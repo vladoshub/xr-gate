@@ -263,24 +263,21 @@ XR_STEAMVR_RESTORE_LAYOUT=right-of \
 3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends.
 
 
-## Runtime package
 
-The portable runtime package is built under:
+## Build:
 
-```text
-out/xreal_ultra/
-  bin/                  binaries, libraries, runtime Python, scripts, apps, drivers
-  devices/xreal_ultra/  device ENV, launch wrappers, configs, calibration
-  run_xr_client.sh      package entrypoint
+Clone:
+```bash
+git clone https://github.com/vladoshub/xr-gate
+cd xr-gate
 ```
 
 Build:
-
 ```bash
 devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
 ```
 
-Or clean build:
+Or clean build with ACT:
 
 ```bash
 devices/xreal_ultra/linux/scripts/run_xreal_ultra_act_build.sh --clean-artifacts
@@ -293,6 +290,18 @@ Run it:
 cd out/xreal_ultra
 ./run_xr_client.sh
 ```
+
+## Runtime package
+
+The portable runtime package is built under:
+
+```text
+out/xreal_ultra/
+  bin/                  binaries, libraries, runtime Python, scripts, apps, drivers
+  devices/xreal_ultra/  device ENV, launch wrappers, configs, calibration
+  run_xr_client.sh      package entrypoint
+```
+
 
 ## Main components
 
