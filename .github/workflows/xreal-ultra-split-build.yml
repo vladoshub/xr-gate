@@ -9,7 +9,7 @@ name: XREAL Ultra split build
       openvr_frequencies:
         description: "OpenVR driver frequencies to build"
         required: false
-        default: "90"
+        default: "60 90"
       openvr_modes:
         description: "OpenVR driver modes to build"
         required: false
@@ -39,7 +39,7 @@ env:
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
   XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer && '1' || '0' }}
-  XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '90' }}
+  XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
   XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
 
 jobs:
