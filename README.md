@@ -274,6 +274,7 @@ Stereo overlay (need running xr_video backend)
 start_steamvr_video_overlay.sh
 ```
 
+---
 
 ## Possible problems
 1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
@@ -283,6 +284,133 @@ start_steamvr_video_overlay.sh
 3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends. Also, do not move your hands too quickly or move them out of your line of sight.
 
 4. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep). In the xr_client skip SBS mode selection
+
+---
+
+
+# Monado / OpenXR
+
+## Monado with main monitor — fullscreen XCB fix
+
+Example for 90 Hz XREAL Ultra:
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+
+XR_TARGET_DEVICE=xreal_ultra \
+XR_MONADO_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=90 \
+XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
+XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
+XR_TRACKING_MONADO_XCB_RATE_HZ=90 \
+./devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
+```
+
+After stopping Monado driver with `Ctrl+C`, the main display should be restored.
+
+
+## Monado with main monitor — XCB windowed mode
+
+```bash
+sudo apt install xdotool wmctrl
+
+cd ~/xr-gate-release/xreal_ultra
+
+XR_TARGET_DEVICE=xreal_ultra \
+XR_MONADO_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=90 \
+XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
+XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
+./devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+
+## Monado with manually disabled main monitor
+
+Check displays:
+
+```bash
+xrandr --query | grep " connected"
+```
+
+Example output:
+
+```text
+DP-6 connected primary 7680x2160+0+1080
+DisplayPort-1-1 connected 3840x1080+1920+0
+```
+
+Here:
+
+```text
+DisplayPort-1-1 = glasses
+DP-6 = main display
+```
+
+Disable main display:
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+
+XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
+XR_TRACKING_MAIN_OUTPUT=DP-6 \
+devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
+```
+
+Run Monado driver:
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+
+XR_TARGET_DEVICE=xreal_ultra \
+XR_MONADO_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=90 \
+XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
+devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+Run simple OpenXR app:
+
+```bash
+XR_RUNTIME_JSON=/... \
+hello_xr -G Vulkan
+```
+
+Enable main display again:
+
+```bash
+cd cd ~/xr-gate-release/xreal_ultra
+XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
+XR_TRACKING_MAIN_OUTPUT=DP-6 \
+devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
+```
+
+---
+
+## Monado with only glasses
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+
+XR_TARGET_DEVICE=xreal_ultra \
+XR_MONADO_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=90 \
+XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
+devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+Run simple OpenXR app:
+
+```bash
+XR_RUNTIME_JSON=/... \
+hello_xr -G Vulkan
+```
+
+You can run OpenVR games through any OpenXR runtime without running SteamVR.
+Check /readme/xrizer.md
+
+
+---
 
 
 ## Build:
