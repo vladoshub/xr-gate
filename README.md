@@ -121,6 +121,17 @@ After install need reboot!
 
 For direct USB4/iGPU path, tested with HX370 iGPU:
 
+90HZ
+```bash
+cd ~/xr-gate-release/xreal_ultra
+XR_TARGET_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=90 \
+XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
+XR_OPENVR_DISPLAY_MODE=direct \
+./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
+```
+
+60HZ
 ```bash
 cd ~/xr-gate-release/xreal_ultra
 XR_TARGET_DEVICE=xreal_ultra \
@@ -154,7 +165,7 @@ You can use 2 identical Bluetooth controllers.
 
 ```bash
 cd ~/xr-gate-release/xreal_ultra
-bin/scripts/override_controller/start_override_controller.sh
+devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
 ```
 
 
@@ -165,6 +176,8 @@ bin/scripts/override_controller/start_override_controller.sh
 
 At startup, you need to select 60Hz or 90Hz mode.
 If you have integrated graphics, a USB-C video output, and don't have a separate graphics card, you can try 90Hz mode. Otherwise, I recommend 60Hz.
+
+If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the driver from section 3)
 
 It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
 
