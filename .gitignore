@@ -1,0 +1,53 @@
+# Build/output artifacts
+/build/
+/out/
+/bin/
+cmake-build-*/
+
+# Third-party source/build trees downloaded locally.
+# Remove this ignore rule if third_party is managed via git submodules.
+/third_party/
+
+# Native build products
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Generated data / packages
+*.ubjson
+*.csv
+*.bag
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+
+# ML/model artifacts should be published separately, not committed
+*.onnx
+
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Logs/temp
+*.log
+*.tmp
+*.bak
+*.pre_*
+*.with_*
+*.working_*
+
+# IDE/OS
+.DS_Store
+.idea/
+.vscode/

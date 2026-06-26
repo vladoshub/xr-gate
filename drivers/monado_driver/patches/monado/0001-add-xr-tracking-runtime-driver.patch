@@ -1,0 +1,165 @@
+diff --git a/src/xrt/drivers/CMakeLists.txt b/src/xrt/drivers/CMakeLists.txt
+index 0b84ff0..1a57163 100644
+--- a/src/xrt/drivers/CMakeLists.txt
++++ b/src/xrt/drivers/CMakeLists.txt
+@@ -666,6 +666,11 @@ if(XRT_BUILD_DRIVER_SOLARXR)
+ 	list(APPEND ENABLED_DRIVERS solarxr)
+ endif()
+ 
++
++# Project-owned XR runtime driver copied by drivers/monado_driver/scripts/linux/install_monado_driver_sources.sh.
++add_subdirectory(xr_tracking_runtime)
++list(APPEND ENABLED_HEADSET_DRIVERS xr_tracking_runtime)
++
+ if(XRT_BUILD_SAMPLES)
+ 	# We build the sample driver to make sure it stays valid,
+ 	# but it never gets linked into a final target.
+diff --git a/src/xrt/targets/common/CMakeLists.txt b/src/xrt/targets/common/CMakeLists.txt
+index f3f46c9..f32a927 100644
+--- a/src/xrt/targets/common/CMakeLists.txt
++++ b/src/xrt/targets/common/CMakeLists.txt
+@@ -219,6 +219,8 @@ if(XRT_BUILD_DRIVER_ILLIXR)
+ 	target_link_libraries(target_lists PRIVATE drv_illixr)
+ endif()
+ 
++target_link_libraries(target_lists PRIVATE drv_xr_tracking_runtime)
++
+ target_link_libraries(target_lists PRIVATE drv_multi)
+ 
+ if(XRT_BUILD_DRIVER_QWERTY)
+diff --git a/src/xrt/targets/common/target_builder_legacy.c b/src/xrt/targets/common/target_builder_legacy.c
+index 2d95fba..fbc23af 100644
+--- a/src/xrt/targets/common/target_builder_legacy.c
++++ b/src/xrt/targets/common/target_builder_legacy.c
+@@ -10,17 +10,24 @@
+ 
+ #include "xrt/xrt_config_drivers.h"
+ #include "xrt/xrt_prober.h"
++#include "xrt/xrt_tracking.h"
+ 
+ #include "util/u_misc.h"
+ #include "util/u_device.h"
++#include "util/u_debug.h"
+ #include "util/u_system_helpers.h"
+ 
+ #include "target_builder_helpers.h"
+ #include "target_builder_interface.h"
+ 
++#include "xr_tracking_runtime/src/xr_monado_driver_interface.h"
++
+ #include <assert.h>
+ 
++DEBUG_GET_ONCE_BOOL_OPTION(xr_tracking_runtime_enabled, "XR_TRACKING_RUNTIME_ENABLE", false)
++
+ static const char *driver_list[] = {
++    "xr_tracking_runtime",
+ #ifdef XRT_BUILD_DRIVER_CONTACTGLOVE
+     "contactglove",
+ #endif
+@@ -104,6 +111,14 @@ legacy_estimate_system(struct xrt_builder *xb,
+                        struct xrt_prober *xp,
+                        struct xrt_builder_estimate *estimate)
+ {
++	if (debug_get_bool_option_xr_tracking_runtime_enabled()) {
++		estimate->certain.head = true;
++		estimate->certain.left = true;
++		estimate->certain.right = true;
++		estimate->priority = 100;
++		return XRT_SUCCESS;
++	}
++
+ 	// If no driver is enabled, there is no way to create a HMD
+ 	bool may_create_hmd = xb->driver_identifier_count > 0;
+ 
+@@ -127,6 +142,38 @@ legacy_open_system_impl(struct xrt_builder *xb,
+ 	xrt_result_t xret;
+ 	int ret;
+ 
++	if (debug_get_bool_option_xr_tracking_runtime_enabled()) {
++		struct xrt_device *head = xr_tracking_runtime_hmd_create();
++		struct xrt_device *left = xr_tracking_runtime_controller_create(head, true);
++		struct xrt_device *right = xr_tracking_runtime_controller_create(head, false);
++
++		if (head == NULL || left == NULL || right == NULL) {
++			if (head != NULL) {
++				xrt_device_destroy(&head);
++			}
++			if (left != NULL) {
++				xrt_device_destroy(&left);
++			}
++			if (right != NULL) {
++				xrt_device_destroy(&right);
++			}
++			return XRT_ERROR_DEVICE_CREATION_FAILED;
++		}
++
++		head->tracking_origin = origin;
++		left->tracking_origin = origin;
++		right->tracking_origin = origin;
++		origin->type = XRT_TRACKING_TYPE_OTHER;
++
++		xsysd->static_xdevs[xsysd->static_xdev_count++] = head;
++		xsysd->static_xdevs[xsysd->static_xdev_count++] = left;
++		xsysd->static_xdevs[xsysd->static_xdev_count++] = right;
++
++		tbrh->head = head;
++		tbrh->left = left;
++		tbrh->right = right;
++		return XRT_SUCCESS;
++	}
+ 
+ 	/*
+ 	 * Create the devices.
+diff --git a/src/xrt/state_trackers/oxr/oxr_session.c b/src/xrt/state_trackers/oxr/oxr_session.c
+index 9eb077c..e0a4340 100644
+--- a/src/xrt/state_trackers/oxr/oxr_session.c
++++ b/src/xrt/state_trackers/oxr/oxr_session.c
+@@ -681,6 +681,27 @@ xrt_to_view_state_flags(enum xrt_space_relation_flags flags)
+ 	return res;
+ }
+ 
++static inline bool
++oxr_quat_is_valid_or_fix_identity(struct xrt_quat *q)
++{
++	if (math_quat_ensure_normalized(q)) {
++		return true;
++	}
++
++	*q = (struct xrt_quat)XRT_QUAT_IDENTITY;
++	return false;
++}
++
++static inline void
++oxr_sanitize_locate_views_relation(struct xrt_space_relation *relation)
++{
++	if (relation == NULL) {
++		return;
++	}
++
++	oxr_quat_is_valid_or_fix_identity(&relation->pose.orientation);
++}
++
+ XrResult
+ oxr_session_locate_views(struct oxr_logger *log,
+                          struct oxr_session *sess,
+@@ -768,7 +789,10 @@ oxr_session_locate_views(struct oxr_logger *log,
+ 	struct xrt_relation_chain xrc = {0};
+ 	m_relation_chain_push_relation(&xrc, &T_xdev_head);
+ 	m_relation_chain_push_relation(&xrc, &T_base_xdev);
++	oxr_sanitize_locate_views_relation(&T_xdev_head);
++	oxr_sanitize_locate_views_relation(&T_base_xdev);
+ 	m_relation_chain_resolve(&xrc, &T_base_head);
++	oxr_sanitize_locate_views_relation(&T_base_head);
+ 
+ 	if (print) {
+ 		for (uint32_t i = 0; i < view_count; i++) {
+@@ -801,7 +825,9 @@ oxr_session_locate_views(struct oxr_logger *log,
+ 		m_relation_chain_push_pose_if_not_identity(&xrc, &view_pose);
+ 		m_relation_chain_push_relation(&xrc, &T_base_head);
+ 		m_relation_chain_resolve(&xrc, &result);
++		oxr_sanitize_locate_views_relation(&result);
+ 		OXR_XRT_POSE_TO_XRPOSEF(result.pose, views[i].pose);
++		oxr_quat_is_valid_or_fix_identity((struct xrt_quat *)&views[i].pose.orientation);
+ 
+ 
+ 		/*

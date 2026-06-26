@@ -1,0 +1,655 @@
+{
+  "root_project": "~/src/xr_tracking",
+  "log_dir": "/tmp/xr_backend_client_logs",
+  "clean_registries": true,
+  "registries_to_clean": [
+    "/tmp/capture_service_streams.json",
+    "/tmp/tracking_streams.json",
+    "/tmp/runtime_tracking_streams.json"
+  ],
+  "wait_timeout_s": 30,
+  "log_max_bytes": 1048576,
+  "log_trim_interval_s": 2,
+  "prestart_control": {
+    "enabled": true,
+    "enable_env": "RUN_PRESTART_CONTROL",
+    "prompt": true,
+    "selected_option": "prompt",
+    "default_option": "60hz",
+    "pre_capture_wait_s": 5.0,
+    "start_message": [
+      "IMPORTANT: Put on the XREAL glasses or cover the proximity sensor to wake/activate them.",
+      "Otherwise display mode switching and tracking startup may not work."
+    ],
+    "title": "Prestart control",
+    "prompt_message": "Select XREAL display mode:",
+    "options": [
+      {
+        "id": "60hz",
+        "choice": "1",
+        "label": "60Hz high-refresh SBS/3D",
+        "description": "start display helper",
+        "service_name": "xreal_display_helper",
+        "command": [
+          "{scripts}/xreal_display_helper/start_xreal_helper_60hz.sh"
+        ],
+        "wait_log_any": [
+          "display mode after:  3",
+          "display mode after: 3",
+          "alive; mode=3",
+          "sbs/3d 60Hz"
+        ],
+        "wait_timeout_s": 20.0,
+        "readiness_min_alive_s": 5.0,
+        "readiness_status_interval_s": 1.0,
+        "stop_timeout_s": 1.0
+      },
+      {
+        "id": "90hz",
+        "choice": "2",
+        "label": "90Hz high-refresh SBS/3D",
+        "description": "start display helper",
+        "service_name": "xreal_display_helper",
+        "command": [
+          "{scripts}/xreal_display_helper/start_xreal_helper_90hz.sh"
+        ],
+        "wait_log_any": [
+          "display mode after:  9",
+          "display mode after: 9",
+          "alive; mode=9",
+          "high-refresh-sbs 90Hz"
+        ],
+        "wait_timeout_s": 20.0,
+        "readiness_min_alive_s": 5.0,
+        "readiness_status_interval_s": 1.0,
+        "stop_timeout_s": 1.0
+      },
+      {
+        "id": "current",
+        "choice": "3",
+        "label": "Use current display mode",
+        "description": "skip display helper",
+        "aliases": [
+          "skip",
+          "none",
+          "current-display"
+        ],
+        "command": []
+      }
+    ]
+  },
+  "pre_gate_services": [
+    {
+      "name": "capture_service",
+      "enable_env": "RUN_CAPTURE_SERVICE",
+      "enabled": true,
+      "command": [
+        "{scripts}/capture_service/start_capture_service.sh"
+      ],
+      "wait_streams": [
+        {
+          "registry": "/tmp/capture_service_streams.json",
+          "stream": "camera0"
+        },
+        {
+          "registry": "/tmp/capture_service_streams.json",
+          "stream": "camera1"
+        },
+        {
+          "registry": "/tmp/capture_service_streams.json",
+          "stream": "imu0"
+        }
+      ]
+    },
+    {
+      "name": "override_controller_service",
+      "enable_env": "RUN_OVERRIDE_CONTROLLER_SERVICE",
+      "enabled": false,
+      "optional": true,
+      "command": [
+        "{root}/bin/host/override_controller_service"
+      ]
+    }
+  ],
+  "gate": {
+    "enabled": true,
+    "enable_env": "STARTUP_GATE",
+    "log_name": "startup_gate",
+    "command": [
+      "{python}",
+      "{bin}/python/xr_client/tools/xr_startup_gate.py",
+      "--transport",
+      "shm",
+      "--registry",
+      "/tmp/capture_service_streams.json",
+      "--cam0-stream",
+      "camera0",
+      "--cam1-stream",
+      "camera1",
+      "--imu-stream",
+      "imu0",
+      "--stream-quality-gate",
+      "--quality-window-s",
+      "5.0",
+      "--quality-max-defective-frames",
+      "5",
+      "--quality-min-frames",
+      "20",
+      "--quality-min-mean",
+      "12.0",
+      "--quality-min-stddev",
+      "4.0",
+      "--quality-max-black-fraction",
+      "0.90",
+      "--quality-min-corners",
+      "4",
+      "--quality-min-laplacian-stddev",
+      "3.0",
+      "--print-every",
+      "10"
+    ],
+    "user_hints": true,
+    "visual_progress_template": "Startup stream quality: {percent:.0f}% — keep the cameras uncovered.",
+    "visual_ready_template": "Startup stream quality check passed.",
+    "debug_output": false,
+    "progress_interval_s": 0.5,
+    "imu_progress_template": "Startup check: headset stability {percent:.0f}% — keep your head still.",
+    "imu_ready_template": "Startup check: ready.",
+    "timeout_s": 12.0,
+    "timeout_status_interval_s": 1.0,
+    "timeout_prompt": true,
+    "quality_progress_template": "Startup stream quality: {percent:.0f}% — defective frames {defective}/{max_defective}.",
+    "quality_ready_template": "Startup stream quality check passed.",
+    "max_attempts": 5,
+    "restart_services_on_failure": [
+      "capture_service"
+    ],
+    "restart_clean_registries": [
+      "/tmp/capture_service_streams.json"
+    ]
+  },
+  "post_gate_services": [
+    {
+      "name": "basalt_vio",
+      "enable_env": "RUN_BASALT",
+      "enabled": true,
+      "command": [
+        "{scripts}/basalt_vio/start_basalt.sh"
+      ],
+      "wait_streams": [
+        {
+          "registry": "/tmp/tracking_streams.json",
+          "stream": "hmd_pose"
+        }
+      ],
+      "restart_on_exit": true,
+      "restart_on_error_only": true,
+      "restart_max_attempts": 3,
+      "restart_window_s": 60,
+      "restart_backoff_s": 2.0,
+      "restart_wait_streams": true,
+      "restart_run_gate": false
+    },
+    {
+      "name": "imu_3dof_backend",
+      "enable_env": "RUN_IMU_3DOF_BACKEND",
+      "enabled": true,
+      "start_on_launch": false,
+      "command": [
+        "{scripts}/imu_3dof/start_imu_3dof_backend.sh"
+      ],
+      "wait_streams": [
+        {
+          "registry": "/tmp/tracking_streams.json",
+          "stream": "hmd_pose_3dof"
+        }
+      ],
+      "restart_on_exit": true,
+      "restart_on_error_only": true,
+      "restart_max_attempts": 3,
+      "restart_window_s": 60,
+      "restart_backoff_s": 1.0,
+      "restart_wait_streams": true,
+      "restart_run_gate": false
+    },
+    {
+      "name": "mercury_hand_tracking",
+      "enable_env": "RUN_HAND_TRACKING",
+      "enabled": true,
+      "command": [
+        "{scripts}/mercury_hand_tracking/start_hand_tracking.sh"
+      ],
+      "wait_streams": [
+        {
+          "registry": "/tmp/tracking_streams.json",
+          "stream": "hand_tracking"
+        }
+      ],
+      "restart_on_exit": true,
+      "restart_on_error_only": true,
+      "restart_max_attempts": 3,
+      "restart_window_s": 60,
+      "restart_backoff_s": 2.0,
+      "restart_wait_streams": true,
+      "restart_run_gate": false
+    },
+    {
+      "name": "xr_runtime_adapter",
+      "enable_env": "RUN_XR_RUNTIME_ADAPTER",
+      "enabled": true,
+      "command": [
+        "{scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"
+      ],
+      "wait_streams": [
+        {
+          "registry": "/tmp/runtime_tracking_streams.json",
+          "stream": "runtime_hmd_pose"
+        },
+        {
+          "registry": "/tmp/runtime_tracking_streams.json",
+          "stream": "runtime_hand_tracking"
+        }
+      ],
+      "ready_message": "xr_runtime is running...",
+      "env": {
+        "HMD_3DOF_PRIORITY": "1",
+        "HMD_3DOF_STREAM": "hmd_pose_3dof",
+        "HMD_3DOF_REGISTRY": "/tmp/tracking_streams.json"
+      }
+    },
+    {
+      "name": "override_controller",
+      "enable_env": "RUN_OVERRIDE_CONTROLLER",
+      "enabled": true,
+      "start_on_launch": false,
+      "optional": true,
+      "command": [
+        "{scripts}/override_controller/start_override_controller.sh"
+      ],
+      "env": {
+        "CONFIG_PATH": "~/.config/xr_tracking/override_controller/default.json",
+        "NON_INTERACTIVE": "1",
+        "GRAB_DEVICES": "1",
+        "REATTACH_DEVICES": "1",
+        "REATTACH_INTERVAL_MS": "3000"
+      },
+      "wait_streams": [
+        {
+          "registry": "/tmp/tracking_streams.json",
+          "stream": "controller_input"
+        }
+      ],
+      "ready_message": "override_controller is running. Right quadruple tap or manual key 5 toggles it.",
+      "start_delay_s": 0.2,
+      "stop_timeout_s": 1.0,
+      "restart_on_exit": true,
+      "restart_on_error_only": true,
+      "restart_max_attempts": 3,
+      "restart_window_s": 60,
+      "restart_backoff_s": 1.0,
+      "restart_wait_streams": true,
+      "restart_run_gate": false
+    },
+    {
+      "name": "xr_video",
+      "enable_env": "RUN_XR_VIDEO",
+      "enabled": true,
+      "start_on_launch": false,
+      "optional": true,
+      "command": [
+        "{scripts}/xr_video/start_xr_video_backend.sh"
+      ],
+      "ready_message": "xr_video is running. Manual key 6 toggles it.",
+      "start_delay_s": 0.2,
+      "stop_timeout_s": 1.0,
+      "restart_on_exit": true,
+      "restart_on_error_only": true,
+      "restart_max_attempts": 3,
+      "restart_window_s": 60,
+      "restart_backoff_s": 1.0,
+      "restart_wait_streams": false,
+      "restart_run_gate": false
+    },
+    {
+      "name": "xr_spatial",
+      "enable_env": "RUN_XR_SPATIAL",
+      "enabled": true,
+      "start_on_launch": false,
+      "optional": true,
+      "command": [
+        "{scripts}/xr_spatial/start_xr_spatial_shm.sh"
+      ],
+      "env": {
+        "SPATIAL_PROXY_MESH_RATE_HZ": "10"
+      },
+      "wait_streams": [
+        {
+          "registry": "/tmp/runtime_tracking_streams.json",
+          "stream": "spatial_proxy_mesh"
+        }
+      ],
+      "ready_message": "xr_spatial is running. Manual key 7 toggles it.",
+      "start_delay_s": 0.2,
+      "stop_timeout_s": 1.0,
+      "restart_on_exit": true,
+      "restart_on_error_only": true,
+      "restart_max_attempts": 3,
+      "restart_window_s": 60,
+      "restart_backoff_s": 1.0,
+      "restart_wait_streams": true,
+      "restart_run_gate": false
+    }
+  ],
+  "foreground_services": [
+    {
+      "name": "runtime_debug_viewer",
+      "enable_env": "RUN_VIEWER",
+      "enabled": false,
+      "foreground": true,
+      "command": [
+        "{python}",
+        "{bin}/python/tools/runtime_debug_viewer/xr_runtime_debug_viewer.py",
+        "--config",
+        "{configs}/runtime_debug_viewer/xr_runtime_stock.yaml"
+      ]
+    }
+  ],
+  "imu_tap_controls": {
+    "enabled": false,
+    "enable_env": "RUN_IMU_TAP_CONTROLS",
+    "debug": false,
+    "source": {
+      "transport": "shm",
+      "registry": "/tmp/capture_service_streams.json",
+      "imu_stream": "imu0",
+      "poll_sleep_ms": 1.0
+    },
+    "detector": {
+      "tap_accel_threshold": 15.0,
+      "tap_refractory_ms": 100.0,
+      "impact_end_ratio": 0.7,
+      "impact_max_width_ms": 60.0,
+      "triple_min_interval_ms": 250.0,
+      "triple_max_interval_ms": 650.0,
+      "triple_max_span_ms": 1400.0,
+      "cooldown_ms": 4000.0,
+      "side_axis": "ax",
+      "side_deadzone_mps2": 3.0,
+      "double_min_interval_ms": 250.0,
+      "double_max_interval_ms": 650.0,
+      "double_max_span_ms": 900.0,
+      "double_emit_delay_ms": 700.0,
+      "triple_emit_delay_ms": 750.0,
+      "quadruple_min_interval_ms": 250.0,
+      "quadruple_max_interval_ms": 650.0,
+      "quadruple_max_span_ms": 2100.0
+    },
+    "actions": {
+      "left-double-tap": {
+        "type": "recenter_3dof",
+        "service": "imu_3dof_backend",
+        "only_if_service_running": true,
+        "control_file": "/tmp/xr_backend_control.json",
+        "counter_key": "imu_3dof_recenter_counter",
+        "description": "Recenter the IMU-only 3DoF yaw origin."
+      },
+      "left-triple-tap": {
+        "type": "toggle_exclusive_services",
+        "primary_service": "basalt_vio",
+        "secondary_service": "imu_3dof_backend",
+        "start_when_none": "imu_3dof_backend",
+        "wait_streams": true,
+        "primary_clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose"
+            ]
+          }
+        ],
+        "secondary_clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose_3dof"
+            ]
+          }
+        ],
+        "primary_clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose"
+            ]
+          }
+        ],
+        "secondary_clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose_3dof"
+            ]
+          }
+        ],
+        "description": "Switch between Basalt 6DoF tracking and IMU-only 3DoF tracking."
+      },
+      "left-quadruple-tap": {
+        "type": "toggle_service",
+        "service": "mercury_hand_tracking",
+        "wait_streams": true,
+        "clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hand_tracking"
+            ]
+          }
+        ],
+        "clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hand_tracking"
+            ]
+          }
+        ],
+        "description": "Start or stop Mercury hand tracking."
+      },
+      "right-triple-tap": {
+        "type": "restart_services",
+        "services": [
+          "basalt_vio",
+          "imu_3dof_backend",
+          "mercury_hand_tracking",
+          "xr_spatial"
+        ],
+        "running_only": true,
+        "run_gate": false,
+        "wait_streams": true,
+        "clean_streams": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose",
+              "hmd_pose_3dof",
+              "hand_tracking"
+            ]
+          }
+        ],
+        "description": "Restart currently running tracking backends without re-running the startup gate."
+      },
+      "manual-restart-running-backends": {
+        "type": "restart_services",
+        "services": [
+          "basalt_vio",
+          "imu_3dof_backend",
+          "mercury_hand_tracking",
+          "xr_spatial"
+        ],
+        "running_only": true,
+        "run_gate": false,
+        "wait_streams": true,
+        "clean_streams": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose",
+              "hmd_pose_3dof",
+              "hand_tracking"
+            ]
+          }
+        ],
+        "description": "Restart currently running tracking backends without re-running the startup gate."
+      },
+      "manual-toggle-hand-tracking": {
+        "type": "toggle_service",
+        "service": "mercury_hand_tracking",
+        "wait_streams": true,
+        "clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hand_tracking"
+            ]
+          }
+        ],
+        "clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hand_tracking"
+            ]
+          }
+        ],
+        "description": "Start or stop Mercury hand tracking."
+      },
+      "manual-toggle-3dof-6dof": {
+        "type": "toggle_exclusive_services",
+        "primary_service": "basalt_vio",
+        "secondary_service": "imu_3dof_backend",
+        "start_when_none": "imu_3dof_backend",
+        "wait_streams": true,
+        "primary_clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose"
+            ]
+          }
+        ],
+        "secondary_clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose_3dof"
+            ]
+          }
+        ],
+        "primary_clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose"
+            ]
+          }
+        ],
+        "secondary_clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose_3dof"
+            ]
+          }
+        ],
+        "description": "Switch between Basalt 6DoF tracking and IMU-only 3DoF tracking."
+      },
+      "manual-recenter-3dof": {
+        "type": "recenter_3dof",
+        "service": "imu_3dof_backend",
+        "only_if_service_running": true,
+        "control_file": "/tmp/xr_backend_control.json",
+        "counter_key": "imu_3dof_recenter_counter",
+        "description": "Recenter the IMU-only 3DoF yaw origin."
+      },
+      "right-quadruple-tap": {
+        "type": "toggle_service",
+        "service": "override_controller",
+        "wait_streams": true,
+        "clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "controller_input"
+            ]
+          }
+        ],
+        "clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "controller_input"
+            ]
+          }
+        ],
+        "description": "Start or stop the override controller input publisher."
+      },
+      "manual-toggle-override-controller": {
+        "type": "toggle_service",
+        "service": "override_controller",
+        "wait_streams": true,
+        "clean_streams_on_stop": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "controller_input"
+            ]
+          }
+        ],
+        "clean_streams_on_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "controller_input"
+            ]
+          }
+        ],
+        "description": "Start or stop the override controller input publisher."
+      },
+      "manual-toggle-xr-video": {
+        "type": "toggle_service",
+        "service": "xr_video",
+        "wait_streams": false,
+        "description": "Start or stop the xr_video backend."
+      },
+      "manual-toggle-xr-spatial": {
+        "type": "toggle_service",
+        "service": "xr_spatial",
+        "wait_streams": true,
+        "clean_streams_on_stop": [
+          {
+            "registry": "/tmp/runtime_tracking_streams.json",
+            "streams": [
+              "spatial_proxy_mesh",
+              "runtime_spatial_summary"
+            ]
+          }
+        ],
+        "clean_streams_on_start": [
+          {
+            "registry": "/tmp/runtime_tracking_streams.json",
+            "streams": [
+              "spatial_proxy_mesh",
+              "runtime_spatial_summary"
+            ]
+          }
+        ],
+        "description": "Start or stop the xr_spatial backend."
+      },
+      "manual-toggle-shake-controls": {
+        "type": "toggle_imu_tap_controls",
+        "description": "Enable or disable IMU tap controls for this session only; the config file is not changed."
+      }
+    }
+  },
+  "device_env": "{root}/devices/xreal_ultra/xreal_ultra.env"
+}

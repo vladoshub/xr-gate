@@ -1,0 +1,27 @@
+{
+  "xr_tracking": {
+    "serialNumber": "xreal-ultra-hmd-001",
+    "modelNumber": "XREAL Air 2 Ultra",
+    "windowX": 0,
+    "windowY": 0,
+    "windowWidth": 3840,
+    "windowHeight": 1080,
+    "renderWidth": 1920,
+    "renderHeight": 1080,
+    "ipdMeters": 0.064,
+    "projectionLeft": -1.0,
+    "projectionRight": 1.0,
+    "projectionTop": -1.0,
+    "projectionBottom": 1.0,
+    "leftHandSerial": "xreal-ultra-left-hand-001",
+    "rightHandSerial": "xreal-ultra-right-hand-001"
+  },
+  "steamvr": {
+    "windowX": 0,
+    "windowY": 0,
+    "windowWidth": 3840,
+    "windowHeight": 1080,
+    "renderWidth": 1920,
+    "renderHeight": 1080
+  }
+}

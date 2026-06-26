@@ -1,0 +1,202 @@
+{
+  "title": "Windows native capture/display/OpenVR + WSL2 backends profile (out/xreal_ultra_windows)",
+  "device_env": "{root}/devices/xreal_ultra/xreal_ultra.windows.env",
+  "device_env_required": false,
+  "log_dir": "{temp}/xr_backend_client_logs",
+  "clean_registries": false,
+  "registries_to_clean": [],
+  "wait_timeout_s": 30,
+  "log_max_bytes": 1048576,
+  "log_trim_interval_s": 2,
+  "prestart_control": {
+    "enabled": true,
+    "enable_env": "RUN_PRESTART_CONTROL",
+    "prompt": true,
+    "title": "Prestart control",
+    "prompt_message": "Select XREAL display mode:",
+    "default_option": "90hz",
+    "options": [
+      {
+        "id": "60hz",
+        "choice": "1",
+        "label": "60Hz high-refresh SBS/3D - start display helper",
+        "service_name": "xreal_display_helper",
+        "command": [
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "{scripts}/xreal_display_helper/start_xreal_helper_60hz.ps1",
+          "-Root",
+          "{root}"
+        ],
+        "readiness_min_alive_s": 1.0,
+        "stop_timeout_s": 1.0
+      },
+      {
+        "id": "90hz",
+        "choice": "2",
+        "label": "90Hz high-refresh SBS/3D - start display helper",
+        "service_name": "xreal_display_helper",
+        "command": [
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "{scripts}/xreal_display_helper/start_xreal_helper_90hz.ps1",
+          "-Root",
+          "{root}"
+        ],
+        "readiness_min_alive_s": 1.0,
+        "stop_timeout_s": 1.0
+      },
+      {
+        "id": "current",
+        "choice": "3",
+        "label": "Use current display mode",
+        "description": "skip display helper",
+        "aliases": [
+          "skip",
+          "none",
+          "current-display"
+        ],
+        "command": []
+      }
+    ]
+  },
+  "pre_gate_services": [
+    {
+      "name": "capture_service",
+      "enable_env": "RUN_CAPTURE_SERVICE",
+      "enabled": true,
+      "command": [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "{scripts}/capture_service/start_capture_service_cpp.ps1",
+        "-Root",
+        "{root}",
+        "-Publish",
+        "tcp"
+      ],
+      "start_delay_s": 1.0,
+      "stop_timeout_s": 1.0
+    }
+  ],
+  "gate": {
+    "enabled": true,
+    "enable_env": "STARTUP_GATE",
+    "log_name": "startup_gate",
+    "user_hints": true,
+    "debug_output": false,
+    "progress_interval_s": 0.5,
+    "timeout_s": 12.0,
+    "timeout_status_interval_s": 1.0,
+    "timeout_prompt": true,
+    "max_attempts": 5,
+    "restart_services_on_failure": [
+      "capture_service"
+    ],
+    "restart_clean_registries": [],
+    "quality_progress_template": "Startup stream quality: {percent:.0f}% — defective frames {defective}/{max_defective}.",
+    "quality_ready_template": "Startup stream quality check passed.",
+    "command": [
+      "{python}",
+      "{root}/xr_client/tools/xr_startup_gate.py",
+      "--transport",
+      "tcp",
+      "--tcp-host",
+      "%XR_CAPTURE_TCP_HOST_WINDOWS%",
+      "--tcp-port",
+      "%XR_CAPTURE_TCP_PORT%",
+      "--cam0-stream",
+      "camera0",
+      "--cam1-stream",
+      "camera1",
+      "--imu-stream",
+      "imu0",
+      "--stream-quality-gate",
+      "--quality-window-s",
+      "5.0",
+      "--quality-max-defective-frames",
+      "5",
+      "--quality-min-frames",
+      "20",
+      "--quality-min-mean",
+      "12.0",
+      "--quality-min-stddev",
+      "4.0",
+      "--quality-max-black-fraction",
+      "0.90",
+      "--quality-min-corners",
+      "4",
+      "--quality-min-laplacian-stddev",
+      "3.0",
+      "--print-every",
+      "10"
+    ]
+  },
+  "imu_tap_controls": {
+    "enabled": false,
+    "enable_env": "RUN_IMU_TAP_CONTROLS",
+    "debug": false,
+    "source": {
+      "transport": "tcp",
+      "tcp_host": "%XR_CAPTURE_TCP_HOST_WINDOWS%",
+      "tcp_port": 45660,
+      "imu_stream": "imu0",
+      "poll_sleep_ms": 1.0
+    },
+    "actions": {
+      "manual-toggle-shake-controls": {
+        "type": "toggle_imu_tap_controls",
+        "description": "Enable or disable IMU tap controls for this session only; the config file is not changed."
+      }
+    }
+  },
+  "post_gate_services": [
+    {
+      "name": "override_controller",
+      "enable_env": "RUN_OVERRIDE_CONTROLLER",
+      "enabled": false,
+      "optional": true,
+      "command": [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "{scripts}/override_controller/start_override_controller_tcp.ps1",
+        "-Root",
+        "{root}"
+      ],
+      "start_delay_s": 0.2,
+      "stop_timeout_s": 1.0,
+      "ready_message": "Windows override_controller TCP publisher started. Host/port are loaded from devices/xreal_ultra/windows/configs/windows_wsl2_network.env."
+    },
+    {
+      "name": "wsl2_runtime",
+      "enable_env": "RUN_WSL2_RUNTIME",
+      "enabled": false,
+      "optional": true,
+      "command": [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "{scripts}/wsl2/start_wsl2_runtime.ps1",
+        "-Root",
+        "{root}"
+      ],
+      "start_delay_s": 0.5,
+      "stop_timeout_s": 2.0,
+      "ready_message": "WSL2 runtime launcher started. Install/sync the WSL2 runtime first with devices/xreal_ultra/windows/scripts/wsl2/install_wsl2_ubuntu24_runtime.ps1."
+    }
+  ],
+  "foreground_services": []
+}

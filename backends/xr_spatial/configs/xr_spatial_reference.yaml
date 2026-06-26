@@ -1,0 +1,57 @@
+# Reference shape for xr_spatial config profiles.
+# Runtime launch scripts currently read .env profiles to avoid adding yaml-cpp.
+# Copy configs/profiles/reference.env for new cameras/devices.
+
+xr_spatial:
+  mode: runtime
+
+  capture:
+    registry: /tmp/capture_service_streams.json
+    camera0_stream: camera0
+    camera1_stream: camera1
+    imu_stream: imu0
+
+  pose:
+    registry: /tmp/tracking_streams.json
+    stream: hmd_pose
+    pose_frame_id: tracking_pose
+    max_pose_age_ms: 120
+    drop_stale_pose: true
+
+  calibration:
+    calib_json: /path/to/calibration.json
+    calib_profile_name: profile_name
+    depth_frame_id: cam0_rect
+    map_frame_id: tracking_world
+
+  stereo_depth:
+    algorithm: opencv_sgbm
+    rate_hz: 10
+    num_disparities: 128
+    block_size: 7
+    uniqueness_ratio: 10
+    speckle_window_size: 100
+    speckle_range: 2
+    point_decimation: 2
+    min_depth_m: 0.25
+    max_depth_m: 2.5
+
+  mapper:
+    backend: live_depth_grid # live_depth_grid|pointcloud_fallback
+    max_accumulated_points: 1000000
+    map_frame: tracking # camera for stereo-depth diagnostics; tracking for pose accumulation
+
+  runtime_output:
+    publish_summary_shm: true
+    registry: /tmp/runtime_tracking_streams.json
+    stream: runtime_spatial_summary
+    shm_name: runtime_spatial_summary
+
+  scan:
+    duration_sec: 30
+    output_root: ~/xr_spatial_scans
+    save_pointcloud_ply: true
+    save_trajectory_csv: true
+    save_metadata_json: true
+    save_debug_frames: true
+    save_debug_clouds: true

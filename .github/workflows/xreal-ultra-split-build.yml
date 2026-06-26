@@ -1,0 +1,244 @@
+name: XREAL Ultra split build
+
+"on":
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      openvr_frequencies:
+        description: "OpenVR driver frequencies to build"
+        required: false
+        default: "90"
+      openvr_modes:
+        description: "OpenVR driver modes to build"
+        required: false
+        default: "direct"
+      include_xrizer:
+        description: "Build optional xrizer GPL component"
+        type: boolean
+        required: false
+        default: false
+      upload_partial_artifacts:
+        description: "Upload each partial out package, not only the merged package"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xreal-ultra-split-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  BUILD_JOBS: "2"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
+  XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
+  XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer && '1' || '0' }}
+  XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '90' }}
+  XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
+
+jobs:
+  build-part:
+    name: build ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: capture
+            build_only: "capture_service_cpp xreal_display_helper"
+          - name: runtime
+            build_only: "imu_3dof xr_runtime_adapter override_controller xr_video bridges"
+          - name: spatial
+            build_only: "xr_spatial"
+          - name: steamvr
+            build_only: "openvr_driver steamvr_video_overlay steamvr_spatial_overlay steamvr_spatial_scene"
+          - name: basalt
+            build_only: "basalt_vio"
+          - name: mercury
+            build_only: "mercury_hand_tracking"
+          - name: monado
+            build_only: "monado_driver"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Install base build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git git-lfs ca-certificates curl wget tar unzip rsync jq file \
+            build-essential cmake ninja-build pkg-config \
+            python3 python3-full python3-venv python3-pip \
+            libopencv-dev libhidapi-dev libcli11-dev nlohmann-json3-dev \
+            libeigen3-dev libboost-all-dev libceres-dev libtbb-dev \
+            libfmt-dev libspdlog-dev
+          git lfs install --local
+
+      - name: Install SteamVR/OpenGL build packages
+        if: ${{ matrix.name == 'steamvr' }}
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            mesa-common-dev libopengl-dev libgl-dev libglx-dev libegl-dev \
+            libvulkan-dev libsdl2-dev \
+            libx11-dev libxrandr-dev libxext-dev libxfixes-dev libxi-dev \
+            libxcursor-dev libxinerama-dev libxxf86vm-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-present-dev \
+            libxcb-dri3-dev libxcb-xfixes0-dev
+
+      - name: Build partial package
+        env:
+          XR_BUILD_ONLY: ${{ matrix.build_only }}
+          XR_PACKAGE_ALLOW_PARTIAL: "1"
+          CLONE_OPENVR: "1"
+          CLONE_MONADO: "1"
+        run: |
+          df -h
+          ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          du -sh out/xreal_ultra || true
+          find out/xreal_ultra -maxdepth 4 -type f | sort | head -200
+
+      - name: Archive partial package
+        run: |
+          tar -C out -czf xreal_ultra_${{ matrix.name }}.tar.gz xreal_ultra
+          ls -lh xreal_ultra_${{ matrix.name }}.tar.gz
+
+      - name: Upload partial package
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_partial_artifacts == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: xreal-ultra-part-${{ matrix.name }}
+          path: xreal_ultra_${{ matrix.name }}.tar.gz
+          retention-days: 3
+
+      - name: Upload merge input
+        uses: actions/upload-artifact@v4
+        with:
+          name: xreal-ultra-merge-input-${{ matrix.name }}
+          path: xreal_ultra_${{ matrix.name }}.tar.gz
+          retention-days: 3
+
+
+  hand-tracking-models-mercury:
+    name: hand-tracking models Mercury
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Install download packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git git-lfs ca-certificates curl tar coreutils rsync \
+            python3 python3-venv
+          git lfs install --local
+
+      - name: Download Mercury hand-tracking models
+        env:
+          XR_BUILD_ONLY: "hand_tracking_models"
+          XR_PACKAGE_ALLOW_PARTIAL: "1"
+          XR_DOWNLOAD_HAND_TRACKING_MODELS: "1"
+          CLONE_MERCURY_DRIVER: "1"
+          FETCH_MERCURY_DRIVER: "1"
+          RESET_MERCURY_DRIVER_TREE: "1"
+        run: |
+          df -h
+          ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+
+          MODEL_DIR="out/xreal_ultra/bin/hand-tracking-models/mercury"
+          test -f "$MODEL_DIR/grayscale_detection_160x160.onnx"
+          test -f "$MODEL_DIR/grayscale_keypoint_jan18.onnx"
+
+          mkdir -p model_artifact/hand-tracking-models/mercury
+          cp -a "$MODEL_DIR"/*.onnx model_artifact/hand-tracking-models/mercury/
+
+          cat > model_artifact/hand-tracking-models/mercury/SOURCE.txt <<'EOF'
+          Mercury hand-tracking ONNX models.
+
+          Files:
+            grayscale_detection_160x160.onnx
+            grayscale_keypoint_jan18.onnx
+
+          Upstream:
+            https://github.com/moshimeow/mercury_steamvr_driver
+
+          Pinned ref:
+            e3948ace94a9f2cbd949adf50ffcc082002337cc
+
+          License/notice:
+            These ONNX model files are third-party artifacts and are not covered by
+            the MIT license of the xr_tracking project. They remain under their
+            upstream terms. Keep this notice with redistributed copies.
+
+          Install into a downloaded XREAL Ultra runtime package:
+            tar -C out/xreal_ultra/bin -xzf hand-tracking-models-mercury.tar.gz
+          EOF
+
+          (
+            cd model_artifact/hand-tracking-models/mercury
+            sha256sum *.onnx > SHA256SUMS.txt
+          )
+
+          find model_artifact -type f -print -exec ls -lh {} \;
+          tar -C model_artifact -czf hand-tracking-models-mercury.tar.gz hand-tracking-models
+          ls -lh hand-tracking-models-mercury.tar.gz
+
+      - name: Upload Mercury hand-tracking models
+        uses: actions/upload-artifact@v4
+        with:
+          name: hand-tracking-models-mercury
+          path: hand-tracking-models-mercury.tar.gz
+          retention-days: 7
+
+  merge-package:
+    name: merge runtime package
+    runs-on: ubuntu-24.04
+    needs: build-part
+    timeout-minutes: 60
+
+    steps:
+      - name: Download partial packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xreal-ultra-merge-input-*
+          path: partials
+          merge-multiple: false
+
+      - name: Merge partial packages
+        run: |
+          mkdir -p merged
+          find partials -type f -name 'xreal_ultra_*.tar.gz' -print -exec ls -lh {} \;
+          for archive in $(find partials -type f -name 'xreal_ultra_*.tar.gz' | sort); do
+            echo "merge $archive"
+            tar -xzf "$archive" -C merged
+          done
+          test -d merged/xreal_ultra/bin
+          test -x merged/xreal_ultra/run_xr_client.sh
+          du -sh merged/xreal_ultra
+          find merged/xreal_ultra -maxdepth 4 -type f | sort | head -300
+          tar -C merged -czf xreal_ultra_linux_x64.tar.gz xreal_ultra
+          ls -lh xreal_ultra_linux_x64.tar.gz
+
+      - name: Upload merged package
+        uses: actions/upload-artifact@v4
+        with:
+          name: xreal-ultra-linux-x64
+          path: xreal_ultra_linux_x64.tar.gz
+          retention-days: 7

@@ -1,0 +1,6 @@
+# Legacy documentation wrapper.
+# The generic schema lives in:
+#   backends/xr_spatial/configs/xr_spatial_reference.yaml
+# The active XREAL profile lives in:
+#   backends/xr_spatial/configs/profiles/xreal_air2ultra_unified_480.env
+# Runtime scripts source .env profiles, not this YAML file.

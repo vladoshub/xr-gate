@@ -1,0 +1,95 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "xr_hand_controller",
+  "description": "XR hand-tracking controller",
+  "input_source": {
+    "/input/trigger": {
+      "type": "trigger",
+      "binding_image_point": [
+        64,
+        64
+      ]
+    },
+    "/input/grip": {
+      "type": "trigger",
+      "binding_image_point": [
+        64,
+        128
+      ]
+    },
+    "/input/joystick": {
+      "type": "joystick",
+      "binding_image_point": [
+        64,
+        192
+      ]
+    },
+    "/input/trackpad": {
+      "type": "trackpad",
+      "touch": true,
+      "click": true,
+      "binding_image_point": [
+        64,
+        224
+      ]
+    },
+    "/input/application_menu": {
+      "type": "button",
+      "binding_image_point": [
+        64,
+        256
+      ]
+    },
+    "/input/a": {
+      "type": "button",
+      "binding_image_point": [
+        128,
+        64
+      ]
+    },
+    "/input/b": {
+      "type": "button",
+      "binding_image_point": [
+        128,
+        128
+      ]
+    },
+    "/input/x": {
+      "type": "button",
+      "binding_image_point": [
+        128,
+        192
+      ]
+    },
+    "/input/y": {
+      "type": "button",
+      "binding_image_point": [
+        128,
+        256
+      ]
+    },
+    "/pose/raw": {
+      "type": "pose",
+      "binding_image_point": [
+        192,
+        128
+      ]
+    },
+    "/pose/tip": {
+      "type": "pose",
+      "binding_image_point": [
+        192,
+        192
+      ]
+    },
+    "/output/haptic": {
+      "type": "haptic",
+      "binding_image_point": [
+        192,
+        256
+      ]
+    }
+  },
+  "compatibility_mode_controller_type": "vive_controller",
+  "input_bindingui_mode": "controller_handed"
+}

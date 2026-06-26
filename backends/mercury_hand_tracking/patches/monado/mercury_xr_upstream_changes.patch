@@ -1,0 +1,1683 @@
+diff --git a/src/xrt/tracking/hand/mercury/CMakeLists.txt b/src/xrt/tracking/hand/mercury/CMakeLists.txt
+index 543cae447..0a0e8f806 100644
+--- a/src/xrt/tracking/hand/mercury/CMakeLists.txt
++++ b/src/xrt/tracking/hand/mercury/CMakeLists.txt
+@@ -79,3 +79,37 @@ add_library(t_ht_mercury_includes INTERFACE)
+ target_include_directories(
+ 	t_ht_mercury_includes INTERFACE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
+ 	)
++
++
++# XR runtime ABI shim: a small shared library with a stable C ABI that lets
++# project-owned runtime backends use Mercury without linking their build tree
++# directly against Monado internals.  This keeps the capture/runtime repository
++# portable and leaves Mercury changes as Monado patches.
++add_library(xr_mercury_runtime SHARED xr_mercury_runtime_c_api.cpp xr_mercury_runtime_c_api.h)
++
++target_compile_definitions(xr_mercury_runtime PRIVATE XR_MERCURY_RUNTIME_BUILD)
++
++target_link_libraries(
++	xr_mercury_runtime
++	PRIVATE
++		t_ht_mercury
++		aux_tracking
++		aux_util
++		aux_math
++		xrt-interfaces
++		xrt-external-cjson
++	)
++
++# Development/debug tool for offline XR HT0 dataset playback through Mercury.
++add_executable(xr_mercury_dataset_probe xr_mercury_dataset_probe.cpp)
++
++target_link_libraries(
++	xr_mercury_dataset_probe
++	PRIVATE
++		t_ht_mercury
++		aux_tracking
++		aux_util
++		aux_math
++		xrt-interfaces
++		xrt-external-cjson
++	)
+diff --git a/src/xrt/tracking/hand/mercury/hg_model.cpp b/src/xrt/tracking/hand/mercury/hg_model.cpp
+index 28826a7b2..14d365b86 100644
+--- a/src/xrt/tracking/hand/mercury/hg_model.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
+@@ -13,9 +13,21 @@
+ #include "hg_image_math.inl"
+ #include "hg_numerics_checker.hpp"
+ 
++#include <cstdlib>
++#include <cstring>
++#include <utility>
++#include <vector>
++#include <algorithm>
+ 
+ #include <filesystem>
+ #include <array>
++#include <cstdio>
++#include <cstdint>
++#include <cmath>
++#include <mutex>
++#include <string>
++#include <vector>
++#include <iterator>
+ 
+ namespace xrt::tracking::hand::mercury {
+ 
+@@ -306,8 +318,514 @@ init_hand_detection(HandTracking *hgt, onnx_state *wrap)
+ }
+ 
+ 
++static bool
++xr_detector_env_flag_enabled(const char *name)
++{
++	const char *value = getenv(name);
++	if (value == nullptr || value[0] == '\0') {
++		return false;
++	}
++	return strcmp(value, "0") != 0 && strcmp(value, "false") != 0 && strcmp(value, "FALSE") != 0;
++}
++
++static float
++xr_detector_env_float(const char *name, float fallback)
++{
++	const char *value = getenv(name);
++	if (value == nullptr || value[0] == '\0') {
++		return fallback;
++	}
++	char *end = nullptr;
++	float parsed = strtof(value, &end);
++	if (end == value) {
++		return fallback;
++	}
++	return parsed;
++}
++
++struct xr_fusion_candidate
++{
++	hand_region_of_interest roi = {};
++	float score = 0.0f;
++	int source = 0; // 0=raw detector, 1=mirrored-detector/unmirrored-ROI
++	int source_hand_idx = 0;
++};
++
++struct xr_fusion_pair_candidate
++{
++	hand_region_of_interest roi[2] = {};
++	float score = 0.0f;
++	int source = 0; // 0=raw detector, 1=mirrored-detector/unmirrored-ROI
++	int source_hand_idx = 0;
++	float avg_x = 0.0f;
++};
++
++struct xr_stereo_fusion_view_cache
++{
++	bool valid = false;
++	ht_view *view = nullptr;
++	hand_region_of_interest raw_outputs[2] = {};
++	hand_region_of_interest mirrored_outputs[2] = {};
++	std::vector<xr_fusion_candidate> candidates;
++	hand_region_of_interest *outputs = nullptr;
++};
++
++struct xr_stereo_fusion_frame_cache
++{
++	HandTracking *hgt = nullptr;
++	uint64_t timestamp_ns = 0;
++	xr_stereo_fusion_view_cache views[2];
++};
++
++static float
++xr_roi_center_distance_px(const hand_region_of_interest &a, const hand_region_of_interest &b)
++{
++	xrt_vec2 diff = a.center_px - b.center_px;
++	return m_vec2_len(diff);
++}
++
++static float
++xr_roi_iou_px(const hand_region_of_interest &a, const hand_region_of_interest &b)
++{
++	if (!a.found || !b.found || a.size_px <= 0.0f || b.size_px <= 0.0f) {
++		return -1.0f;
++	}
++	float ax0 = a.center_px.x - a.size_px * 0.5f;
++	float ax1 = a.center_px.x + a.size_px * 0.5f;
++	float ay0 = a.center_px.y - a.size_px * 0.5f;
++	float ay1 = a.center_px.y + a.size_px * 0.5f;
++	float bx0 = b.center_px.x - b.size_px * 0.5f;
++	float bx1 = b.center_px.x + b.size_px * 0.5f;
++	float by0 = b.center_px.y - b.size_px * 0.5f;
++	float by1 = b.center_px.y + b.size_px * 0.5f;
++
++	float ix0 = fmaxf(ax0, bx0);
++	float ix1 = fminf(ax1, bx1);
++	float iy0 = fmaxf(ay0, by0);
++	float iy1 = fminf(ay1, by1);
++	float iw = fmaxf(0.0f, ix1 - ix0);
++	float ih = fmaxf(0.0f, iy1 - iy0);
++	float inter = iw * ih;
++	float area_a = fmaxf(0.0f, ax1 - ax0) * fmaxf(0.0f, ay1 - ay0);
++	float area_b = fmaxf(0.0f, bx1 - bx0) * fmaxf(0.0f, by1 - by0);
++	float denom = area_a + area_b - inter;
++	if (denom <= 1e-6f) {
++		return -1.0f;
++	}
++	return inter / denom;
++}
++
++static float
++xr_roi_dynamic_duplicate_threshold_px(const hand_region_of_interest &a,
++                                                const hand_region_of_interest &b,
++                                                float configured_min_px)
++{
++	// One hand seen through two detector conventions usually produces overlapping
++	// ROIs. Keep the threshold tied to ROI size, with a configurable floor.
++	float size_based = 0.55f * fmaxf(a.size_px, b.size_px);
++	return fmaxf(configured_min_px, size_based);
++}
++
++static int
++xr_detector_env_int(const char *name, int fallback)
++{
++	const char *value = getenv(name);
++	if (value == nullptr || value[0] == '\0') {
++		return fallback;
++	}
++	char *end = nullptr;
++	long parsed = strtol(value, &end, 10);
++	if (end == value) {
++		return fallback;
++	}
++	return (int)parsed;
++}
++
++static const char *
++xr_detector_source_name(int source)
++{
++	switch (source) {
++	case 0: return "raw";
++	case 1: return "mirror_unmirror";
++	default: return "unknown";
++	}
++}
++
++static const hand_region_of_interest &
++xr_candidate_kind_roi(const xr_stereo_fusion_view_cache &view, int source, int hand_idx)
++{
++	return source == 0 ? view.raw_outputs[hand_idx] : view.mirrored_outputs[hand_idx];
++}
++
++static std::vector<xr_fusion_candidate>
++xr_per_view_select_candidates(const std::vector<xr_fusion_candidate> &candidates, float min_dist_px)
++{
++	std::vector<xr_fusion_candidate> sorted = candidates;
++	std::sort(sorted.begin(), sorted.end(), [](const xr_fusion_candidate &a, const xr_fusion_candidate &b) {
++		return a.score > b.score;
++	});
++
++	std::vector<xr_fusion_candidate> selected;
++	selected.reserve(2);
++	for (const xr_fusion_candidate &candidate : sorted) {
++		bool duplicate = false;
++		for (const xr_fusion_candidate &existing : selected) {
++			float dist_px = xr_roi_center_distance_px(candidate.roi, existing.roi);
++			float threshold_px =
++			    xr_roi_dynamic_duplicate_threshold_px(candidate.roi, existing.roi, min_dist_px);
++			if (dist_px < threshold_px) {
++				duplicate = true;
++				break;
++			}
++		}
++		if (duplicate) {
++			continue;
++		}
++		selected.push_back(candidate);
++		if (selected.size() >= 2) {
++			break;
++		}
++	}
++
++	std::sort(selected.begin(), selected.end(), [](const xr_fusion_candidate &a, const xr_fusion_candidate &b) {
++		return a.roi.center_px.x < b.roi.center_px.x;
++	});
++	return selected;
++}
++
+ static void
+-run_hand_detection_unsafe(hand_detection_run_info *info)
++xr_clear_outputs(hand_region_of_interest outputs[2])
++{
++	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
++		outputs[hand_idx].found = false;
++		outputs[hand_idx].hand_detection_confidence = false;
++		outputs[hand_idx].provenance = ROIProvenance::HAND_DETECTION;
++	}
++}
++
++static void
++xr_apply_selected_to_outputs(const std::vector<xr_fusion_candidate> &selected, hand_region_of_interest outputs[2])
++{
++	xr_clear_outputs(outputs);
++	for (size_t i = 0; i < selected.size() && i < 2; i++) {
++		outputs[i] = selected[i].roi;
++		outputs[i].xr_raw_cy = (float)selected[i].source;
++		outputs[i].xr_raw_size = (float)selected[i].source_hand_idx;
++	}
++}
++
++static void
++xr_apply_pair_selection_to_outputs(const std::vector<xr_fusion_pair_candidate> &selected_pairs,
++                                         xr_stereo_fusion_view_cache views[2],
++                                         bool slot_swap)
++{
++	for (int view_idx = 0; view_idx < 2; view_idx++) {
++		if (!views[view_idx].valid || views[view_idx].outputs == nullptr) {
++			continue;
++		}
++		xr_clear_outputs(views[view_idx].outputs);
++	}
++
++	for (size_t slot = 0; slot < selected_pairs.size() && slot < 2; slot++) {
++		size_t out_slot = slot_swap ? (1 - slot) : slot;
++		for (int view_idx = 0; view_idx < 2; view_idx++) {
++			if (!views[view_idx].valid || views[view_idx].outputs == nullptr) {
++				continue;
++			}
++			views[view_idx].outputs[out_slot] = selected_pairs[slot].roi[view_idx];
++			views[view_idx].outputs[out_slot].xr_raw_cy = (float)selected_pairs[slot].source;
++			views[view_idx].outputs[out_slot].xr_raw_size = (float)selected_pairs[slot].source_hand_idx;
++		}
++	}
++}
++
++static void
++xr_build_selected_debug_for_view(const std::vector<xr_fusion_pair_candidate> &selected_pairs,
++                                    int view_idx,
++                                    std::vector<xr_fusion_candidate> &out)
++{
++	out.clear();
++	out.reserve(2);
++	for (const xr_fusion_pair_candidate &pair : selected_pairs) {
++		xr_fusion_candidate c = {};
++		c.roi = pair.roi[view_idx];
++		c.score = pair.score;
++		c.source = pair.source;
++		c.source_hand_idx = pair.source_hand_idx;
++		out.push_back(c);
++	}
++}
++
++static std::vector<xr_fusion_pair_candidate>
++xr_select_stereo_pairs(const xr_stereo_fusion_view_cache views[2], float min_conf, float min_dist_px)
++{
++	std::vector<xr_fusion_pair_candidate> pairs;
++	pairs.reserve(4);
++
++	for (int source = 0; source < 2; source++) {
++		for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
++			const hand_region_of_interest &v0 = xr_candidate_kind_roi(views[0], source, hand_idx);
++			const hand_region_of_interest &v1 = xr_candidate_kind_roi(views[1], source, hand_idx);
++			if (!v0.found || !v1.found) {
++				continue;
++			}
++			if (v0.xr_raw_hand_exists < min_conf || v1.xr_raw_hand_exists < min_conf) {
++				continue;
++			}
++
++			xr_fusion_pair_candidate pair = {};
++			pair.roi[0] = v0;
++			pair.roi[1] = v1;
++			pair.source = source;
++			pair.source_hand_idx = hand_idx;
++			pair.score = v0.xr_raw_hand_exists + v1.xr_raw_hand_exists;
++			pair.avg_x = 0.5f * (v0.center_px.x + v1.center_px.x);
++			pairs.push_back(pair);
++		}
++	}
++
++	std::sort(pairs.begin(), pairs.end(), [](const xr_fusion_pair_candidate &a, const xr_fusion_pair_candidate &b) {
++		return a.score > b.score;
++	});
++
++	std::vector<xr_fusion_pair_candidate> selected;
++	selected.reserve(2);
++	for (const xr_fusion_pair_candidate &pair : pairs) {
++		bool duplicate = false;
++		for (const xr_fusion_pair_candidate &existing : selected) {
++			float d0 = xr_roi_center_distance_px(pair.roi[0], existing.roi[0]);
++			float d1 = xr_roi_center_distance_px(pair.roi[1], existing.roi[1]);
++			float avg = 0.5f * (d0 + d1);
++			if (avg < min_dist_px) {
++				duplicate = true;
++				break;
++			}
++		}
++		if (duplicate) {
++			continue;
++		}
++		selected.push_back(pair);
++		if (selected.size() >= 2) {
++			break;
++		}
++	}
++
++	std::sort(selected.begin(), selected.end(), [](const xr_fusion_pair_candidate &a, const xr_fusion_pair_candidate &b) {
++		return a.avg_x < b.avg_x;
++	});
++	return selected;
++}
++
++static void
++xr_fusion_debug_write_roi_csv(FILE *f, const hand_region_of_interest &roi)
++{
++	fprintf(f, "%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g", roi.found ? 1 : 0, roi.xr_raw_hand_exists,
++	        roi.xr_raw_cx, roi.xr_raw_cy, roi.xr_raw_size, roi.center_px.x, roi.center_px.y,
++	        roi.size_px);
++}
++
++static void
++xr_fusion_debug_write_selected_csv(FILE *f, const std::vector<xr_fusion_candidate> &selected, size_t idx)
++{
++	if (idx >= selected.size()) {
++		fprintf(f, "0,none,-1,-1,0,0,0,0");
++		return;
++	}
++	const xr_fusion_candidate &s = selected[idx];
++	fprintf(f, "1,%s,%d,%zu,%.9g,%.9g,%.9g,%.9g", xr_detector_source_name(s.source),
++	        s.source_hand_idx, idx, s.score, s.roi.center_px.x, s.roi.center_px.y, s.roi.size_px);
++}
++
++static void
++xr_fusion_debug_write_row(HandTracking *hgt,
++                             ht_view *view,
++                             const hand_region_of_interest raw_outputs[2],
++                             const hand_region_of_interest mirrored_outputs[2],
++                             const std::vector<xr_fusion_candidate> &candidates,
++                             const std::vector<xr_fusion_candidate> &selected,
++                             const hand_region_of_interest final_outputs[2],
++                             float min_conf,
++                             float min_dist_px,
++                             bool slot_swap)
++{
++	const char *path = getenv("MERCURY_XR_FUSION_DEBUG_CSV");
++	if (path == nullptr || path[0] == '\0') {
++		return;
++	}
++
++	static std::mutex mutex;
++	static FILE *f = nullptr;
++	static bool header_written = false;
++
++	std::lock_guard<std::mutex> lock(mutex);
++
++	if (f == nullptr) {
++		f = fopen(path, "w");
++		if (f == nullptr) {
++			HG_WARN(hgt, "Failed to open MERCURY_XR_FUSION_DEBUG_CSV='%s'", path);
++			return;
++		}
++	}
++
++	if (!header_written) {
++		fprintf(f,
++		        "timestamp_ns,detection_counter,view_idx,min_conf,min_center_dist_px,slot_swap,"
++		        "candidate_count,selected_count,"
++		        "raw_left_found,raw_left_conf,raw_left_cx,raw_left_cy,raw_left_size_raw,raw_left_x,raw_left_y,raw_left_size_px,"
++		        "raw_right_found,raw_right_conf,raw_right_cx,raw_right_cy,raw_right_size_raw,raw_right_x,raw_right_y,raw_right_size_px,"
++		        "mir_left_found,mir_left_conf,mir_left_cx,mir_left_cy,mir_left_size_raw,mir_left_x,mir_left_y,mir_left_size_px,"
++		        "mir_right_found,mir_right_conf,mir_right_cx,mir_right_cy,mir_right_size_raw,mir_right_x,mir_right_y,mir_right_size_px,"
++		        "selected0_valid,selected0_source,selected0_source_hand_idx,selected0_assigned_slot,selected0_score,selected0_x,selected0_y,selected0_size_px,"
++		        "selected1_valid,selected1_source,selected1_source_hand_idx,selected1_assigned_slot,selected1_score,selected1_x,selected1_y,selected1_size_px,"
++		        "final0_found,final0_conf,final0_cx,final0_cy,final0_size_raw,final0_x,final0_y,final0_size_px,"
++		        "final1_found,final1_conf,final1_cx,final1_cy,final1_size_raw,final1_x,final1_y,final1_size_px,"
++		        "selected_center_dist_px,selected_iou\n");
++		header_written = true;
++	}
++
++	float selected_dist = -1.0f;
++	float selected_iou = -1.0f;
++	if (selected.size() >= 2) {
++		selected_dist = xr_roi_center_distance_px(selected[0].roi, selected[1].roi);
++		selected_iou = xr_roi_iou_px(selected[0].roi, selected[1].roi);
++	}
++
++	fprintf(f, "%llu,%d,%d,%.9g,%.9g,%d,%zu,%zu,", (unsigned long long)hgt->current_frame_timestamp,
++	        hgt->detection_counter, view->view, min_conf, min_dist_px, slot_swap ? 1 : 0, candidates.size(),
++	        selected.size());
++
++	xr_fusion_debug_write_roi_csv(f, raw_outputs[0]);
++	fprintf(f, ",");
++	xr_fusion_debug_write_roi_csv(f, raw_outputs[1]);
++	fprintf(f, ",");
++	xr_fusion_debug_write_roi_csv(f, mirrored_outputs[0]);
++	fprintf(f, ",");
++	xr_fusion_debug_write_roi_csv(f, mirrored_outputs[1]);
++	fprintf(f, ",");
++	xr_fusion_debug_write_selected_csv(f, selected, 0);
++	fprintf(f, ",");
++	xr_fusion_debug_write_selected_csv(f, selected, 1);
++	fprintf(f, ",");
++	xr_fusion_debug_write_roi_csv(f, final_outputs[0]);
++	fprintf(f, ",");
++	xr_fusion_debug_write_roi_csv(f, final_outputs[1]);
++	fprintf(f, ",%.9g,%.9g\n", selected_dist, selected_iou);
++	fflush(f);
++}
++
++static void
++xr_put_rgb(std::vector<uint8_t> &rgb, int w, int h, int x, int y, uint8_t r, uint8_t g, uint8_t b)
++{
++	if (x < 0 || y < 0 || x >= w || y >= h) {
++		return;
++	}
++	size_t idx = (size_t)(y * w + x) * 3;
++	rgb[idx + 0] = r;
++	rgb[idx + 1] = g;
++	rgb[idx + 2] = b;
++}
++
++static void
++xr_draw_rect_rgb(std::vector<uint8_t> &rgb,
++                    int w,
++                    int h,
++                    const hand_region_of_interest &roi,
++                    uint8_t r,
++                    uint8_t g,
++                    uint8_t b)
++{
++	if (!roi.found || roi.size_px <= 1.0f) {
++		return;
++	}
++	int x0 = (int)lrintf(roi.center_px.x - roi.size_px * 0.5f);
++	int x1 = (int)lrintf(roi.center_px.x + roi.size_px * 0.5f);
++	int y0 = (int)lrintf(roi.center_px.y - roi.size_px * 0.5f);
++	int y1 = (int)lrintf(roi.center_px.y + roi.size_px * 0.5f);
++
++	for (int x = x0; x <= x1; x++) {
++		xr_put_rgb(rgb, w, h, x, y0, r, g, b);
++		xr_put_rgb(rgb, w, h, x, y1, r, g, b);
++	}
++	for (int y = y0; y <= y1; y++) {
++		xr_put_rgb(rgb, w, h, x0, y, r, g, b);
++		xr_put_rgb(rgb, w, h, x1, y, r, g, b);
++	}
++
++	int cx = (int)lrintf(roi.center_px.x);
++	int cy = (int)lrintf(roi.center_px.y);
++	for (int d = -4; d <= 4; d++) {
++		xr_put_rgb(rgb, w, h, cx + d, cy, r, g, b);
++		xr_put_rgb(rgb, w, h, cx, cy + d, r, g, b);
++	}
++}
++
++static void
++xr_fusion_debug_dump_overlay(HandTracking *hgt,
++                                ht_view *view,
++                                const hand_region_of_interest raw_outputs[2],
++                                const hand_region_of_interest mirrored_outputs[2],
++                                const hand_region_of_interest final_outputs[2])
++{
++	const char *dir = getenv("MERCURY_XR_FUSION_DUMP_OVERLAY_DIR");
++	if (dir == nullptr || dir[0] == '\0') {
++		return;
++	}
++
++	int every_n = xr_detector_env_int("MERCURY_XR_FUSION_DUMP_EVERY_N", 30);
++	if (every_n <= 0) {
++		every_n = 1;
++	}
++	if ((hgt->detection_counter % every_n) != 0) {
++		return;
++	}
++
++	cv::Mat &gray = view->run_model_on_this;
++	if (gray.empty() || gray.type() != CV_8UC1) {
++		return;
++	}
++
++	const int w = gray.cols;
++	const int h = gray.rows;
++	std::vector<uint8_t> rgb((size_t)w * (size_t)h * 3);
++	for (int y = 0; y < h; y++) {
++		const uint8_t *row = gray.ptr<uint8_t>(y);
++		for (int x = 0; x < w; x++) {
++			uint8_t v = row[x];
++			size_t idx = (size_t)(y * w + x) * 3;
++			rgb[idx + 0] = v;
++			rgb[idx + 1] = v;
++			rgb[idx + 2] = v;
++		}
++	}
++
++	// raw detector candidates: yellow/orange
++	xr_draw_rect_rgb(rgb, w, h, raw_outputs[0], 255, 255, 0);
++	xr_draw_rect_rgb(rgb, w, h, raw_outputs[1], 255, 165, 0);
++	// mirrored detector candidates after unmirror: red/magenta
++	xr_draw_rect_rgb(rgb, w, h, mirrored_outputs[0], 255, 0, 0);
++	xr_draw_rect_rgb(rgb, w, h, mirrored_outputs[1], 255, 0, 255);
++	// final selected slot outputs: green/cyan
++	xr_draw_rect_rgb(rgb, w, h, final_outputs[0], 0, 255, 0);
++	xr_draw_rect_rgb(rgb, w, h, final_outputs[1], 0, 255, 255);
++
++	std::error_code ec;
++	std::filesystem::create_directories(dir, ec);
++
++	char path[2048];
++	snprintf(path, sizeof(path), "%s/fusion_%012llu_det%06d_view%d.ppm", dir,
++	         (unsigned long long)hgt->current_frame_timestamp, hgt->detection_counter, view->view);
++
++	FILE *f = fopen(path, "wb");
++	if (f == nullptr) {
++		return;
++	}
++	fprintf(f, "P6\n%d %d\n255\n", w, h);
++	fwrite(rgb.data(), 1, rgb.size(), f);
++	fclose(f);
++}
++
++static void
++xr_run_hand_detection_pass(hand_detection_run_info *info, bool mirror_horizontal, hand_region_of_interest outputs[2])
+ {
+ 	ht_view *view = info->view;
+ 	HandTracking *hgt = view->hgt;
+@@ -316,13 +834,25 @@ run_hand_detection_unsafe(hand_detection_run_info *info)
+ 
+ 	cv::Mat &orig_data = view->run_model_on_this;
+ 
++	// XR diagnostic/compatibility mode:
++	// Mirror only the detector input, then unmirror the detector ROI back into
++	// the original raw image coordinate system. Keypoint estimation and the 3D
++	// optimizer will still use the unmodified raw frames and raw calibration.
++	// This is intentionally different from flipping the whole input pipeline.
++	cv::Mat detector_input;
++	if (mirror_horizontal) {
++		cv::flip(orig_data, detector_input, 1);
++	} else {
++		detector_input = orig_data;
++	}
++
+ 	cv::Mat binned_uint8;
+ 
+ 	xrt_size desired_bin_size;
+ 	desired_bin_size.h = kDetectionInputSize;
+ 	desired_bin_size.w = kDetectionInputSize;
+ 
+-	cv::Matx23f go_back = blackbar(orig_data, view->camera_info.camera_orientation, binned_uint8, desired_bin_size);
++	cv::Matx23f go_back = blackbar(detector_input, view->camera_info.camera_orientation, binned_uint8, desired_bin_size);
+ 
+ 	cv::Mat binned_float_wrapper_mat(cv::Size(kDetectionInputSize, kDetectionInputSize),
+ 	                                 CV_32FC1,             //
+@@ -358,7 +888,14 @@ run_hand_detection_unsafe(hand_detection_run_info *info)
+ 
+ 
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+-		hand_region_of_interest &output = info->outputs[hand_idx];
++		hand_region_of_interest &output = outputs[hand_idx];
++
++		// Preserve raw detector outputs for offline diagnostics. These are the
++		// values before min_detection_confidence/found and later ROI gates.
++		output.xr_raw_hand_exists = hand_exists[hand_idx];
++		output.xr_raw_cx = cx[hand_idx];
++		output.xr_raw_cy = cy[hand_idx];
++		output.xr_raw_size = sizee[hand_idx];
+ 
+ 		output.found = hand_exists[hand_idx] > hgt->tuneable_values.min_detection_confidence.val;
+ 
+@@ -381,6 +918,9 @@ run_hand_detection_unsafe(hand_detection_run_info *info)
+ 			cv::Mat &debug_frame = view->debug_out_to_this;
+ 
+ 			_pt = transformVecBy2x3(_pt, go_back);
++			if (mirror_horizontal) {
++				_pt.x = (float)(orig_data.cols - 1) - _pt.x;
++			}
+ 
+ 			output.center_px = _pt;
+ 			output.size_px = size;
+@@ -406,6 +946,142 @@ run_hand_detection_unsafe(hand_detection_run_info *info)
+ 	}
+ }
+ 
++static void
++run_hand_detection_unsafe(hand_detection_run_info *info)
++{
++	const bool xr_detector_fusion = xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_FUSION");
++	const bool xr_detector_swap_slots = xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_SWAP_SLOTS");
++
++	if (!xr_detector_fusion) {
++		const bool mirror_horizontal =
++		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
++		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
++		if (xr_detector_swap_slots) {
++			std::swap(info->outputs[0], info->outputs[1]);
++		}
++		return;
++	}
++
++	ht_view *view = info->view;
++	HandTracking *hgt = view->hgt;
++
++	hand_region_of_interest raw_outputs[2] = {};
++	hand_region_of_interest mirrored_outputs[2] = {};
++	xr_run_hand_detection_pass(info, false, raw_outputs);
++	xr_run_hand_detection_pass(info, true, mirrored_outputs);
++
++	std::vector<xr_fusion_candidate> candidates;
++	candidates.reserve(4);
++
++	const float min_conf = xr_detector_env_float(
++	    "MERCURY_XR_FUSION_MIN_CONF", hgt->tuneable_values.min_detection_confidence.val);
++	const float min_dist_px = xr_detector_env_float("MERCURY_XR_FUSION_MIN_CENTER_DIST_PX", 70.0f);
++
++	auto add_candidate = [&](const hand_region_of_interest &roi, int source, int hand_idx) {
++		float score = roi.xr_raw_hand_exists;
++		if (score < min_conf || !roi.found) {
++			return;
++		}
++		xr_fusion_candidate c = {};
++		c.roi = roi;
++		c.score = score;
++		c.source = source;
++		c.source_hand_idx = hand_idx;
++		candidates.push_back(c);
++	};
++
++	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
++		add_candidate(raw_outputs[hand_idx], 0, hand_idx);
++		add_candidate(mirrored_outputs[hand_idx], 1, hand_idx);
++	}
++
++	const bool xr_detector_fusion_stereo_pairs =
++	    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_FUSION_STEREO_PAIRS");
++
++	if (xr_detector_fusion_stereo_pairs) {
++		// Fusion v1 selected candidates independently per view. That can assign
++		// slot0=view0/raw_right but slot0=view1/mir_left, which is invalid for a
++		// stereo optimizer. Fusion v2 keeps source-kind pairs together across both
++		// views: raw_right is selected as raw_right(view0)+raw_right(view1), etc.
++		static std::mutex stereo_mutex;
++		static xr_stereo_fusion_frame_cache stereo_cache;
++
++		std::lock_guard<std::mutex> lock(stereo_mutex);
++		uint64_t ts = (uint64_t)hgt->current_frame_timestamp;
++		if (stereo_cache.hgt != hgt || stereo_cache.timestamp_ns != ts) {
++			stereo_cache = {};
++			stereo_cache.hgt = hgt;
++			stereo_cache.timestamp_ns = ts;
++		}
++
++		int view_idx = view->view;
++		if (view_idx < 0 || view_idx > 1) {
++			view_idx = 0;
++		}
++
++		xr_stereo_fusion_view_cache &entry = stereo_cache.views[view_idx];
++		entry.valid = true;
++		entry.view = view;
++		entry.outputs = info->outputs;
++		std::copy(std::begin(raw_outputs), std::end(raw_outputs), std::begin(entry.raw_outputs));
++		std::copy(std::begin(mirrored_outputs), std::end(mirrored_outputs), std::begin(entry.mirrored_outputs));
++		entry.candidates = candidates;
++
++		// Fallback for the first view that returns before the other view has populated
++		// the frame cache. The second view overwrites both info structs before
++		// u_worker_group_wait_all() returns to hg_sync.cpp.
++		std::vector<xr_fusion_candidate> fallback = xr_per_view_select_candidates(candidates, min_dist_px);
++		xr_apply_selected_to_outputs(fallback, info->outputs);
++		if (xr_detector_swap_slots) {
++			std::swap(info->outputs[0], info->outputs[1]);
++		}
++
++		if (stereo_cache.views[0].valid && stereo_cache.views[1].valid) {
++			std::vector<xr_fusion_pair_candidate> selected_pairs =
++			    xr_select_stereo_pairs(stereo_cache.views, min_conf, min_dist_px);
++			xr_apply_pair_selection_to_outputs(selected_pairs, stereo_cache.views, xr_detector_swap_slots);
++
++			for (int vi = 0; vi < 2; vi++) {
++				std::vector<xr_fusion_candidate> selected_debug;
++				xr_build_selected_debug_for_view(selected_pairs, vi, selected_debug);
++				xr_fusion_debug_write_row(hgt, stereo_cache.views[vi].view, stereo_cache.views[vi].raw_outputs,
++				                            stereo_cache.views[vi].mirrored_outputs, stereo_cache.views[vi].candidates,
++				                            selected_debug, stereo_cache.views[vi].outputs, min_conf, min_dist_px,
++				                            xr_detector_swap_slots);
++				xr_fusion_debug_dump_overlay(hgt, stereo_cache.views[vi].view, stereo_cache.views[vi].raw_outputs,
++				                                stereo_cache.views[vi].mirrored_outputs, stereo_cache.views[vi].outputs);
++			}
++		}
++
++		if (hgt->debug_scribble) {
++			for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
++				if (info->outputs[hand_idx].found) {
++					handSquare(view->debug_out_to_this, info->outputs[hand_idx].center_px,
++					           info->outputs[hand_idx].size_px, colors[hand_idx]);
++				}
++			}
++		}
++		return;
++	}
++
++	std::vector<xr_fusion_candidate> selected = xr_per_view_select_candidates(candidates, min_dist_px);
++	xr_apply_selected_to_outputs(selected, info->outputs);
++
++	if (xr_detector_swap_slots) {
++		std::swap(info->outputs[0], info->outputs[1]);
++	}
++
++	xr_fusion_debug_write_row(hgt, view, raw_outputs, mirrored_outputs, candidates, selected, info->outputs, min_conf,
++	                            min_dist_px, xr_detector_swap_slots);
++	xr_fusion_debug_dump_overlay(hgt, view, raw_outputs, mirrored_outputs, info->outputs);
++
++	if (hgt->debug_scribble) {
++		for (size_t i = 0; i < selected.size() && i < 2; i++) {
++			handSquare(view->debug_out_to_this, info->outputs[i].center_px, info->outputs[i].size_px, colors[i]);
++		}
++	}
++}
++
+ void
+ run_hand_detection(void *ptr)
+ {
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.cpp b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+index dbb89cedd..d162f88a9 100644
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -23,6 +23,18 @@
+ 
+ #include <numeric>
+ 
++#include <cerrno>
++#include <cstdint>
++#include <cfloat>
++#include <cmath>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <iomanip>
++#include <sstream>
++#include <string>
++#include <strings.h>
++
+ 
+ namespace xrt::tracking::hand::mercury {
+ 
+@@ -30,6 +42,508 @@ DEBUG_GET_ONCE_LOG_OPTION(mercury_log, "MERCURY_LOG", U_LOGGING_WARN)
+ DEBUG_GET_ONCE_BOOL_OPTION(mercury_optimize_hand_size, "MERCURY_optimize_hand_size", true)
+ DEBUG_GET_ONCE_FLOAT_OPTION(mercury_min_detection_confidence, "MERCURY_MIN_DETECTION_CONFIDENCE", 0.3)
+ 
++static bool
++xr_env_is_enabled(const char *name, bool default_value = false)
++{
++	const char *v = std::getenv(name);
++	if (v == nullptr || v[0] == '\0') {
++		return default_value;
++	}
++	return !(strcmp(v, "0") == 0 || strcasecmp(v, "false") == 0 || strcasecmp(v, "no") == 0 ||
++	         strcasecmp(v, "off") == 0);
++}
++
++static const char *
++xr_debug_dump_dir_env()
++{
++	const char *dir = std::getenv("MERCURY_XR_DEBUG_DUMP_DIR");
++	if (dir == nullptr || dir[0] == '\0') {
++		return nullptr;
++	}
++	return dir;
++}
++
++static bool
++xr_debug_dump_enabled()
++{
++	return xr_debug_dump_dir_env() != nullptr;
++}
++
++static bool
++xr_debug_dump_frame_allowed(struct HandTracking *hgt, bool left_active, bool right_active);
++
++static std::string
++xr_debug_safe_env_suffix(const char *name);
++
++static bool
++xr_write_ppm_rgb(const std::filesystem::path &path, const cv::Mat &bgr)
++{
++	if (bgr.empty() || bgr.type() != CV_8UC3) {
++		return false;
++	}
++
++	std::ofstream out(path, std::ios::binary);
++	if (!out) {
++		return false;
++	}
++
++	out << "P6\n" << bgr.cols << " " << bgr.rows << "\n255\n";
++	for (int y = 0; y < bgr.rows; y++) {
++		const uint8_t *row = bgr.ptr<uint8_t>(y);
++		for (int x = 0; x < bgr.cols; x++) {
++			uint8_t rgb[3] = {row[(x * 3) + 2], row[(x * 3) + 1], row[(x * 3) + 0]};
++			out.write(reinterpret_cast<const char *>(rgb), sizeof(rgb));
++		}
++	}
++	return true;
++}
++
++static bool
++xr_write_pgm_l8(const std::filesystem::path &path, const cv::Mat &gray)
++{
++	if (gray.empty() || gray.type() != CV_8UC1) {
++		return false;
++	}
++
++	std::ofstream out(path, std::ios::binary);
++	if (!out) {
++		return false;
++	}
++
++	out << "P5\n" << gray.cols << " " << gray.rows << "\n255\n";
++	for (int y = 0; y < gray.rows; y++) {
++		out.write(reinterpret_cast<const char *>(gray.ptr<uint8_t>(y)), gray.cols);
++	}
++	return true;
++}
++
++static void
++xr_debug_dump_frames(struct HandTracking *hgt, xrt_frame *ann_frame, xrt_frame *model_frame, bool left_active, bool right_active)
++{
++	const char *dir_c = xr_debug_dump_dir_env();
++	if (dir_c == nullptr) {
++		return;
++	}
++
++	if (!xr_debug_dump_frame_allowed(hgt, left_active, right_active)) {
++		return;
++	}
++
++	const std::filesystem::path root(dir_c);
++	const std::filesystem::path ann_dir = root / "ann";
++	const std::filesystem::path model_dir = root / "model";
++	std::error_code ec;
++	std::filesystem::create_directories(ann_dir, ec);
++	std::filesystem::create_directories(model_dir, ec);
++
++	std::ostringstream name;
++	name << "frame_" << std::setw(6) << std::setfill('0') << hgt->current_frame_timestamp << "_det"
++	     << std::setw(6) << std::setfill('0') << hgt->detection_counter;
++
++	std::string dump_suffix = xr_debug_safe_env_suffix("MERCURY_XR_CURRENT_DUMP_INDEX");
++	if (!dump_suffix.empty()) {
++		name << "_dump" << dump_suffix;
++	}
++
++	std::string label_suffix = xr_debug_safe_env_suffix("MERCURY_XR_CURRENT_LABEL");
++	if (!label_suffix.empty()) {
++		name << "_" << label_suffix;
++	}
++
++	name << "_L" << (left_active ? 1 : 0) << "_R" << (right_active ? 1 : 0);
++
++	if (ann_frame != nullptr) {
++		cv::Mat ann(cv::Size((int)ann_frame->width, (int)ann_frame->height), CV_8UC3, ann_frame->data,
++		            ann_frame->stride);
++		xr_write_ppm_rgb(ann_dir / (name.str() + "_ann.ppm"), ann);
++	}
++
++	if (model_frame != nullptr) {
++		cv::Mat model(cv::Size((int)model_frame->width, (int)model_frame->height), CV_8UC1, model_frame->data,
++		              model_frame->stride);
++		xr_write_pgm_l8(model_dir / (name.str() + "_model.pgm"), model);
++	}
++}
++
++static bool
++xr_debug_draw_skeleton_enabled()
++{
++	return xr_env_is_enabled("MERCURY_XR_DEBUG_DRAW_SKELETON", true);
++}
++
++static bool
++xr_debug_draw_joint_numbers_enabled()
++{
++	return xr_env_is_enabled("MERCURY_XR_DEBUG_DRAW_JOINT_NUMBERS", true);
++}
++
++static bool
++xr_debug_draw_keypoints_enabled()
++{
++	return xr_env_is_enabled("MERCURY_XR_DEBUG_DRAW_KEYPOINTS", true);
++}
++
++static bool
++xr_debug_draw_optimizer_enabled()
++{
++	return xr_env_is_enabled("MERCURY_XR_DEBUG_DRAW_OPTIMIZER", true);
++}
++
++static bool
++xr_debug_draw_predictions_enabled()
++{
++	return xr_env_is_enabled("MERCURY_XR_DEBUG_DRAW_PREDICTIONS", false);
++}
++
++static bool
++xr_debug_env_token_enabled(const char *name, const char *token)
++{
++	const char *v = std::getenv(name);
++	if (v == nullptr || v[0] == '\0') {
++		return false;
++	}
++
++	// Accept a small set of simple forms: "all", "both", exact token, or a comma-separated list.
++	std::string value(v);
++	std::string current;
++	for (size_t i = 0; i <= value.size(); i++) {
++		const char c = i < value.size() ? value[i] : ',';
++		if (c == ',' || c == ';' || c == ' ' || c == '\t') {
++			if (!current.empty()) {
++				if (strcasecmp(current.c_str(), "all") == 0 || strcasecmp(current.c_str(), "both") == 0 ||
++				    strcasecmp(current.c_str(), token) == 0) {
++					return true;
++				}
++				current.clear();
++			}
++		} else {
++			current.push_back(c);
++		}
++	}
++
++	return false;
++}
++
++static bool
++xr_debug_mirror_overlay_for_slot(int hand_idx)
++{
++	if (hand_idx == 0 && xr_env_is_enabled("MERCURY_XR_DEBUG_MIRROR_SLOT0", false)) {
++		return true;
++	}
++	if (hand_idx == 1 && xr_env_is_enabled("MERCURY_XR_DEBUG_MIRROR_SLOT1", false)) {
++		return true;
++	}
++	return false;
++}
++
++static bool
++xr_debug_mirror_source_filter_is_set()
++{
++	const char *v = std::getenv("MERCURY_XR_DEBUG_MIRROR_SOURCE_TAG");
++	return v != nullptr && v[0] != '\0';
++}
++
++static bool
++xr_debug_mirror_overlay_for_source(const char *source_tag)
++{
++	// source_tag is currently "kp" for keypoint-model projection or "opt" for optimizer projection.
++	// This is a diagnostic-only overlay transform; it does not change Mercury state/runtime output.
++	if (!xr_debug_mirror_source_filter_is_set()) {
++		return true;
++	}
++	return xr_debug_env_token_enabled("MERCURY_XR_DEBUG_MIRROR_SOURCE_TAG", source_tag);
++}
++
++static bool
++xr_env_i64(const char *name, int64_t *out)
++{
++	const char *v = std::getenv(name);
++	if (v == nullptr || v[0] == '\0') {
++		return false;
++	}
++	char *end = nullptr;
++	errno = 0;
++	long long parsed = std::strtoll(v, &end, 10);
++	if (errno != 0 || end == v || (end != nullptr && *end != '\0')) {
++		return false;
++	}
++	*out = (int64_t)parsed;
++	return true;
++}
++
++static bool
++xr_i64_in_window(const char *center_name, const char *radius_name, int64_t value)
++{
++	int64_t center = 0;
++	if (!xr_env_i64(center_name, &center)) {
++		return true;
++	}
++
++	int64_t radius = 0;
++	(void)xr_env_i64(radius_name, &radius);
++	if (radius < 0) {
++		radius = 0;
++	}
++
++	const int64_t diff = value >= center ? value - center : center - value;
++	return diff <= radius;
++}
++
++static bool
++xr_debug_dump_frame_allowed(struct HandTracking *hgt, bool left_active, bool right_active)
++{
++	if (xr_env_is_enabled("MERCURY_XR_DEBUG_DUMP_ACTIVE_ONLY", false) && !(left_active || right_active)) {
++		return false;
++	}
++
++	if (!xr_i64_in_window("MERCURY_XR_DEBUG_DUMP_DET_CENTER", "MERCURY_XR_DEBUG_DUMP_DET_RADIUS",
++	                         (int64_t)hgt->detection_counter)) {
++		return false;
++	}
++
++	if (!xr_i64_in_window("MERCURY_XR_DEBUG_DUMP_TIMESTAMP_CENTER",
++	                         "MERCURY_XR_DEBUG_DUMP_TIMESTAMP_RADIUS_NS",
++	                         (int64_t)hgt->current_frame_timestamp)) {
++		return false;
++	}
++
++	int64_t dump_index = 0;
++	if (xr_env_i64("MERCURY_XR_DEBUG_DUMP_INDEX_CENTER", &dump_index)) {
++		int64_t current_dump_index = 0;
++		if (!xr_env_i64("MERCURY_XR_CURRENT_DUMP_INDEX", &current_dump_index)) {
++			return false;
++		}
++		if (!xr_i64_in_window("MERCURY_XR_DEBUG_DUMP_INDEX_CENTER", "MERCURY_XR_DEBUG_DUMP_INDEX_RADIUS",
++		                         current_dump_index)) {
++			return false;
++		}
++	}
++
++	return true;
++}
++
++static std::string
++xr_debug_safe_env_suffix(const char *name)
++{
++	const char *v = std::getenv(name);
++	if (v == nullptr || v[0] == '\0') {
++		return "";
++	}
++
++	std::string out;
++	for (const char *p = v; *p != '\0'; ++p) {
++		const char c = *p;
++		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' ||
++		    c == '-') {
++			out.push_back(c);
++		} else {
++			out.push_back('_');
++		}
++	}
++	return out;
++}
++
++static bool
++xr_debug_draw_joint_valid(const cv::Mat &mat, const xrt_vec2 &pt)
++{
++	return std::isfinite(pt.x) && std::isfinite(pt.y) && pt.x >= 0.0f && pt.y >= 0.0f &&
++	       pt.x < (float)mat.cols && pt.y < (float)mat.rows;
++}
++
++static cv::Scalar
++xr_debug_hand_color(int hand_idx)
++{
++	// OpenCV uses BGR. Slot 0 is cyan-ish, slot 1 is blue-ish to match the existing ROI colors.
++	return hand_idx == 0 ? cv::Scalar(255, 220, 0) : cv::Scalar(255, 70, 70);
++}
++
++static cv::Scalar
++xr_debug_text_color()
++{
++	return cv::Scalar(255, 255, 255);
++}
++
++static void
++xr_debug_draw_line(cv::Mat &mat, const xrt_vec2 &a, const xrt_vec2 &b, cv::Scalar color, int thickness)
++{
++	if (!xr_debug_draw_joint_valid(mat, a) || !xr_debug_draw_joint_valid(mat, b)) {
++		return;
++	}
++
++	cv::line(mat, cv::Point((int)std::lround(a.x), (int)std::lround(a.y)),
++	         cv::Point((int)std::lround(b.x), (int)std::lround(b.y)), color, thickness, cv::LINE_AA);
++}
++
++static void
++xr_debug_draw_text(cv::Mat &mat, const xrt_vec2 &pt, const std::string &text, cv::Scalar color, double scale)
++{
++	if (!xr_debug_draw_joint_valid(mat, pt)) {
++		return;
++	}
++
++	cv::Point org((int)std::lround(pt.x) + 4, (int)std::lround(pt.y) - 4);
++	cv::putText(mat, text, org + cv::Point(1, 1), cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(0, 0, 0), 2,
++	            cv::LINE_AA);
++	cv::putText(mat, text, org, cv::FONT_HERSHEY_SIMPLEX, scale, color, 1, cv::LINE_AA);
++}
++
++static bool
++xr_debug_joint_valid_no_bounds(const xrt_vec2 &pt)
++{
++	return std::isfinite(pt.x) && std::isfinite(pt.y);
++}
++
++static bool
++xr_debug_mirror_anchor(const xrt_vec2 keypoints[21], const bool invalid[21], xrt_vec2 *out_anchor)
++{
++	const char *anchor_env = std::getenv("MERCURY_XR_DEBUG_MIRROR_ANCHOR");
++	const char *anchor = (anchor_env == nullptr || anchor_env[0] == '\0') ? "palm" : anchor_env;
++
++	if (strcasecmp(anchor, "wrist") == 0) {
++		if (!invalid[0] && xr_debug_joint_valid_no_bounds(keypoints[0])) {
++			*out_anchor = keypoints[0];
++			return true;
++		}
++		return false;
++	}
++
++	if (strcasecmp(anchor, "bbox") == 0) {
++		bool any = false;
++		xrt_vec2 mn = {FLT_MAX, FLT_MAX};
++		xrt_vec2 mx = {-FLT_MAX, -FLT_MAX};
++		for (int i = 0; i < 21; i++) {
++			if (invalid[i] || !xr_debug_joint_valid_no_bounds(keypoints[i])) {
++				continue;
++			}
++			any = true;
++			mn.x = fminf(mn.x, keypoints[i].x);
++			mn.y = fminf(mn.y, keypoints[i].y);
++			mx.x = fmaxf(mx.x, keypoints[i].x);
++			mx.y = fmaxf(mx.y, keypoints[i].y);
++		}
++		if (!any) {
++			return false;
++		}
++		*out_anchor = m_vec2_mul_scalar(mn + mx, 0.5f);
++		return true;
++	}
++
++	// Default: approximate palm center using wrist and MCP joints. This is usually more stable than bbox during
++	// curled/fist poses and more centered than the wrist alone.
++	static constexpr int palm_joints[] = {0, 5, 9, 13, 17};
++	xrt_vec2 sum = {0.0f, 0.0f};
++	int count = 0;
++	for (const int idx : palm_joints) {
++		if (invalid[idx] || !xr_debug_joint_valid_no_bounds(keypoints[idx])) {
++			continue;
++		}
++		sum = sum + keypoints[idx];
++		count++;
++	}
++	if (count == 0) {
++		return false;
++	}
++	*out_anchor = m_vec2_mul_scalar(sum, 1.0f / (float)count);
++	return true;
++}
++
++static void
++xr_debug_mirror_joints_for_overlay(const xrt_vec2 input[21], const bool invalid[21], xrt_vec2 output[21])
++{
++	for (int i = 0; i < 21; i++) {
++		output[i] = input[i];
++	}
++
++	xrt_vec2 anchor = {};
++	if (!xr_debug_mirror_anchor(input, invalid, &anchor)) {
++		return;
++	}
++
++	const char *axis_env = std::getenv("MERCURY_XR_DEBUG_MIRROR_AXIS");
++	const char *axis = (axis_env == nullptr || axis_env[0] == '\0') ? "x" : axis_env;
++	const bool mirror_x = strcasecmp(axis, "x") == 0 || strcasecmp(axis, "xy") == 0 || strcasecmp(axis, "both") == 0;
++	const bool mirror_y = strcasecmp(axis, "y") == 0 || strcasecmp(axis, "xy") == 0 || strcasecmp(axis, "both") == 0;
++
++	for (int i = 0; i < 21; i++) {
++		if (invalid[i] || !xr_debug_joint_valid_no_bounds(input[i])) {
++			continue;
++		}
++		if (mirror_x) {
++			output[i].x = 2.0f * anchor.x - input[i].x;
++		}
++		if (mirror_y) {
++			output[i].y = 2.0f * anchor.y - input[i].y;
++		}
++	}
++}
++
++static void
++xr_debug_draw_joint_overlay(cv::Mat &mat,
++                              const xrt_vec2 keypoints[21],
++                              const bool invalid[21],
++                              int hand_idx,
++                              const char *source_tag)
++{
++	const cv::Scalar hand_color = xr_debug_hand_color(hand_idx);
++	const cv::Scalar text_color = xr_debug_text_color();
++
++	xrt_vec2 display_keypoints[21] = {};
++	for (int i = 0; i < 21; i++) {
++		display_keypoints[i] = keypoints[i];
++	}
++
++	const bool mirror_overlay = xr_debug_mirror_overlay_for_slot(hand_idx) &&
++	                            xr_debug_mirror_overlay_for_source(source_tag);
++	if (mirror_overlay) {
++		xr_debug_mirror_joints_for_overlay(keypoints, invalid, display_keypoints);
++	}
++
++	if (xr_debug_draw_skeleton_enabled()) {
++		static constexpr int bones[][2] = {
++		    // Thumb
++		    {0, 1}, {1, 2}, {2, 3}, {3, 4},
++		    // Index
++		    {0, 5}, {5, 6}, {6, 7}, {7, 8},
++		    // Middle
++		    {0, 9}, {9, 10}, {10, 11}, {11, 12},
++		    // Ring
++		    {0, 13}, {13, 14}, {14, 15}, {15, 16},
++		    // Little
++		    {0, 17}, {17, 18}, {18, 19}, {19, 20},
++		    // Palm cross-links. These are useful for visually checking finger order/handedness.
++		    {5, 9}, {9, 13}, {13, 17},
++		};
++
++		for (const auto &bone : bones) {
++			const int a = bone[0];
++			const int b = bone[1];
++			if (invalid[a] || invalid[b]) {
++				continue;
++			}
++			xr_debug_draw_line(mat, display_keypoints[a], display_keypoints[b], hand_color, 1);
++		}
++	}
++
++	if (xr_debug_draw_joint_numbers_enabled()) {
++		for (int i = 0; i < 21; i++) {
++			if (invalid[i]) {
++				continue;
++			}
++			xr_debug_draw_text(mat, display_keypoints[i], std::to_string(i), text_color, 0.35);
++		}
++	}
++
++	// Label the slot near wrist joint 0. This helps when checking whether slot0/slot1 or L/R got swapped.
++	if (!invalid[0]) {
++		std::ostringstream label;
++		label << source_tag << " slot" << hand_idx;
++		if (mirror_overlay) {
++			label << " MIR";
++		}
++		xr_debug_draw_text(mat, display_keypoints[0], label.str(), hand_color, 0.45);
++	}
++}
++
+ // Flags to tell state tracker that these are indeed valid joints
+ static const enum xrt_space_relation_flags valid_flags_ht = (enum xrt_space_relation_flags)(
+     XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
+@@ -244,6 +758,10 @@ back_project(struct HandTracking *hgt,        //
+ 				loc.y = keypoints_global[i].y;
+ 				handDot(debug, loc, 2, invalid[i] ? 0.0 : (float)(i) / 26.0, 1, 2);
+ 			}
++
++			if (xr_debug_draw_optimizer_enabled()) {
++				xr_debug_draw_joint_overlay(debug, keypoints_global, invalid, hand_idx, "opt");
++			}
+ 		}
+ 	} // for view_idx
+ }
+@@ -257,6 +775,9 @@ back_project_keypoint_output(struct HandTracking *hgt, //
+ 	cv::Mat debug = hgt->views[view_idx].debug_out_to_this;
+ 	one_frame_one_view &view = hgt->keypoint_outputs[hand_idx].views[view_idx];
+ 
++	xrt_vec2 keypoints_global[21] = {};
++	bool invalid[21] = {};
++
+ 	for (int i = 0; i < 21; i++) {
+ 
+ 		//!@todo We're trivially rewriting the stereographic projection for like the 2nd or 3rd time here. We
+@@ -274,16 +795,23 @@ back_project_keypoint_output(struct HandTracking *hgt, //
+ 		math_quat_rotate_vec3(&view.look_dir, &dir, &dir);
+ 
+ 		xrt_vec2 loc = {};
+-		t_camera_models_flip_and_project(&hgt->views[view_idx].hgdist, //
+-		                                 dir.x,                        //
+-		                                 dir.y,                        //
+-		                                 dir.z,                        //
+-		                                 &loc.x,                       //
+-		                                 &loc.y                        //
++		bool projected = t_camera_models_flip_and_project(&hgt->views[view_idx].hgdist, //
++		                                                 dir.x,                        //
++		                                                 dir.y,                        //
++		                                                 dir.z,                        //
++		                                                 &loc.x,                       //
++		                                                 &loc.y                        //
+ 		);
+ 
++		keypoints_global[i] = loc;
++		invalid[i] = !projected || !xr_debug_draw_joint_valid(debug, loc);
++
+ 		handDot(debug, loc, 2, (float)(i) / 26.0, 1, 2);
+ 	}
++
++	if (xr_debug_draw_keypoints_enabled()) {
++		xr_debug_draw_joint_overlay(debug, keypoints_global, invalid, hand_idx, "kp");
++	}
+ }
+ 
+ static bool
+@@ -374,6 +902,97 @@ hand_bounding_boxes_iou(const hand_region_of_interest &one, const hand_region_of
+ 	return boxIOU(this_box, other_box);
+ }
+ 
++static bool
++xr_env_flag_enabled(const char *name)
++{
++	const char *value = getenv(name);
++	if (value == nullptr || value[0] == '\0') {
++		return false;
++	}
++	return strcmp(value, "0") != 0 && strcmp(value, "false") != 0 && strcmp(value, "FALSE") != 0;
++}
++
++static void
++xr_detector_debug_write_header_if_needed(HandTracking *hgt)
++{
++	if (!hgt->xr_detector_debug_enabled) {
++		return;
++	}
++
++	if (hgt->xr_detector_debug_file == nullptr) {
++		hgt->xr_detector_debug_file = fopen(hgt->xr_detector_debug_csv, "w");
++		if (hgt->xr_detector_debug_file == nullptr) {
++			HG_WARN(hgt, "Failed to open MERCURY_XR_DETECTOR_DEBUG_CSV='%s'", hgt->xr_detector_debug_csv);
++			hgt->xr_detector_debug_enabled = false;
++			return;
++		}
++	}
++
++	if (hgt->xr_detector_debug_header_written) {
++		return;
++	}
++
++	fprintf(hgt->xr_detector_debug_file,
++	        "timestamp_ns,detection_counter,num_views,active_camera,no_hands_detected_last_frame,"
++	        "last_left_detected,last_right_detected,hand_idx,"
++	        "view0_found,view0_conf_bool,view0_raw_conf,view0_raw_cx,view0_raw_cy,view0_raw_size,"
++	        "view0_center_x,view0_center_y,view0_size_px,"
++	        "view1_found,view1_conf_bool,view1_raw_conf,view1_raw_cx,view1_raw_cy,view1_raw_size,"
++	        "view1_center_x,view1_center_y,view1_size_px,"
++	        "confidence_sum_bool,raw_conf_avg,conf_gate_pass,attempt_replace,good_to_go,"
++	        "reject_reason,reject_view,reject_iou,accepted,this_frame_detected,roi0_found_after,roi1_found_after\n");
++	fflush(hgt->xr_detector_debug_file);
++	hgt->xr_detector_debug_header_written = true;
++}
++
++static void
++xr_detector_debug_write_row(HandTracking *hgt,
++                               const hand_detection_run_info infos[2],
++                               int hand_idx,
++                               int num_views,
++                               size_t active_camera,
++                               bool no_hands_detected_last_frame,
++                               float confidence_sum,
++                               float raw_conf_avg,
++                               bool conf_gate_pass,
++                               bool attempt_replace,
++                               bool good_to_go,
++                               int reject_reason,
++                               int reject_view,
++                               float reject_iou,
++                               bool accepted)
++{
++	if (!hgt->xr_detector_debug_enabled) {
++		return;
++	}
++
++	xr_detector_debug_write_header_if_needed(hgt);
++	if (hgt->xr_detector_debug_file == nullptr) {
++		return;
++	}
++
++	const hand_region_of_interest &v0 = infos[0].outputs[hand_idx];
++	const hand_region_of_interest &v1 = infos[1].outputs[hand_idx];
++
++	fprintf(hgt->xr_detector_debug_file,
++	        "%llu,%d,%d,%zu,%d,%d,%d,%d,"
++	        "%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
++	        "%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
++	        "%.9g,%.9g,%d,%d,%d,%d,%d,%.9g,%d,%d,%d,%d\n",
++	        (unsigned long long)hgt->current_frame_timestamp, hgt->detection_counter, num_views, active_camera,
++	        no_hands_detected_last_frame ? 1 : 0, hgt->last_frame_hand_detected[0] ? 1 : 0,
++	        hgt->last_frame_hand_detected[1] ? 1 : 0, hand_idx,
++	        v0.found ? 1 : 0, v0.hand_detection_confidence ? 1 : 0, v0.xr_raw_hand_exists, v0.xr_raw_cx,
++	        v0.xr_raw_cy, v0.xr_raw_size, v0.center_px.x, v0.center_px.y, v0.size_px,
++	        v1.found ? 1 : 0, v1.hand_detection_confidence ? 1 : 0, v1.xr_raw_hand_exists, v1.xr_raw_cx,
++	        v1.xr_raw_cy, v1.xr_raw_size, v1.center_px.x, v1.center_px.y, v1.size_px,
++	        confidence_sum, raw_conf_avg, conf_gate_pass ? 1 : 0, attempt_replace ? 1 : 0,
++	        good_to_go ? 1 : 0, reject_reason, reject_view, reject_iou, accepted ? 1 : 0,
++	        hgt->this_frame_hand_detected[hand_idx] ? 1 : 0,
++	        hgt->views[0].regions_of_interest_this_frame[hand_idx].found ? 1 : 0,
++	        hgt->views[1].regions_of_interest_this_frame[hand_idx].found ? 1 : 0);
++}
++
+ void
+ dispatch_and_process_hand_detections(struct HandTracking *hgt)
+ {
+@@ -397,13 +1016,9 @@ dispatch_and_process_hand_detections(struct HandTracking *hgt)
+ 		}
+ 	}
+ 
+-
+-
+ 	infos[0].view = &hgt->views[0];
+ 	infos[1].view = &hgt->views[1];
+ 
+-
+-
+ 	bool no_hands_detected_last_frame = !(hgt->this_frame_hand_detected[0] || hgt->this_frame_hand_detected[1]);
+ 
+ 	size_t active_camera = hgt->detection_counter++ % 2;
+@@ -421,21 +1036,34 @@ dispatch_and_process_hand_detections(struct HandTracking *hgt)
+ 		num_views = 1;
+ 	}
+ 
+-
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+ 		float confidence_sum = (infos[0].outputs[hand_idx].hand_detection_confidence +
+ 		                        infos[1].outputs[hand_idx].hand_detection_confidence) /
+ 		                       float(num_views);
+-		if (confidence_sum < 0.92) {
++		float raw_conf_avg = (infos[0].outputs[hand_idx].xr_raw_hand_exists +
++		                      infos[1].outputs[hand_idx].xr_raw_hand_exists) /
++		                     float(num_views);
++
++		bool conf_gate_pass = confidence_sum >= 0.92f;
++		bool attempt_replace = false;
++		bool good_to_go = false;
++		bool accepted = false;
++		int reject_reason = 0; // 0=none, 1=confidence_gate, 2=double_iou, 3=single_iou, 4=already_tracked_no_replace
++		int reject_view = -1;
++		float reject_iou = -1.0f;
++
++		if (!conf_gate_pass) {
++			reject_reason = 1;
++			xr_detector_debug_write_row(hgt, infos, hand_idx, num_views, active_camera,
++			                               no_hands_detected_last_frame, confidence_sum, raw_conf_avg,
++			                               conf_gate_pass, attempt_replace, good_to_go, reject_reason,
++			                               reject_view, reject_iou, accepted);
+ 			continue;
+ 		}
+ 
+-
+ 		if (hgt->tuneable_values.always_run_detection_model || !hgt->last_frame_hand_detected[hand_idx]) {
+-
+-
+-			bool good_to_go = true;
+-
++			attempt_replace = true;
++			good_to_go = true;
+ 
+ 			if (no_hands_detected_last_frame) {
+ 				// Stop overlapping _double_ hand detections - detecting both hands in the same place.
+@@ -451,6 +1079,9 @@ dispatch_and_process_hand_detections(struct HandTracking *hgt)
+ 						         "%d was %f",
+ 						         hand_idx, view_idx, iou);
+ 						good_to_go = false;
++						reject_reason = 2;
++						reject_view = view_idx;
++						reject_iou = iou;
+ 						break;
+ 					}
+ 				}
+@@ -472,21 +1103,29 @@ dispatch_and_process_hand_detections(struct HandTracking *hgt)
+ 						         "%d was %f",
+ 						         hand_idx, view_idx, iou);
+ 						good_to_go = false;
++						reject_reason = 3;
++						reject_view = view_idx;
++						reject_iou = iou;
+ 						break;
+ 					}
+ 				}
+ 			}
+ 
+-
+ 			if (good_to_go) {
+ 				// Note we already initialized the previous-keypoints-input to nonexistent above this.
+ 				hgt->views[0].regions_of_interest_this_frame[hand_idx] = infos[0].outputs[hand_idx];
+ 				hgt->views[1].regions_of_interest_this_frame[hand_idx] = infos[1].outputs[hand_idx];
++				accepted = true;
+ 			}
++		} else {
++			reject_reason = 4;
+ 		}
+ 
+-
+ 		hgt->this_frame_hand_detected[hand_idx] = true;
++		xr_detector_debug_write_row(hgt, infos, hand_idx, num_views, active_camera,
++		                               no_hands_detected_last_frame, confidence_sum, raw_conf_avg,
++		                               conf_gate_pass, attempt_replace, good_to_go, reject_reason,
++		                               reject_view, reject_iou, accepted);
+ 	}
+ }
+ 
+@@ -694,6 +1333,11 @@ HandTracking::~HandTracking()
+ 
+ 	u_var_remove_root((void *)&this->base);
+ 	u_frame_times_widget_teardown(&this->ft_widget);
++
++	if (this->xr_detector_debug_file != nullptr) {
++		fclose(this->xr_detector_debug_file);
++		this->xr_detector_debug_file = nullptr;
++	}
+ }
+ 
+ static void
+@@ -739,8 +1383,18 @@ callback_process_unsafe(HandTracking *hgt,
+ 	hgt->views[0].run_model_on_this = cv::Mat(view_size, CV_8UC1, left_frame->data, left_frame->stride);
+ 	hgt->views[1].run_model_on_this = cv::Mat(view_size, CV_8UC1, right_frame->data, right_frame->stride);
+ 
+-	hgt->debug_scribble =
+-	    u_sink_debug_is_active(&hgt->debug_sink_ann) && u_sink_debug_is_active(&hgt->debug_sink_model);
++	const bool xr_force_debug_dump = xr_debug_dump_enabled();
++	hgt->debug_scribble = xr_force_debug_dump ||
++	                      (u_sink_debug_is_active(&hgt->debug_sink_ann) &&
++	                       u_sink_debug_is_active(&hgt->debug_sink_model));
++
++	if (xr_force_debug_dump) {
++		// Dataset/realtime debug dump: force the useful Mercury scribbles even when the Monado UI sinks are not open.
++		// The XR env toggles below allow keypoint-only, optimizer-only, or combined overlays.
++		hgt->tuneable_values.scribble_keypoint_model_outputs = xr_debug_draw_keypoints_enabled();
++		hgt->tuneable_values.scribble_optimizer_outputs = xr_debug_draw_optimizer_enabled();
++		hgt->tuneable_values.scribble_predictions_into_next_frame = xr_debug_draw_predictions_enabled();
++	}
+ 
+ 	cv::Mat debug_output = {};
+ 	xrt_frame *debug_frame = nullptr;
+@@ -1044,8 +1698,16 @@ callback_process_unsafe(HandTracking *hgt,
+ 	// If the debug UI is active, push to the frame-timing widget
+ 	u_frame_times_widget_push_sample(&hgt->ft_widget, hgt->current_frame_timestamp);
+ 
+-	// If the debug UI is active, push our debug frame
+-	if (hgt->debug_scribble) {
++	// If requested, dump the Mercury annotated/model debug frames to disk.
++	if (hgt->debug_scribble && xr_force_debug_dump) {
++		xr_debug_dump_frames(hgt, debug_frame, hgt->visualizers.xrtframe, out_left_hand->is_active,
++		                        out_right_hand->is_active);
++	}
++
++	// If the debug UI is active, push our debug frame.
++	const bool xr_ui_debug_active =
++	    u_sink_debug_is_active(&hgt->debug_sink_ann) && u_sink_debug_is_active(&hgt->debug_sink_model);
++	if (hgt->debug_scribble && xr_ui_debug_active) {
+ 		u_sink_debug_push_frame(&hgt->debug_sink_ann, debug_frame);
+ 		xrt_frame_reference(&debug_frame, NULL);
+ 
+@@ -1054,6 +1716,9 @@ callback_process_unsafe(HandTracking *hgt,
+ 		u_sink_debug_push_frame(&hgt->debug_sink_model, hgt->visualizers.xrtframe);
+ 		xrt_frame_reference(&hgt->visualizers.old_frame, hgt->visualizers.xrtframe);
+ 		xrt_frame_reference(&hgt->visualizers.xrtframe, NULL);
++	} else if (hgt->debug_scribble) {
++		xrt_frame_reference(&debug_frame, NULL);
++		xrt_frame_reference(&hgt->visualizers.xrtframe, NULL);
+ 	}
+ 
+ 	// done!
+@@ -1249,6 +1914,29 @@ t_hand_tracking_sync_mercury_create(struct t_stereo_camera_calibration *calib,
+ 	hgt->tuneable_values.min_detection_confidence.step = 0.01f;
+ 	hgt->tuneable_values.min_detection_confidence.val = debug_get_float_option_mercury_min_detection_confidence();
+ 
++	const char *xr_detector_debug_csv = getenv("MERCURY_XR_DETECTOR_DEBUG_CSV");
++	if (xr_detector_debug_csv != nullptr && xr_detector_debug_csv[0] != '\0') {
++		hgt->xr_detector_debug_enabled = true;
++		strncpy(hgt->xr_detector_debug_csv, xr_detector_debug_csv,
++		        ARRAY_SIZE(hgt->xr_detector_debug_csv) - 1);
++	}
++
++	// Useful for offline dataset diagnostics: get detector output for both stereo
++	// views on every detection pass without opening the Mercury UI. This does not
++	// reset tracking history, unlike always_run_detection_model.
++	if (xr_env_flag_enabled("MERCURY_XR_DETECT_BOTH_VIEWS") ||
++	    xr_env_flag_enabled("MERCURY_XR_DETECTOR_FUSION")) {
++		hgt->tuneable_values.detection_model_in_both_views = true;
++	}
++
++	// Stronger diagnostic mode: rerun detector and clear tracking history every
++	// frame. This intentionally changes runtime behavior and should be used only
++	// when inspecting raw detector slots.
++	if (xr_env_flag_enabled("MERCURY_XR_FORCE_ALWAYS_DETECT")) {
++		hgt->tuneable_values.always_run_detection_model = true;
++		hgt->tuneable_values.detection_model_in_both_views = true;
++	}
++
+ 	u_var_add_draggable_f32(hgt, &hgt->tuneable_values.amt_use_depth, "Amount to use depth prediction");
+ 
+ 
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.hpp b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+index fee345bbb..36e4f7ccc 100644
+--- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+@@ -176,6 +176,13 @@ struct hand_region_of_interest
+ 
+ 	bool found;
+ 	bool hand_detection_confidence;
++
++	// XR/Mercury offline diagnostics: keep the raw detector outputs before
++	// Mercury thresholding/gating converts them into found/confidence booleans.
++	float xr_raw_hand_exists = 0.0f;
++	float xr_raw_cx = 0.0f;
++	float xr_raw_cy = 0.0f;
++	float xr_raw_size = 0.0f;
+ };
+ 
+ 
+@@ -338,6 +345,13 @@ public:
+ 
+ 	struct hg_tuneable_values tuneable_values;
+ 
++	// XR/Mercury offline detector diagnostics. Enabled by
++	// MERCURY_XR_DETECTOR_DEBUG_CSV=/path/to/file.csv.
++	bool xr_detector_debug_enabled = false;
++	bool xr_detector_debug_header_written = false;
++	FILE *xr_detector_debug_file = nullptr;
++	char xr_detector_debug_csv[1024] = {};
++
+ public:
+ 	explicit HandTracking();
+ 	~HandTracking();

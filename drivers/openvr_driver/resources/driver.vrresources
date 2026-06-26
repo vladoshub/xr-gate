@@ -1,0 +1,8 @@
+{
+  "jsonid": "vrresources",
+  "resources": {
+    "input": {
+      "xr_hand_controller": "resources/input/xr_hand_controller_profile.json"
+    }
+  }
+}

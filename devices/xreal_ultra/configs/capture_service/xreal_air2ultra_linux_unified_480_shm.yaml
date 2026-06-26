@@ -1,0 +1,87 @@
+capture_service:
+  service:
+    namespace: xreal_air2ultra_linux
+    platform: linux
+    registry_path: /tmp/capture_service_streams.json
+    timebase: monotonic_ns
+    log_every_sec: 2.0
+    publish:
+    - shm
+    tcp_enabled: false
+    tcp_bind_host: 0.0.0.0
+    tcp_port: 45660
+    tcp_client_queue_size: 256
+  rig:
+    name: xreal_air2_ultra
+    serial: ZBBM5DZFMP
+    calibration_profile: ~/src/xr_tracking/calibration_dataset/final/xreal_air2ultra/ZBBM5DZFMP/basalt_calib_unified_480x640.json
+    vio_config: ~/src/xr_tracking/calibration_dataset/final/xreal_air2ultra/ZBBM5DZFMP/basalt_vio_config_unified_480x640.json
+    convention:
+      camera0: cw90(front_left)
+      camera1: cw90(front_right)
+      resolution: 480x640
+      decoder_rotation: 0
+      post_split_rotation: cw90
+      preview_only_whole_canvas_flip: do not use in data path
+    notes:
+    - 'Unified pipeline: camera0/camera1 are true 480x640 portrait frames.'
+    - Both Basalt and Mercury should consume camera0/camera1 after a new 480x640 calibration.
+    - Do not use the old 640x480 basalt_calib_working_baseline.json with this stream.
+    - Data path uses capture_service_cpp in-process XREAL UVC decoding and publishes
+      true 480x640 portrait camera0/camera1 streams.
+    - IMU requires magic start payload before HID packets arrive.
+  xreal_linux:
+    camera:
+      enabled: true
+      backend: capture_service_cpp
+      device: /dev/video0
+      raw_width: 640
+      raw_height: 241
+      raw_format: YUY2
+      raw_fps_num: 60
+      raw_fps_den: 1
+      rotation: 0
+      decoder_cam1_rot180: true
+      decoded_width: 640
+      decoded_height: 960
+      decoded_format: GRAY8
+      publish_raw_stereo: false
+      publish_decoded_stereo: false
+      left_stream_id: camera0
+      right_stream_id: camera1
+      left_from: bottom
+      right_from: top
+      left_height: 480
+      right_height: 480
+      rotate_left_180: false
+      rotate_right_180: false
+      post_rotate_left: ccw90
+      post_rotate_right: ccw90
+      post_rotate_keep_size: false
+      publish_hand_streams: false
+      hand_left_stream_id: camera0_hand
+      hand_right_stream_id: camera1_hand
+      hand_post_rotate_left: cw90
+      hand_post_rotate_right: cw90
+      hand_post_rotate_keep_size: false
+      slot_count: 8
+      raw_slot_count: 16
+    imu:
+      enabled: true
+      backend: hidapi
+      vendor_id: '0x3318'
+      product_id: '0x0426'
+      interface_number: 2
+      read_size: 64
+      read_timeout_ms: 100
+      start_command_hex: 00 aa c5 d1 21 42 04 00 19 01
+      stop_command_hex: ''
+      drop_first_packets: 500
+      publish_raw_hid: true
+      publish_normalized_imu: true
+      raw_stream_id: xreal_raw_hid
+      imu_stream_id: imu0
+      slot_count: 2048
+      raw_slot_count: 2048
+      parser:
+        type: xreal_air2ultra_24bit
