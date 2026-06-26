@@ -173,6 +173,8 @@ cd ~/xr-gate-release/xreal_ultra
 ./run_xr_client.sh
 ```
 
+You can switch between 3DoF/6DoF without restarting your current session!
+
 CTRL + C - exit from xr_client
 
 
