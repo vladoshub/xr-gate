@@ -1,24 +1,23 @@
-# XR Tracking
+# XR Gate
 
-Real-time XR tracking stack for **XREAL Air 2 Ultra** and compatible AR/XR experiments.
+Experimental XR pipeline for **AR glasses**, designed both for low-level AR/XR research and for launching real VR/XR games and applications with spatial tracking and controller input.
 
-It is also possible to use other XR-Glasses (SLAM + IMU) at the architectural level. But most likely, calibration for a specific model will be required + adding support for reading raw data
+XR Tracking turns XREAL Ultra into a hackable runtime platform: it captures stereo grayscale video and IMU data, synchronizes the streams, runs 6DoF/3DoF tracking and perception backends, performs ML-based hand tracking, emulates VR controllers from hand poses and physical input devices, and exposes the result to SteamVR/OpenVR, Monado/OpenXR, and standalone tools.
 
-For install and use go to "Quick start"
+The goal is to keep the project useful in two directions at once:
 
-XR Tracking turns AR glasses into a hackable runtime platform: it captures stereo grayscale video and IMU data, synchronizes the streams, runs tracking and perception backends, normalizes runtime poses, and exposes the result to SteamVR/OpenVR, Monado/OpenXR, debug viewers, and standalone tools.
+- **For users and XR hobbyists:** build one runtime package, register the driver, start `xr_client`, and experiment with XREAL Ultra in SteamVR/OpenVR without manually wiring every backend.
+- **For engineers and researchers:** use the codebase as a real-time computer vision / perception / XR systems project with C++ capture, Python stream clients, ONNX hand-tracking integration, VIO, runtime filtering, spatial mapping, IPC transports, controller emulation, and reproducible packaging.
 
-The project is intended to be useful in two ways:
+**FOR INSTALL AND USE GO TO "Quick start"**
 
-- **For users and XR hobbyists:** build one runtime package, register the driver, start `xr_client`, and experiment with XREAL Ultra in SteamVR/OpenVR.
-- **For engineers and researchers:** use the codebase as a real-time computer vision / perception / XR systems project with C++ capture, Python stream clients, ONNX hand-tracking integration, VIO, runtime filtering, spatial mapping, IPC transports, and reproducible packaging.
 
 ## What it does
 
 The default XREAL Ultra pipeline is:
 
 ```text
-XREAL Air 2 Ultra
+XREAL Ultra
   stereo grayscale cameras + IMU
         ↓
 capture_service_cpp
@@ -38,7 +37,7 @@ drivers and apps
 
 Current focus areas:
 
-- XREAL Air 2 Ultra capture and display/runtime integration.
+- XREAL Ultra capture and display/runtime integration.
 - 6DoF VIO through Basalt.
 - IMU-only 3DoF fallback and recentering.
 - Mercury/ONNX hand-tracking runtime integration.
@@ -81,51 +80,49 @@ Steam must be installed from the Steam website, not from Snap. Use an X11/Xorg s
 
 Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups. After that, log out/log in or reboot.
 
-### 1. Install runtime dependencies
+### 1. Use the release artifacts (once)
+
+Download these artifacts:
+
+1. xreal-ultra-linux-x64.zip
+
+2. hand-tracking-models-mercury.zip
+
+3. unpack-xreal-ultra.zip
+
+Mercury ONNX models are distributed separately in hand-tracking-models-mercury.zip. They are not included in the core runtime package and are not downloaded by the default build.
+
+Extract unpack_xreal_ultra.sh from unpack-xreal-ultra.zip and place it next to:
+xreal-ultra-linux-x64.zip
+hand-tracking-models-mercury.zip
+Unpack the runtime package and install the Mercury models:
 
 ```bash
-cd ~/src/xr_tracking
+chmod +x unpack_xreal_ultra.sh
+./unpack_xreal_ultra.sh --dest ~/xr-gate-release
+```
+
+
+After extraction, the runtime package will be available under:
+
+~/xr-gate-release/xreal_ultra/...
+
+
+### 2. Install runtime dependencies (once)
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
 ./devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
 ```
+After install need reboot!
 
-### 2. Build or unpack the runtime package
 
-Build from source:
-
-```bash
-cd ~/src/xr_tracking
-./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-```
-
-Or copy a release package to:
-
-```text
-~/src/xr_tracking/out/xreal_ultra
-```
-
-### 3. Optional: download Mercury hand-tracking models
-
-Mercury ONNX models are not included in the core repository/release and are not downloaded by the default build.
-
-Download them explicitly when hand tracking is needed:
-
-```bash
-cd ~/src/xr_tracking/out/xreal_ultra
-./download_mercury_models.sh
-```
-
-The models are placed under:
-
-```text
-out/xreal_ultra/bin/hand-tracking-models/mercury/
-```
-
-### 4. Register OpenVR driver
+### 3. Register OpenVR driver (once)
 
 For direct USB4/iGPU path, tested with HX370 iGPU:
 
 ```bash
-cd ~/src/xr_tracking
+cd ~/xr-gate-release/xreal_ultra
 XR_TARGET_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
@@ -136,7 +133,7 @@ XR_OPENVR_DISPLAY_MODE=direct \
 For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, 60 Hz is the safer default:
 
 ```bash
-cd ~/src/xr_tracking
+cd ~/xr-gate-release/xreal_ultra
 XR_OPENVR_REGISTER_METHOD=manual \
 XR_OPENVR_RUNTIME_MODE=steamvr \
 XR_TARGET_DEVICE=xreal_ultra \
@@ -146,31 +143,110 @@ XR_OPENVR_DISPLAY_MODE=direct \
 ./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
 ```
 
-### 5. Optional: train override controller input
+### 4. Optional: train override controller input (once)
+
+
+Without this, input will be limited to gestures (pinch, grab).
 
 Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime controller input.
 
+You can use 2 identical Bluetooth controllers.
+
 ```bash
-cd ~/src/xr_tracking
-REL_BUTTON_HOLD_MS=1000 \
-BUTTON_HOLD_MS=160 \
-REL_AXIS_HOLD_MS=180 \
-GRAB_DEVICES=1 \
-out/xreal_ultra/bin/scripts/override_controller/start_override_controller.sh
+cd ~/xr-gate-release/xreal_ultra
+bin/scripts/override_controller/start_override_controller.sh
 ```
 
-For controller-only input, set this in the runtime adapter start script/config:
+
+### 5. Run xr_client
+
+**You must launch the client every time before launching SteamVR.**
+
+
+At startup, you need to select 60Hz or 90Hz mode.
+If you have integrated graphics, a USB-C video output, and don't have a separate graphics card, you can try 90Hz mode. Otherwise, I recommend 60Hz.
+
+It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
 
 ```bash
-CONTROLLER_INPUT_MODE="${CONTROLLER_INPUT_MODE:-controller_buttons_only}"
-```
-
-### 6. Run xr_client
-
-```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/xr-gate-release/xreal_ultra
 ./run_xr_client.sh
 ```
+
+CTRL + C - exit from xr_client
+
+
+If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
+
+### Start on Integrated GPU with USB-C video output without discrete GPU in system
+
+Tested on HX370
+
+
+Just start Steam and start SteamVR. After you can start SteamVR apps/games.
+
+
+### Start on Discrete GPU
+
+Tested on RTX6000 Pro Blackwell
+
+
+In most cases, you will need an adapter to run the glasses with a dGPU.
+
+Check displays:
+
+```bash
+xrandr --query | grep " connected"
+```
+
+Example output:
+
+```text
+DP-6 connected primary 7680x2160+0+1080
+DP-4 connected 3840x1080+1920+0
+```
+
+Here:
+
+```text
+DP-4 = glasses (3840x1080)
+DP-6 = main monitor
+```
+
+Run direct mode (tested on Nvidia):
+```bash
+cd ~/xr-gate-release/xreal_ultra
+XR_OPENVR_DGPU_GPU_VENDOR=nvidia \
+XR_OPENVR_DGPU_OUTPUT=DP-4 \
+XR_OPENVR_LAUNCH_MODE=steam \
+XR_OPENVR_CLEAR_LOGS=1 \
+XR_DISPLAY_FREQUENCY_HZ=60 \
+./run_openvr_dgpu_direct.sh 60
+```
+
+
+Start SteamVR. After you can start SteamVR apps/games.
+
+
+After finishing the work, I recommend restoring the glasses to their normal state to avoid problems during future launches or if you have an issue with xr_client or the SteamVR driver:
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+
+XR_STEAMVR_RESTORE_OUTPUT=DP-4 \
+XR_STEAMVR_RESTORE_MAIN_OUTPUT=DP-6 \
+XR_STEAMVR_RESTORE_LAYOUT=right-of \
+./run_openvr_restore_desktop.sh
+```
+
+
+## Possible problems
+1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
+
+2. Tracking isn't working, or my pose is off somewhere - most likely, 6DoF received bad frames (not enough light) and can't calculate the pose correctly. The solution is to try pressing "1" in xr_client to restart the backends - this can be done at runtime and shouldn't break the current session. This can be done several times.
+
+3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends.
+
 
 ## Runtime package
 
@@ -183,7 +259,7 @@ out/xreal_ultra/
   run_xr_client.sh      package entrypoint
 ```
 
-Build the package:
+Build:
 
 ```bash
 devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh

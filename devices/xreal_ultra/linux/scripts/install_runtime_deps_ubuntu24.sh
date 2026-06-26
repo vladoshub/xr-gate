@@ -182,6 +182,35 @@ if [[ "$INSTALL_THIN_VENV" == "1" ]]; then
   create_or_repair_thin_venv "$XR_PACKAGE_ROOT"
 fi
 
+collect_package_library_path() {
+  local package_root="$1"
+  local paths=()
+  local d
+  local out=""
+  local p
+
+  while IFS= read -r -d '' d; do
+    paths+=("$d")
+  done < <(find "$package_root/bin" -type d \( -name lib -o -name lib64 \) -print0 2>/dev/null)
+
+  # Package-local runtime libraries used by launch scripts.
+  paths+=(
+    "$package_root/bin/onnxruntime/onnxruntime-linux-x64-1.18.1/lib"
+    "$package_root/bin/backends/basalt_vio/lib"
+    "$package_root/bin/backends/mercury_hand_tracking"
+  )
+
+  for p in "${paths[@]}"; do
+    [[ -d "$p" ]] || continue
+    case ":$out:" in
+      *":$p:"*) ;;
+      *) out="${out:+$out:}$p" ;;
+    esac
+  done
+
+  printf '%s\n' "$out"
+}
+
 run_runtime_checks() {
   local check_python="python3"
   if [[ -x "$XR_PACKAGE_ROOT/bin/python-runtime/venv/bin/python" ]]; then
@@ -218,11 +247,17 @@ PY
     log "scan package ELF dependencies for missing shared libraries"
     local missing_file
     missing_file="$(mktemp)"
+    local package_ld_library_path
+    package_ld_library_path="$(collect_package_library_path "$XR_PACKAGE_ROOT")"
+
+    if [[ -n "$package_ld_library_path" ]]; then
+      log "package library path for ELF scan: $package_ld_library_path"
+    fi
     while IFS= read -r -d '' f; do
       if file "$f" | grep -q 'ELF'; then
-        if ldd "$f" 2>/dev/null | grep -q 'not found'; then
+        if LD_LIBRARY_PATH="$package_ld_library_path:${LD_LIBRARY_PATH:-}" ldd "$f" 2>/dev/null | grep -q 'not found'; then
           echo "MISSING for $f" >>"$missing_file"
-          ldd "$f" 2>/dev/null | grep 'not found' >>"$missing_file" || true
+          LD_LIBRARY_PATH="$package_ld_library_path:${LD_LIBRARY_PATH:-}" ldd "$f" 2>/dev/null | grep 'not found' >>"$missing_file" || true
           echo >>"$missing_file"
         fi
       fi

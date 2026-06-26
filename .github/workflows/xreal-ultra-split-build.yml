@@ -43,6 +43,30 @@ env:
   XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
 
 jobs:
+
+  release-unpack-helper:
+    name: release unpack helper
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate unpack helper
+        run: |
+          test -f devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          bash -n devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          chmod +x devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          ls -lh devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+
+      - name: Upload unpack helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: unpack-xreal-ultra
+          path: devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          if-no-files-found: error
+          retention-days: 7
+
   build-part:
     name: build ${{ matrix.name }}
     runs-on: ubuntu-24.04
