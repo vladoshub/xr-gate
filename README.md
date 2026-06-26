@@ -257,6 +257,23 @@ XR_STEAMVR_RESTORE_LAYOUT=right-of \
 ./run_openvr_restore_desktop.sh
 ```
 
+## Some demo
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+```
+
+
+Spatial Vision (need running xr_spatial backend)
+```bash
+start_xr_steamvr_spatial_scene.sh
+```
+
+Stereo overlay (need running xr_video backend)
+```bash
+start_steamvr_video_overlay.sh
+```
+
 
 ## Possible problems
 1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
