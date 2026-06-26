@@ -168,6 +168,9 @@ cd ~/xr-gate-release/xreal_ultra
 devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
 ```
 
+The config will be saved in ~/.config/xr_tracking/override_controller/default.json
+If you want to retrain, you can delete default.json for new train
+
 
 ### 5. Run xr_client
 
@@ -186,7 +189,7 @@ cd ~/xr-gate-release/xreal_ultra
 ./run_xr_client.sh
 ```
 
-You can switch between 3DoF/6DoF without restarting your current session!
+You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
 
 CTRL + C - exit from xr_client
 
@@ -260,8 +263,9 @@ XR_STEAMVR_RESTORE_LAYOUT=right-of \
 
 2. Tracking isn't working, or my pose is off somewhere - most likely, 6DoF received bad frames (not enough light) and can't calculate the pose correctly. The solution is to try pressing "1" in xr_client to restart the backends - this can be done at runtime and shouldn't break the current session. This can be done several times.
 
-3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends.
+3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends. Also, do not move your hands too quickly or move them out of your line of sight.
 
+4. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep). In the xr_client skip SBS mode selection
 
 
 ## Build:
