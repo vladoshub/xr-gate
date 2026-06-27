@@ -121,6 +121,18 @@ jobs:
             libxcb1-dev libxcb-randr0-dev libxcb-present-dev \
             libxcb-dri3-dev libxcb-xfixes0-dev
 
+      - name: Install Monado X11/XCB build packages
+        if: ${{ matrix.name == 'monado' }}
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libvulkan-dev vulkan-tools glslang-tools \
+            libx11-dev libx11-xcb-dev libxrandr-dev libxext-dev libxfixes-dev libxxf86vm-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-present-dev \
+            libxcb-dri3-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev \
+            libudev-dev libhidapi-dev libsystemd-dev libdbus-1-dev
+
       - name: Build partial package
         env:
           XR_BUILD_ONLY: ${{ matrix.build_only }}
