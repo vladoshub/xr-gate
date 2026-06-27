@@ -18,7 +18,14 @@ constexpr uint32_t RUNTIME_BUTTON_DPAD_CENTER = static_cast<uint32_t>(xr_runtime
 
 enum class LostHandPoseFallbackMode {
   PoseInvalid,
+  // Use HMD-relative fallback only while the physical controller side has
+  // active input (buttons/axes/trigger/grip). This keeps lost hands from being
+  // visually glued to the HMD when the user is idle.
   HmdRelativeWithControllerInput,
+  // Use HMD-relative fallback whenever the physical controller side is present.
+  // This is useful for always-visible synthetic controllers, but intentionally
+  // distinct from hmd_relative_with_input.
+  HmdRelativeWithControllerPresent,
   HmdRelative,
 };
 
@@ -43,8 +50,8 @@ struct RuntimeControllerSynthesisConfig {
 
   // Controls only visual hand-derived gestures when building RuntimeControllerStateV1.
   // External ControllerInputV2 buttons/axes remain authoritative and are not affected.
-  bool left_hand_gestures_enabled = true;
-  bool right_hand_gestures_enabled = true;
+  bool left_hand_gestures_enabled = false;
+  bool right_hand_gestures_enabled = false;
 };
 
 LostHandPoseFallbackMode parse_lost_hand_pose_fallback_mode(const std::string& value, const char* option_name);

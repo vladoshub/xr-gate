@@ -96,7 +96,7 @@ struct PublishConfig {
   std::string shm_name = "controller_input";
   std::string tcp_bind_host = "127.0.0.1";
   int tcp_port = 45672;
-  uint32_t slot_count = 1024;
+  uint32_t slot_count = 32;
   double rate_hz = 90.0;
   bool unlink_existing = true;
 };
@@ -110,7 +110,7 @@ struct InputConfig {
   // Periodically rescan/re-resolve configured devices. This lets Bluetooth HID
   // devices recover after disconnect/reconnect because /dev/input/eventX often
   // changes while stable fingerprint fields such as uniq/by-id remain usable.
-  bool reattach_devices = true;
+  bool reattach_devices = false;
   uint32_t reattach_interval_ms = 1000;
 
   // Event wait cap for the service loop. Larger values reduce idle CPU wakeups;

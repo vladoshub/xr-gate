@@ -120,7 +120,7 @@ RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_PREDICTIO
 RUNTIME_HAND_GATE_PREDICTION_DAMPING="${RUNTIME_HAND_GATE_PREDICTION_DAMPING:-0.5}" # velocity damping during lost-hand prediction
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS="${RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS:-0}" # blend duration after reacquire
 RUNTIME_HAND_GATE_DEBUG_CSV="${RUNTIME_HAND_GATE_DEBUG_CSV:-}" # optional CSV path for hand gate diagnostics
-RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS:-0.1.25}" # max continuity velocity for hand gate
+RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS:-1.25}" # max continuity velocity for hand gate
 
 # Runtime-side position/orientation deadband jitter filter.
 # It suppresses very small pose changes while preserving larger real movement.
@@ -138,10 +138,13 @@ CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}" # control
 CONTROLLER_INPUT_HOST="${CONTROLLER_INPUT_HOST:-127.0.0.1}" # TCP host for controller input
 CONTROLLER_INPUT_PORT="${CONTROLLER_INPUT_PORT:-45672}" # TCP port for controller input
 CONTROLLER_INPUT_CONFLICT_POLICY="${CONTROLLER_INPUT_CONFLICT_POLICY:-controller_override}" # policy when controller input conflicts with hand gestures
+CONTROLLER_INPUT_STALE_POLICY="${CONTROLLER_INPUT_STALE_POLICY:-hold_last}" # keep last controller state through brief no-hands/controller-source stalls
+OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT="${OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT:-1}" # in controller_buttons_runtime_only, block hand gesture input while override_controller stream is fresh/recently seen
+OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS="${OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS:-2000}" # keep gestures blocked this long after last fresh override_controller frame
 # How long xr_runtime_adapter keeps the latest controller_input frame fresh.
 # override_controller reattach/rescan can briefly pause publishing; keeping this
 # above that pause avoids tiny synchronized controller release glitches.
-MAX_CONTROLLER_AGE_MS="${MAX_CONTROLLER_AGE_MS:-${CONTROLLER_INPUT_MAX_AGE_MS:-2000}}" # max age before controller_input is considered stale
+MAX_CONTROLLER_AGE_MS="${MAX_CONTROLLER_AGE_MS:-${CONTROLLER_INPUT_MAX_AGE_MS:-3000}}" # max age before controller_input is considered stale
 # pose_invalid: old behavior; hmd_relative_with_input: when hand tracking is lost but override_controller input is active,
 # synthesize a body/HMD-relative controller pose instead of leaving hands at an invalid/floor pose.
 RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK="${RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK:-hmd_relative_with_input}" # fallback pose policy when hand tracking is lost
@@ -246,7 +249,10 @@ args=(
   --controller-input-stream "$CONTROLLER_INPUT_STREAM"
   --controller-input-host "$CONTROLLER_INPUT_HOST"
   --controller-input-port "$CONTROLLER_INPUT_PORT"
-  --controller-input-conflict-policy "$CONTROLLER_INPUT_CONFLICT_POLICY"
+  --controller-input-conflict-policy "$CONTROLLER_INPUT_CONFLICT_POLICY" \
+  --controller-input-stale-policy "$CONTROLLER_INPUT_STALE_POLICY"
+  --override-controller-block-gestures-while-stream-present "$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT"
+  --override-controller-gesture-block-latch-ms "$OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS"
   --max-controller-age-ms "$MAX_CONTROLLER_AGE_MS"
   --runtime-controller-lost-hand-pose-fallback "$RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK"
   --controller-trigger-pinch-threshold "$CONTROLLER_TRIGGER_PINCH_THRESHOLD"
@@ -403,6 +409,8 @@ RUNTIME_JITTER_FILTER_HMD_DEG=$RUNTIME_JITTER_FILTER_HMD_DEG # HMD orientation j
 RUNTIME_JITTER_FILTER_TRACKER_DEG=$RUNTIME_JITTER_FILTER_TRACKER_DEG # tracker/hand orientation jitter deadband in degrees
 CONTROLLER_INPUT_MODE=$CONTROLLER_INPUT_MODE # controller/hand gesture merge mode
 CONTROLLER_INPUT_TRANSPORT=$CONTROLLER_INPUT_TRANSPORT # controller input transport
+OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT # runtime-only gesture block gate
+OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS=$OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS # runtime-only gesture block latch
 MAX_CONTROLLER_AGE_MS=$MAX_CONTROLLER_AGE_MS # max age before controller_input is considered stale
 RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK=$RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK # fallback pose policy when hand tracking is lost
 PUBLISH_RUNTIME_VIDEO=$PUBLISH_RUNTIME_VIDEO # publish runtime stereo video SHM output

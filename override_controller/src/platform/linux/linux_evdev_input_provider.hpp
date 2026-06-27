@@ -4,6 +4,7 @@
 
 #include <ostream>
 #include <set>
+#include <deque>
 
 namespace xr_override_controller {
 
@@ -19,6 +20,6 @@ class LinuxEvdevInputProvider final : public InputProvider {
                        const std::set<size_t>& device_indices,
                        bool enabled,
                        std::ostream* log) override;
-};
+ private: std::deque<InputEvent> pending_events_; };
 
 }  // namespace xr_override_controller

@@ -52,8 +52,8 @@ BUTTON_RELEASE_GRACE_MS="${BUTTON_RELEASE_GRACE_MS:-${OVERRIDE_CONTROLLER_BUTTON
 
 PULSE_MODE="${PULSE_MODE:-${OVERRIDE_CONTROLLER_PULSE_MODE:-1}}"                            # enable pulse-source filtering for controllers that emit repeated short pulses
 
-DPAD_PULSE_GAP_MS="${DPAD_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_DPAD_PULSE_GAP_MS:-120}}"     # expected maximum gap between D-pad pulse events
-DPAD_RELEASE_MS="${DPAD_RELEASE_MS:-${OVERRIDE_CONTROLLER_DPAD_RELEASE_MS:-130}}"           # virtual D-pad release timeout after the last pulse
+DPAD_PULSE_GAP_MS="${DPAD_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_DPAD_PULSE_GAP_MS:-70}}"     # expected maximum gap between D-pad pulse events
+DPAD_RELEASE_MS="${DPAD_RELEASE_MS:-${OVERRIDE_CONTROLLER_DPAD_RELEASE_MS:-80}}"           # virtual D-pad release timeout after the last pulse
 
 BUTTON_PULSE_GAP_MS="${BUTTON_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_GAP_MS:-150}}" # expected maximum gap between button pulse events
 BUTTON_RELEASE_MS="${BUTTON_RELEASE_MS:-${OVERRIDE_CONTROLLER_BUTTON_RELEASE_MS:-160}}"     # virtual button release timeout after the last pulse
@@ -75,7 +75,7 @@ CONTROLLER_INPUT_REGISTRY="$(expand_tilde "$CONTROLLER_INPUT_REGISTRY")"        
 CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}"                      # published ControllerInputV2 stream name
 CONTROLLER_INPUT_SHM_NAME="${CONTROLLER_INPUT_SHM_NAME:-controller_input}"                  # shared-memory object name for controller_input payloads
 CONTROLLER_INPUT_RATE_HZ="${CONTROLLER_INPUT_RATE_HZ:-90}"                                  # controller_input publish rate expected by runtime adapter/SteamVR path
-CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-1024}"                                    # ring-buffer slot count for controller_input SHM
+CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-32}"                                      # ring-buffer slot count for controller_input SHM
 FIX_REGISTRY_PERMISSIONS="${FIX_REGISTRY_PERMISSIONS:-1}"                                   # fix stale root-owned registry/SHM files before publishing when possible
 
 [[ -d "$ROOT_PROJECT" ]] || fatal "ROOT_PROJECT not found: $ROOT_PROJECT"

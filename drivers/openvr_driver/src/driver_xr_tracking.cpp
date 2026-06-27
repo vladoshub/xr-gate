@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cctype>
 #include <cstdio>
@@ -69,6 +70,7 @@ constexpr const char* kRuntimeControllerStateRegistryPathKey = "runtimeControlle
 constexpr const char* kRuntimeControllerStateStreamKey = "runtimeControllerStateStream";
 constexpr const char* kRuntimeControllerStateShmNameKey = "runtimeControllerStateShmName";
 constexpr const char* kRuntimeControllerStateMaxAgeMsKey = "runtimeControllerStateMaxAgeMs";
+constexpr const char* kRuntimeControllerInputHoldMsKey = "runtimeControllerInputHoldMs";
 constexpr const char* kRuntimeControllerStateUdpBindHostKey = "runtimeControllerStateUdpBindHost";
 constexpr const char* kRuntimeControllerStateUdpPortKey = "runtimeControllerStateUdpPort";
 constexpr const char* kHandControllerPoseModeKey = "handControllerPoseMode";
@@ -219,7 +221,7 @@ vr::HmdQuaternion_t quat_for_coordinate_mode(CoordinateMode mode, const vr::HmdQ
   }
   return quat_normalize(q_runtime);
 }
- 
+
 std::array<double, 3> quat_rotate_vec(const vr::HmdQuaternion_t& q, const std::array<double, 3>& v) {
   const vr::HmdQuaternion_t p = quat(0.0, v[0], v[1], v[2]);
   const vr::HmdQuaternion_t r = quat_multiply(quat_multiply(q, p), quat_conjugate(q));
@@ -616,6 +618,7 @@ struct HandControllerConfig {
   RuntimeHandReaderConfig reader;
   RuntimeControllerStateReaderConfig controller_reader;
   RuntimePoseReaderConfig hmd_reader;
+  int runtime_controller_input_hold_ms = 3000;
   std::string mode = "none";
   std::string pose_mode = "runtime_absolute";
   std::string left_serial = "xr-tracking-left-hand-001";
@@ -740,6 +743,10 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     hand_reader_.reset();
     pose_reader_.reset();
     cached_pose_ = make_invalid_pose();
+    has_cached_runtime_controller_side_ = false;
+    cached_runtime_controller_input_ns_ = 0;
+    has_cached_runtime_controller_side_ = false;
+    cached_runtime_controller_input_ns_ = 0;
   }
 
   void EnterStandby() override {}
@@ -764,6 +771,9 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
         runtime_controller_state_sample_is_fresh(controller_sample, cfg_.controller_reader.max_age_ms)) {
       last_controller_state_error_.clear();
       const auto& controller_side = left_ ? controller_sample.frame.left : controller_sample.frame.right;
+      cached_runtime_controller_side_ = controller_side;
+      cached_runtime_controller_input_ns_ = steady_now_ns();
+      has_cached_runtime_controller_side_ = true;
       maybe_log_runtime_controller_sample(controller_sample.frame.sequence, controller_side);
       if (runtime_controller_side_has_pose(controller_side, left_)) {
         cached_pose_ = make_pose_from_runtime_controller(controller_side);
@@ -776,6 +786,10 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     }
     if (controller_reader_ && !controller_error.empty()) {
       maybe_log_controller_state_error(controller_error);
+    }
+
+    if (hold_cached_runtime_controller_input_if_fresh()) {
+      return;
     }
 
     RuntimeHandSample sample{};
@@ -1174,6 +1188,45 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     }
   }
 
+
+  static uint64_t steady_now_ns() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+  }
+
+  bool hold_cached_runtime_controller_input_if_fresh() {
+    if (!has_cached_runtime_controller_side_ || cfg_.runtime_controller_input_hold_ms <= 0) {
+      return false;
+    }
+
+    const uint64_t now_ns = steady_now_ns();
+    const uint64_t age_ns =
+        now_ns >= cached_runtime_controller_input_ns_ ? now_ns - cached_runtime_controller_input_ns_ : 0ull;
+    const uint64_t age_ms = age_ns / 1000000ull;
+    if (age_ms > static_cast<uint64_t>(cfg_.runtime_controller_input_hold_ms)) {
+      return false;
+    }
+
+    // Keep held buttons/axes alive through short runtime_controller_state gaps.
+    // Without this, the no-hands fallback path clears input to neutral, so
+    // SteamVR locomotion sees on/off/on/off pulses and games can queue movement.
+    update_inputs_from_runtime_controller(&cached_runtime_controller_side_);
+
+    if (object_id_ != vr::k_unTrackedDeviceIndexInvalid) {
+      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+    }
+
+    if (now_ns >= last_controller_hold_log_ns_ + 1000000000ull) {
+      last_controller_hold_log_ns_ = now_ns;
+      log_line(std::string("[xr_tracking_openvr] holding last runtime controller input ") +
+               (left_ ? "left" : "right") +
+               " age_ms=" + std::to_string(age_ms));
+    }
+    return true;
+  }
+
   void maybe_log_runtime_controller_sample(
       uint64_t sequence,
       const xr_runtime::RuntimeControllerSideStateV1& side) {
@@ -1260,6 +1313,11 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
   vr::VRInputComponentHandle_t y_click_component_ = 0;
   vr::VRInputComponentHandle_t system_click_component_ = 0;
   vr::VRInputComponentHandle_t haptic_component_ = 0;
+  bool has_cached_runtime_controller_side_ = false;
+  xr_runtime::RuntimeControllerSideStateV1 cached_runtime_controller_side_{};
+  uint64_t cached_runtime_controller_input_ns_ = 0;
+  uint64_t last_controller_hold_log_ns_ = 0;
+
   uint64_t last_controller_debug_sequence_ = 0;
   uint64_t last_controller_debug_buttons_ = 0;
 };
@@ -1317,9 +1375,10 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
     hand_cfg_.controller_reader.registry_path = get_string_setting(kRuntimeControllerStateRegistryPathKey, "");
     hand_cfg_.controller_reader.stream_id = get_string_setting(kRuntimeControllerStateStreamKey, "runtime_controller_state");
     hand_cfg_.controller_reader.shm_name = get_string_setting(kRuntimeControllerStateShmNameKey, "runtime_controller_state");
-    hand_cfg_.controller_reader.max_age_ms = static_cast<uint32_t>(std::max(0, get_int_setting(kRuntimeControllerStateMaxAgeMsKey, 250)));
+    hand_cfg_.controller_reader.max_age_ms = static_cast<uint32_t>(std::max(0, get_int_setting(kRuntimeControllerStateMaxAgeMsKey, 1000)));
     hand_cfg_.controller_reader.udp_bind_host = get_string_setting(kRuntimeControllerStateUdpBindHostKey, "127.0.0.1");
     hand_cfg_.controller_reader.udp_port = static_cast<uint16_t>(std::clamp(get_int_setting(kRuntimeControllerStateUdpPortKey, 45802), 1, 65535));
+    hand_cfg_.runtime_controller_input_hold_ms = std::max(0, get_int_setting(kRuntimeControllerInputHoldMsKey, 1000));
 
     hand_cfg_.hmd_reader.transport = get_string_setting(kRuntimePoseTransportKey, "auto");
     hand_cfg_.hmd_reader.registry_path = get_string_setting(kRuntimePoseRegistryPathKey, "");
