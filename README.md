@@ -92,8 +92,9 @@ Mercury ONNX models are distributed separately in hand-tracking-models-mercury.z
 Extract unpack_xreal_ultra.sh from unpack-xreal-ultra.zip and place it next to:
 xreal-ultra-linux-x64.zip
 hand-tracking-models-mercury.zip
-Unpack the runtime package and install the Mercury models:
 
+
+Unpack the runtime package and install the Mercury models:
 ```bash
 chmod +x unpack_xreal_ultra.sh
 ./unpack_xreal_ultra.sh --dest ~/xr-gate-release
@@ -109,8 +110,6 @@ cd ~/xr-gate-release/xreal_ultra
 ./devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
 ```
 After install need reboot!
-
-Steam must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
 
 Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups. After that, log out/log in or reboot.
 
@@ -172,7 +171,7 @@ If you have completed the train override controller from the previous point, you
 
 ## SteamVR with XREAL Ultra
 
-Need Steam with SteamVR installed.
+Steam and SteamVR must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
 
 Run xr_client
 ```bash
@@ -300,6 +299,8 @@ start_steamvr_video_overlay.sh
 
 
 ## Modano/OpenXR with XREAL Ultra
+
+Use an X11/Xorg session.
 
 Run xr_client
 ```bash
