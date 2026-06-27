@@ -70,6 +70,49 @@ copy_device_bundle() {
     "$src/" "$dst/"
 }
 
+write_monado_openxr_runtime_manifest() {
+  local monado_bin_dir="$XR_OUT_BIN_ROOT/drivers/monado_driver"
+  local openxr_lib="$monado_bin_dir/libopenxr_monado.so"
+  local script_dir="$XR_OUT_DEVICE_HOME/linux/scripts/monado_driver"
+  local manifest="$script_dir/openxr_monado_xrgate.json"
+  local env_script="$script_dir/openxr_runtime_env.sh"
+  local relative_lib="../../../../../bin/drivers/monado_driver/libopenxr_monado.so"
+
+  if [[ ! -e "$openxr_lib" ]]; then
+    log "skip Monado OpenXR runtime manifest: lib not present: $openxr_lib"
+    return 0
+  fi
+
+  mkdir -p "$script_dir"
+
+  cat > "$manifest" <<EOF
+{
+  "file_format_version": "1.0.0",
+  "runtime": {
+    "name": "XR Gate Monado",
+    "library_path": "$relative_lib"
+  }
+}
+EOF
+
+  cat > "$env_script" <<'EOF'
+#!/usr/bin/env bash
+# Source this file to force OpenXR applications to use the XR Gate packaged Monado runtime:
+#   source devices/xreal_ultra/linux/scripts/monado_driver/openxr_runtime_env.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
+echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
+EOF
+
+  chmod 0755 "$env_script"
+
+  [[ -f "$manifest" ]] || fatal "failed to write Monado OpenXR manifest: $manifest"
+  [[ -x "$env_script" ]] || fatal "failed to write Monado OpenXR env helper: $env_script"
+
+  log "wrote Monado OpenXR runtime manifest: $manifest"
+  log "wrote Monado OpenXR env helper: $env_script"
+}
+
 copy_runtime_py_dir() {
   local src="$1"
   local dst="$2"
@@ -356,6 +399,7 @@ fi
 # Package/build entrypoints live in the source device tree, but are excluded from
 # the runtime package to keep out/xreal_ultra runtime-only.
 copy_device_bundle
+write_monado_openxr_runtime_manifest
 
 # Runtime Python entrypoints. They are required at runtime, so keep them under
 # bin/python instead of creating top-level source-looking folders.
