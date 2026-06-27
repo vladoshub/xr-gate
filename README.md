@@ -372,7 +372,7 @@ devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
 Run simple OpenXR app:
 
 ```bash
-XR_RUNTIME_JSON=/... \
+XR_RUNTIME_JSON=~/xr-gate-release/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
 
@@ -402,7 +402,7 @@ devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
 Run simple OpenXR app:
 
 ```bash
-XR_RUNTIME_JSON=/... \
+XR_RUNTIME_JSON=~/xr-gate-release/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
 
