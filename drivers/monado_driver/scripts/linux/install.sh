@@ -622,6 +622,7 @@ install_openxr_runtime_manifest() {
   fi
 
   mkdir -p "$BIN_DIR" "$DEVICE_MONADO_SCRIPT_OUT_DIR"
+
   install -m 0755 "$openxr_lib" "$BIN_DIR/$(basename "$openxr_lib")"
 
   if [[ "$(basename "$openxr_lib")" != "$lib_name" ]]; then
