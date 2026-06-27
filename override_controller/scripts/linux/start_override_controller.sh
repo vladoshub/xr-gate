@@ -41,7 +41,7 @@ NON_INTERACTIVE="${NON_INTERACTIVE:-0}"                                         
 VERBOSE="${VERBOSE:-0}"                                                                     # enable verbose override_controller logging when set to 1
 USE_SUDO="${USE_SUDO:-0}"                                                                   # run binary through sudo for evdev access when set to 1
 GRAB_DEVICES="${GRAB_DEVICES:-${OVERRIDE_CONTROLLER_GRAB_DEVICES:-1}}"                      # grab evdev devices exclusively to prevent duplicate OS/game input
-REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-0}}"          # periodically rescan/reopen input devices after disconnect/reconnect
+REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}}"          # periodically rescan/reopen input devices after disconnect/reconnect
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
 EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum evdev poll wait before publishing current state

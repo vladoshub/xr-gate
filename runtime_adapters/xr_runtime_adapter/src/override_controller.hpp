@@ -43,8 +43,8 @@ struct RuntimeControllerSynthesisConfig {
 
   // Controls only visual hand-derived gestures when building RuntimeControllerStateV1.
   // External ControllerInputV2 buttons/axes remain authoritative and are not affected.
-  bool left_hand_gestures_enabled = true;
-  bool right_hand_gestures_enabled = true;
+  bool left_hand_gestures_enabled = false;
+  bool right_hand_gestures_enabled = false;
 };
 
 LostHandPoseFallbackMode parse_lost_hand_pose_fallback_mode(const std::string& value, const char* option_name);

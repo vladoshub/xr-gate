@@ -328,10 +328,12 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
   const bool hand_gestures_enabled = left ? cfg.left_hand_gestures_enabled
                                           : cfg.right_hand_gestures_enabled;
   if (cfg.mode == xr_runtime::RuntimeControllerMode::HAND_TRACKING_WITH_BUTTON_PRIORITY &&
-      valid_hand_side && hand_gestures_enabled) {
-    // Mode 1: hand gestures still work, controller buttons/axes have priority when active.
-    // Since the external controller uses analog values/buttons and can legitimately be zero,
-    // we merge by max/non-zero rather than clearing visual gestures with zero controller input.
+      valid_hand_side && hand_gestures_enabled &&
+      !(controller_side != nullptr && controller_side_is_present(*controller_side))) {
+    // Hand gestures are allowed only when no external controller side is present.
+    // With override_controller active, external ControllerInputV2 is authoritative;
+    // otherwise palm/pinch/grab gestures can leak as trigger/grip/buttons and cause
+    // phantom clicks or discrete movement pulses in SteamVR.
     merge_hand_gestures(out, *hand_side);
   }
 
