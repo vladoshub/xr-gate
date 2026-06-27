@@ -210,7 +210,7 @@ bool should_use_lost_hand_hmd_relative_fallback(
     case LostHandPoseFallbackMode::PoseInvalid:
       return false;
     case LostHandPoseFallbackMode::HmdRelativeWithControllerInput:
-      return controller_side != nullptr && controller_side_has_nonzero_input(*controller_side);
+      return controller_side != nullptr && controller_side_is_present(*controller_side);
     case LostHandPoseFallbackMode::HmdRelative:
       return true;
   }

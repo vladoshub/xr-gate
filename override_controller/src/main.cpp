@@ -641,7 +641,7 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
   cfg.publish.tcp_bind_host = "127.0.0.1";
   cfg.publish.tcp_port = 45672;
   cfg.publish.rate_hz = 90.0;
-  cfg.publish.slot_count = 1024;
+  cfg.publish.slot_count = 32;
 
   std::cout << "\nTraining creates independent bindings per action. Actions may come from different devices.\n";
   std::cout << "Each binding stores the captured device fingerprint for matching after reboot/reconnect.\n";
@@ -870,15 +870,15 @@ std::vector<RuntimeBinding> resolve_binding_configs(const std::vector<BindingCon
       }
     }
     rb.match_score = best_score;
-    if (best_idx >= 0 && best_score >= 55) {
+    if (best_idx >= 0 && best_score >= 55 && !ambiguous) {
       rb.device_index = best_idx;
       rb.connected = true;
-      if (ambiguous && log_warnings) {
-        std::cerr << "[override_controller][WARN] ambiguous device match for "
-                  << label << " " << to_string(b.side) << "." << to_string(b.action)
-                  << "; using " << short_device_label(devices[best_idx].fingerprint)
-                  << " score=" << best_score << "\n";
-      }
+    } else if (ambiguous && log_warnings) {
+      std::cerr << "[override_controller][ERROR] ambiguous device match for "
+                << label << " " << to_string(b.side) << "." << to_string(b.action)
+                << "; refusing to bind; wanted=" << short_device_label(b.device)
+                << " candidate=" << short_device_label(devices[best_idx].fingerprint)
+                << " score=" << best_score << "\n";
     } else if (log_warnings) {
       std::cerr << "[override_controller][WARN] no good device match for "
                 << label << " " << to_string(b.side) << "." << to_string(b.action)
@@ -981,7 +981,35 @@ OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
   out.left.device_id = label(left_devices);
   out.right.device_id = label(right_devices);
 
-  out.left.changed_buttons = counters.prev_left_buttons ^ out.left.buttons;
+
+  bool side_device_overlap = false;
+  for (const auto& device_id : left_devices) {
+    if (right_devices.count(device_id) != 0) {
+      side_device_overlap = true;
+      break;
+    }
+  }
+  if (side_device_overlap) {
+    std::cerr << "[override_controller][ERROR] same physical input device resolved for both left and right; "
+                 "suppressing both controller sides until bindings are retrained or made unique\n";
+    out.left.connected = false;
+    out.right.connected = false;
+    out.left.buttons = 0;
+    out.right.buttons = 0;
+    out.left.touches = 0;
+    out.right.touches = 0;
+    out.left.trigger = 0.0f;
+    out.right.trigger = 0.0f;
+    out.left.grip = 0.0f;
+    out.right.grip = 0.0f;
+    out.left.thumbstick_x = 0.0f;
+    out.left.thumbstick_y = 0.0f;
+    out.right.thumbstick_x = 0.0f;
+    out.right.thumbstick_y = 0.0f;
+    out.left.device_id.clear();
+    out.right.device_id.clear();
+  }
+out.left.changed_buttons = counters.prev_left_buttons ^ out.left.buttons;
   out.right.changed_buttons = counters.prev_right_buttons ^ out.right.buttons;
   update_counters(counters.prev_left_buttons, out.left.buttons, counters.left_press, counters.left_release);
   update_counters(counters.prev_right_buttons, out.right.buttons, counters.right_press, counters.right_release);

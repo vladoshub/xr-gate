@@ -41,7 +41,7 @@ NON_INTERACTIVE="${NON_INTERACTIVE:-0}"                                         
 VERBOSE="${VERBOSE:-0}"                                                                     # enable verbose override_controller logging when set to 1
 USE_SUDO="${USE_SUDO:-0}"                                                                   # run binary through sudo for evdev access when set to 1
 GRAB_DEVICES="${GRAB_DEVICES:-${OVERRIDE_CONTROLLER_GRAB_DEVICES:-1}}"                      # grab evdev devices exclusively to prevent duplicate OS/game input
-REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}}"          # periodically rescan/reopen input devices after disconnect/reconnect
+REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-0}}"          # periodically rescan/reopen input devices after disconnect/reconnect
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
 EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum evdev poll wait before publishing current state
@@ -75,7 +75,7 @@ CONTROLLER_INPUT_REGISTRY="$(expand_tilde "$CONTROLLER_INPUT_REGISTRY")"        
 CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}"                      # published ControllerInputV2 stream name
 CONTROLLER_INPUT_SHM_NAME="${CONTROLLER_INPUT_SHM_NAME:-controller_input}"                  # shared-memory object name for controller_input payloads
 CONTROLLER_INPUT_RATE_HZ="${CONTROLLER_INPUT_RATE_HZ:-90}"                                  # controller_input publish rate expected by runtime adapter/SteamVR path
-CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-1024}"                                    # ring-buffer slot count for controller_input SHM
+CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-32}"                                      # ring-buffer slot count for controller_input SHM
 FIX_REGISTRY_PERMISSIONS="${FIX_REGISTRY_PERMISSIONS:-1}"                                   # fix stale root-owned registry/SHM files before publishing when possible
 
 [[ -d "$ROOT_PROJECT" ]] || fatal "ROOT_PROJECT not found: $ROOT_PROJECT"
