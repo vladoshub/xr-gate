@@ -24,6 +24,21 @@ name: XREAL Ultra split build
         type: boolean
         required: false
         default: false
+      publish_release:
+        description: "Upload final artifacts to a GitHub Release"
+        type: boolean
+        required: false
+        default: false
+      release_tag:
+        description: "Release tag, for example v0.1.0"
+        type: string
+        required: false
+        default: "v0.1.0"
+      release_prerelease:
+        description: "Mark release as prerelease"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -278,3 +293,83 @@ jobs:
           name: xreal-ultra-linux-x64
           path: xreal_ultra_linux_x64.tar.gz
           retention-days: 7
+
+
+  publish-release:
+    name: publish GitHub release
+    runs-on: ubuntu-24.04
+    needs:
+      - release-unpack-helper
+      - hand-tracking-models-mercury
+      - merge-package
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Download merged runtime package
+        uses: actions/download-artifact@v4
+        with:
+          name: xreal-ultra-linux-x64
+          path: release-assets/runtime
+
+      - name: Download Mercury hand-tracking models
+        uses: actions/download-artifact@v4
+        with:
+          name: hand-tracking-models-mercury
+          path: release-assets/models
+
+      - name: Download unpack helper
+        uses: actions/download-artifact@v4
+        with:
+          name: unpack-xreal-ultra
+          path: release-assets/unpack-helper
+
+      - name: Validate release assets
+        run: |
+          set -euo pipefail
+
+          find release-assets -maxdepth 5 -type f -print -exec ls -lh {} \;
+
+          test -f release-assets/runtime/xreal_ultra_linux_x64.tar.gz
+          test -f release-assets/models/hand-tracking-models-mercury.tar.gz
+          test -f release-assets/unpack-helper/unpack_xreal_ultra.sh
+
+          mkdir -p verify/runtime
+          tar -xzf release-assets/runtime/xreal_ultra_linux_x64.tar.gz -C verify/runtime
+
+          test -d verify/runtime/xreal_ultra/bin
+          test -x verify/runtime/xreal_ultra/run_xr_client.sh
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          PRERELEASE: ${{ inputs.release_prerelease }}
+        run: |
+          set -euo pipefail
+
+          ASSETS=(
+            release-assets/runtime/xreal_ultra_linux_x64.tar.gz
+            release-assets/models/hand-tracking-models-mercury.tar.gz
+            release-assets/unpack-helper/unpack_xreal_ultra.sh
+          )
+
+          args=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release exists: $TAG"
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "XR Gate $TAG" \
+              --notes "Automated XR Gate Linux x64 release artifact." \
+              "${args[@]}"
+          fi
