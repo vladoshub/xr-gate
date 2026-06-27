@@ -1,6 +1,6 @@
 # XR Gate
 
-Experimental XR pipeline for **AR glasses**, designed both for low-level AR/XR research and for launching real VR/XR games and applications with spatial tracking and controller input.
+Experimental opensource XR pipeline for **AR glasses**, designed both for low-level AR/XR research and for launching real VR/XR games and applications with spatial tracking and controller input.
 
 XR Tracking turns XREAL Ultra into a hackable runtime platform: it captures stereo grayscale video and IMU data, synchronizes the streams, runs 6DoF/3DoF tracking and perception backends, performs ML-based hand tracking, emulates VR controllers from hand poses and physical input devices, and exposes the result to SteamVR/OpenVR, Monado/OpenXR, and standalone tools.
 
