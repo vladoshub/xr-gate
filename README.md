@@ -74,13 +74,10 @@ For **Python/C++ / AR/VR/XR systems** work, it shows cross-language runtime engi
 - OpenVR/SteamVR and Monado/OpenXR integration points;
 - device-specific package scripts with a portable `out/xreal_ultra` layout.
 
-## Quick start — XREAL Ultra with SteamVR/OpenVR on Ubuntu 24.04
+## Quick start — XREAL Ultra on Ubuntu 24.04
 
-Steam must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
 
-Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups. After that, log out/log in or reboot.
-
-### 1. Use the release artifacts (once)
+### 1. Install (once)
 
 Download these artifacts:
 
@@ -107,17 +104,75 @@ After extraction, the runtime package will be available under:
 
 ~/xr-gate-release/xreal_ultra/...
 
-
-### 2. Install runtime dependencies (once)
-
 ```bash
 cd ~/xr-gate-release/xreal_ultra
 ./devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
 ```
 After install need reboot!
 
+Steam must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
 
-### 3. Register OpenVR driver (once)
+Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups. After that, log out/log in or reboot.
+
+### 2. Optional: train override controller input (once)
+
+
+Without this, input will be limited to gestures (pinch, grab).
+
+Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime controller input.
+
+You can use 2 identical Bluetooth controllers.
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
+```
+
+The config will be saved in ~/.config/xr_tracking/override_controller/default.json
+If you want to retrain, you can delete default.json for new train
+
+
+### 3. Run xr_client
+
+**You must launch the client every time before launching SteamVR.**
+
+
+At startup, you need to select 60Hz or 90Hz mode.
+If you have integrated graphics, a USB-C video output, and don't have a separate graphics card, you can try 90Hz mode. Otherwise, I recommend 60Hz.
+
+If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the driver from section 3)
+
+It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
+
+```bash
+cd ~/xr-gate-release/xreal_ultra
+./run_xr_client.sh
+```
+
+You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
+
+CTRL + C - exit from xr_client
+
+
+If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
+
+---
+
+## Possible problems
+1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
+
+2. Tracking isn't working, or my pose is off somewhere - most likely, 6DoF received bad frames (not enough light) and can't calculate the pose correctly. The solution is to try pressing "1" in xr_client to restart the backends - this can be done at runtime and shouldn't break the current session. This can be done several times.
+
+3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends. Also, do not move your hands too quickly or move them out of your line of sight.
+
+4. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep). In the xr_client skip SBS mode selection
+
+---
+
+
+## SteamVR with XREAL Ultra
+
+### 1. Register OpenVR driver (once)
 
 For direct USB4/iGPU path, tested with HX370 iGPU:
 
@@ -154,47 +209,6 @@ XR_OPENVR_DISPLAY_MODE=direct \
 ./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
 ```
 
-### 4. Optional: train override controller input (once)
-
-
-Without this, input will be limited to gestures (pinch, grab).
-
-Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime controller input.
-
-You can use 2 identical Bluetooth controllers.
-
-```bash
-cd ~/xr-gate-release/xreal_ultra
-devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
-```
-
-The config will be saved in ~/.config/xr_tracking/override_controller/default.json
-If you want to retrain, you can delete default.json for new train
-
-
-### 5. Run xr_client
-
-**You must launch the client every time before launching SteamVR.**
-
-
-At startup, you need to select 60Hz or 90Hz mode.
-If you have integrated graphics, a USB-C video output, and don't have a separate graphics card, you can try 90Hz mode. Otherwise, I recommend 60Hz.
-
-If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the driver from section 3)
-
-It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
-
-```bash
-cd ~/xr-gate-release/xreal_ultra
-./run_xr_client.sh
-```
-
-You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
-
-CTRL + C - exit from xr_client
-
-
-If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
 
 ### Start on Integrated GPU with USB-C video output without discrete GPU in system
 
@@ -276,19 +290,8 @@ start_steamvr_video_overlay.sh
 
 ---
 
-## Possible problems
-1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
 
-2. Tracking isn't working, or my pose is off somewhere - most likely, 6DoF received bad frames (not enough light) and can't calculate the pose correctly. The solution is to try pressing "1" in xr_client to restart the backends - this can be done at runtime and shouldn't break the current session. This can be done several times.
-
-3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends. Also, do not move your hands too quickly or move them out of your line of sight.
-
-4. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep). In the xr_client skip SBS mode selection
-
----
-
-
-# Monado / OpenXR
+## Modano/OpenXR with XREAL Ultra
 
 ## Monado with main monitor — fullscreen XCB fix
 
