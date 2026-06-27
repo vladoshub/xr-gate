@@ -1378,7 +1378,7 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
     hand_cfg_.controller_reader.max_age_ms = static_cast<uint32_t>(std::max(0, get_int_setting(kRuntimeControllerStateMaxAgeMsKey, 1000)));
     hand_cfg_.controller_reader.udp_bind_host = get_string_setting(kRuntimeControllerStateUdpBindHostKey, "127.0.0.1");
     hand_cfg_.controller_reader.udp_port = static_cast<uint16_t>(std::clamp(get_int_setting(kRuntimeControllerStateUdpPortKey, 45802), 1, 65535));
-    hand_cfg_.runtime_controller_input_hold_ms = static_cast<std::max(0, get_int_setting(kRuntimeControllerInputHoldMsKey, 3000)));
+    hand_cfg_.runtime_controller_input_hold_ms = std::max(0, get_int_setting(kRuntimeControllerInputHoldMsKey, 1000));
 
     hand_cfg_.hmd_reader.transport = get_string_setting(kRuntimePoseTransportKey, "auto");
     hand_cfg_.hmd_reader.registry_path = get_string_setting(kRuntimePoseRegistryPathKey, "");
