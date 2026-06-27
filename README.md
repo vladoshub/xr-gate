@@ -74,10 +74,11 @@ For **Python/C++ / AR/VR/XR systems** work, it shows cross-language runtime engi
 - OpenVR/SteamVR and Monado/OpenXR integration points;
 - device-specific package scripts with a portable `out/xreal_ultra` layout.
 
-## Quick start — XREAL Ultra on Ubuntu 24.04
-
+## Quick start — XREAL Ultra on Linux
+Tested on Ubuntu 24.04
 
 ### 1. Install (once)
+
 
 Download these artifacts:
 
