@@ -219,7 +219,7 @@ vr::HmdQuaternion_t quat_for_coordinate_mode(CoordinateMode mode, const vr::HmdQ
   }
   return quat_normalize(q_runtime);
 }
- 
+
 std::array<double, 3> quat_rotate_vec(const vr::HmdQuaternion_t& q, const std::array<double, 3>& v) {
   const vr::HmdQuaternion_t p = quat(0.0, v[0], v[1], v[2]);
   const vr::HmdQuaternion_t r = quat_multiply(quat_multiply(q, p), quat_conjugate(q));

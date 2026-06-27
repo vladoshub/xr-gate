@@ -17,6 +17,8 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <unistd.h>
+#include <map>
+#include <tuple>
 
 namespace fs = std::filesystem;
 
@@ -306,26 +308,34 @@ void LinuxEvdevInputProvider::close_devices(std::vector<DeviceInfo>& devices) {
 }
 
 std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<DeviceInfo>& devices,
-                                                              int timeout_ms,
-                                                              bool include_stdin) {
+                                                                      int timeout_ms,
+                                                                      bool include_stdin) {
+  if (!pending_events_.empty()) {
+    InputEvent out = pending_events_.front();
+    pending_events_.pop_front();
+    return out;
+  }
+
   const auto start = std::chrono::steady_clock::now();
-  const auto deadline = timeout_ms >= 0
-      ? start + std::chrono::milliseconds(timeout_ms)
-      : std::chrono::steady_clock::time_point::max();
+  const auto deadline = timeout_ms >= 0 ? start + std::chrono::milliseconds(timeout_ms)
+                                      : std::chrono::steady_clock::time_point::max();
 
   while (true) {
     fd_set rfds;
     FD_ZERO(&rfds);
     int max_fd = -1;
+
     if (include_stdin) {
       FD_SET(STDIN_FILENO, &rfds);
       max_fd = std::max(max_fd, STDIN_FILENO);
     }
+
     for (const auto& d : devices) {
       if (d.fd < 0) continue;
       FD_SET(d.fd, &rfds);
       max_fd = std::max(max_fd, d.fd);
     }
+
     if (max_fd < 0) return std::nullopt;
 
     timeval tv{};
@@ -355,23 +365,41 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
       return ev;
     }
 
+    // Realtime input must not replay a kernel evdev backlog after the service stalls.
+    // Drain every ready fd and compact to the latest value per (device,type,code).
+    // This preserves final held state for sticks/buttons while dropping old transient
+    // press/release/axis history that would otherwise appear in SteamVR as a seconds-long queue.
+    std::map<std::tuple<size_t, uint16_t, uint16_t>, size_t> compact_index;
+    std::vector<InputEvent> compacted;
     bool saw_ready_device = false;
+
     for (size_t i = 0; i < devices.size(); ++i) {
       auto& d = devices[i];
       if (d.fd < 0 || !FD_ISSET(d.fd, &rfds)) continue;
       saw_ready_device = true;
+
       input_event ev{};
       ssize_t n = 0;
       while ((n = read(d.fd, &ev, sizeof(ev))) == sizeof(ev)) {
         if (!interesting_event(ev)) continue;
+
         InputEvent out;
         out.device_index = i;
         out.type = static_cast<uint16_t>(ev.type);
         out.code = static_cast<uint16_t>(ev.code);
         out.value = ev.value;
-        out.timestamp_ns = now_ns();
-        return out;
+        out.timestamp_ns = 0;
+
+        const auto key = std::make_tuple(out.device_index, out.type, out.code);
+        const auto it = compact_index.find(key);
+        if (it == compact_index.end()) {
+          compact_index.emplace(key, compacted.size());
+          compacted.push_back(out);
+        } else {
+          compacted[it->second] = out;
+        }
       }
+
       if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         d.open_error = std::strerror(errno);
         d.readable = false;
@@ -381,6 +409,17 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
           d.fd = -1;
         }
       }
+    }
+
+    if (!compacted.empty()) {
+      const int64_t ts = now_ns();
+      for (auto& ev : compacted) {
+        ev.timestamp_ns = ts;
+        pending_events_.push_back(ev);
+      }
+      InputEvent out = pending_events_.front();
+      pending_events_.pop_front();
+      return out;
     }
 
     // A device can wake select() with only EV_SYN/EV_MSC/noise or with data
