@@ -18,7 +18,14 @@ constexpr uint32_t RUNTIME_BUTTON_DPAD_CENTER = static_cast<uint32_t>(xr_runtime
 
 enum class LostHandPoseFallbackMode {
   PoseInvalid,
+  // Use HMD-relative fallback only while the physical controller side has
+  // active input (buttons/axes/trigger/grip). This keeps lost hands from being
+  // visually glued to the HMD when the user is idle.
   HmdRelativeWithControllerInput,
+  // Use HMD-relative fallback whenever the physical controller side is present.
+  // This is useful for always-visible synthetic controllers, but intentionally
+  // distinct from hmd_relative_with_input.
+  HmdRelativeWithControllerPresent,
   HmdRelative,
 };
 

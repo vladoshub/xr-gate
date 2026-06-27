@@ -210,6 +210,8 @@ bool should_use_lost_hand_hmd_relative_fallback(
     case LostHandPoseFallbackMode::PoseInvalid:
       return false;
     case LostHandPoseFallbackMode::HmdRelativeWithControllerInput:
+      return controller_side != nullptr && controller_side_has_nonzero_input(*controller_side);
+    case LostHandPoseFallbackMode::HmdRelativeWithControllerPresent:
       return controller_side != nullptr && controller_side_is_present(*controller_side);
     case LostHandPoseFallbackMode::HmdRelative:
       return true;
@@ -328,12 +330,11 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
   const bool hand_gestures_enabled = left ? cfg.left_hand_gestures_enabled
                                           : cfg.right_hand_gestures_enabled;
   if (cfg.mode == xr_runtime::RuntimeControllerMode::HAND_TRACKING_WITH_BUTTON_PRIORITY &&
-      valid_hand_side && hand_gestures_enabled &&
-      !(controller_side != nullptr && controller_side_is_present(*controller_side))) {
-    // Hand gestures are allowed only when no external controller side is present.
-    // With override_controller active, external ControllerInputV2 is authoritative;
-    // otherwise palm/pinch/grab gestures can leak as trigger/grip/buttons and cause
-    // phantom clicks or discrete movement pulses in SteamVR.
+      valid_hand_side && hand_gestures_enabled) {
+    // Whether hand gestures are allowed while an external ControllerInputV2 stream
+    // exists is decided by xr_runtime_adapter per frame.  Do not key this off
+    // controller_side presence here, otherwise hand_plus_controller cannot combine
+    // physical controller input with pinch/grab gestures.
     merge_hand_gestures(out, *hand_side);
   }
 
@@ -356,11 +357,18 @@ LostHandPoseFallbackMode parse_lost_hand_pose_fallback_mode(const std::string& v
       value == "hmd_relative_when_input") {
     return LostHandPoseFallbackMode::HmdRelativeWithControllerInput;
   }
+  if (value == "hmd_relative_with_controller_present" ||
+      value == "hmd_relative_when_controller_present" ||
+      value == "hmd_relative_with_stream" ||
+      value == "hmd_relative_when_stream_present") {
+    return LostHandPoseFallbackMode::HmdRelativeWithControllerPresent;
+  }
   if (value == "hmd_relative" || value == "body_locked" || value == "body") {
     return LostHandPoseFallbackMode::HmdRelative;
   }
   throw std::runtime_error(std::string(option_name) +
-                           " must be one of: pose_invalid, hmd_relative_with_input, hmd_relative");
+                           " must be one of: pose_invalid, hmd_relative_with_input, "
+                           "hmd_relative_with_controller_present, hmd_relative");
 }
 
 const char* lost_hand_pose_fallback_mode_name(LostHandPoseFallbackMode mode) {
@@ -369,6 +377,8 @@ const char* lost_hand_pose_fallback_mode_name(LostHandPoseFallbackMode mode) {
       return "pose_invalid";
     case LostHandPoseFallbackMode::HmdRelativeWithControllerInput:
       return "hmd_relative_with_input";
+    case LostHandPoseFallbackMode::HmdRelativeWithControllerPresent:
+      return "hmd_relative_with_controller_present";
     case LostHandPoseFallbackMode::HmdRelative:
       return "hmd_relative";
   }

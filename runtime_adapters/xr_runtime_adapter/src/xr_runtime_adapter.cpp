@@ -2527,6 +2527,8 @@ int main(int argc, char** argv) {
   bool runtime_right_hand_gestures_enabled = true;
   bool runtime_derive_extra_gesture_buttons = true;
   bool runtime_derive_extra_gesture_buttons_with_controller_input = false;
+  bool override_controller_block_gestures_while_stream_present = true;
+  double override_controller_gesture_block_latch_ms = 2000.0;
 
   bool runtime_hand_stability_gate = false;
   double runtime_hand_gate_max_jump_m = 0.08;
@@ -2724,6 +2726,14 @@ int main(int argc, char** argv) {
 
                  "Controller stale policy: zero_on_stale, hold_last");
 
+  app.add_option("--override-controller-block-gestures-while-stream-present",
+                 override_controller_block_gestures_while_stream_present,
+                 "In controller_buttons_runtime_only, block hand gesture input while override_controller stream is fresh/recently seen; hand_plus_controller is unaffected");
+
+  app.add_option("--override-controller-gesture-block-latch-ms",
+                 override_controller_gesture_block_latch_ms,
+                 "In controller_buttons_runtime_only, keep hand gestures blocked this long after the last fresh override_controller frame; 0 blocks only the current fresh frame");
+
   app.add_flag("--publish-runtime-pose-shm", publish_runtime_pose_shm,
                "Publish RUNTIME_HMD_POSE_V1 output for Monado/OpenVR runtime drivers");
   app.add_flag("--publish-runtime-pose-udp", publish_runtime_pose_udp,
@@ -2767,7 +2777,7 @@ int main(int argc, char** argv) {
                      "Runtime controller synthesis mode. Normally set this in config controller_override.mode; CLI overrides config.");
   CLI::Option* runtime_controller_lost_hand_pose_fallback_option =
       app.add_option("--runtime-controller-lost-hand-pose-fallback", runtime_controller_lost_hand_pose_fallback,
-                     "Hand-tracking controller modes: fallback pose when a hand is lost: pose_invalid, hmd_relative_with_input, or hmd_relative. hmd_relative_with_input keeps held override-controller hands body/HMD-relative while buttons are active.");
+                     "Hand-tracking controller modes: fallback pose when a hand is lost: pose_invalid, hmd_relative_with_input, hmd_relative_with_controller_present, or hmd_relative. hmd_relative_with_input keeps held override-controller hands body/HMD-relative only while physical buttons/axes are active.");
   CLI::Option* publish_runtime_controller_state_shm_option =
       app.add_flag("--publish-runtime-controller-state-shm", publish_runtime_controller_state_shm,
                    "Publish RUNTIME_CONTROLLER_STATE_V1 output for OpenVR/Monado controller drivers");
@@ -3097,6 +3107,9 @@ int main(int argc, char** argv) {
   if (max_controller_age_ms <= 0) {
     throw std::runtime_error("--max-controller-age-ms must be positive");
   }
+  if (override_controller_gesture_block_latch_ms < 0.0) {
+    throw std::runtime_error("--override-controller-gesture-block-latch-ms must be >= 0");
+  }
   if (runtime_hand_gate_confirm_frames < 1) {
     throw std::runtime_error("--runtime-hand-gate-confirm-frames must be >= 1");
   }
@@ -3323,6 +3336,10 @@ int main(int argc, char** argv) {
               << (effective_runtime_left_hand_gestures_enabled ? "true" : "false") << "\n";
     std::cout << "effective_runtime_right_hand_gestures_enabled: "
               << (effective_runtime_right_hand_gestures_enabled ? "true" : "false") << "\n";
+    std::cout << "override_controller_block_gestures_while_stream_present: "
+              << (override_controller_block_gestures_while_stream_present ? "true" : "false") << "\n";
+    std::cout << "override_controller_gesture_block_latch_ms: "
+              << override_controller_gesture_block_latch_ms << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons: "
               << (runtime_derive_extra_gesture_buttons ? "true" : "false") << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons_with_controller_input: "
@@ -3878,6 +3895,9 @@ int main(int argc, char** argv) {
     bool runtime_last_hand_output_had_hands = false;
     uint64_t skeleton26_frames_used = 0;
     uint64_t controller_override_frames = 0;
+    uint64_t override_controller_gesture_block_frames = 0;
+    uint64_t override_controller_gesture_allow_frames = 0;
+    int64_t override_controller_gesture_block_until_ns = 0;
     gestures::RuntimeGestureHysteresisState runtime_gesture_hysteresis;
     gestures::RuntimeHandGestureSnapshot last_fresh_runtime_hand_gestures;
 
@@ -4285,10 +4305,15 @@ int main(int argc, char** argv) {
           (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm)) {
         const auto controller_snapshot = controller_input_thread->snapshot();
         if (controller_snapshot.latest) {
-          const bool controller_stale = is_age_stale(
+          const bool controller_receive_stale = is_age_stale(
               frame.read_timestamp_ns,
               static_cast<int64_t>(controller_snapshot.latest_receive_timestamp_ns),
               static_cast<double>(controller_input_config.max_age_ms));
+          const bool controller_payload_stale = is_age_stale(
+              frame.read_timestamp_ns,
+              static_cast<int64_t>(controller_snapshot.latest->timestamp_ns),
+              static_cast<double>(controller_input_config.max_age_ms));
+          const bool controller_stale = controller_receive_stale || controller_payload_stale;
           if (!controller_stale && controller_snapshot.latest->sequence != 0) {
             controller_stream_fresh = true;
             fresh_controller_input = *controller_snapshot.latest;
@@ -4310,6 +4335,13 @@ int main(int argc, char** argv) {
                 ? controller_stream_fresh
                 : controller_has_nonzero_input;
             frame_controller_sequence = controller_snapshot.latest->sequence;
+            if (controller_buttons_runtime_only_mode &&
+                override_controller_block_gestures_while_stream_present) {
+              const int64_t block_until_ns = frame.read_timestamp_ns +
+                  ms_to_ns(override_controller_gesture_block_latch_ms);
+              override_controller_gesture_block_until_ns =
+                  std::max(override_controller_gesture_block_until_ns, block_until_ns);
+            }
             if (controller_override_active) {
               ++controller_override_frames;
             }
@@ -4342,10 +4374,17 @@ int main(int argc, char** argv) {
         }
       }
 
-      const bool runtime_only_clear_left_visual_gestures =
-          controller_buttons_runtime_only_mode && controller_stream_fresh;
-      const bool runtime_only_clear_right_visual_gestures =
-          controller_buttons_runtime_only_mode && controller_stream_fresh;
+      const bool runtime_only_gesture_input_blocked =
+          controller_buttons_runtime_only_mode &&
+          override_controller_block_gestures_while_stream_present &&
+          (controller_stream_fresh || frame.read_timestamp_ns < override_controller_gesture_block_until_ns);
+      if (controller_buttons_runtime_only_mode) {
+        if (runtime_only_gesture_input_blocked) ++override_controller_gesture_block_frames;
+        else ++override_controller_gesture_allow_frames;
+      }
+
+      const bool runtime_only_clear_left_visual_gestures = runtime_only_gesture_input_blocked;
+      const bool runtime_only_clear_right_visual_gestures = runtime_only_gesture_input_blocked;
       if ((runtime_only_clear_left_visual_gestures || runtime_only_clear_right_visual_gestures) &&
           frame.hand_v2.sequence != 0) {
         gestures::clear_runtime_hand_v2_backend_gestures_by_side(
@@ -4478,6 +4517,11 @@ int main(int argc, char** argv) {
           }
         }
 
+        const bool frame_runtime_left_hand_gestures_enabled =
+            effective_runtime_left_hand_gestures_enabled && !runtime_only_gesture_input_blocked;
+        const bool frame_runtime_right_hand_gestures_enabled =
+            effective_runtime_right_hand_gestures_enabled && !runtime_only_gesture_input_blocked;
+
         const bool runtime_derived_gestures_have_fresh_tracking =
             !runtime_derived_gestures_require_fresh_tracking || runtime_visual_hand_tracking_fresh;
 
@@ -4486,12 +4530,13 @@ int main(int argc, char** argv) {
                                                                  last_fresh_runtime_hand_gestures,
                                                                  frame.read_timestamp_ns,
                                                                  runtime_derived_gesture_latch_ms,
-                                                                 effective_runtime_left_hand_gestures_enabled,
-                                                                 effective_runtime_right_hand_gestures_enabled);
+                                                                 frame_runtime_left_hand_gestures_enabled,
+                                                                 frame_runtime_right_hand_gestures_enabled);
           runtime_gesture_hysteresis.reset_all();
         } else {
           const bool should_derive_runtime_hand_gestures =
               runtime_derive_hand_gestures &&
+              !runtime_only_gesture_input_blocked &&
               (!controller_override_active || runtime_derive_hand_gestures_with_controller_input);
           if (frame.hand_v2.sequence != 0 && should_derive_runtime_hand_gestures) {
             gestures::derive_missing_runtime_hand_v2_gestures(frame.hand_v2,
@@ -4502,12 +4547,13 @@ int main(int argc, char** argv) {
                                                     derived_pinch_response_start,
                                                     derived_grab_response_start,
                                                     runtime_gesture_hysteresis,
-                                                    effective_runtime_left_hand_gestures_enabled,
-                                                    effective_runtime_right_hand_gestures_enabled);
+                                                    frame_runtime_left_hand_gestures_enabled,
+                                                    frame_runtime_right_hand_gestures_enabled);
           }
 
           const bool should_derive_extra_gesture_buttons =
               runtime_derive_extra_gesture_buttons &&
+              !runtime_only_gesture_input_blocked &&
               (!controller_override_active || runtime_derive_extra_gesture_buttons_with_controller_input);
           if (frame.hand_v2.sequence != 0 && should_derive_extra_gesture_buttons) {
             gestures::derive_runtime_hand_v2_extra_gesture_buttons(frame.hand_v2,
@@ -4521,8 +4567,8 @@ int main(int argc, char** argv) {
                                                          derived_extra_gesture_hold_ms,
                                                          frame.read_timestamp_ns,
                                                          runtime_gesture_hysteresis,
-                                                         effective_runtime_left_hand_gestures_enabled,
-                                                         effective_runtime_right_hand_gestures_enabled);
+                                                         frame_runtime_left_hand_gestures_enabled,
+                                                         frame_runtime_right_hand_gestures_enabled);
           }
 
           if (frame.hand_v2.sequence != 0 && runtime_visual_hand_tracking_fresh &&
@@ -4530,8 +4576,8 @@ int main(int argc, char** argv) {
             gestures::capture_runtime_hand_v2_gesture_snapshot(last_fresh_runtime_hand_gestures,
                                                               frame.hand_v2,
                                                               frame.read_timestamp_ns,
-                                                              effective_runtime_left_hand_gestures_enabled,
-                                                              effective_runtime_right_hand_gestures_enabled);
+                                                              frame_runtime_left_hand_gestures_enabled,
+                                                              frame_runtime_right_hand_gestures_enabled);
           }
         }
 
@@ -4568,7 +4614,7 @@ int main(int argc, char** argv) {
           }
 
           auto runtime_controller_synthesis_cfg_for_frame = runtime_controller_synthesis_cfg;
-          if (controller_buttons_runtime_only_mode && controller_stream_fresh) {
+          if (runtime_only_gesture_input_blocked) {
             runtime_controller_synthesis_cfg_for_frame.left_hand_gestures_enabled = false;
             runtime_controller_synthesis_cfg_for_frame.right_hand_gestures_enabled = false;
           }
@@ -4702,6 +4748,9 @@ int main(int argc, char** argv) {
                     << " hand_reattach_attempts=" << hand_reattach_state.attempts
                     << " hand_reattach_successes=" << hand_reattach_state.successes
                     << " controller_override=" << (controller_override_active ? "yes" : "no")
+                    << " runtime_only_gesture_blocked=" << (runtime_only_gesture_input_blocked ? "yes" : "no")
+                    << " override_gesture_block_frames=" << override_controller_gesture_block_frames
+                    << " override_gesture_allow_frames=" << override_controller_gesture_allow_frames
                     << " controller_seq=" << frame_controller_sequence
                     << " controller_input_mode=" << controller_input_config.mode
                     << " controller_input_transport=" << controller_input_config.transport
@@ -4906,6 +4955,8 @@ int main(int argc, char** argv) {
     std::cout << "controller_input_frames: " << final_controller_health.frames << "\n";
     std::cout << "controller_input_last_seq: " << final_controller_health.last_sequence << "\n";
     std::cout << "controller_override_frames: " << controller_override_frames << "\n";
+    std::cout << "override_controller_gesture_block_frames: " << override_controller_gesture_block_frames << "\n";
+    std::cout << "override_controller_gesture_allow_frames: " << override_controller_gesture_allow_frames << "\n";
     std::cout << "controller_input_last_error: " << final_controller_health.last_error << "\n";
     std::cout << "controller_input_stream: " << controller_input_config.stream << "\n";
     std::cout << "left_controller_id: " << controller_input_config.left_controller_id << "\n";
