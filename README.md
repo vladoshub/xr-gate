@@ -287,12 +287,12 @@ cd ~/xr-gate-release/xreal_ultra
 
 Spatial Vision (need running xr_spatial backend)
 ```bash
-start_xr_steamvr_spatial_scene.sh
+./run_steamvr_spatial_scene.sh
 ```
 
 Stereo overlay (need running xr_video backend)
 ```bash
-start_steamvr_video_overlay.sh
+./run_steamvr_video_overlay.sh
 ```
 
 ---
