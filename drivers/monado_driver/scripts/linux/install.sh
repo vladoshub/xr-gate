@@ -617,8 +617,7 @@ install_openxr_runtime_manifest() {
   openxr_lib="$(find "$BUILD_DIR" -type f \( -name 'libopenxr_monado.so' -o -name 'libopenxr_monado.so.*' \) -print 2>/dev/null | sort | head -n1 || true)"
 
   if [[ -z "$openxr_lib" ]]; then
-    log "warning: libopenxr_monado.so was not found under build dir; XR_RUNTIME_JSON manifest will not be generated"
-    return 0
+    fail "libopenxr_monado.so was not found under build dir; cannot generate XR_RUNTIME_JSON manifest"
   fi
 
   mkdir -p "$BIN_DIR" "$DEVICE_MONADO_SCRIPT_OUT_DIR"
@@ -647,12 +646,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
+
   chmod 0755 "$env_script"
+
+  [[ -f "$manifest" ]] || fail "OpenXR runtime manifest was not generated: $manifest"
+  [[ -x "$env_script" ]] || fail "OpenXR runtime env helper was not generated: $env_script"
+  [[ -e "$BIN_DIR/$lib_name" ]] || fail "OpenXR runtime library symlink/copy was not installed: $BIN_DIR/$lib_name"
 
   log "installed OpenXR runtime library: $BIN_DIR/$lib_name"
   log "installed OpenXR runtime manifest: $manifest"
   log "installed OpenXR env helper: $env_script"
 }
+
 
 install_runtime_binaries() {
   mkdir -p "$BIN_DIR"
