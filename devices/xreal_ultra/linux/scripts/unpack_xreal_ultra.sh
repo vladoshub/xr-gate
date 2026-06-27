@@ -9,25 +9,30 @@ usage() {
 Usage:
   ./unpack_xreal_ultra.sh [options] [DEST_DIR]
 
-Expected files by default are next to this script:
-  xreal-ultra-linux-x64.zip
-  hand-tracking-models-mercury.zip
+Expected files by default are next to this script. Release tar.gz assets are
+preferred, while old GitHub Actions artifact zip wrappers are still supported:
+  xreal_ultra_linux_x64.tar.gz      or xreal-ultra-linux-x64.zip
+  hand-tracking-models-mercury.tar.gz or hand-tracking-models-mercury.zip
 
 Options:
   -d, --dest DIR          Destination directory where the runtime package will be extracted.
                           Default: directory containing this script.
-  --main-zip FILE         Main GitHub artifact zip.
-                          Default: ./xreal-ultra-linux-x64.zip next to this script.
-  --models-zip FILE       Mercury models GitHub artifact zip.
-                          Default: ./hand-tracking-models-mercury.zip next to this script.
+  --main FILE             Main runtime archive: .tar.gz release asset or old GitHub artifact .zip.
+  --main-archive FILE     Alias for --main.
+  --main-zip FILE         Backward-compatible alias for --main.
+  --models FILE           Mercury models archive: .tar.gz release asset or old GitHub artifact .zip.
+  --models-archive FILE   Alias for --models.
+  --models-zip FILE       Backward-compatible alias for --models.
   -f, --force             Remove existing extracted runtime package directory before extracting.
   --keep-tmp              Keep temporary extraction directory for debugging.
   -h, --help              Show this help.
 
 Environment variables:
   DEST_DIR=/path          Same as --dest.
-  MAIN_ZIP=/path/file.zip Same as --main-zip.
-  MODELS_ZIP=/path.zip    Same as --models-zip.
+  MAIN_ARCHIVE=/path      Same as --main.
+  MAIN_ZIP=/path/file.zip Backward-compatible alias for MAIN_ARCHIVE.
+  MODELS_ARCHIVE=/path    Same as --models.
+  MODELS_ZIP=/path.zip    Backward-compatible alias for MODELS_ARCHIVE.
   FORCE=1                Same as --force.
   KEEP_TMP=1             Same as --keep-tmp.
 
@@ -35,14 +40,41 @@ Examples:
   ./unpack_xreal_ultra.sh
   ./unpack_xreal_ultra.sh ~/xr-gate-release
   ./unpack_xreal_ultra.sh --dest ~/xr-gate-release
+  ./unpack_xreal_ultra.sh --main ./xreal_ultra_linux_x64.tar.gz --models ./hand-tracking-models-mercury.tar.gz
+  ./unpack_xreal_ultra.sh --main ./xreal-ultra-linux-x64.zip --models ./hand-tracking-models-mercury.zip
   FORCE=1 ./unpack_xreal_ultra.sh --dest ~/xr-gate-release
 USAGE
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MAIN_ZIP="${MAIN_ZIP:-$SCRIPT_DIR/xreal-ultra-linux-x64.zip}"
-MODELS_ZIP="${MODELS_ZIP:-$SCRIPT_DIR/hand-tracking-models-mercury.zip}"
+first_existing() {
+  local candidate
+  for candidate in "$@"; do
+    candidate="${candidate/#\~/$HOME}"
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' "${1/#\~/$HOME}"
+}
+
+MAIN_ARCHIVE="${MAIN_ARCHIVE:-${MAIN_ZIP:-}}"
+if [[ -z "$MAIN_ARCHIVE" ]]; then
+  MAIN_ARCHIVE="$(first_existing \
+    "$SCRIPT_DIR/xreal_ultra_linux_x64.tar.gz" \
+    "$SCRIPT_DIR/xreal-ultra-linux-x64.tar.gz" \
+    "$SCRIPT_DIR/xreal-ultra-linux-x64.zip")"
+fi
+
+MODELS_ARCHIVE="${MODELS_ARCHIVE:-${MODELS_ZIP:-}}"
+if [[ -z "$MODELS_ARCHIVE" ]]; then
+  MODELS_ARCHIVE="$(first_existing \
+    "$SCRIPT_DIR/hand-tracking-models-mercury.tar.gz" \
+    "$SCRIPT_DIR/hand-tracking-models-mercury.zip")"
+fi
+
 DEST_DIR="${DEST_DIR:-$SCRIPT_DIR}"
 FORCE="${FORCE:-0}"
 KEEP_TMP="${KEEP_TMP:-0}"
@@ -56,14 +88,14 @@ while [[ $# -gt 0 ]]; do
       DEST_DIR="$2"
       shift 2
       ;;
-    --main-zip)
+    --main|--main-archive|--main-zip)
       [[ $# -ge 2 ]] || fatal "$1 requires a file argument"
-      MAIN_ZIP="$2"
+      MAIN_ARCHIVE="$2"
       shift 2
       ;;
-    --models-zip)
+    --models|--models-archive|--models-zip)
       [[ $# -ge 2 ]] || fatal "$1 requires a file argument"
-      MODELS_ZIP="$2"
+      MODELS_ARCHIVE="$2"
       shift 2
       ;;
     -f|--force)
@@ -82,7 +114,7 @@ while [[ $# -gt 0 ]]; do
       shift
       break
       ;;
-    -*)
+    -* )
       fatal "unknown option: $1"
       ;;
     *)
@@ -107,18 +139,17 @@ if [[ -n "$POSITIONAL_DEST" ]]; then
 fi
 
 # Expand a leading ~/ manually; quoted shell variables do not expand it.
-MAIN_ZIP="${MAIN_ZIP/#\~/$HOME}"
-MODELS_ZIP="${MODELS_ZIP/#\~/$HOME}"
+MAIN_ARCHIVE="${MAIN_ARCHIVE/#\~/$HOME}"
+MODELS_ARCHIVE="${MODELS_ARCHIVE/#\~/$HOME}"
 DEST_DIR="${DEST_DIR/#\~/$HOME}"
 
-command -v unzip >/dev/null 2>&1 || fatal "unzip not found. Install it: sudo apt install unzip"
 command -v tar >/dev/null 2>&1 || fatal "tar not found"
 command -v find >/dev/null 2>&1 || fatal "find not found"
 command -v mktemp >/dev/null 2>&1 || fatal "mktemp not found"
 command -v cp >/dev/null 2>&1 || fatal "cp not found"
 
-[[ -f "$MAIN_ZIP" ]] || fatal "main artifact zip not found: $MAIN_ZIP"
-[[ -f "$MODELS_ZIP" ]] || fatal "models artifact zip not found: $MODELS_ZIP"
+[[ -f "$MAIN_ARCHIVE" ]] || fatal "main archive not found: $MAIN_ARCHIVE"
+[[ -f "$MODELS_ARCHIVE" ]] || fatal "models archive not found: $MODELS_ARCHIVE"
 
 mkdir -p "$DEST_DIR"
 DEST_DIR="$(cd "$DEST_DIR" && pwd)"
@@ -133,41 +164,59 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "main artifact: $MAIN_ZIP"
-log "models artifact: $MODELS_ZIP"
+log "main archive: $MAIN_ARCHIVE"
+log "models archive: $MODELS_ARCHIVE"
 log "destination: $DEST_DIR"
 
 mkdir -p "$TMP_DIR/main_zip" "$TMP_DIR/models_zip" "$TMP_DIR/main_probe" "$TMP_DIR/models_extract"
 
-log "unzip main GitHub artifact wrapper"
-unzip -q "$MAIN_ZIP" -d "$TMP_DIR/main_zip"
+select_tar_from_archive() {
+  local archive="$1"
+  local extract_dir="$2"
+  local label="$3"
+  shift 3
+  local -a tar_names=("$@")
+  local tar_name
 
-log "unzip models GitHub artifact wrapper"
-unzip -q "$MODELS_ZIP" -d "$TMP_DIR/models_zip"
-
-mapfile -t MAIN_TARS < <(
-  find "$TMP_DIR/main_zip" -type f \( \
-    -name 'xreal_ultra_linux_x64.tar.gz' -o \
-    -name 'xreal-ultra-linux-x64.tar.gz' \
-  \) | sort
-)
-
-mapfile -t MODELS_TARS < <(
-  find "$TMP_DIR/models_zip" -type f -name 'hand-tracking-models-mercury.tar.gz' | sort
-)
-
-[[ "${#MAIN_TARS[@]}" -eq 1 ]] || {
-  find "$TMP_DIR/main_zip" -maxdepth 5 -type f -print >&2 || true
-  fatal "expected exactly one xreal_ultra_linux_x64.tar.gz inside $MAIN_ZIP, found ${#MAIN_TARS[@]}"
+  case "$archive" in
+    *.tar.gz|*.tgz)
+      printf '%s\n' "$archive"
+      return 0
+      ;;
+    *.zip)
+      command -v unzip >/dev/null 2>&1 || fatal "unzip not found. Install it: sudo apt install unzip"
+      log "unzip $label GitHub artifact wrapper"
+      unzip -q "$archive" -d "$extract_dir"
+      local -a find_args=()
+      for tar_name in "${tar_names[@]}"; do
+        if [[ "${#find_args[@]}" -gt 0 ]]; then
+          find_args+=( -o )
+        fi
+        find_args+=( -name "$tar_name" )
+      done
+      local -a matches=()
+      mapfile -t matches < <(find "$extract_dir" -type f \( "${find_args[@]}" \) | sort)
+      [[ "${#matches[@]}" -eq 1 ]] || {
+        find "$extract_dir" -maxdepth 5 -type f -print >&2 || true
+        fatal "expected exactly one ${tar_names[*]} inside $archive, found ${#matches[@]}"
+      }
+      printf '%s\n' "${matches[0]}"
+      return 0
+      ;;
+    *)
+      fatal "unsupported $label archive type: $archive. Expected .tar.gz/.tgz or .zip"
+      ;;
+  esac
 }
 
-[[ "${#MODELS_TARS[@]}" -eq 1 ]] || {
-  find "$TMP_DIR/models_zip" -maxdepth 5 -type f -print >&2 || true
-  fatal "expected exactly one hand-tracking-models-mercury.tar.gz inside $MODELS_ZIP, found ${#MODELS_TARS[@]}"
-}
+MAIN_TAR="$(select_tar_from_archive \
+  "$MAIN_ARCHIVE" "$TMP_DIR/main_zip" "main" \
+  'xreal_ultra_linux_x64.tar.gz' \
+  'xreal-ultra-linux-x64.tar.gz')"
 
-MAIN_TAR="${MAIN_TARS[0]}"
-MODELS_TAR="${MODELS_TARS[0]}"
+MODELS_TAR="$(select_tar_from_archive \
+  "$MODELS_ARCHIVE" "$TMP_DIR/models_zip" "models" \
+  'hand-tracking-models-mercury.tar.gz')"
 
 log "main tar: $MAIN_TAR"
 log "models tar: $MODELS_TAR"

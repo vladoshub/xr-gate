@@ -82,11 +82,11 @@ Tested on Ubuntu 24.04
 
 Download these artifacts:
 
-1. xreal-ultra-linux-x64.zip
+1. xreal-ultra-linux-x64.tar.gz
 
-2. hand-tracking-models-mercury.zip
+2. hand-tracking-models-mercury.tar.gz
 
-3. unpack-xreal-ultra.zip
+3. unpack-xreal-ultra.sh
 
 Mercury ONNX models are distributed separately in hand-tracking-models-mercury.zip. They are not included in the core runtime package and are not downloaded by the default build.
 
