@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 ANSI_COLORS = {
+    "red": "\033[31m",
     "green": "\033[32m",
     "yellow": "\033[33m",
     "blue": "\033[34m",

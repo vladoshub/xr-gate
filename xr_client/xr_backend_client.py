@@ -315,6 +315,13 @@ class Launcher:
         if proc.poll() is not None:
             self.print_log_tail(log_path)
             self.fail(f"{spec.name} exited immediately with code {proc.returncode}")
+        if spec.name == "basalt_vio":
+            log(
+                "IMPORTANT: Basalt VIO is initializing. For correct positioning, "
+                "gently rotate or move your head for a couple of seconds. "
+                "Avoid fast turns, shaking, or large movements.",
+                color="red",
+            )
         self.start_log_limiter(item)
         return True
 
