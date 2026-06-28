@@ -159,7 +159,7 @@ If you have completed the train override controller from the previous point, you
 
 **Tracking recommendations:**
 
-1. It is recommended not to cover the glasses' chambers. It is also recommended to use the glasses in a bright place.
+1. It is recommended not to cover the glasses' cameras. It is also recommended to use the glasses in a bright place.
 
 2. It is recommended to make small head movements for a couple of seconds after the initial frame check in xr_client to ensure successful positioning.
 
