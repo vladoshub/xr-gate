@@ -178,7 +178,9 @@ If you have completed the train override controller from the previous point, you
 
 4. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep). In the xr_client skip SBS mode selection. It was also noted that if the main display is connected via Type-C, the glasses may not work correctly in SBS.
 
-5. I had problems using two cheap, identical Bluetooth controllers. They only worked correctly within line-of-sight, and there were also issues with sticking and command queues. If you're experiencing similar issues, try using them near a computer and/or try re-enabling the controllers themselves.
+5. The glasses don't work in any mode - there may be a conflict with the main monitor - try reconnecting the main monitor or changing the frequency on the glasses in the display settings
+
+6. I had problems using two cheap, identical Bluetooth controllers. They only worked correctly within line-of-sight, and there were also issues with sticking and command queues. If you're experiencing similar issues, try using them near a computer and/or try re-enabling the controllers themselves.
 
 ---
 
