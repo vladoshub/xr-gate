@@ -29,7 +29,7 @@ capture_client + backends
   Python stream SDK, 3DoF/6DoF, hand tracking, stereo video, spatial mesh/scanner
         ↓
 xr_runtime_adapter
-  runtime-rate normalization, prediction, coordinate transforms, controller state
+  runtime-rate normalization, Movement prediction, coordinate transforms, controller state, gestures  ← Override controller ← Bluetooth joystick/keyboard
         ↓
 drivers and apps
   SteamVR/OpenVR, Monado/OpenXR, debug viewers, optional overlays
@@ -38,12 +38,14 @@ drivers and apps
 Current focus areas:
 
 - XREAL Ultra capture and display/runtime integration.
+- No vendor SDK required.
 - 6DoF VIO through Basalt.
 - IMU-only 3DoF fallback and recentering.
 - Mercury/ONNX hand-tracking runtime integration.
 - Physical controller override input for SteamVR-style interactions.
 - Stereo video streaming and optional SteamVR video overlay experiments.
 - Live depth grid / spatial proxy mesh / primitive scan output.
+- Gestures, movement prediction
 - Portable Linux runtime package under `out/xreal_ultra`.
 
 ## Why this project is interesting
