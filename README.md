@@ -157,6 +157,14 @@ CTRL + C - exit from xr_client
 
 If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
 
+**Tracking recomendations:**
+
+1. It is recommended not to cover the glasses' chambers. It is also recommended to use the glasses in a bright place.
+
+2. It is recommended to make small head movements for a couple of seconds after the initial frame check in xr_client to ensure successful positioning.
+
+3. The current hand tracking system isn't perfect, and it's generally recommended to use joysticks instead of gestures (enabling override_controller automatically disables gestures, and vice versa). It is not recommended to wave your arms quickly or block the view of your hands in front of the front camera.
+
 ---
 
 ## Possible problems
