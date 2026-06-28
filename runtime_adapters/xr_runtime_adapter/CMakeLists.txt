@@ -20,6 +20,7 @@ add_executable(xr_runtime_adapter
   src/gestures.cpp
   src/hmd_pose_stability_filter.cpp
   src/jitter_filter.cpp
+  src/body_tracker_stability_filter.cpp
   src/override_controller.cpp
 )
 

@@ -38,7 +38,7 @@ struct HandPoseStabilityFilterConfig {
   double max_continuity_velocity_mps = 1.25;
 
   // V2-only runtime smoothing. The gate still keeps the raw Mercury output safe:
-  // short prediction covers brief tracking loss, and confirmed reacquire blending
+  // hold-lost plus prediction covers brief tracking loss, and confirmed reacquire blending
   // avoids hard controller snaps after far-jump confirmation.
   double predict_lost_ms = 0.0;
   double max_prediction_velocity_mps = 2.0;
@@ -319,6 +319,51 @@ class HandPoseStabilityFilter {
     return static_cast<uint64_t>(std::max(0.0, cfg.predict_lost_ms) * 1e6);
   }
 
+  // V2 lost-hand output is intentionally split into two phases:
+  //   1) hold_lost_ms: keep the last accepted pose stable;
+  //   2) predict_lost_ms: extrapolate from the last accepted velocity.
+  // This makes the total graceful-loss window hold_lost_ms + predict_lost_ms.
+  static uint64_t lost_output_ns_v2(const HandPoseStabilityFilterConfig& cfg) {
+    const uint64_t hold_ns = hold_lost_ns(cfg);
+    const uint64_t predict_ns = predict_lost_ns(cfg);
+    if (std::numeric_limits<uint64_t>::max() - hold_ns < predict_ns) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    return hold_ns + predict_ns;
+  }
+
+  static bool elapsed_since_last_good_v2(const HandStateV2& state,
+                                         uint64_t source_ts,
+                                         uint64_t& elapsed_ns) {
+    if (!state.has_last_good) return false;
+    if (source_ts < state.last_good_source_ts) return false;
+    elapsed_ns = source_ts - state.last_good_source_ts;
+    return true;
+  }
+
+  static bool within_lost_output_window_v2(const HandStateV2& state,
+                                           uint64_t source_ts,
+                                           const HandPoseStabilityFilterConfig& cfg) {
+    uint64_t elapsed_ns = 0;
+    if (!elapsed_since_last_good_v2(state, source_ts, elapsed_ns)) return false;
+    return elapsed_ns <= lost_output_ns_v2(cfg);
+  }
+
+  static bool prediction_elapsed_v2(const HandStateV2& state,
+                                    uint64_t source_ts,
+                                    const HandPoseStabilityFilterConfig& cfg,
+                                    uint64_t& prediction_elapsed_ns) {
+    uint64_t elapsed_ns = 0;
+    if (!elapsed_since_last_good_v2(state, source_ts, elapsed_ns)) return false;
+    const uint64_t hold_ns = hold_lost_ns(cfg);
+    const uint64_t predict_ns = predict_lost_ns(cfg);
+    if (predict_ns == 0 || elapsed_ns <= hold_ns) return false;
+    const uint64_t after_hold_ns = elapsed_ns - hold_ns;
+    if (after_hold_ns > predict_ns) return false;
+    prediction_elapsed_ns = after_hold_ns;
+    return true;
+  }
+
   static uint64_t reacquire_blend_ns(const HandPoseStabilityFilterConfig& cfg) {
     return static_cast<uint64_t>(std::max(0.0, cfg.reacquire_blend_ms) * 1e6);
   }
@@ -384,8 +429,8 @@ class HandPoseStabilityFilter {
     const uint64_t age_ns = source_ts >= state.last_good_source_ts
                                 ? source_ts - state.last_good_source_ts
                                 : 0;
-    const double hold_ns = std::max(1.0, static_cast<double>(hold_lost_ns(cfg)));
-    const double t = std::clamp(static_cast<double>(age_ns) / hold_ns, 0.0, 1.0);
+    const double fade_ns = std::max(1.0, static_cast<double>(lost_output_ns_v2(cfg)));
+    const double t = std::clamp(static_cast<double>(age_ns) / fade_ns, 0.0, 1.0);
     s.confidence = static_cast<float>(std::max(0.0, static_cast<double>(s.confidence) * (1.0 - t)));
   }
 
@@ -443,12 +488,9 @@ class HandPoseStabilityFilter {
   static xr_runtime::HandSideF32V2 predicted_side_v2(const HandStateV2& state,
                                          uint64_t source_ts,
                                          const HandPoseStabilityFilterConfig& cfg,
-                                         uint64_t max_dt_ns) {
+                                         uint64_t prediction_elapsed_ns) {
     xr_runtime::HandSideF32V2 out = state.last_good;
-    const uint64_t elapsed_ns = source_ts >= state.last_good_source_ts
-                                    ? source_ts - state.last_good_source_ts
-                                    : 0;
-    const uint64_t dt_ns = std::min(elapsed_ns, max_dt_ns);
+    const uint64_t dt_ns = std::min(prediction_elapsed_ns, predict_lost_ns(cfg));
     const double dt_s = static_cast<double>(dt_ns) / 1e9;
     const double damping = std::clamp(cfg.prediction_damping, 0.0, 1.0);
     Vec3 v = state.has_velocity ? state.velocity_mps : Vec3{};
@@ -563,12 +605,20 @@ class HandPoseStabilityFilter {
                                                const SideDecisionV2& in_decision) {
     SideDecisionV2 d = in_decision;
     stat_velocity_rejected(hand_name)++;
-    if (within_hold_window_v2(state, source_ts, cfg_)) {
-      const uint64_t elapsed_ns = source_ts >= state.last_good_source_ts ? source_ts - state.last_good_source_ts : 0;
-      const uint64_t predict_ns = predict_lost_ns(cfg_);
-      d.side = predict_ns > 0 && elapsed_ns <= predict_ns && state.has_velocity
-                   ? predicted_side_v2(state, source_ts, cfg_, predict_ns)
-                   : state.last_good;
+    if (within_lost_output_window_v2(state, source_ts, cfg_)) {
+      uint64_t prediction_elapsed_ns = 0;
+      if (state.has_velocity && prediction_elapsed_v2(state, source_ts, cfg_, prediction_elapsed_ns)) {
+        d.side = predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns);
+        d.gated_active = true;
+        d.mode = "reject_velocity_predict";
+        d.has_output = true;
+        d.output = controller_v2(d.side);
+        stat_gated_active(hand_name)++;
+        stat_predicted(hand_name)++;
+        return d;
+      }
+
+      d.side = state.last_good;
       mark_degraded_hold_v2(d.side, source_ts, state, cfg_);
       d.gated_active = true;
       d.mode = "reject_velocity_hold";
@@ -581,7 +631,7 @@ class HandPoseStabilityFilter {
 
     // Keep last_good for active velocity outliers for the same reason as the V1
     // path: do not let a still-active bogus floor candidate reinitialize as a
-    // fresh hand.  A truly inactive frame beyond hold_lost_ms still resets state.
+    // fresh hand.  A truly inactive frame beyond the lost-output window still resets state.
     clear_side_v2(d.side);
     d.gated_active = false;
     d.mode = "reject_velocity_inactive";
@@ -855,11 +905,10 @@ class HandPoseStabilityFilter {
       }
 
       stat_jump_rejected(hand_name)++;
-      if (within_hold_window_v2(state, source_ts, cfg_)) {
-        const uint64_t elapsed_ns = source_ts >= state.last_good_source_ts ? source_ts - state.last_good_source_ts : 0;
-        const uint64_t predict_ns = predict_lost_ns(cfg_);
-        if (predict_ns > 0 && elapsed_ns <= predict_ns && state.has_velocity) {
-          d.side = predicted_side_v2(state, source_ts, cfg_, predict_ns);
+      if (within_lost_output_window_v2(state, source_ts, cfg_)) {
+        uint64_t prediction_elapsed_ns = 0;
+        if (state.has_velocity && prediction_elapsed_v2(state, source_ts, cfg_, prediction_elapsed_ns)) {
+          d.side = predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns);
           d.gated_active = true;
           d.mode = "reject_jump_predict";
           d.has_output = true;
@@ -869,9 +918,7 @@ class HandPoseStabilityFilter {
           return d;
         }
 
-        d.side = predict_ns > 0 && state.has_velocity
-                     ? predicted_side_v2(state, source_ts, cfg_, predict_ns)
-                     : state.last_good;
+        d.side = state.last_good;
         mark_degraded_hold_v2(d.side, source_ts, state, cfg_);
         d.gated_active = true;
         d.mode = "reject_jump_hold";
@@ -898,11 +945,10 @@ class HandPoseStabilityFilter {
       d.candidate = inactive_candidate;
     }
 
-    if (within_hold_window_v2(state, source_ts, cfg_)) {
-      const uint64_t elapsed_ns = source_ts >= state.last_good_source_ts ? source_ts - state.last_good_source_ts : 0;
-      const uint64_t predict_ns = predict_lost_ns(cfg_);
-      if (predict_ns > 0 && elapsed_ns <= predict_ns && state.has_velocity) {
-        d.side = predicted_side_v2(state, source_ts, cfg_, predict_ns);
+    if (within_lost_output_window_v2(state, source_ts, cfg_)) {
+      uint64_t prediction_elapsed_ns = 0;
+      if (state.has_velocity && prediction_elapsed_v2(state, source_ts, cfg_, prediction_elapsed_ns)) {
+        d.side = predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns);
         d.gated_active = true;
         d.mode = "predict_lost";
         d.has_output = true;
@@ -912,9 +958,7 @@ class HandPoseStabilityFilter {
         return d;
       }
 
-      d.side = predict_ns > 0 && state.has_velocity
-                   ? predicted_side_v2(state, source_ts, cfg_, predict_ns)
-                   : state.last_good;
+      d.side = state.last_good;
       mark_degraded_hold_v2(d.side, source_ts, state, cfg_);
       d.gated_active = true;
       d.mode = "hold_lost";
@@ -925,7 +969,7 @@ class HandPoseStabilityFilter {
       return d;
     }
 
-    // The hand has been inactive beyond the hold window. Drop stale last_good
+    // The hand has been inactive beyond the lost-output window. Drop stale last_good
     // so the next valid detection can initialize normally instead of being
     // rejected forever against an old controller pose.
     state = HandStateV2{};

@@ -128,7 +128,12 @@ bool hand_side_is_valid(const xr_runtime::HandTrackingFrameF32V2& hand,
   if (side.handedness != expected_handedness) return false;
   if ((hand.flags & frame_flag) == 0u) return false;
   if ((side.flags & xr_runtime::HAND_POSE_VALID) == 0u) return false;
-  if (side.status != 1u && side.status != 3u) return false;
+
+  // Runtime hand gate publishes held/predicted lost-hand poses as status=2
+  // (degraded). Treat them as valid controller poses; otherwise SteamVR/OpenVR
+  // controller synthesis immediately falls back to invalid/HMD-relative pose and
+  // the 1-1.5s runtime hand prediction is invisible to the controller path.
+  if (side.status != 1u && side.status != 2u && side.status != 3u) return false;
   return side.confidence > 0.0f;
 }
 

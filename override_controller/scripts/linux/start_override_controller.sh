@@ -52,8 +52,8 @@ BUTTON_RELEASE_GRACE_MS="${BUTTON_RELEASE_GRACE_MS:-${OVERRIDE_CONTROLLER_BUTTON
 
 PULSE_MODE="${PULSE_MODE:-${OVERRIDE_CONTROLLER_PULSE_MODE:-1}}"                            # enable pulse-source filtering for controllers that emit repeated short pulses
 
-DPAD_PULSE_GAP_MS="${DPAD_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_DPAD_PULSE_GAP_MS:-70}}"     # expected maximum gap between D-pad pulse events
-DPAD_RELEASE_MS="${DPAD_RELEASE_MS:-${OVERRIDE_CONTROLLER_DPAD_RELEASE_MS:-80}}"           # virtual D-pad release timeout after the last pulse
+DPAD_PULSE_GAP_MS="${DPAD_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_DPAD_PULSE_GAP_MS:-120}}"     # expected maximum gap between D-pad pulse events
+DPAD_RELEASE_MS="${DPAD_RELEASE_MS:-${OVERRIDE_CONTROLLER_DPAD_RELEASE_MS:-130}}"           # virtual D-pad release timeout after the last pulse
 
 BUTTON_PULSE_GAP_MS="${BUTTON_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_GAP_MS:-150}}" # expected maximum gap between button pulse events
 BUTTON_RELEASE_MS="${BUTTON_RELEASE_MS:-${OVERRIDE_CONTROLLER_BUTTON_RELEASE_MS:-160}}"     # virtual button release timeout after the last pulse
