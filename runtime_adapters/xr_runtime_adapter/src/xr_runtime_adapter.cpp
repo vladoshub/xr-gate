@@ -2957,7 +2957,7 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-hand-gate-max-continuity-velocity-mps", runtime_hand_gate_max_continuity_velocity_mps,
                  "Runtime hand gate: reject continuous hand tracking updates faster than this velocity in meters/second; <=0 disables");
   app.add_option("--runtime-hand-gate-predict-lost-ms", runtime_hand_gate_predict_lost_ms,
-                 "Runtime hand gate: short lost-hand prediction window before hold_lost in milliseconds; 0 disables");
+                 "Runtime hand gate: lost-hand prediction window after hold_lost in milliseconds; 0 disables");
   app.add_option("--runtime-hand-gate-max-prediction-velocity-mps", runtime_hand_gate_max_prediction_velocity_mps,
                  "Runtime hand gate: clamp predicted lost-hand linear velocity in meters/second");
   app.add_option("--runtime-hand-gate-prediction-damping", runtime_hand_gate_prediction_damping,

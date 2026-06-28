@@ -101,11 +101,11 @@ DERIVED_INDEX_POINT_DEACTIVE_THRESHOLD="${DERIVED_INDEX_POINT_DEACTIVE_THRESHOLD
 DERIVED_EXTRA_GESTURE_RESPONSE_START="${DERIVED_EXTRA_GESTURE_RESPONSE_START:-0.65}" # response curve start for extra gesture buttons
 DERIVED_EXTRA_GESTURE_HOLD_MS="${DERIVED_EXTRA_GESTURE_HOLD_MS:-120}" # minimum hold time for extra gesture buttons
 DERIVED_PINCH_ACTIVE_THRESHOLD="${DERIVED_PINCH_ACTIVE_THRESHOLD:-0.90}" # activation threshold for derived pinch
-DERIVED_GRAB_ACTIVE_THRESHOLD="${DERIVED_GRAB_ACTIVE_THRESHOLD:-0.30}" # activation threshold for derived grab
+DERIVED_GRAB_ACTIVE_THRESHOLD="${DERIVED_GRAB_ACTIVE_THRESHOLD:-0.99}" # activation threshold for derived grab
 DERIVED_PINCH_DEACTIVE_THRESHOLD="${DERIVED_PINCH_DEACTIVE_THRESHOLD:-0.05}" # deactivation threshold for derived pinch
-DERIVED_GRAB_DEACTIVE_THRESHOLD="${DERIVED_GRAB_DEACTIVE_THRESHOLD:-0.1}" # deactivation threshold for derived grab
+DERIVED_GRAB_DEACTIVE_THRESHOLD="${DERIVED_GRAB_DEACTIVE_THRESHOLD:-0.60}" # deactivation threshold for derived grab
 DERIVED_PINCH_RESPONSE_START="${DERIVED_PINCH_RESPONSE_START:-0.55}" # response curve start for pinch
-DERIVED_GRAB_RESPONSE_START="${DERIVED_GRAB_RESPONSE_START:-0.60}" # response curve start for grab
+DERIVED_GRAB_RESPONSE_START="${DERIVED_GRAB_RESPONSE_START:-0.80}" # response curve start for grab
 
 # Runtime-side hand pose stability gate. This replaces the old Mercury-backend gate.
 # Keep Mercury backend raw; apply hold/reacquire/jump policy here, before runtime transforms
@@ -114,8 +114,8 @@ RUNTIME_HAND_STABILITY_GATE="${RUNTIME_HAND_STABILITY_GATE:-1}" # enable runtime
 RUNTIME_HAND_GATE_MAX_JUMP_M="${RUNTIME_HAND_GATE_MAX_JUMP_M:-0.055}" # max allowed hand jump before reacquire gating
 RUNTIME_HAND_GATE_CONFIRM_FRAMES="${RUNTIME_HAND_GATE_CONFIRM_FRAMES:-5}" # frames required to confirm reacquired hand
 RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M="${RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M:-0.02}" # max per-frame step while confirming reacquire
-RUNTIME_HAND_GATE_HOLD_LOST_MS="${RUNTIME_HAND_GATE_HOLD_LOST_MS:-500}" # hold last valid hand pose after tracking loss
-RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-500}" # predict hand pose for this time after loss
+RUNTIME_HAND_GATE_HOLD_LOST_MS="${RUNTIME_HAND_GATE_HOLD_LOST_MS:-50}" # hold last valid hand pose after tracking loss
+RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-350}" # predict hand pose for this time after hold-lost phase
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS:-2.0}" # cap prediction velocity for lost hands
 RUNTIME_HAND_GATE_PREDICTION_DAMPING="${RUNTIME_HAND_GATE_PREDICTION_DAMPING:-0.5}" # velocity damping during lost-hand prediction
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS="${RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS:-0}" # blend duration after reacquire
@@ -239,6 +239,7 @@ args=(
   --runtime-hand-gate-max-prediction-velocity-mps "$RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS"
   --runtime-hand-gate-prediction-damping "$RUNTIME_HAND_GATE_PREDICTION_DAMPING"
   --runtime-hand-gate-reacquire-blend-ms "$RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS"
+  --runtime-hand-gate-max-continuity-velocity-mps "$RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS"
   --runtime-jitter-filter-hmd-cm "$RUNTIME_JITTER_FILTER_HMD_CM"
   --runtime-jitter-filter-tracker-cm "$RUNTIME_JITTER_FILTER_TRACKER_CM"
   --runtime-jitter-filter-hmd-deg "$RUNTIME_JITTER_FILTER_HMD_DEG"
@@ -399,8 +400,11 @@ RUNTIME_HAND_GATE_MAX_JUMP_M=$RUNTIME_HAND_GATE_MAX_JUMP_M # max allowed hand ju
 RUNTIME_HAND_GATE_CONFIRM_FRAMES=$RUNTIME_HAND_GATE_CONFIRM_FRAMES # frames required to confirm reacquired hand
 RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M=$RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M # max per-frame step while confirming reacquire
 RUNTIME_HAND_GATE_HOLD_LOST_MS=$RUNTIME_HAND_GATE_HOLD_LOST_MS # hold last valid hand pose after tracking loss
-RUNTIME_HAND_GATE_PREDICT_LOST_MS=$RUNTIME_HAND_GATE_PREDICT_LOST_MS # predict hand pose for this time after loss
+RUNTIME_HAND_GATE_PREDICT_LOST_MS=$RUNTIME_HAND_GATE_PREDICT_LOST_MS # predict hand pose for this time after hold-lost phase
+RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS=$RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS # cap prediction velocity for lost hands
+RUNTIME_HAND_GATE_PREDICTION_DAMPING=$RUNTIME_HAND_GATE_PREDICTION_DAMPING # velocity damping during lost-hand prediction
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS=$RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS # blend duration after reacquire
+RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS=$RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS # max continuity velocity for hand gate
 RUNTIME_HAND_GATE_DEBUG_CSV=$RUNTIME_HAND_GATE_DEBUG_CSV # optional CSV path for hand gate diagnostics
 RUNTIME_JITTER_FILTER=$RUNTIME_JITTER_FILTER # enable runtime pose jitter deadband filter
 RUNTIME_JITTER_FILTER_HMD_CM=$RUNTIME_JITTER_FILTER_HMD_CM # HMD position jitter deadband in cm
