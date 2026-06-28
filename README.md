@@ -157,7 +157,7 @@ CTRL + C - exit from xr_client
 
 If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
 
-**Tracking recomendations:**
+**Tracking recommendations:**
 
 1. It is recommended not to cover the glasses' chambers. It is also recommended to use the glasses in a bright place.
 
