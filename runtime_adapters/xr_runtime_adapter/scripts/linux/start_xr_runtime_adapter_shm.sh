@@ -109,11 +109,11 @@ DERIVED_INDEX_POINT_DEACTIVE_THRESHOLD="${DERIVED_INDEX_POINT_DEACTIVE_THRESHOLD
 DERIVED_EXTRA_GESTURE_RESPONSE_START="${DERIVED_EXTRA_GESTURE_RESPONSE_START:-0.65}" # response curve start for extra gesture buttons
 DERIVED_EXTRA_GESTURE_HOLD_MS="${DERIVED_EXTRA_GESTURE_HOLD_MS:-120}" # minimum hold time for extra gesture buttons
 DERIVED_PINCH_ACTIVE_THRESHOLD="${DERIVED_PINCH_ACTIVE_THRESHOLD:-0.90}" # activation threshold for derived pinch
-DERIVED_GRAB_ACTIVE_THRESHOLD="${DERIVED_GRAB_ACTIVE_THRESHOLD:-0.99}" # activation threshold for derived grab
+DERIVED_GRAB_ACTIVE_THRESHOLD="${DERIVED_GRAB_ACTIVE_THRESHOLD:-0.90}" # activation threshold for derived grab
 DERIVED_PINCH_DEACTIVE_THRESHOLD="${DERIVED_PINCH_DEACTIVE_THRESHOLD:-0.05}" # deactivation threshold for derived pinch
-DERIVED_GRAB_DEACTIVE_THRESHOLD="${DERIVED_GRAB_DEACTIVE_THRESHOLD:-0.60}" # deactivation threshold for derived grab
+DERIVED_GRAB_DEACTIVE_THRESHOLD="${DERIVED_GRAB_DEACTIVE_THRESHOLD:-0.20}" # deactivation threshold for derived grab
 DERIVED_PINCH_RESPONSE_START="${DERIVED_PINCH_RESPONSE_START:-0.55}" # response curve start for pinch
-DERIVED_GRAB_RESPONSE_START="${DERIVED_GRAB_RESPONSE_START:-0.80}" # response curve start for grab
+DERIVED_GRAB_RESPONSE_START="${DERIVED_GRAB_RESPONSE_START:-0.50}" # response curve start for grab
 
 # Runtime-side hand pose stability gate. This replaces the old Mercury-backend gate.
 # Keep Mercury backend raw; apply hold/reacquire/jump policy here, before runtime transforms
