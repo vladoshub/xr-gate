@@ -76,6 +76,19 @@ For **Python/C++ / AR/VR/XR systems** work, it shows cross-language runtime engi
 - OpenVR/SteamVR and Monado/OpenXR integration points;
 - device-specific package scripts with a portable `out/xreal_ultra` layout.
 
+## Safety and experimental software notice
+
+XR Gate is experimental software intended for research, development, and hobbyist use.
+
+Use it at your own risk. The project may interact with display modes, cameras, IMU streams, input devices, SteamVR/OpenVR, Monado/OpenXR, and other low-level runtime components. Incorrect configuration, bugs, driver issues, or unsupported hardware setups may cause tracking loss, visual discomfort, broken runtime sessions, display/output issues, or other unexpected behavior.
+
+This project is provided without any warranty. The authors and contributors are not responsible for any damage, data loss, hardware issues, device misuse, personal discomfort, injury, or other consequences resulting from the use of this software, to the fullest extent permitted by applicable law.
+
+Do not use this project in unsafe environments. Make sure you have enough free space around you, avoid fast movement when tracking is unstable, and stop using the software immediately if you experience discomfort, dizziness, eye strain, nausea, or unsafe tracking behavior.
+
+XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
+
+
 ## Quick start — XREAL Ultra on Linux
 Tested on Ubuntu 24.04
 
