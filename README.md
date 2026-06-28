@@ -446,7 +446,7 @@ mkdir -p ~/src
 cd ~/src
 
 git clone https://github.com/vladoshub/xr-gate.git xr_tracking
-xr_tracking
+cd xr_tracking
 ```
 
 Build:
