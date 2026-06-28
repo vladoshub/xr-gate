@@ -11,7 +11,7 @@ The goal is to keep the project useful in two directions at once:
 
 **FOR INSTALL AND USE GO TO "Quick start"**
 
-## Demo
+## Demo (6DoF + hand-tracking)
 
 <p align="center">
   <img src="docs/media/xr_gate_demo_1.gif" alt="XR Gate SteamVR hand tracking demo" width="720">
