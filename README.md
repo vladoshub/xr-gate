@@ -131,6 +131,7 @@ devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
 If you want to retrain, you can delete default.json for new train
 
+I tested on two identical "vr-park" joystick
 
 ### 3. Run xr_client
 
@@ -163,9 +164,11 @@ If you have completed the train override controller from the previous point, you
 
 2. Tracking isn't working, or my pose is off somewhere - most likely, 6DoF received bad frames (not enough light) and can't calculate the pose correctly. The solution is to try pressing "1" in xr_client to restart the backends - this can be done at runtime and shouldn't break the current session. This can be done several times.
 
-3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends. Also, do not move your hands too quickly or move them out of your line of sight.
+3. Poor hand tracking, one hand isn't visible, etc. Try removing both hands from the cameras' field of view and then bringing them back. If that doesn't help, press "1" in xr_client to restart the backends or press "2" to start/stop hand-tracking backend. Also, do not move your hands too quickly or move them out of your line of sight.
 
 4. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep). In the xr_client skip SBS mode selection. It was also noted that if the main display is connected via Type-C, the glasses may not work correctly in SBS.
+
+5. I had problems using two cheap, identical Bluetooth controllers. They only worked correctly within line-of-sight, and there were also issues with sticking and command queues. If you're experiencing similar issues, try using them near a computer and/or try re-enabling the controllers themselves.
 
 ---
 
