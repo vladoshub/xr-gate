@@ -442,8 +442,11 @@ Check /readme/xrizer.md
 
 Clone:
 ```bash
-git clone https://github.com/vladoshub/xr-gate
-cd xr-gate
+mkdir -p ~/src
+cd ~/src
+
+git clone https://github.com/vladoshub/xr-gate.git xr_tracking
+xr_tracking
 ```
 
 Build:
