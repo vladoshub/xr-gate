@@ -11,6 +11,16 @@ The goal is to keep the project useful in two directions at once:
 
 **FOR INSTALL AND USE GO TO "Quick start"**
 
+## Demo
+
+<p align="center">
+  <img src="docs/media/xr_gate_demo_1.gif" alt="XR Gate SteamVR hand tracking demo" width="720">
+</p>
+
+<p align="center">
+  <img src="docs/media/xr_gate_demo_2.gif" alt="XR Gate gesture demo" width="720">
+</p>
+
 
 ## What it does
 
@@ -47,6 +57,7 @@ Current focus areas:
 - Live depth grid / spatial proxy mesh / primitive scan output.
 - Gestures, movement prediction
 - Portable Linux runtime package under `out/xreal_ultra`.
+
 
 ## Why this project is interesting
 
@@ -145,6 +156,8 @@ devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
 If you want to retrain, you can delete default.json for new train
+
+If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
 
 I tested on two identical "vr-park" joystick
 
