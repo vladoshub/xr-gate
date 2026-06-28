@@ -43,6 +43,7 @@ CAM1_STREAM="${CAM1_STREAM:-camera1}"
 DURATION="${DURATION:-0}"
 PRINT_EVERY="${PRINT_EVERY:-30}"
 MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.05}"
+MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.3}"
 # Keep Mercury backend raw by default. Runtime-side filtering now lives in
 # only for rollback/debug comparisons.
 
