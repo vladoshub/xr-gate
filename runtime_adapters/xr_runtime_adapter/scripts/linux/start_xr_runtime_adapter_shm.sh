@@ -52,6 +52,14 @@ BODY_TRACKERS_UDP_BIND_HOST="${BODY_TRACKERS_UDP_BIND_HOST:-0.0.0.0}" # UDP bind
 BODY_TRACKERS_UDP_BIND_PORT="${BODY_TRACKERS_UDP_BIND_PORT:-45676}" # UDP bind port for body tracker input
 BODY_TRACKERS_REATTACH_ON_STALE_MS="${BODY_TRACKERS_REATTACH_ON_STALE_MS:-1000}" # reattach body tracker reader after stale interval
 PUBLISH_RUNTIME_BODY_TRACKERS="${PUBLISH_RUNTIME_BODY_TRACKERS:-0}" # publish runtime body tracker SHM output
+RUNTIME_BODY_TRACKER_STABILITY_GATE="${RUNTIME_BODY_TRACKER_STABILITY_GATE:-1}" # enable runtime-side hold/prediction for body trackers; disabled by default
+RUNTIME_BODY_TRACKER_HOLD_LOST_MS="${RUNTIME_BODY_TRACKER_HOLD_LOST_MS:-150}" # hold last valid body tracker pose after tracker loss
+RUNTIME_BODY_TRACKER_PREDICT_LOST_MS="${RUNTIME_BODY_TRACKER_PREDICT_LOST_MS:-350}" # predict body tracker pose after hold-lost phase
+RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS:-0.8}" # cap body tracker prediction velocity
+RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2="${RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2:-0}" # cap body tracker prediction acceleration; 0 disables
+RUNTIME_BODY_TRACKER_PREDICTION_DAMPING="${RUNTIME_BODY_TRACKER_PREDICTION_DAMPING:-0.35}" # velocity damping during body tracker prediction
+RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ="${RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ:-90}" # synthetic publish rate while source body tracker stream is stale
+RUNTIME_BODY_TRACKER_PREDICTED_STATUS="${RUNTIME_BODY_TRACKER_PREDICTED_STATUS:-tracking}" # predicted body tracker status; tracking, stale, lost
 
 SPATIAL_PROXY_MESH_INPUT="${SPATIAL_PROXY_MESH_INPUT:-shm}"   # spatial proxy mesh input transport;  none, shm, udp
 # Source stream consumed by xr_runtime_adapter. Keep the legacy
@@ -191,6 +199,13 @@ args=(
   --body-trackers-udp-bind-host "$BODY_TRACKERS_UDP_BIND_HOST"
   --body-trackers-udp-bind-port "$BODY_TRACKERS_UDP_BIND_PORT"
   --body-trackers-reattach-on-stale-ms "$BODY_TRACKERS_REATTACH_ON_STALE_MS"
+  --runtime-body-tracker-hold-lost-ms "$RUNTIME_BODY_TRACKER_HOLD_LOST_MS"
+  --runtime-body-tracker-predict-lost-ms "$RUNTIME_BODY_TRACKER_PREDICT_LOST_MS"
+  --runtime-body-tracker-max-prediction-velocity-mps "$RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS"
+  --runtime-body-tracker-max-prediction-acceleration-mps2 "$RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2"
+  --runtime-body-tracker-prediction-damping "$RUNTIME_BODY_TRACKER_PREDICTION_DAMPING"
+  --runtime-body-tracker-prediction-publish-hz "$RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ"
+  --runtime-body-tracker-predicted-status "$RUNTIME_BODY_TRACKER_PREDICTED_STATUS"
   --spatial-proxy-mesh-input "$SPATIAL_PROXY_MESH_INPUT"
   --spatial-proxy-mesh-registry "$SPATIAL_PROXY_MESH_REGISTRY"
   --spatial-proxy-mesh-stream "$SPATIAL_PROXY_MESH_STREAM"
@@ -293,6 +308,9 @@ fi
 if [[ "$RUNTIME_JITTER_FILTER" == "1" ]]; then
   args+=(--runtime-jitter-filter)
 fi
+if [[ "$RUNTIME_BODY_TRACKER_STABILITY_GATE" == "1" ]]; then
+  args+=(--runtime-body-tracker-stability-gate)
+fi
 if [[ -n "$RUNTIME_HAND_GATE_DEBUG_CSV" ]]; then
   args+=(--runtime-hand-gate-debug-csv "$RUNTIME_HAND_GATE_DEBUG_CSV")
 fi
@@ -367,6 +385,14 @@ RUNTIME_SPATIAL_PROXY_MESH_REGISTRY=$RUNTIME_SPATIAL_PROXY_MESH_REGISTRY # runti
 RUNTIME_SPATIAL_PROXY_MESH_STREAM=$RUNTIME_SPATIAL_PROXY_MESH_STREAM # runtime spatial mesh stream name
 RUNTIME_SPATIAL_PROXY_MESH_SHM_NAME=$RUNTIME_SPATIAL_PROXY_MESH_SHM_NAME # runtime spatial mesh SHM object name
 PUBLISH_RUNTIME_BODY_TRACKERS=$PUBLISH_RUNTIME_BODY_TRACKERS # publish runtime body tracker SHM output
+RUNTIME_BODY_TRACKER_STABILITY_GATE=$RUNTIME_BODY_TRACKER_STABILITY_GATE # enable runtime-side hold/prediction for body trackers
+RUNTIME_BODY_TRACKER_HOLD_LOST_MS=$RUNTIME_BODY_TRACKER_HOLD_LOST_MS # hold last valid body tracker pose after loss
+RUNTIME_BODY_TRACKER_PREDICT_LOST_MS=$RUNTIME_BODY_TRACKER_PREDICT_LOST_MS # predict body tracker pose after hold phase
+RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS=$RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS # body tracker prediction velocity cap
+RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2=$RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2 # body tracker prediction acceleration cap
+RUNTIME_BODY_TRACKER_PREDICTION_DAMPING=$RUNTIME_BODY_TRACKER_PREDICTION_DAMPING # body tracker prediction damping
+RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ=$RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ # synthetic publish rate while body tracker source is stale
+RUNTIME_BODY_TRACKER_PREDICTED_STATUS=$RUNTIME_BODY_TRACKER_PREDICTED_STATUS # predicted body tracker status
 HAND_SKELETON26_INPUT=$HAND_SKELETON26_INPUT # 26-joint hand skeleton input transport
 HAND_SKELETON26_DERIVE_GESTURES=$HAND_SKELETON26_DERIVE_GESTURES # derive gestures from skeleton26 input
 RUNTIME_DERIVE_HAND_GESTURES=$RUNTIME_DERIVE_HAND_GESTURES # derive pinch/grab gestures in runtime adapter

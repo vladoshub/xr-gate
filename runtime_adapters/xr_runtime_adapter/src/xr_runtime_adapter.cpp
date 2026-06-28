@@ -46,6 +46,7 @@
 #include "hand_pose_stability_filter.hpp"
 #include "hmd_pose_stability_filter.hpp"
 #include "jitter_filter.hpp"
+#include "body_tracker_stability_filter.hpp"
 #include "platform/runtime_platform.hpp"
 
 namespace {
@@ -55,7 +56,11 @@ namespace override_controller = ::xr_runtime_adapter::override_controller;
 namespace hand_filter = ::xr_runtime_adapter::hand_filter;
 namespace hmd_filter = ::xr_runtime_adapter::hmd_filter;
 namespace jitter_filter = ::xr_runtime_adapter::jitter_filter;
+namespace body_tracker_filter = ::xr_runtime_adapter::body_tracker_filter;
 
+using ::xr_runtime_adapter::body_tracker_filter::BodyTrackerStabilityFilter;
+using ::xr_runtime_adapter::body_tracker_filter::BodyTrackerStabilityGateConfig;
+using ::xr_runtime_adapter::body_tracker_filter::parse_body_tracker_predicted_status;
 using ::xr_runtime_adapter::coordinate_util::Qd;
 using ::xr_runtime_adapter::coordinate_util::RuntimeOriginSnapshot;
 using ::xr_runtime_adapter::coordinate_util::RuntimeOriginState;
@@ -2117,6 +2122,7 @@ class ControllerInputThread {
   ControllerInputThreadSnapshot snapshot_;
 
 };
+
 struct BodyTrackerInputConfig {
   std::string input = "none";  // none, shm, udp
   std::string registry = xr_runtime::default_tracking_registry_path();
@@ -2134,6 +2140,7 @@ struct BodyTrackerInputConfig {
   bool runtime_unlink_existing = true;
   StreamTransformConfig transform{};
   jitter_filter::RuntimeJitterFilterConfig jitter_filter{};
+  BodyTrackerStabilityGateConfig stability_gate{};
 };
 
 struct BodyTrackerInputSnapshot {
@@ -2228,6 +2235,7 @@ class BodyTrackerInputThread {
         observe(std::move(*frame));
       } else {
         const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
+        maybe_publish_synthetic(now_ns);
         if (cfg_.reattach_on_stale_ms > 0.0 &&
             xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - last_frame_ns)) >= cfg_.reattach_on_stale_ms) {
           throw std::runtime_error("body_trackers SHM stream stale; reattaching");
@@ -2249,6 +2257,8 @@ class BodyTrackerInputThread {
                                 sizeof(xr_tracking::BodyTrackerSetFrameF32V1)];
       const auto n_opt = receiver.receive(buffer, sizeof(buffer));
       if (!n_opt) {
+        const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
+        maybe_publish_synthetic(now_ns);
         sleep_ms(1);
         continue;
       }
@@ -2274,6 +2284,8 @@ class BodyTrackerInputThread {
       origin = origin_snapshot_;
     }
     apply_body_tracker_origin_transform(frame, origin);
+    stability_filter_.configure(cfg_.stability_gate);
+    frame = stability_filter_.filter_observed(std::move(frame), now_ns);
     runtime_jitter_filter_.configure(cfg_.jitter_filter);
     runtime_jitter_filter_.filter_body_trackers(frame);
 
@@ -2296,6 +2308,17 @@ class BodyTrackerInputThread {
     snapshot_.age_ms = xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - frame.timestamp_ns));
     snapshot_.latest = frame;
     ++snapshot_.frames;
+  }
+
+
+  void maybe_publish_synthetic(uint64_t now_ns) {
+    if (!cfg_.publish_runtime_shm || !cfg_.stability_gate.enabled) return;
+    stability_filter_.configure(cfg_.stability_gate);
+    auto frame = stability_filter_.predicted_frame(now_ns);
+    if (!frame) return;
+    runtime_jitter_filter_.configure(cfg_.jitter_filter);
+    runtime_jitter_filter_.filter_body_trackers(*frame);
+    publish_runtime(std::move(*frame), now_ns);
   }
 
   void publish_runtime(xr_tracking::BodyTrackerSetFrameF32V1 frame, uint64_t now_ns) {
@@ -2359,6 +2382,7 @@ class BodyTrackerInputThread {
   BodyTrackerInputSnapshot snapshot_;
   RuntimeOriginSnapshot origin_snapshot_;
   jitter_filter::RuntimeJitterFilter runtime_jitter_filter_{};
+  BodyTrackerStabilityFilter stability_filter_{};
   std::unique_ptr<xr_tracking::BodyTrackerSetShmPublisher> runtime_publisher_;
 };
 
@@ -2510,6 +2534,14 @@ int main(int argc, char** argv) {
   std::string runtime_body_trackers_stream = "runtime_body_trackers";
   std::string runtime_body_trackers_shm_name = "runtime_body_trackers";
   uint32_t runtime_body_trackers_slots = 1024;
+  bool runtime_body_tracker_stability_gate = false;
+  double runtime_body_tracker_hold_lost_ms = 150.0;
+  double runtime_body_tracker_predict_lost_ms = 350.0;
+  double runtime_body_tracker_max_prediction_velocity_mps = 0.8;
+  double runtime_body_tracker_max_prediction_acceleration_mps2 = 0.0;
+  double runtime_body_tracker_prediction_damping = 0.35;
+  double runtime_body_tracker_prediction_publish_hz = 90.0;
+  std::string runtime_body_tracker_predicted_status = "tracking";
 
   std::string hand_skeleton26_input = "none";  // none, shm, tcp
   std::string hand_skeleton26_registry = xr_runtime::default_tracking_registry_path();
@@ -2909,6 +2941,23 @@ int main(int argc, char** argv) {
   app.add_flag("--no-runtime-body-trackers-unlink", no_runtime_body_trackers_unlink,
                "Do not unlink existing runtime body trackers SHM before publishing");
 
+  app.add_flag("--runtime-body-tracker-stability-gate", runtime_body_tracker_stability_gate,
+               "Enable runtime-side body tracker hold/prediction gate; disabled by default");
+  app.add_option("--runtime-body-tracker-hold-lost-ms", runtime_body_tracker_hold_lost_ms,
+                 "Hold last valid body tracker pose for this many ms after tracker loss");
+  app.add_option("--runtime-body-tracker-predict-lost-ms", runtime_body_tracker_predict_lost_ms,
+                 "Predict body tracker pose for this many ms after hold-lost phase");
+  app.add_option("--runtime-body-tracker-max-prediction-velocity-mps", runtime_body_tracker_max_prediction_velocity_mps,
+                 "Cap body tracker prediction velocity in metres per second; <=0 disables velocity clamp");
+  app.add_option("--runtime-body-tracker-max-prediction-acceleration-mps2", runtime_body_tracker_max_prediction_acceleration_mps2,
+                 "Cap body tracker prediction velocity change in metres per second squared; <=0 disables acceleration clamp");
+  app.add_option("--runtime-body-tracker-prediction-damping", runtime_body_tracker_prediction_damping,
+                 "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
+  app.add_option("--runtime-body-tracker-prediction-publish-hz", runtime_body_tracker_prediction_publish_hz,
+                 "Synthetic runtime body tracker publish rate while source stream is stale; <=0 publishes every poll");
+  app.add_option("--runtime-body-tracker-predicted-status", runtime_body_tracker_predicted_status,
+                 "Status to publish for predicted body trackers: tracking, stale, or lost");
+
   app.add_option("--hand-skeleton26-input", hand_skeleton26_input,
                  "Optional generic OpenXR/Ultraleap-style 26-joint hand skeleton input: none, shm, or tcp");
   app.add_option("--hand-skeleton26-registry", hand_skeleton26_registry,
@@ -3020,6 +3069,9 @@ int main(int argc, char** argv) {
   }
 
   if (no_recenter_on_reset_counter) recenter_on_reset_counter = false;
+
+  const uint32_t runtime_body_tracker_predicted_status_value =
+      parse_body_tracker_predicted_status(runtime_body_tracker_predicted_status);
 
   const ControllerOverrideFileConfig controller_override_file_config =
       load_controller_override_file_config(tracking_transform_config_path);
@@ -3229,6 +3281,13 @@ int main(int argc, char** argv) {
                                                              "--publish-runtime-spatial-proxy-mesh-shm");
     xr_runtime_adapter::platform::require_shm_flag_available(publish_runtime_body_trackers_shm,
                                                              "--publish-runtime-body-trackers-shm");
+    if (runtime_body_tracker_stability_gate && !publish_runtime_body_trackers_shm) {
+      std::cout << "[xr_runtime_adapter] warning: runtime body tracker stability gate is enabled but "
+                << "--publish-runtime-body-trackers-shm is disabled; gate has no runtime output to publish\n";
+    }
+    if (runtime_body_tracker_prediction_publish_hz < 0.0) {
+      throw std::runtime_error("--runtime-body-tracker-prediction-publish-hz must be >= 0");
+    }
     if (derived_pinch_active_threshold < 0.0f || derived_pinch_active_threshold > 1.0f ||
         derived_grab_active_threshold < 0.0f || derived_grab_active_threshold > 1.0f) {
       throw std::runtime_error("derived gesture thresholds must be in 0..1");
@@ -3303,6 +3362,16 @@ int main(int argc, char** argv) {
       std::cout << "runtime_body_trackers_stream: " << runtime_body_trackers_stream << "\n";
       std::cout << "runtime_body_trackers_shm_name: " << runtime_body_trackers_shm_name << "\n";
       std::cout << "runtime_body_trackers_slots: " << runtime_body_trackers_slots << "\n";
+      std::cout << "runtime_body_tracker_stability_gate: " << (runtime_body_tracker_stability_gate ? "true" : "false") << "\n";
+      if (runtime_body_tracker_stability_gate) {
+        std::cout << "runtime_body_tracker_hold_lost_ms: " << runtime_body_tracker_hold_lost_ms << "\n";
+        std::cout << "runtime_body_tracker_predict_lost_ms: " << runtime_body_tracker_predict_lost_ms << "\n";
+        std::cout << "runtime_body_tracker_max_prediction_velocity_mps: " << runtime_body_tracker_max_prediction_velocity_mps << "\n";
+        std::cout << "runtime_body_tracker_max_prediction_acceleration_mps2: " << runtime_body_tracker_max_prediction_acceleration_mps2 << "\n";
+        std::cout << "runtime_body_tracker_prediction_damping: " << runtime_body_tracker_prediction_damping << "\n";
+        std::cout << "runtime_body_tracker_prediction_publish_hz: " << runtime_body_tracker_prediction_publish_hz << "\n";
+        std::cout << "runtime_body_tracker_predicted_status: " << runtime_body_tracker_predicted_status << "\n";
+      }
     }
     std::cout << "hand_skeleton26_input: " << hand_skeleton26_input << "\n";
     if (hand_skeleton26_input == "tcp") {
@@ -3707,6 +3776,14 @@ int main(int argc, char** argv) {
       cfg.jitter_filter.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
       cfg.jitter_filter.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
       cfg.jitter_filter.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
+      cfg.stability_gate.enabled = runtime_body_tracker_stability_gate;
+      cfg.stability_gate.hold_lost_ms = runtime_body_tracker_hold_lost_ms;
+      cfg.stability_gate.predict_lost_ms = runtime_body_tracker_predict_lost_ms;
+      cfg.stability_gate.max_prediction_velocity_mps = runtime_body_tracker_max_prediction_velocity_mps;
+      cfg.stability_gate.max_prediction_acceleration_mps2 = runtime_body_tracker_max_prediction_acceleration_mps2;
+      cfg.stability_gate.prediction_damping = runtime_body_tracker_prediction_damping;
+      cfg.stability_gate.synthetic_publish_hz = runtime_body_tracker_prediction_publish_hz;
+      cfg.stability_gate.predicted_status = runtime_body_tracker_predicted_status_value;
       body_tracker_thread = std::make_unique<BodyTrackerInputThread>(std::move(cfg));
       body_tracker_thread->start();
       std::cout << "[xr_runtime_adapter] body_trackers input thread started: "
