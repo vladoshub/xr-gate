@@ -1,5 +1,7 @@
 #include "override_controller.hpp"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -105,6 +107,93 @@ void q_rotate(Qf q, const float in[3], float out[3]) {
   out[0] = r.x;
   out[1] = r.y;
   out[2] = r.z;
+}
+
+
+float dot3(const float a[3], const float b[3]) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+bool normalize_horizontal(float v[3]) {
+  v[1] = 0.0f;
+  const float n = std::sqrt(v[0] * v[0] + v[2] * v[2]);
+  if (!std::isfinite(n) || n <= 1.0e-5f) return false;
+  v[0] /= n;
+  v[2] /= n;
+  return true;
+}
+
+bool horizontal_yaw_basis_from_q(Qf q, float right[3], float forward[3]) {
+  // Runtime/OpenVR convention used by the HMD-relative offsets: X=right, Y=up/down,
+  // -Z=forward.  Project to the horizontal XZ plane so pitch/roll of the hand does
+  // not affect locomotion direction.
+  const float local_forward[3]{0.0f, 0.0f, -1.0f};
+  q_rotate(q, local_forward, forward);
+  if (!normalize_horizontal(forward)) return false;
+
+  // Build an orthogonal horizontal right vector from the projected forward vector.
+  right[0] = -forward[2];
+  right[1] = 0.0f;
+  right[2] = forward[0];
+  return normalize_horizontal(right);
+}
+
+RuntimeControllerMovementSpace runtime_controller_movement_space_from_value(
+    const char* value,
+    RuntimeControllerMovementSpace fallback) {
+  if (value == nullptr || value[0] == '\0') return fallback;
+  const std::string v(value);
+  if (v == "controller" || v == "hand" || v == "controller_local" || v == "local") {
+    return RuntimeControllerMovementSpace::Controller;
+  }
+  if (v == "hmd" || v == "head" || v == "head_relative" || v == "hmd_relative") {
+    return RuntimeControllerMovementSpace::Hmd;
+  }
+  return fallback;
+}
+
+RuntimeControllerMovementSpace effective_runtime_controller_movement_space(
+    const RuntimeControllerSynthesisConfig& cfg) {
+  // Keep the default path fully backward-compatible, but allow launch scripts and
+  // direct runs to override it without adding another hard CLI dependency.
+  return runtime_controller_movement_space_from_value(
+      std::getenv("RUNTIME_CONTROLLER_MOVEMENT_SPACE"), cfg.movement_space);
+}
+
+void remap_thumbstick_axes_to_hmd_space(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const xr_runtime::HmdPoseF64V1& hmd) {
+  if ((out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) == 0u) return;
+  if ((hmd.flags & xr_runtime::HMD_FLAG_POSE_VALID) == 0u || hmd.tracking_status != 2u) return;
+
+  const float in_x = clamp_axis(out.thumbstick_x);
+  const float in_y = clamp_axis(out.thumbstick_y);
+  if (std::abs(in_x) <= 0.0001f && std::abs(in_y) <= 0.0001f) return;
+
+  const Qf controller_q = normalize_q({out.orientation_xyzw[3],
+                                    out.orientation_xyzw[0],
+                                    out.orientation_xyzw[1],
+                                    out.orientation_xyzw[2]});
+  const Qf hmd_q = normalize_q({static_cast<float>(hmd.qw),
+                                static_cast<float>(hmd.qx),
+                                static_cast<float>(hmd.qy),
+                                static_cast<float>(hmd.qz)});
+
+  float controller_right[3]{};
+  float controller_forward[3]{};
+  float hmd_right[3]{};
+  float hmd_forward[3]{};
+  if (!horizontal_yaw_basis_from_q(controller_q, controller_right, controller_forward)) return;
+  if (!horizontal_yaw_basis_from_q(hmd_q, hmd_right, hmd_forward)) return;
+
+  const float desired_world[3]{
+      hmd_right[0] * in_x + hmd_forward[0] * in_y,
+      0.0f,
+      hmd_right[2] * in_x + hmd_forward[2] * in_y,
+  };
+
+  out.thumbstick_x = clamp_axis(dot3(desired_world, controller_right));
+  out.thumbstick_y = clamp_axis(dot3(desired_world, controller_forward));
 }
 
 Qf q_from_xyzw(const float q_xyzw[4]) {
@@ -330,6 +419,10 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 
   if (controller_side != nullptr) {
     fill_inputs_from_controller(out, *controller_side, cfg);
+    if (effective_runtime_controller_movement_space(cfg) == RuntimeControllerMovementSpace::Hmd &&
+        hmd != nullptr) {
+      remap_thumbstick_axes_to_hmd_space(out, *hmd);
+    }
   }
 
   const bool hand_gestures_enabled = left ? cfg.left_hand_gestures_enabled

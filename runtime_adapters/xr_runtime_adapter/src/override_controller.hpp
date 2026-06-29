@@ -29,6 +29,11 @@ enum class LostHandPoseFallbackMode {
   HmdRelative,
 };
 
+enum class RuntimeControllerMovementSpace {
+  Controller,
+  Hmd,
+};
+
 struct RuntimeControllerSynthesisConfig {
   xr_runtime::RuntimeControllerMode mode = xr_runtime::RuntimeControllerMode::HAND_TRACKING_WITH_BUTTON_PRIORITY;
 
@@ -45,6 +50,9 @@ struct RuntimeControllerSynthesisConfig {
   float right_static_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
   bool dpad_to_thumbstick_axes = true;
+  // Axis remap for locomotion input. Controller keeps its visual pose/orientation;
+  // thumbstick/D-pad axes can optionally be expressed in HMD yaw space.
+  RuntimeControllerMovementSpace movement_space = RuntimeControllerMovementSpace::Controller;
 
   LostHandPoseFallbackMode lost_hand_pose_fallback = LostHandPoseFallbackMode::PoseInvalid;
 
