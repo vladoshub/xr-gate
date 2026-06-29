@@ -114,7 +114,7 @@ Download these artifacts:
 
 3. unpack-xreal-ultra.sh
 
-Mercury ONNX models are distributed separately in hand-tracking-models-mercury.zip. They are not included in the core runtime package and are not downloaded by the default build.
+Mercury ONNX models are distributed separately in hand-tracking-models-mercury.tar.gz. They are not included in the core runtime package and are not downloaded by the default build.
 
 Download unpack_xreal_ultra.sh and place it next to:
 xreal-ultra-linux-x64.tar.gz
@@ -239,8 +239,8 @@ XR_OPENVR_DISPLAY_MODE=direct \
 ```bash
 cd ~/xr-gate-release/xreal_ultra
 XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
+XR_DISPLAY_FREQUENCY_HZ=60 \
+XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_MODE=direct \
 ./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
 ```
@@ -340,7 +340,7 @@ Stereo overlay (need running xr_video backend)
 ---
 
 
-## Modano/OpenXR with XREAL Ultra
+## Monado/OpenXR with XREAL Ultra
 
 Use an X11/Xorg session.
 
