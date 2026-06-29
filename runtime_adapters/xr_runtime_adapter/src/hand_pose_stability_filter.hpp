@@ -853,7 +853,8 @@ class HandPoseStabilityFilter {
       // be rejected for a few frames and then accepted only because it stayed
       // consistently wrong.
       const double confirmed_reacquire_max_jump_m = cfg_.max_reacquire_jump_m * 1.5;
-      const bool candidate_within_confirmed_gate = d.jump_m <= confirmed_reacquire_max_jump_m;
+      // If the graceful lost-output window has expired, the old last_good pose is stale. Allow a far reacquire candidate to enter the stability-confirmation path; it still must remain stable for confirm_frames with per-frame steps <= confirm_max_step_m.
+const bool lost_output_window_expired_for_reacquire = !within_lost_output_window_v2(state, source_ts, cfg_); const bool candidate_within_confirmed_gate = d.jump_m <= confirmed_reacquire_max_jump_m || lost_output_window_expired_for_reacquire;
 
       const bool pending_continues = candidate_within_confirmed_gate &&
                                      state.has_pending &&

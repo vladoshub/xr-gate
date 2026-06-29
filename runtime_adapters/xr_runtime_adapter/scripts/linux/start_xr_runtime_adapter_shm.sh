@@ -119,11 +119,11 @@ DERIVED_GRAB_RESPONSE_START="${DERIVED_GRAB_RESPONSE_START:-0.50}" # response cu
 # Keep Mercury backend raw; apply hold/reacquire/jump policy here, before runtime transforms
 # and before controller override. Physical controller buttons still apply after this gate.
 RUNTIME_HAND_STABILITY_GATE="${RUNTIME_HAND_STABILITY_GATE:-1}" # enable runtime hand pose stability gate
-RUNTIME_HAND_GATE_MAX_JUMP_M="${RUNTIME_HAND_GATE_MAX_JUMP_M:-0.055}" # max allowed hand jump before reacquire gating
+RUNTIME_HAND_GATE_MAX_JUMP_M="${RUNTIME_HAND_GATE_MAX_JUMP_M:-0.1}" # max allowed hand jump before reacquire gating
 RUNTIME_HAND_GATE_CONFIRM_FRAMES="${RUNTIME_HAND_GATE_CONFIRM_FRAMES:-5}" # frames required to confirm reacquired hand
-RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M="${RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M:-0.02}" # max per-frame step while confirming reacquire
-RUNTIME_HAND_GATE_HOLD_LOST_MS="${RUNTIME_HAND_GATE_HOLD_LOST_MS:-100}" # hold last valid hand pose after tracking loss
-RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-350}" # predict hand pose for this time after hold-lost phase
+RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M="${RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M:-0.1}" # max per-frame step while confirming reacquire
+RUNTIME_HAND_GATE_HOLD_LOST_MS="${RUNTIME_HAND_GATE_HOLD_LOST_MS:-50}" # hold last valid hand pose after tracking loss
+RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-300}" # predict hand pose for this time after hold-lost phase
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS:-2.0}" # cap prediction velocity for lost hands
 RUNTIME_HAND_GATE_PREDICTION_DAMPING="${RUNTIME_HAND_GATE_PREDICTION_DAMPING:-1}" # velocity damping during lost-hand prediction
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS="${RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS:-0}" # blend duration after reacquire
