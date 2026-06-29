@@ -123,14 +123,14 @@ DERIVED_GRAB_RESPONSE_START="${DERIVED_GRAB_RESPONSE_START:-0.50}" # response cu
 RUNTIME_HAND_STABILITY_GATE="${RUNTIME_HAND_STABILITY_GATE:-1}" # enable runtime hand pose stability gate
 RUNTIME_HAND_GATE_MAX_JUMP_M="${RUNTIME_HAND_GATE_MAX_JUMP_M:-0.1}" # max allowed hand jump before reacquire gating
 RUNTIME_HAND_GATE_CONFIRM_FRAMES="${RUNTIME_HAND_GATE_CONFIRM_FRAMES:-5}" # frames required to confirm reacquired hand
-RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M="${RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M:-0.1}" # max per-frame step while confirming reacquire
+RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M="${RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M:-0.15}" # max per-frame step while confirming reacquire
 RUNTIME_HAND_GATE_HOLD_LOST_MS="${RUNTIME_HAND_GATE_HOLD_LOST_MS:-50}" # hold last valid hand pose after tracking loss
 RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-300}" # predict hand pose for this time after hold-lost phase
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS:-2.0}" # cap prediction velocity for lost hands
 RUNTIME_HAND_GATE_PREDICTION_DAMPING="${RUNTIME_HAND_GATE_PREDICTION_DAMPING:-1}" # velocity damping during lost-hand prediction
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS="${RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS:-0}" # blend duration after reacquire
 RUNTIME_HAND_GATE_DEBUG_CSV="${RUNTIME_HAND_GATE_DEBUG_CSV:-}" # optional CSV path for hand gate diagnostics
-RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS:-1.25}" # max continuity velocity for hand gate
+RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS:-4.0}" # max continuity velocity for hand gate
 
 # Runtime-side position/orientation deadband jitter filter.
 # It suppresses very small pose changes while preserving larger real movement.
