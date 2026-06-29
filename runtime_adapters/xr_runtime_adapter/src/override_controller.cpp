@@ -149,6 +149,11 @@ RuntimeControllerMovementSpace runtime_controller_movement_space_from_value(
   if (v == "hmd" || v == "head" || v == "head_relative" || v == "hmd_relative") {
     return RuntimeControllerMovementSpace::Hmd;
   }
+  if (v == "hmd_pose" || v == "head_pose" ||
+      v == "hmd_orientation" || v == "head_orientation" ||
+      v == "hmd_yaw" || v == "head_yaw") {
+    return RuntimeControllerMovementSpace::HmdPose;
+  }
   return fallback;
 }
 
@@ -206,6 +211,49 @@ void set_orientation_xyzw(xr_runtime::RuntimeControllerSideStateV1& out, Qf q) {
   out.orientation_xyzw[1] = q.y;
   out.orientation_xyzw[2] = q.z;
   out.orientation_xyzw[3] = q.w;
+}
+
+
+bool controller_side_has_movement_input(const xr_runtime::ControllerDeviceStateV2& controller) {
+  if (!controller_side_is_present(controller)) return false;
+  const uint64_t buttons = normalize_controller_dpad_buttons(controller.buttons);
+  const uint64_t dpad_mask = xr_runtime::CONTROLLER_BUTTON_DPAD_UP |
+                             xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN |
+                             xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT |
+                             xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT;
+  return (buttons & dpad_mask) != 0ull ||
+         std::abs(controller.thumbstick_x) > 0.05f ||
+         std::abs(controller.thumbstick_y) > 0.05f;
+}
+
+Qf horizontal_yaw_q_from_q(Qf q) {
+  float right[3]{};
+  float forward[3]{};
+  if (!horizontal_yaw_basis_from_q(q, right, forward)) return {};
+  // local forward is -Z. For a yaw-only quaternion around +Y:
+  // yaw=0 -> forward=(0,0,-1). Therefore yaw = atan2(-x, -z).
+  const float yaw = std::atan2(-forward[0], -forward[2]);
+  return normalize_q({std::cos(0.5f * yaw), 0.0f, std::sin(0.5f * yaw), 0.0f});
+}
+
+void apply_hmd_yaw_orientation_for_movement(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const xr_runtime::HmdPoseF64V1& hmd,
+    const float static_q_xyzw[4]) {
+  if ((out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) == 0u) return;
+  if ((hmd.flags & xr_runtime::HMD_FLAG_POSE_VALID) == 0u || hmd.tracking_status != 2u) return;
+
+  const Qf hmd_q = normalize_q({static_cast<float>(hmd.qw),
+                                static_cast<float>(hmd.qx),
+                                static_cast<float>(hmd.qy),
+                                static_cast<float>(hmd.qz)});
+  const Qf hmd_yaw_q = horizontal_yaw_q_from_q(hmd_q);
+  set_orientation_xyzw(out, q_mul(hmd_yaw_q, q_from_xyzw(static_q_xyzw)));
+
+  // Position still comes from hand tracking; only orientation is synthesized for
+  // locomotion. Keep the hand-position source, but do not advertise hand yaw.
+  out.source_mask &= ~xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION;
+  out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_STATIC_ORIENTATION;
 }
 
 bool hand_side_is_valid(const xr_runtime::HandTrackingFrameF32V2& hand,
@@ -419,9 +467,16 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 
   if (controller_side != nullptr) {
     fill_inputs_from_controller(out, *controller_side, cfg);
-    if (effective_runtime_controller_movement_space(cfg) == RuntimeControllerMovementSpace::Hmd &&
-        hmd != nullptr) {
+    const RuntimeControllerMovementSpace movement_space = effective_runtime_controller_movement_space(cfg);
+    if (movement_space == RuntimeControllerMovementSpace::Hmd && hmd != nullptr) {
+      // Axis-space fix: for games that consume analog vector angle.
       remap_thumbstick_axes_to_hmd_space(out, *hmd);
+    } else if (movement_space == RuntimeControllerMovementSpace::HmdPose &&
+               hmd != nullptr &&
+               controller_side_has_movement_input(*controller_side)) {
+      // Pose-space fix: for games/bindings that use controller yaw as locomotion
+      // reference and treat D-pad/stick as forward/back/strafe commands.
+      apply_hmd_yaw_orientation_for_movement(out, *hmd, static_q);
     }
   }
 

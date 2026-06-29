@@ -159,7 +159,7 @@ MAX_CONTROLLER_AGE_MS="${MAX_CONTROLLER_AGE_MS:-${CONTROLLER_INPUT_MAX_AGE_MS:-3
 # synthesize a body/HMD-relative controller pose instead of leaving hands at an invalid/floor pose.
 RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK="${RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK:-hmd_relative_with_input}" # fallback pose policy when hand tracking is lost
 
-RUNTIME_CONTROLLER_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_MOVEMENT_SPACE:-hmd}" # movement axes space: controller or hmd
+RUNTIME_CONTROLLER_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_MOVEMENT_SPACE:-hmd_pose}" # movement mode: controller, hmd, or hmd_pose
 CONTROLLER_TRIGGER_PINCH_THRESHOLD="${CONTROLLER_TRIGGER_PINCH_THRESHOLD:-0.55}" # trigger threshold used as pinch/button input
 CONTROLLER_GRIP_GRAB_THRESHOLD="${CONTROLLER_GRIP_GRAB_THRESHOLD:-0.55}" # grip threshold used as grab/button input
 
@@ -449,7 +449,7 @@ OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLO
 OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS=$OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS # runtime-only gesture block latch
 MAX_CONTROLLER_AGE_MS=$MAX_CONTROLLER_AGE_MS # max age before controller_input is considered stale
 RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK=$RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK # fallback pose policy when hand tracking is lost
-RUNTIME_CONTROLLER_MOVEMENT_SPACE=$RUNTIME_CONTROLLER_MOVEMENT_SPACE # movement axes space for D-pad/thumbstick
+RUNTIME_CONTROLLER_MOVEMENT_SPACE=$RUNTIME_CONTROLLER_MOVEMENT_SPACE # movement mode for D-pad/thumbstick: controller, hmd, hmd_pose
 
 PUBLISH_RUNTIME_VIDEO=$PUBLISH_RUNTIME_VIDEO # publish runtime stereo video SHM output
 EOF2
