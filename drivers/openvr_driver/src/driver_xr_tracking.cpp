@@ -1099,20 +1099,13 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     float stick_x = side != nullptr ? std::clamp(side->thumbstick_x, -1.0f, 1.0f) : 0.0f;
     float stick_y = side != nullptr ? std::clamp(side->thumbstick_y, -1.0f, 1.0f) : 0.0f;
 
-    const bool runtime_has_stick_axes =
-    std::abs(stick_x) >= 0.05f || std::abs(stick_y) >= 0.05f;
-// If xr_runtime_adapter already supplied axes (including HMD-space
-// remapped D-pad axes), preserve them. Only synthesize axes from raw
-// D-pad button bits when the runtime stream did not provide axes.
-if (!runtime_has_stick_axes) {
-  if (std::abs(stick_x) < 0.05f) {
-    if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT) != 0ull) stick_x = -1.0f;
+    if (std::abs(stick_x) < 0.05f) {
+  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT) != 0ull) stick_x = -1.0f;
       if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT) != 0ull) stick_x = 1.0f;
-  }
-  if (std::abs(stick_y) < 0.05f) {
-    if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) stick_y = -1.0f;
+}
+if (std::abs(stick_y) < 0.05f) {
+  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) stick_y = -1.0f;
       if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_UP) != 0ull) stick_y = 1.0f;
-  }
 }
 
     const bool trigger_click = trigger >= 0.55f ||

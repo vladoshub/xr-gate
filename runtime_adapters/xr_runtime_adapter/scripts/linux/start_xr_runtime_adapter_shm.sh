@@ -141,6 +141,14 @@ RUNTIME_JITTER_FILTER_TRACKER_CM="${RUNTIME_JITTER_FILTER_TRACKER_CM:-0.25}" # t
 RUNTIME_JITTER_FILTER_HMD_DEG="${RUNTIME_JITTER_FILTER_HMD_DEG:-0.10}" # HMD orientation jitter deadband in degrees
 RUNTIME_JITTER_FILTER_TRACKER_DEG="${RUNTIME_JITTER_FILTER_TRACKER_DEG:-1.0}" # tracker/hand orientation jitter deadband in degrees
 
+
+# Controller locomotion space.
+RUNTIME_CONTROLLER_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_MOVEMENT_SPACE:-controller}"
+# Optional per-hand override. Empty value falls back to RUNTIME_CONTROLLER_MOVEMENT_SPACE.
+RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE:-hmd_pose}"
+RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE:-controller}"
+export RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE
+export RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE
 CONTROLLER_INPUT_MODE="${CONTROLLER_INPUT_MODE:-controller_buttons_runtime_only}" # controller/hand gesture merge mode; hand_tracking_only #controller_buttons_only #hand_plus_controller №controller_buttons_runtime_only
 CONTROLLER_INPUT_TRANSPORT="${CONTROLLER_INPUT_TRANSPORT:-shm}"  # controller input transport;  none, shm, tcp
 CONTROLLER_INPUT_REGISTRY="${CONTROLLER_INPUT_REGISTRY:-$TRACKING_REGISTRY}" # controller input source registry path
@@ -159,7 +167,6 @@ MAX_CONTROLLER_AGE_MS="${MAX_CONTROLLER_AGE_MS:-${CONTROLLER_INPUT_MAX_AGE_MS:-3
 # synthesize a body/HMD-relative controller pose instead of leaving hands at an invalid/floor pose.
 RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK="${RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK:-hmd_relative_with_input}" # fallback pose policy when hand tracking is lost
 
-RUNTIME_CONTROLLER_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_MOVEMENT_SPACE:-hmd_pose}" # movement mode: controller, hmd, or hmd_pose
 CONTROLLER_TRIGGER_PINCH_THRESHOLD="${CONTROLLER_TRIGGER_PINCH_THRESHOLD:-0.55}" # trigger threshold used as pinch/button input
 CONTROLLER_GRIP_GRAB_THRESHOLD="${CONTROLLER_GRIP_GRAB_THRESHOLD:-0.55}" # grip threshold used as grab/button input
 
@@ -449,7 +456,7 @@ OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLO
 OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS=$OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS # runtime-only gesture block latch
 MAX_CONTROLLER_AGE_MS=$MAX_CONTROLLER_AGE_MS # max age before controller_input is considered stale
 RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK=$RUNTIME_CONTROLLER_LOST_HAND_POSE_FALLBACK # fallback pose policy when hand tracking is lost
-RUNTIME_CONTROLLER_MOVEMENT_SPACE=$RUNTIME_CONTROLLER_MOVEMENT_SPACE # movement mode for D-pad/thumbstick: controller, hmd, hmd_pose
+RUNTIME_CONTROLLER_MOVEMENT_SPACE=$RUNTIME_CONTROLLER_MOVEMENT_SPACE # movement mode: controller or hmd_pose
 
 PUBLISH_RUNTIME_VIDEO=$PUBLISH_RUNTIME_VIDEO # publish runtime stereo video SHM output
 EOF2
