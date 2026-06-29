@@ -628,13 +628,13 @@ xrt_result_t xrtd_update_inputs(struct xrt_device* xdev) {
     float stick_y = std::clamp(side.thumbstick_y, -1.0f, 1.0f);
 
     if (std::abs(stick_x) < 0.05f) {
-      if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT) != 0ull) stick_x = -1.0f;
+  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT) != 0ull) stick_x = -1.0f;
       if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT) != 0ull) stick_x = 1.0f;
-    }
-    if (std::abs(stick_y) < 0.05f) {
-      if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) stick_y = -1.0f;
+}
+if (std::abs(stick_y) < 0.05f) {
+  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) stick_y = -1.0f;
       if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_UP) != 0ull) stick_y = 1.0f;
-    }
+}
 
     const bool trigger_click = trigger >= 0.55f ||
         (buttons & xr_runtime::CONTROLLER_BUTTON_TRIGGER) != 0ull;
