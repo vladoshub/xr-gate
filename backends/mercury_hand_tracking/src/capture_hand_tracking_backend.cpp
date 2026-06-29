@@ -131,6 +131,17 @@ class HandTrackingProcessor {
   }
 };
 
+uint32_t clamped_hand_count(uint32_t hand_count) {
+  return std::min<uint32_t>(hand_count, 2);
+}
+
+struct MercuryShadowReacquireState {
+  std::unique_ptr<xr_tracking::MercuryRuntimeProcessor> processor;
+  int64_t created_ns = 0;
+  uint64_t stable_better_frames = 0;
+  uint64_t processed_frames = 0;
+};
+
 bool save_pgm(const std::filesystem::path& path,
               const capture_client::ImageFrame& frame) {
   if (frame.width == 0 || frame.height == 0) return false;
@@ -436,6 +447,12 @@ int main(int argc, char** argv) {
   int mercury_orientation0 = 0;
   int mercury_orientation1 = 0;
 
+  bool mercury_shadow_reacquire = false;
+  double mercury_shadow_restart_one_hand_ms = 500.0;
+  double mercury_shadow_restart_no_hands_ms = 10000.0;
+  int mercury_shadow_promote_stable_frames = 2;
+  int mercury_shadow_process_every_n = 1;
+
   CLI::App app{"Hand tracking backend scaffold using capture_client LatestStereoReader"};
   app.add_option("--transport", transport_type, "Capture transport: shm, tcp, or capture_tcp");
   app.add_option("--registry", registry_path, "capture_service SHM registry path; used when --transport shm");
@@ -501,11 +518,34 @@ int main(int argc, char** argv) {
   app.add_option("--mercury-orientation0", mercury_orientation0, "Mercury camera orientation for cam0: 0,90,180,270");
   app.add_option("--mercury-orientation1", mercury_orientation1, "Mercury camera orientation for cam1: 0,90,180,270");
 
+  app.add_flag("--mercury-shadow-reacquire", mercury_shadow_reacquire,
+               "Enable an internal clean Mercury shadow tracker while primary sees fewer than two hands");
+  app.add_option("--mercury-shadow-restart-one-hand-ms", mercury_shadow_restart_one_hand_ms,
+                 "Restart interval for the shadow tracker while primary sees exactly one hand");
+  app.add_option("--mercury-shadow-restart-no-hands-ms", mercury_shadow_restart_no_hands_ms,
+                 "Restart interval for the shadow tracker while primary sees no hands");
+  app.add_option("--mercury-shadow-promote-stable-frames", mercury_shadow_promote_stable_frames,
+                 "Promote shadow to primary after this many processed shadow frames with at least primary+1 hands");
+  app.add_option("--mercury-shadow-process-every-n", mercury_shadow_process_every_n,
+                 "Run shadow tracker every Nth stereo frame; 1 means every frame");
+
   try {
     app.parse(argc, argv);
     publish_hand_shm = !no_hand_shm;
     if (hand_format_version != 1 && hand_format_version != 2) {
       std::cerr << "ERROR: --hand-format-version must be 1 or 2\n";
+      return 2;
+    }
+    if (mercury_shadow_promote_stable_frames < 1) {
+      std::cerr << "ERROR: --mercury-shadow-promote-stable-frames must be >= 1\n";
+      return 2;
+    }
+    if (mercury_shadow_process_every_n < 1) {
+      std::cerr << "ERROR: --mercury-shadow-process-every-n must be >= 1\n";
+      return 2;
+    }
+    if (mercury_shadow_restart_one_hand_ms < 0.0 || mercury_shadow_restart_no_hands_ms < 0.0) {
+      std::cerr << "ERROR: Mercury shadow restart intervals must be >= 0 ms\n";
       return 2;
     }
   } catch (const CLI::ParseError& e) {
@@ -588,7 +628,10 @@ int main(int argc, char** argv) {
         max_scan_back);
 
     HandTrackingProcessor processor;
+    xr_tracking::MercuryRuntimeConfig mercury_cfg;
+    bool mercury_cfg_ready = false;
     std::unique_ptr<xr_tracking::MercuryRuntimeProcessor> mercury_processor;
+    MercuryShadowReacquireState mercury_shadow;
     if (hand_tracker == "mercury") {
       if (mercury_detector_fusion) set_process_env("MERCURY_XR_DETECTOR_FUSION", "1");
       if (mercury_fusion_stereo_pairs) set_process_env("MERCURY_XR_DETECTOR_FUSION_STEREO_PAIRS", "1");
@@ -596,7 +639,6 @@ int main(int argc, char** argv) {
       set_process_env("MERCURY_XR_FUSION_MIN_CONF", std::to_string(mercury_fusion_min_conf));
       set_process_env("MERCURY_XR_FUSION_MIN_CENTER_DIST_PX", std::to_string(mercury_fusion_min_center_dist_px));
 
-      xr_tracking::MercuryRuntimeConfig mercury_cfg;
       mercury_cfg.library_path = mercury_runtime_lib.empty()
                                      ? default_mercury_runtime_library_path()
                                      : expand_user_path(mercury_runtime_lib);
@@ -612,14 +654,23 @@ int main(int argc, char** argv) {
       mercury_cfg.boundary1_radius = static_cast<float>(mercury_boundary1_radius);
       mercury_cfg.orientation0 = mercury_orientation0;
       mercury_cfg.orientation1 = mercury_orientation1;
+      mercury_cfg_ready = true;
 
       std::cout << "mercury_runtime_lib: " << mercury_cfg.library_path << "\n"
                 << "mercury_models: " << mercury_cfg.models_dir << "\n"
                 << "mercury_calib: " << mercury_cfg.calib_json << "\n"
                 << "mercury_detector_fusion: " << (mercury_detector_fusion ? "yes" : "no") << "\n"
-                << "mercury_fusion_stereo_pairs: " << (mercury_fusion_stereo_pairs ? "yes" : "no") << "\n";
-      mercury_processor = std::make_unique<xr_tracking::MercuryRuntimeProcessor>(std::move(mercury_cfg));
+                << "mercury_fusion_stereo_pairs: " << (mercury_fusion_stereo_pairs ? "yes" : "no") << "\n"
+                << "mercury_shadow_reacquire: " << (mercury_shadow_reacquire ? "yes" : "no") << "\n";
+      mercury_processor = std::make_unique<xr_tracking::MercuryRuntimeProcessor>(mercury_cfg);
     }
+
+    auto make_mercury_processor = [&]() {
+      if (!mercury_cfg_ready) {
+        throw std::runtime_error("Mercury runtime config is not ready");
+      }
+      return std::make_unique<xr_tracking::MercuryRuntimeProcessor>(mercury_cfg);
+    };
 
     Stats stats;
 
@@ -675,6 +726,77 @@ int main(int argc, char** argv) {
         if (mercury_processor) {
           const auto mercury_t0 = std::chrono::steady_clock::now();
           frame = mercury_processor->process(*pair, reset_counter);
+
+          const uint32_t primary_hand_count = clamped_hand_count(frame.hand_count);
+
+          if (mercury_shadow_reacquire) {
+            if (primary_hand_count >= 2) {
+              if (mercury_shadow.processor) {
+                std::cout << "[capture_hand_tracking_backend] Mercury shadow stopped: primary has 2 hands\n";
+              }
+              mercury_shadow.processor.reset();
+              mercury_shadow.created_ns = 0;
+              mercury_shadow.stable_better_frames = 0;
+              mercury_shadow.processed_frames = 0;
+            } else {
+              const int64_t current_ns = now_ns();
+              const double restart_ms = primary_hand_count == 0
+                                            ? mercury_shadow_restart_no_hands_ms
+                                            : mercury_shadow_restart_one_hand_ms;
+              const bool should_start_shadow = !mercury_shadow.processor;
+              const bool should_restart_shadow =
+                  mercury_shadow.processor &&
+                  ns_to_ms(current_ns - mercury_shadow.created_ns) >= restart_ms;
+
+              if (should_start_shadow || should_restart_shadow) {
+                mercury_shadow.processor = make_mercury_processor();
+                mercury_shadow.created_ns = current_ns;
+                mercury_shadow.stable_better_frames = 0;
+                mercury_shadow.processed_frames = 0;
+                std::cout << "[capture_hand_tracking_backend] Mercury shadow "
+                          << (should_restart_shadow ? "restarted" : "started")
+                          << ": primary_hands=" << primary_hand_count
+                          << " restart_ms=" << restart_ms << "\n";
+              }
+
+              if (mercury_shadow.processor &&
+                  (mercury_shadow.processed_frames %
+                       static_cast<uint64_t>(mercury_shadow_process_every_n) ==
+                   0)) {
+                auto shadow_frame = mercury_shadow.processor->process(*pair, reset_counter);
+                const uint32_t shadow_hand_count = clamped_hand_count(shadow_frame.hand_count);
+                const uint32_t required_shadow_hands = std::min<uint32_t>(2, primary_hand_count + 1);
+                if (shadow_hand_count >= required_shadow_hands &&
+                    shadow_hand_count > primary_hand_count) {
+                  ++mercury_shadow.stable_better_frames;
+                } else {
+                  mercury_shadow.stable_better_frames = 0;
+                }
+
+                if (mercury_shadow.stable_better_frames >=
+                    static_cast<uint64_t>(mercury_shadow_promote_stable_frames)) {
+                  ++reset_counter;
+                  shadow_frame.reset_counter = reset_counter;
+                  shadow_frame.timestamp_ns = static_cast<uint64_t>(now_ns());
+                  mercury_processor = std::move(mercury_shadow.processor);
+                  frame = shadow_frame;
+                  mercury_shadow.created_ns = 0;
+                  mercury_shadow.stable_better_frames = 0;
+                  mercury_shadow.processed_frames = 0;
+                  std::cout << "[capture_hand_tracking_backend] Mercury shadow promoted: "
+                            << "primary_hands=" << primary_hand_count
+                            << " shadow_hands=" << shadow_hand_count
+                            << " stable_frames=" << mercury_shadow_promote_stable_frames
+                            << " reset_counter=" << reset_counter << "\n";
+                }
+              }
+
+              if (mercury_shadow.processor) {
+                ++mercury_shadow.processed_frames;
+              }
+            }
+          }
+
           const auto mercury_t1 = std::chrono::steady_clock::now();
 
           result.processing_ms =

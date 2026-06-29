@@ -43,6 +43,11 @@ CAM1_STREAM="${CAM1_STREAM:-camera1}"
 DURATION="${DURATION:-0}"
 PRINT_EVERY="${PRINT_EVERY:-30}"
 MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.05}"
+MERCURY_SHADOW_REACQUIRE="${MERCURY_SHADOW_REACQUIRE:-0}"
+MERCURY_SHADOW_RESTART_ONE_HAND_MS="${MERCURY_SHADOW_RESTART_ONE_HAND_MS:-500}"
+MERCURY_SHADOW_RESTART_NO_HANDS_MS="${MERCURY_SHADOW_RESTART_NO_HANDS_MS:-10000}"
+MERCURY_SHADOW_PROMOTE_STABLE_FRAMES="${MERCURY_SHADOW_PROMOTE_STABLE_FRAMES:-2}"
+MERCURY_SHADOW_PROCESS_EVERY_N="${MERCURY_SHADOW_PROCESS_EVERY_N:-1}"
 MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.3}"
 # Keep Mercury backend raw by default. Runtime-side filtering now lives in
 # only for rollback/debug comparisons.
@@ -70,8 +75,16 @@ args=(
   --mercury-models "$MERCURY_MODELS"
   --mercury-calib "$MERCURY_CALIB"
   --mercury-min-detection-confidence "$MERCURY_MIN_DETECTION_CONFIDENCE"
+  --mercury-shadow-restart-one-hand-ms "$MERCURY_SHADOW_RESTART_ONE_HAND_MS"
+  --mercury-shadow-restart-no-hands-ms "$MERCURY_SHADOW_RESTART_NO_HANDS_MS"
+  --mercury-shadow-promote-stable-frames "$MERCURY_SHADOW_PROMOTE_STABLE_FRAMES"
+  --mercury-shadow-process-every-n "$MERCURY_SHADOW_PROCESS_EVERY_N"
   --print-every "$PRINT_EVERY"
 )
 
+
+if [[ "$MERCURY_SHADOW_REACQUIRE" == "1" ]]; then
+  args+=(--mercury-shadow-reacquire)
+fi
 
 exec "$BACKEND_BIN" "${args[@]}"
