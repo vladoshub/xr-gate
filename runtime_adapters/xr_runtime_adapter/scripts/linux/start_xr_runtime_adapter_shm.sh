@@ -53,6 +53,8 @@ BODY_TRACKERS_UDP_BIND_PORT="${BODY_TRACKERS_UDP_BIND_PORT:-45676}" # UDP bind p
 BODY_TRACKERS_REATTACH_ON_STALE_MS="${BODY_TRACKERS_REATTACH_ON_STALE_MS:-1000}" # reattach body tracker reader after stale interval
 PUBLISH_RUNTIME_BODY_TRACKERS="${PUBLISH_RUNTIME_BODY_TRACKERS:-0}" # publish runtime body tracker SHM output
 RUNTIME_BODY_TRACKER_STABILITY_GATE="${RUNTIME_BODY_TRACKER_STABILITY_GATE:-1}" # enable runtime-side hold/prediction for body trackers; disabled by default
+
+RUNTIME_BODY_TRACKER_MAX_JUMP_M="${RUNTIME_BODY_TRACKER_MAX_JUMP_M:-0.85}" # max observed body tracker jump from last good pose in metres; <=0 disables
 RUNTIME_BODY_TRACKER_HOLD_LOST_MS="${RUNTIME_BODY_TRACKER_HOLD_LOST_MS:-150}" # hold last valid body tracker pose after tracker loss
 RUNTIME_BODY_TRACKER_PREDICT_LOST_MS="${RUNTIME_BODY_TRACKER_PREDICT_LOST_MS:-350}" # predict body tracker pose after hold-lost phase
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS:-0.8}" # cap body tracker prediction velocity
@@ -180,6 +182,7 @@ RUNTIME_VIDEO_SHM_NAME="${RUNTIME_VIDEO_SHM_NAME:-runtime_stereo_video}" # runti
   exit 1
 }
 
+export RUNTIME_BODY_TRACKER_MAX_JUMP_M
 args=(
   --adapter "$ADAPTER"
   --mode "$MODE"

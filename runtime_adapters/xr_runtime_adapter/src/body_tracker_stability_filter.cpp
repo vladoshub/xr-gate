@@ -1,4 +1,5 @@
 #include "body_tracker_stability_filter.hpp"
+#include <cstdlib>
 
 #include <algorithm>
 #include <cmath>
@@ -15,8 +16,15 @@ uint32_t parse_body_tracker_predicted_status(const std::string& value) {
 }
 
 void BodyTrackerStabilityFilter::configure(BodyTrackerStabilityGateConfig cfg) {
-  cfg_ = cfg;
-  if (!cfg_.enabled) reset();
+    cfg_ = cfg;
+    if (const char* value = std::getenv("RUNTIME_BODY_TRACKER_MAX_JUMP_M")) {
+        char* end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        if (end != value && std::isfinite(parsed)) {
+            cfg_.max_jump_m = parsed;
+        }
+    }
+    if (!cfg_.enabled) reset();
 }
 
 void BodyTrackerStabilityFilter::reset() {
@@ -55,9 +63,24 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
     const uint64_t key = tracker_key(tracker, i);
     if (observed_key_count < observed_keys.size()) observed_keys[observed_key_count++] = key;
     if (tracker_pose_is_good(tracker)) {
-      update_state(tracker, key, sample_ns);
-      append_tracker(out, tracker);
-    } else {
+            const State* previous_state = find_state(key);
+            const double max_jump_m = cfg_.max_jump_m;
+            if (previous_state != nullptr && previous_state->active && previous_state->last_good_ns != 0 &&
+                std::isfinite(max_jump_m) && max_jump_m > 0.0) {
+                const double body_tracker_jump_reject_distance_m =
+                    norm(sub(pose_position(tracker), pose_position(previous_state->last_good)));
+                if (std::isfinite(body_tracker_jump_reject_distance_m) &&
+                    body_tracker_jump_reject_distance_m > max_jump_m) {
+                    auto predicted = predicted_tracker_for_key(key, now_ns);
+                    if (predicted) {
+                        append_tracker(out, *predicted);
+                    }
+                    continue;
+                }
+            }
+            update_state(tracker, key, sample_ns);
+            append_tracker(out, tracker);
+        } else {
       auto predicted = predicted_tracker_for_key(key, now_ns);
       if (predicted) {
         append_tracker(out, *predicted);

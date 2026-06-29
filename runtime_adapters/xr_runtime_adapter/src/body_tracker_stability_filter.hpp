@@ -11,6 +11,7 @@ namespace xr_runtime_adapter::body_tracker_filter {
 
 struct BodyTrackerStabilityGateConfig {
   bool enabled = false;
+    double max_jump_m = 0.0; // Max accepted observed tracker jump from last good pose in metres; <=0 disables.
   double hold_lost_ms = 150.0;
   double predict_lost_ms = 350.0;
   double max_prediction_velocity_mps = 0.8;
