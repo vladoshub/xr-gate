@@ -116,9 +116,9 @@ Download these artifacts:
 
 Mercury ONNX models are distributed separately in hand-tracking-models-mercury.zip. They are not included in the core runtime package and are not downloaded by the default build.
 
-Extract unpack_xreal_ultra.sh from unpack-xreal-ultra.zip and place it next to:
-xreal-ultra-linux-x64.zip
-hand-tracking-models-mercury.zip
+Download unpack_xreal_ultra.sh and place it next to:
+xreal-ultra-linux-x64.tar.gz
+hand-tracking-models-mercury.tar.gz
 
 
 Unpack the runtime package and install the Mercury models:
