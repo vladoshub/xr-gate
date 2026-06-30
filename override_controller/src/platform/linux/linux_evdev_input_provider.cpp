@@ -1,6 +1,7 @@
 #include "linux_evdev_input_provider.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <thread>
 
 #include <fcntl.h>
 #include <linux/input.h>
@@ -244,6 +246,63 @@ bool interesting_event(const input_event& ev) {
   if (ev.type == EV_KEY) return ev.value == 0 || ev.value == 1;
   if (ev.type == EV_ABS) return true;
   if (ev.type == EV_REL) return ev.value != 0;
+  return false;
+}
+
+constexpr size_t kBitsPerWord = sizeof(unsigned long) * 8u;
+constexpr size_t kKeyWords = (KEY_MAX + 1u + kBitsPerWord - 1u) / kBitsPerWord;
+using KeyBits = std::array<unsigned long, kKeyWords>;
+
+bool read_key_bits(int fd, KeyBits& bits) {
+  bits.fill(0);
+  return ioctl(fd, EVIOCGKEY(static_cast<int>(bits.size() * sizeof(bits[0]))), bits.data()) >= 0;
+}
+
+bool has_pressed_key(int fd) {
+  KeyBits keys{};
+  if (!read_key_bits(fd, keys)) return false;
+  for (unsigned long word : keys) {
+    if (word != 0) return true;
+  }
+  return false;
+}
+
+void drain_fd_events(int fd) {
+  input_event ev{};
+  while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {}
+}
+
+bool wait_for_pressed_keys_before_grab(int fd,
+                                      size_t idx,
+                                      const DeviceFingerprint& fp,
+                                      std::ostream* log) {
+  if (fd < 0 || !has_pressed_key(fd)) return true;
+
+  if (log) {
+    *log << "[override_controller][WARN] input device [" << idx << "] " << short_device_label(fp)
+         << " still has pressed keys/buttons; waiting for release before EVIOCGRAB to avoid stuck input.\n";
+  }
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+  while (std::chrono::steady_clock::now() < deadline) {
+    drain_fd_events(fd);
+    if (!has_pressed_key(fd)) {
+      // Give the Linux input stack a tiny window to deliver key/button-up events
+      // before this process takes the exclusive EVIOCGRAB. This matters most for
+      // keyboards and terminals, but it is harmless for gamepads/remotes too.
+      std::this_thread::sleep_for(std::chrono::milliseconds(40));
+      drain_fd_events(fd);
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  if (log) {
+    *log << "[override_controller][WARN] input device [" << idx
+         << "] still reports pressed keys/buttons; NOT enabling EVIOCGRAB for this device "
+            "to avoid stuck input. Release the key/button and restart override_controller if "
+            "you need this device to be blocked.\n";
+  }
   return false;
 }
 
@@ -502,6 +561,17 @@ bool LinuxEvdevInputProvider::set_device_grab(std::vector<DeviceInfo>& devices,
              << " unopened device [" << idx << "] " << short_device_label(d.fingerprint) << "\n";
       }
       continue;
+    }
+
+    if (enabled) {
+      // Avoid grabbing while a key/button is already down. If EVIOCGRAB is enabled
+      // before the key/button-up reaches the original consumer, that consumer can
+      // see a permanently pressed input until this process exits. This is most
+      // visible with keyboards/terminals, but the check is cheap and safe for all
+      // EV_KEY-capable devices.
+      if (!wait_for_pressed_keys_before_grab(d.fd, idx, d.fingerprint, log)) {
+        continue;
+      }
     }
 
     errno = 0;

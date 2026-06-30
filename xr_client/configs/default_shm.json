@@ -279,11 +279,12 @@
           "stream": "controller_input"
         }
       ],
-      "ready_message": "override_controller is running. Right quadruple tap or manual key 5 toggles it.",
+      "ready_message": "override_controller is running. Right quadruple tap or manual key 5 toggles it. Press CTRL+C or ESC to stop grab devices",
       "start_delay_s": 0.2,
       "stop_timeout_s": 1.0,
       "restart_on_exit": true,
       "restart_on_error_only": true,
+      "allow_normal_exit": true,
       "restart_max_attempts": 3,
       "restart_window_s": 60,
       "restart_backoff_s": 1.0,
