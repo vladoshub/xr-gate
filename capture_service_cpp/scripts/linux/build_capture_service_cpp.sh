@@ -96,7 +96,7 @@ cat > "$INSTALL_BIN_DIR/README.md" <<'README'
 
 Device build target: `${XR_CAPTURE_SERVICE_CPP_DEVICE:-xreal_ultra}`.
 
-Experimental C++ capture service. It is not used by default.
+Experimental C++ capture service.
 
 Linux SHM mode:
 

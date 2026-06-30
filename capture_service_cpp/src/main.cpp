@@ -13,6 +13,7 @@
 
 namespace xr_capture_cpp {
 std::atomic<bool> g_stop{false};
+std::atomic<int> g_exit_code{kExitOk};
 }
 
 namespace {
@@ -56,9 +57,9 @@ int main(int argc, char** argv) {
     }
     g_stop.store(true);
     for (auto& t : threads) if (t.joinable()) t.join();
-    return 0;
+    return g_exit_code.load();
   } catch (const std::exception& e) {
     std::cerr << "[capture_service_cpp][ERROR] " << e.what() << std::endl;
-    return 2;
+    return kExitRuntimeError;
   }
 }

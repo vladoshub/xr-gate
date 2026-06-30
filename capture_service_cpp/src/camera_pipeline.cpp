@@ -25,12 +25,24 @@ void camera_thread(const RuntimeConfig& cfg, StreamPublishers* publishers) {
   uint64_t decode_fail = 0;
   uint64_t published_pairs = 0;
   uint64_t last_log = steady_ns();
+  uint64_t last_frame_ns = steady_ns();
+  const int stall_exit_ms = env_int("CPP_CAPTURE_CAMERA_STALL_EXIT_MS", 2000);
 
   while (!g_stop.load()) {
     if (!cap.read(frame) || frame.empty()) {
+      if (stall_exit_ms > 0) {
+        const uint64_t now = steady_ns();
+        if (now - last_frame_ns >= static_cast<uint64_t>(stall_exit_ms) * 1000000ULL) {
+          std::cerr << "[capture_service_cpp][ERROR] no camera frames for " << stall_exit_ms
+                    << " ms; assuming device disconnect/stall" << std::endl;
+          request_stop_with_exit_code(kExitDeviceLost);
+          break;
+        }
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       continue;
     }
+    last_frame_ns = steady_ns();
     bool is_right = false;
     if (!decode_xreal_eye(frame, raw_eye, is_right)) {
       ++decode_fail;

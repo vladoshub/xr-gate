@@ -20,6 +20,14 @@ uint64_t wall_ns() {
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
+void request_stop_with_exit_code(int exit_code) {
+  if (exit_code != kExitOk) {
+    int expected = kExitOk;
+    g_exit_code.compare_exchange_strong(expected, exit_code);
+  }
+  g_stop.store(true);
+}
+
 std::string env_or(const char* name, const std::string& fallback) {
   const char* v = std::getenv(name);
   return (v && *v) ? std::string(v) : fallback;

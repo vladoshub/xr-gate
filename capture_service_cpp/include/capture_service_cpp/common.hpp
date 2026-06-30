@@ -12,6 +12,13 @@
 namespace xr_capture_cpp {
 
 extern std::atomic<bool> g_stop;
+extern std::atomic<int> g_exit_code;
+
+constexpr int kExitOk = 0;
+constexpr int kExitRuntimeError = 2;
+constexpr int kExitDeviceLost = 3;
+
+void request_stop_with_exit_code(int exit_code);
 
 constexpr uint32_t kKindImage = 1;
 constexpr uint32_t kKindImu = 2;
