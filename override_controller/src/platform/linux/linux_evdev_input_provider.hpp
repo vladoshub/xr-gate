@@ -20,6 +20,10 @@ class LinuxEvdevInputProvider final : public InputProvider {
                        const std::set<size_t>& device_indices,
                        bool enabled,
                        std::ostream* log) override;
- private: std::deque<InputEvent> pending_events_; };
+ private:
+  std::deque<InputEvent> pending_events_;
+  bool left_ctrl_down_ = false;
+  bool right_ctrl_down_ = false;
+};
 
 }  // namespace xr_override_controller

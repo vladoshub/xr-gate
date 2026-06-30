@@ -1,6 +1,7 @@
 #include "linux_evdev_input_provider.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <thread>
 
 #include <fcntl.h>
 #include <linux/input.h>
@@ -247,6 +249,74 @@ bool interesting_event(const input_event& ev) {
   return false;
 }
 
+constexpr size_t kBitsPerWord = sizeof(unsigned long) * 8u;
+constexpr size_t kKeyWords = (KEY_MAX + 1u + kBitsPerWord - 1u) / kBitsPerWord;
+using KeyBits = std::array<unsigned long, kKeyWords>;
+
+bool read_key_bits(int fd, KeyBits& bits) {
+  bits.fill(0);
+  return ioctl(fd, EVIOCGKEY(static_cast<int>(bits.size() * sizeof(bits[0]))), bits.data()) >= 0;
+}
+
+bool has_pressed_key(int fd) {
+  KeyBits keys{};
+  if (!read_key_bits(fd, keys)) return false;
+  for (unsigned long word : keys) {
+    if (word != 0) return true;
+  }
+  return false;
+}
+
+void drain_fd_events(int fd) {
+  input_event ev{};
+  while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {}
+}
+
+bool wait_for_pressed_keys_before_grab(int fd,
+                                      size_t idx,
+                                      const DeviceFingerprint& fp,
+                                      std::ostream* log) {
+  if (fd < 0 || !has_pressed_key(fd)) return true;
+
+  if (log) {
+    *log << "[override_controller][WARN] input device [" << idx << "] " << short_device_label(fp)
+         << " still has pressed keys/buttons; waiting for release before EVIOCGRAB to avoid stuck input.\n";
+  }
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+  while (std::chrono::steady_clock::now() < deadline) {
+    drain_fd_events(fd);
+    if (!has_pressed_key(fd)) {
+      // Give the Linux input stack a tiny window to deliver key/button-up events
+      // before this process takes the exclusive EVIOCGRAB. This matters most for
+      // keyboards and terminals, but it is harmless for gamepads/remotes too.
+      std::this_thread::sleep_for(std::chrono::milliseconds(40));
+      drain_fd_events(fd);
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  if (log) {
+    *log << "[override_controller][WARN] input device [" << idx
+         << "] still reports pressed keys/buttons; NOT enabling EVIOCGRAB for this device "
+            "to avoid stuck input. Release the key/button and restart override_controller if "
+            "you need this device to be blocked.\n";
+  }
+  return false;
+}
+
+InputEvent make_stop_event(size_t device_index, uint16_t code) {
+  InputEvent out;
+  out.device_index = device_index;
+  out.type = EV_KEY;
+  out.code = code;
+  out.value = 1;
+  out.timestamp_ns = now_ns();
+  out.stop_requested = true;
+  return out;
+}
+
 }  // namespace
 
 std::vector<DeviceInfo> LinuxEvdevInputProvider::scan_devices(bool open_readable) {
@@ -297,6 +367,9 @@ void LinuxEvdevInputProvider::flush_events(std::vector<DeviceInfo>& devices) {
 }
 
 void LinuxEvdevInputProvider::close_devices(std::vector<DeviceInfo>& devices) {
+  pending_events_.clear();
+  left_ctrl_down_ = false;
+  right_ctrl_down_ = false;
   for (auto& d : devices) {
     if (d.fd >= 0) {
       (void)ioctl(d.fd, EVIOCGRAB, 0);
@@ -381,6 +454,23 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
       input_event ev{};
       ssize_t n = 0;
       while ((n = read(d.fd, &ev, sizeof(ev))) == sizeof(ev)) {
+        if (ev.type == EV_KEY) {
+          const bool key_down = ev.value == 1 || ev.value == 2;
+          if (ev.code == KEY_LEFTCTRL) {
+            left_ctrl_down_ = key_down;
+          } else if (ev.code == KEY_RIGHTCTRL) {
+            right_ctrl_down_ = key_down;
+          }
+
+          // Reserved escape hatch for EVIOCGRAB. When a keyboard is grabbed,
+          // the terminal may not receive Ctrl+C/SIGINT, so detect it directly
+          // from raw evdev before event compaction. Esc is a single-key fallback.
+          if (key_down && (ev.code == KEY_ESC ||
+                           (ev.code == KEY_C && (left_ctrl_down_ || right_ctrl_down_)))) {
+            return make_stop_event(i, static_cast<uint16_t>(ev.code));
+          }
+        }
+
         if (!interesting_event(ev)) continue;
 
         InputEvent out;
@@ -473,6 +563,17 @@ bool LinuxEvdevInputProvider::set_device_grab(std::vector<DeviceInfo>& devices,
       continue;
     }
 
+    if (enabled) {
+      // Avoid grabbing while a key/button is already down. If EVIOCGRAB is enabled
+      // before the key/button-up reaches the original consumer, that consumer can
+      // see a permanently pressed input until this process exits. This is most
+      // visible with keyboards/terminals, but the check is cheap and safe for all
+      // EV_KEY-capable devices.
+      if (!wait_for_pressed_keys_before_grab(d.fd, idx, d.fingerprint, log)) {
+        continue;
+      }
+    }
+
     errno = 0;
     if (ioctl(d.fd, EVIOCGRAB, enabled ? 1 : 0) < 0) {
       if (log) {
@@ -487,6 +588,11 @@ bool LinuxEvdevInputProvider::set_device_grab(std::vector<DeviceInfo>& devices,
     if (log) {
       *log << "[override_controller] " << (enabled ? "grabbed" : "released")
            << " input device [" << idx << "] " << short_device_label(d.fingerprint) << "\n";
+      if (enabled) {
+        *log << "[override_controller][WARN] Input device [" << idx
+             << "] is blocked by override_controller. Press Ctrl+C or Esc to stop "
+                "override_controller and release the device.\n";
+      }
     }
   }
   return any_ok;

@@ -1307,6 +1307,10 @@ class Launcher:
                 if code is not None:
                     if self.handle_restartable_exit(item, int(code)):
                         continue
+                    if int(code) == 0 and item.spec.allow_normal_exit:
+                        log(f"{item.spec.name} exited normally; leaving service stopped")
+                        self.unregister_running_item(item)
+                        continue
                     self.print_log_tail(item.log_path)
                     self.fail(f"{item.spec.name} exited with code {code}")
             time.sleep(1.0)

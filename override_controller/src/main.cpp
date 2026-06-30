@@ -59,6 +59,8 @@ struct Args {
   uint32_t publish_slot_count = 0;
   bool grab_devices_override_set = false;
   bool grab_devices = false;
+  bool allow_shared_physical_device_sides_override_set = false;
+  bool allow_shared_physical_device_sides = true;
   bool reattach_devices_override_set = false;
   bool reattach_devices = true;
   uint32_t reattach_interval_ms = 0;
@@ -111,8 +113,9 @@ void usage() {
       "  --publish-tcp-port <port> TCP port for --publish-transport tcp. Default: 45672\n"
       "  --publish-rate-hz <hz>   Publish rate override\n"
       "  --publish-slots <n>      Ring slot count override\n"
-      "  --grab-devices <bool>    Exclusively capture mapped input devices when running\n"
+      "  --grab-devices <bool>    Exclusively capture whole mapped input devices when running\n"
       "  --no-grab-devices        Disable exclusive input capture override\n"
+      "  --allow-shared-physical-device-sides <bool> Allow one physical device/key to drive both sides\n"
       "  --reattach-devices <bool> Periodically rescan/re-resolve devices after reconnect\n"
       "  --no-reattach-devices    Disable device reattach/rescan\n"
       "  --reattach-interval-ms <n> Rescan interval. Default: 1000\n"
@@ -205,6 +208,12 @@ Args parse_args(int argc, char** argv) {
     } else if (v == "--no-grab-devices") {
       a.grab_devices_override_set = true;
       a.grab_devices = false;
+    } else if (v == "--allow-shared-physical-device-sides") {
+      a.allow_shared_physical_device_sides_override_set = true;
+      a.allow_shared_physical_device_sides = parse_bool_arg(need(v.c_str()), v.c_str());
+    } else if (v == "--no-shared-physical-device-sides") {
+      a.allow_shared_physical_device_sides_override_set = true;
+      a.allow_shared_physical_device_sides = false;
     } else if (v == "--reattach-devices") {
       a.reattach_devices_override_set = true;
       a.reattach_devices = parse_bool_arg(need(v.c_str()), v.c_str());
@@ -590,6 +599,9 @@ void apply_publish_overrides(AppConfig& cfg, const Args& args) {
   if (args.publish_rate_hz > 0.0) cfg.publish.rate_hz = args.publish_rate_hz;
   if (args.publish_slot_count > 0) cfg.publish.slot_count = args.publish_slot_count;
   if (args.grab_devices_override_set) cfg.input.grab_devices = args.grab_devices;
+  if (args.allow_shared_physical_device_sides_override_set) {
+    cfg.input.allow_shared_physical_device_sides = args.allow_shared_physical_device_sides;
+  }
   if (args.reattach_devices_override_set) cfg.input.reattach_devices = args.reattach_devices;
   if (args.reattach_interval_ms > 0) cfg.input.reattach_interval_ms = args.reattach_interval_ms;
   if (args.event_wait_max_ms > 0) cfg.input.event_wait_max_ms = args.event_wait_max_ms;
@@ -948,7 +960,8 @@ void update_counters(uint64_t prev, uint64_t now, uint32_t press[32], uint32_t r
 OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
-                          CounterState& counters) {
+                          CounterState& counters,
+                          bool allow_shared_physical_device_sides) {
   OutputState out;
   std::set<std::string> left_devices;
   std::set<std::string> right_devices;
@@ -982,34 +995,36 @@ OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
   out.right.device_id = label(right_devices);
 
 
-  bool side_device_overlap = false;
-  for (const auto& device_id : left_devices) {
-    if (right_devices.count(device_id) != 0) {
-      side_device_overlap = true;
-      break;
+  if (!allow_shared_physical_device_sides) {
+    bool side_device_overlap = false;
+    for (const auto& device_id : left_devices) {
+      if (right_devices.count(device_id) != 0) {
+        side_device_overlap = true;
+        break;
+      }
+    }
+    if (side_device_overlap) {
+      std::cerr << "[override_controller][ERROR] same physical input device resolved for both left and right; "
+                   "suppressing both controller sides until bindings are retrained or sharing is enabled\n";
+      out.left.connected = false;
+      out.right.connected = false;
+      out.left.buttons = 0;
+      out.right.buttons = 0;
+      out.left.touches = 0;
+      out.right.touches = 0;
+      out.left.trigger = 0.0f;
+      out.right.trigger = 0.0f;
+      out.left.grip = 0.0f;
+      out.right.grip = 0.0f;
+      out.left.thumbstick_x = 0.0f;
+      out.left.thumbstick_y = 0.0f;
+      out.right.thumbstick_x = 0.0f;
+      out.right.thumbstick_y = 0.0f;
+      out.left.device_id.clear();
+      out.right.device_id.clear();
     }
   }
-  if (side_device_overlap) {
-    std::cerr << "[override_controller][ERROR] same physical input device resolved for both left and right; "
-                 "suppressing both controller sides until bindings are retrained or made unique\n";
-    out.left.connected = false;
-    out.right.connected = false;
-    out.left.buttons = 0;
-    out.right.buttons = 0;
-    out.left.touches = 0;
-    out.right.touches = 0;
-    out.left.trigger = 0.0f;
-    out.right.trigger = 0.0f;
-    out.left.grip = 0.0f;
-    out.right.grip = 0.0f;
-    out.left.thumbstick_x = 0.0f;
-    out.left.thumbstick_y = 0.0f;
-    out.right.thumbstick_x = 0.0f;
-    out.right.thumbstick_y = 0.0f;
-    out.left.device_id.clear();
-    out.right.device_id.clear();
-  }
-out.left.changed_buttons = counters.prev_left_buttons ^ out.left.buttons;
+  out.left.changed_buttons = counters.prev_left_buttons ^ out.left.buttons;
   out.right.changed_buttons = counters.prev_right_buttons ^ out.right.buttons;
   update_counters(counters.prev_left_buttons, out.left.buttons, counters.left_press, counters.left_release);
   update_counters(counters.prev_right_buttons, out.right.buttons, counters.right_press, counters.right_release);
@@ -1258,6 +1273,8 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
             << " shm=" << cfg.publish.shm_name
             << " rate_hz=" << cfg.publish.rate_hz << "\n";
   std::cout << "[override_controller] input grab_devices=" << (cfg.input.grab_devices ? "true" : "false")
+            << " allow_shared_physical_device_sides="
+            << (cfg.input.allow_shared_physical_device_sides ? "true" : "false")
             << " reattach_devices=" << (cfg.input.reattach_devices ? "true" : "false")
             << " reattach_interval_ms=" << cfg.input.reattach_interval_ms
             << " event_wait_max_ms=" << cfg.input.event_wait_max_ms
@@ -1306,6 +1323,18 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
       ev = provider.wait_event(devices, wait_ms, false);
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+    }
+
+    if (ev && ev->stop_requested) {
+      if (ev->device_index < devices.size()) {
+        std::cout << "[override_controller] emergency stop requested from input device ["
+                  << ev->device_index << "] " << short_device_label(devices[ev->device_index].fingerprint)
+                  << " via " << provider.input_name(ev->type, ev->code) << "\n";
+      } else {
+        std::cout << "[override_controller] emergency stop requested from input device\n";
+      }
+      g_stop = true;
+      continue;
     }
 
     if (ev && ev->device_index < devices.size()) {
@@ -1416,7 +1445,8 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     decay_button_hold_bindings(bindings, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(bindings, hold_toggle_bindings, devices, counters);
+      const auto out = compose_state(bindings, hold_toggle_bindings, devices, counters,
+                                     cfg.input.allow_shared_physical_device_sides);
       publisher.publish(out);
       do {
         next_publish += period;

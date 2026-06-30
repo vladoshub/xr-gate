@@ -70,6 +70,7 @@ class ServiceSpec:
     stop_timeout_s: float = 1.0
     restart_on_exit: bool = False
     restart_on_error_only: bool = True
+    allow_normal_exit: bool = False
     restart_max_attempts: int = 3
     restart_window_s: float = 60.0
     restart_backoff_s: float = 2.0
@@ -193,6 +194,7 @@ def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: fl
         stop_timeout_s=float(item.get("stop_timeout_s", 1.0)),
         restart_on_exit=bool(item.get("restart_on_exit", False)),
         restart_on_error_only=bool(item.get("restart_on_error_only", True)),
+        allow_normal_exit=bool(item.get("allow_normal_exit", False)),
         restart_max_attempts=int(item.get("restart_max_attempts", 3)),
         restart_window_s=float(item.get("restart_window_s", 60.0)),
         restart_backoff_s=float(item.get("restart_backoff_s", 2.0)),
@@ -705,6 +707,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
                 "stop_timeout_s": 1.0,
                 "restart_on_exit": True,
                 "restart_on_error_only": True,
+                "allow_normal_exit": True,
                 "restart_max_attempts": 3,
                 "restart_window_s": 60,
                 "restart_backoff_s": 1.0,

@@ -103,9 +103,15 @@ struct PublishConfig {
 
 struct InputConfig {
   // Linux evdev: use EVIOCGRAB on devices that matched configured bindings.
+  // EVIOCGRAB is device-wide; it cannot grab only individual bound keys.
   // This prevents mapped HID/media/mouse events from also reaching the desktop/Steam.
   // Other platforms should implement this through their platform input provider.
   bool grab_devices = false;
+
+  // Allow bindings for both virtual controller sides to resolve to the same
+  // physical input device. When true, the same physical key/button may drive
+  // both left and right if it is explicitly bound for both sides.
+  bool allow_shared_physical_device_sides = true;
 
   // Periodically rescan/re-resolve configured devices. This lets Bluetooth HID
   // devices recover after disconnect/reconnect because /dev/input/eventX often
