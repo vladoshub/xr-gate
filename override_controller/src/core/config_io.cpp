@@ -187,6 +187,7 @@ AppConfig load_config_file(const fs::path& path) {
 
   const auto input = j.value("input", nlohmann::json::object());
   cfg.input.grab_devices = input.value("grab_devices", false);
+  cfg.input.allow_shared_physical_device_sides = input.value("allow_shared_physical_device_sides", true);
   cfg.input.reattach_devices = input.value("reattach_devices", true);
   cfg.input.reattach_interval_ms = input.value("reattach_interval_ms", 1000u);
   cfg.input.event_wait_max_ms = input.value("event_wait_max_ms", 20u);
@@ -240,6 +241,7 @@ void save_config_file(const AppConfig& cfg, const fs::path& path) {
   };
   j["input"] = {
       {"grab_devices", cfg.input.grab_devices},
+      {"allow_shared_physical_device_sides", cfg.input.allow_shared_physical_device_sides},
       {"reattach_devices", cfg.input.reattach_devices},
       {"reattach_interval_ms", cfg.input.reattach_interval_ms},
       {"event_wait_max_ms", cfg.input.event_wait_max_ms},

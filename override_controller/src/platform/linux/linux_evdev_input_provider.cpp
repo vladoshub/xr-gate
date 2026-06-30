@@ -247,6 +247,17 @@ bool interesting_event(const input_event& ev) {
   return false;
 }
 
+InputEvent make_stop_event(size_t device_index, uint16_t code) {
+  InputEvent out;
+  out.device_index = device_index;
+  out.type = EV_KEY;
+  out.code = code;
+  out.value = 1;
+  out.timestamp_ns = now_ns();
+  out.stop_requested = true;
+  return out;
+}
+
 }  // namespace
 
 std::vector<DeviceInfo> LinuxEvdevInputProvider::scan_devices(bool open_readable) {
@@ -297,6 +308,9 @@ void LinuxEvdevInputProvider::flush_events(std::vector<DeviceInfo>& devices) {
 }
 
 void LinuxEvdevInputProvider::close_devices(std::vector<DeviceInfo>& devices) {
+  pending_events_.clear();
+  left_ctrl_down_ = false;
+  right_ctrl_down_ = false;
   for (auto& d : devices) {
     if (d.fd >= 0) {
       (void)ioctl(d.fd, EVIOCGRAB, 0);
@@ -381,6 +395,23 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
       input_event ev{};
       ssize_t n = 0;
       while ((n = read(d.fd, &ev, sizeof(ev))) == sizeof(ev)) {
+        if (ev.type == EV_KEY) {
+          const bool key_down = ev.value == 1 || ev.value == 2;
+          if (ev.code == KEY_LEFTCTRL) {
+            left_ctrl_down_ = key_down;
+          } else if (ev.code == KEY_RIGHTCTRL) {
+            right_ctrl_down_ = key_down;
+          }
+
+          // Reserved escape hatch for EVIOCGRAB. When a keyboard is grabbed,
+          // the terminal may not receive Ctrl+C/SIGINT, so detect it directly
+          // from raw evdev before event compaction. Esc is a single-key fallback.
+          if (key_down && (ev.code == KEY_ESC ||
+                           (ev.code == KEY_C && (left_ctrl_down_ || right_ctrl_down_)))) {
+            return make_stop_event(i, static_cast<uint16_t>(ev.code));
+          }
+        }
+
         if (!interesting_event(ev)) continue;
 
         InputEvent out;
@@ -487,6 +518,11 @@ bool LinuxEvdevInputProvider::set_device_grab(std::vector<DeviceInfo>& devices,
     if (log) {
       *log << "[override_controller] " << (enabled ? "grabbed" : "released")
            << " input device [" << idx << "] " << short_device_label(d.fingerprint) << "\n";
+      if (enabled) {
+        *log << "[override_controller][WARN] Input device [" << idx
+             << "] is blocked by override_controller. Press Ctrl+C or Esc to stop "
+                "override_controller and release the device.\n";
+      }
     }
   }
   return any_ok;

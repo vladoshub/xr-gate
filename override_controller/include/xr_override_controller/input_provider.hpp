@@ -16,6 +16,11 @@ struct InputEvent {
   uint16_t code = 0;
   int32_t value = 0;
   int64_t timestamp_ns = 0;
+
+  // Provider-side emergency shutdown event. Linux evdev can exclusively grab a
+  // keyboard, which prevents the terminal from receiving its normal SIGINT.
+  // The provider detects reserved escape keys before normal binding handling.
+  bool stop_requested = false;
 };
 
 class InputProvider {

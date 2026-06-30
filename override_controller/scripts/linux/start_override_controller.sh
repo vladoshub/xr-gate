@@ -41,6 +41,7 @@ NON_INTERACTIVE="${NON_INTERACTIVE:-0}"                                         
 VERBOSE="${VERBOSE:-0}"                                                                     # enable verbose override_controller logging when set to 1
 USE_SUDO="${USE_SUDO:-0}"                                                                   # run binary through sudo for evdev access when set to 1
 GRAB_DEVICES="${GRAB_DEVICES:-${OVERRIDE_CONTROLLER_GRAB_DEVICES:-1}}"                      # grab evdev devices exclusively to prevent duplicate OS/game input
+ALLOW_SHARED_PHYSICAL_DEVICE_SIDES="${ALLOW_SHARED_PHYSICAL_DEVICE_SIDES:-${OVERRIDE_CONTROLLER_ALLOW_SHARED_PHYSICAL_DEVICE_SIDES:-1}}" # allow one physical device/key to drive both virtual controller sides
 REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}}"          # periodically rescan/reopen input devices after disconnect/reconnect
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
@@ -164,6 +165,7 @@ args+=("--publish-shm-name" "$CONTROLLER_INPUT_SHM_NAME")
 args+=("--publish-rate-hz" "$CONTROLLER_INPUT_RATE_HZ")
 args+=("--publish-slots" "$CONTROLLER_INPUT_SLOTS")
 args+=("--grab-devices" "$GRAB_DEVICES")
+args+=("--allow-shared-physical-device-sides" "$ALLOW_SHARED_PHYSICAL_DEVICE_SIDES")
 args+=("--reattach-devices" "$REATTACH_DEVICES")
 args+=("--reattach-interval-ms" "$REATTACH_INTERVAL_MS")
 args+=("--event-wait-max-ms" "$EVENT_WAIT_MAX_MS")
@@ -212,7 +214,7 @@ log "CONTROLLER_INPUT_REGISTRY=$CONTROLLER_INPUT_REGISTRY"
 log "CONTROLLER_INPUT_STREAM=$CONTROLLER_INPUT_STREAM"
 log "CONTROLLER_INPUT_SHM_NAME=$CONTROLLER_INPUT_SHM_NAME"
 log "CONTROLLER_INPUT_RATE_HZ=$CONTROLLER_INPUT_RATE_HZ CONTROLLER_INPUT_SLOTS=$CONTROLLER_INPUT_SLOTS"
-log "GRAB_DEVICES=$GRAB_DEVICES REATTACH_DEVICES=$REATTACH_DEVICES REATTACH_INTERVAL_MS=$REATTACH_INTERVAL_MS"
+log "GRAB_DEVICES=$GRAB_DEVICES ALLOW_SHARED_PHYSICAL_DEVICE_SIDES=$ALLOW_SHARED_PHYSICAL_DEVICE_SIDES REATTACH_DEVICES=$REATTACH_DEVICES REATTACH_INTERVAL_MS=$REATTACH_INTERVAL_MS"
 log "HOLD_MS rel_axis=$REL_AXIS_HOLD_MS rel_button=$REL_BUTTON_HOLD_MS button=$BUTTON_HOLD_MS release_grace=$BUTTON_RELEASE_GRACE_MS"
 log "PULSE_MODE=$PULSE_MODE dpad_gap=$DPAD_PULSE_GAP_MS dpad_release=$DPAD_RELEASE_MS button_gap=$BUTTON_PULSE_GAP_MS button_release=$BUTTON_RELEASE_MS button_startup_ms=$BUTTON_PULSE_STARTUP_MS button_startup_release_ms=$BUTTON_PULSE_STARTUP_RELEASE_MS button_startup_types=$BUTTON_PULSE_STARTUP_TYPES"
 log "HOLD_TOGGLE_DEBOUNCE_MS=$HOLD_TOGGLE_DEBOUNCE_MS"
