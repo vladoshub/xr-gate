@@ -359,8 +359,8 @@ TrainingInputFilter prompt_training_input_filter(const std::vector<DeviceInfo>& 
   TrainingInputFilter filter;
   std::cout << "\nTraining input device whitelist.\n"
             << "  Empty = listen to every readable input device.\n"
-            << "  Recommended = enter VR-PARK device indexes, e.g. 10,11, so Enter/keyboard cannot be captured.\n"
-            << "  You may use indexes or text tokens such as VR-PARK or a uniq value.\n";
+            << "  Recommended = enter your device indexes, e.g. 10,11, so Enter/keyboard cannot be captured.\n"
+            << "  You may use indexes or text tokens or a uniq value.\n";
   std::cout << "Use only devices [empty=all readable]: " << std::flush;
   std::string line;
   if (!std::getline(std::cin, line)) return filter;
