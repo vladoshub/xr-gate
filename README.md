@@ -14,6 +14,15 @@ The goal is to keep the project useful in two directions at once:
 ## Demo (6DoF + hand-tracking)
 
 <p align="center">
+  <video src="docs/media/xr_gate_demo_1.mp4"
+         width="720"
+         controls
+         muted
+         playsinline>
+  </video>
+</p>
+
+<p align="center">
   <img src="docs/media/xr_gate_demo_1.gif" alt="XR Gate SteamVR hand tracking demo" width="720">
 </p>
 
