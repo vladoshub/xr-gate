@@ -11,7 +11,7 @@ The goal is to keep the project useful in two directions at once:
 
 **FOR INSTALL AND USE GO TO "Quick start"**
 
-## Half-Life: Alyx on HX370 with XREAL Ultra 
+## Half-Life Alyx on HX370 with XREAL Ultra 
 
 
 <p align="center">
