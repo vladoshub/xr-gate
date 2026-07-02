@@ -11,23 +11,11 @@ The goal is to keep the project useful in two directions at once:
 
 **FOR INSTALL AND USE GO TO "Quick start"**
 
-## Demo (6DoF + hand-tracking)
+## Half-Life: Alyx on HX370 with XREAL Ultra 
+
 
 <p align="center">
-  <video src="docs/media/xr_gate_demo_1.mp4"
-         width="720"
-         controls
-         muted
-         playsinline>
-  </video>
-</p>
-
-<p align="center">
-  <img src="docs/media/xr_gate_demo_1.gif" alt="XR Gate SteamVR hand tracking demo" width="720">
-</p>
-
-<p align="center">
-  <img src="docs/media/xr_gate_demo_2.gif" alt="XR Gate gesture demo" width="720">
+  <img src="docs/media/alyx.gif" alt="XR Gate SteamVR hand tracking demo" width="426">
 </p>
 
 
