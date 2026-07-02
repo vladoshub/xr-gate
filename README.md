@@ -107,6 +107,8 @@ Tested on Ubuntu 24.04
 
 Download these artifacts:
 
+https://github.com/vladoshub/xr-gate/releases/latest
+
 1. xreal-ultra-linux-x64.tar.gz
 
 2. hand-tracking-models-mercury.tar.gz
