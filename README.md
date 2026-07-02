@@ -9,7 +9,9 @@ The goal is to keep the project useful in two directions at once:
 - **For users and XR hobbyists:** build one runtime package, register the driver, start `xr_client`, and experiment with XREAL Ultra in SteamVR/OpenVR without manually wiring every backend.
 - **For engineers and researchers:** use the codebase as a real-time computer vision / perception / XR systems project with C++ capture, Python stream clients, ONNX hand-tracking integration, VIO, runtime filtering, spatial mapping, IPC transports, controller emulation, and reproducible packaging.
 
-**FOR INSTALL AND USE GO TO "Quick start"**
+
+**For installation and usage instructions, see:**
+[Quick Start — XREAL Ultra on Linux](#quick-start--xreal-ultra-on-linux)
 
 ## Half-Life Alyx on HX370 with XREAL Ultra 
 
@@ -133,9 +135,9 @@ After extraction, the runtime package will be available under:
 cd ~/xr-gate-release/xreal_ultra
 ./devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
 ```
-After install need reboot!
 
-Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups. After that, log out/log in or reboot.
+Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups.
+**After that, log out/log in or reboot.**
 
 ### 2. Optional: train override controller input (once)
 
