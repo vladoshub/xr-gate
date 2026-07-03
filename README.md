@@ -11,6 +11,7 @@ The goal is to keep the project useful in two directions at once:
 
 
 **For installation and usage instructions, see:**
+
 [Quick Start — XREAL Ultra on Linux](#quick-start--xreal-ultra-on-linux)
 
 ## Half-Life Alyx on HX370 with XREAL Ultra 
@@ -161,6 +162,10 @@ If you want to retrain, you can delete default.json for new train
 If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
 
 I tested on two identical "vr-park" joystick
+
+In more detail:
+
+[Controller setup](docs/controllers/README.md)
 
 ### 3. Run xr_client
 
