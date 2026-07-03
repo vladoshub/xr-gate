@@ -1,12 +1,14 @@
 # XR Gate
 
-Experimental open-source XR pipeline for **AR glasses**, designed both for low-level AR/XR research and for launching real VR/XR games and applications with spatial tracking and controller input.
+Experimental open-source XR runtime stack for **AR glasses**, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
 
-XR Tracking support XREAL Ultra: it captures stereo grayscale video and IMU data, synchronizes the streams, runs 6DoF/3DoF tracking and perception backends, performs ML-based hand tracking, emulates VR controllers from hand poses and physical input devices, and exposes the result to SteamVR/OpenVR, Monado/OpenXR, and standalone tools.
+XR Tracking currently provides a working end-to-end XR stack for XREAL Ultra, with a modular architecture intended to make support for other AR/XR glasses, tracking backends, and input devices possible over time.
+
+It already supports 6DoF/3DoF spatial tracking, ML-based hand tracking, VR controller emulation from hand poses and physical input devices, and working SteamVR/OpenVR and Monado/OpenXR driver integration, as well as standalone tools. The stack captures stereo grayscale video and IMU data directly, synchronizes the streams, and feeds the resulting tracking and input state into real XR runtimes and applications.
 
 The goal is to keep the project useful in two directions at once:
 
-- **For users and XR hobbyists:** build one runtime package, register the driver, start `xr_client`, and experiment with XREAL Ultra in SteamVR/OpenVR without manually wiring every backend.
+- **For users and XR hobbyists:** download runtime packages, register the driver, start `xr_client`, and run SteamVR/OpenVR games/apps on lightweight glasses without external tracking!
 - **For engineers and researchers:** use the codebase as a real-time computer vision / perception / XR systems project with C++ capture, Python stream clients, ONNX hand-tracking integration, VIO, runtime filtering, spatial mapping, IPC transports, controller emulation, and reproducible packaging.
 
 
@@ -24,7 +26,7 @@ The goal is to keep the project useful in two directions at once:
 
 ## What it does
 
-The default XREAL Ultra pipeline is:
+The default XREAL Ultra stack is:
 
 ```text
 XREAL Ultra
