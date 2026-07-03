@@ -32,6 +32,9 @@ and follow the instructions on the command line
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json If you want to retrain, you can delete default.json for new train
 
+After this, you can enable controller emulation in xr_runtime. To do this, enable override_controller (by pressing "5").
+Once enabled, gestures are automatically disabled to avoid input conflicts.
+
 1. If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
 
 2. Also, when you hold the joysticks in your hands, your hands will physically be rotated at an angle. You can use the rotation angle offset via the config in xr_runtime to rotate your hands in VR.
