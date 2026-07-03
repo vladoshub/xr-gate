@@ -17,7 +17,7 @@ The goal is to keep the project useful in two directions at once:
 
 
 <p align="center">
-  <img src="docs/media/alyx.gif" alt="XR Gate SteamVR hand tracking demo" width="426">
+  <img src="docs/media/demo/alyx.gif" alt="XR Gate SteamVR hand tracking demo" width="426">
 </p>
 
 
