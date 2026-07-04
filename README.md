@@ -163,6 +163,8 @@ If you want to retrain, you can delete default.json for new train
 
 If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
 
+When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
+
 I tested on two identical "vr-park" joystick
 
 In more detail:
