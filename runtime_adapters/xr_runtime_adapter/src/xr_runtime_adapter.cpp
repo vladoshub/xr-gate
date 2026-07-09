@@ -2579,6 +2579,10 @@ int main(int argc, char** argv) {
   double runtime_jitter_filter_tracker_cm = 0.50;
   double runtime_jitter_filter_hmd_deg = 0.15;
   double runtime_jitter_filter_tracker_deg = 0.75;
+  double runtime_jitter_filter_hmd_vel_cm_s = 1.0;
+  double runtime_jitter_filter_tracker_vel_cm_s = 5.0;
+  double runtime_jitter_filter_hmd_ang_vel_deg_s = 1.0;
+  double runtime_jitter_filter_tracker_ang_vel_deg_s = 5.0;
 
   std::string derived_thumbs_up_button = "a";
   std::string derived_index_point_button = "b";
@@ -3026,6 +3030,14 @@ int main(int argc, char** argv) {
                  "Runtime jitter filter HMD orientation deadband in degrees; <=0 disables HMD orientation deadband");
   app.add_option("--runtime-jitter-filter-tracker-deg", runtime_jitter_filter_tracker_deg,
                  "Runtime jitter filter hand/body tracker orientation deadband in degrees; <=0 disables tracker orientation deadband");
+  app.add_option("--runtime-jitter-filter-hmd-vel-cm-s", runtime_jitter_filter_hmd_vel_cm_s,
+                 "Runtime jitter filter HMD linear velocity zero-deadband in centimeters per second; <=0 disables HMD velocity deadband");
+  app.add_option("--runtime-jitter-filter-tracker-vel-cm-s", runtime_jitter_filter_tracker_vel_cm_s,
+                 "Runtime jitter filter hand/body tracker linear velocity zero-deadband in centimeters per second; <=0 disables tracker velocity deadband");
+  app.add_option("--runtime-jitter-filter-hmd-ang-vel-deg-s", runtime_jitter_filter_hmd_ang_vel_deg_s,
+                 "Runtime jitter filter HMD angular velocity zero-deadband in degrees per second; <=0 disables HMD angular velocity deadband");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-deg-s", runtime_jitter_filter_tracker_ang_vel_deg_s,
+                 "Runtime jitter filter hand/body tracker angular velocity zero-deadband in degrees per second; <=0 disables tracker angular velocity deadband");
 
   app.add_option("--derived-thumbs-up-button", derived_thumbs_up_button,
                  "Runtime button mapped from visually-derived thumbs_up: none, a, b, menu, thumbstick, trigger, grip");
@@ -3434,6 +3446,10 @@ int main(int argc, char** argv) {
       std::cout << "runtime_jitter_filter_tracker_cm: " << runtime_jitter_filter_tracker_cm << "\n";
       std::cout << "runtime_jitter_filter_hmd_deg: " << runtime_jitter_filter_hmd_deg << "\n";
       std::cout << "runtime_jitter_filter_tracker_deg: " << runtime_jitter_filter_tracker_deg << "\n";
+      std::cout << "runtime_jitter_filter_hmd_vel_cm_s: " << runtime_jitter_filter_hmd_vel_cm_s << "\n";
+      std::cout << "runtime_jitter_filter_tracker_vel_cm_s: " << runtime_jitter_filter_tracker_vel_cm_s << "\n";
+      std::cout << "runtime_jitter_filter_hmd_ang_vel_deg_s: " << runtime_jitter_filter_hmd_ang_vel_deg_s << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_deg_s: " << runtime_jitter_filter_tracker_ang_vel_deg_s << "\n";
     }
     std::cout << "derived_thumbs_up_button: " << derived_thumbs_up_button << "\n";
     std::cout << "derived_index_point_button: " << derived_index_point_button << "\n";
@@ -3776,6 +3792,10 @@ int main(int argc, char** argv) {
       cfg.jitter_filter.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
       cfg.jitter_filter.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
       cfg.jitter_filter.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
+      cfg.jitter_filter.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
+      cfg.jitter_filter.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
       cfg.stability_gate.enabled = runtime_body_tracker_stability_gate;
       cfg.stability_gate.hold_lost_ms = runtime_body_tracker_hold_lost_ms;
       cfg.stability_gate.predict_lost_ms = runtime_body_tracker_predict_lost_ms;
@@ -3962,6 +3982,10 @@ int main(int argc, char** argv) {
     runtime_jitter_filter_cfg.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
     runtime_jitter_filter_cfg.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
     runtime_jitter_filter_cfg.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
+    runtime_jitter_filter_cfg.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
+    runtime_jitter_filter_cfg.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
+    runtime_jitter_filter_cfg.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+    runtime_jitter_filter_cfg.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
     jitter_filter::RuntimeJitterFilter runtime_jitter_filter(runtime_jitter_filter_cfg);
 
     uint64_t runtime_pose_published = 0;
@@ -4704,6 +4728,9 @@ int main(int argc, char** argv) {
               runtime_controller_hand,
               fresh_controller_input,
               runtime_controller_hmd);
+          if (runtime_jitter_filter_enabled) {
+            runtime_jitter_filter.filter_runtime_controller_state(runtime_controller_state);
+          }
           if (runtime_controller_state_publisher) runtime_controller_state_publisher->publish(runtime_controller_state);
           if (runtime_controller_state_udp_publisher) runtime_controller_state_udp_publisher->send_controller_state(runtime_controller_state);
           ++runtime_controller_state_published;

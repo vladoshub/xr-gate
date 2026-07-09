@@ -14,6 +14,10 @@ struct RuntimeJitterFilterConfig {
   double tracker_threshold_m = 0.0;
   double hmd_angle_threshold_rad = 0.0;
   double tracker_angle_threshold_rad = 0.0;
+  double hmd_velocity_threshold_mps = 0.0;
+  double tracker_velocity_threshold_mps = 0.0;
+  double hmd_angular_velocity_threshold_radps = 0.0;
+  double tracker_angular_velocity_threshold_radps = 0.0;
 };
 
 class PositionDeadbandFilter {
@@ -109,6 +113,7 @@ class RuntimeJitterFilter {
   void filter_hand(xr_runtime::HandTrackingFrameF32V2& hand);
   void filter_hand(xr_runtime::HandTrackingFrameF64V1& hand);
   void filter_body_trackers(xr_tracking::BodyTrackerSetFrameF32V1& frame);
+  void filter_runtime_controller_state(xr_runtime::RuntimeControllerStateFrameV1& frame);
 
  private:
   RuntimeJitterFilterConfig cfg_{};

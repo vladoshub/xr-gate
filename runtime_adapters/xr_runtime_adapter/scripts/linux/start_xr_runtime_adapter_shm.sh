@@ -140,6 +140,10 @@ RUNTIME_JITTER_FILTER_HMD_CM="${RUNTIME_JITTER_FILTER_HMD_CM:-0.15}" # HMD posit
 RUNTIME_JITTER_FILTER_TRACKER_CM="${RUNTIME_JITTER_FILTER_TRACKER_CM:-0.25}" # tracker/hand position jitter deadband in cm
 RUNTIME_JITTER_FILTER_HMD_DEG="${RUNTIME_JITTER_FILTER_HMD_DEG:-0.10}" # HMD orientation jitter deadband in degrees
 RUNTIME_JITTER_FILTER_TRACKER_DEG="${RUNTIME_JITTER_FILTER_TRACKER_DEG:-1.0}" # tracker/hand orientation jitter deadband in degrees
+RUNTIME_JITTER_FILTER_HMD_VEL_CM_S="${RUNTIME_JITTER_FILTER_HMD_VEL_CM_S:-1.0}" # HMD linear velocity zero-deadband in cm/s
+RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S="${RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S:-5.0}" # tracker/hand linear velocity zero-deadband in cm/s
+RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S:-1.0}" # HMD angular velocity zero-deadband in deg/s
+RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S:-5.0}" # tracker/hand angular velocity zero-deadband in deg/s
 
 
 # Controller locomotion space.
@@ -272,6 +276,10 @@ args=(
   --runtime-jitter-filter-tracker-cm "$RUNTIME_JITTER_FILTER_TRACKER_CM"
   --runtime-jitter-filter-hmd-deg "$RUNTIME_JITTER_FILTER_HMD_DEG"
   --runtime-jitter-filter-tracker-deg "$RUNTIME_JITTER_FILTER_TRACKER_DEG"
+  --runtime-jitter-filter-hmd-vel-cm-s "$RUNTIME_JITTER_FILTER_HMD_VEL_CM_S"
+  --runtime-jitter-filter-tracker-vel-cm-s "$RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S"
+  --runtime-jitter-filter-hmd-ang-vel-deg-s "$RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S"
+  --runtime-jitter-filter-tracker-ang-vel-deg-s "$RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S"
   --controller-input-mode "$CONTROLLER_INPUT_MODE"
   --controller-input-transport "$CONTROLLER_INPUT_TRANSPORT"
   --controller-input-registry "$CONTROLLER_INPUT_REGISTRY"
@@ -450,6 +458,10 @@ RUNTIME_JITTER_FILTER_HMD_CM=$RUNTIME_JITTER_FILTER_HMD_CM # HMD position jitter
 RUNTIME_JITTER_FILTER_TRACKER_CM=$RUNTIME_JITTER_FILTER_TRACKER_CM # tracker/hand position jitter deadband in cm
 RUNTIME_JITTER_FILTER_HMD_DEG=$RUNTIME_JITTER_FILTER_HMD_DEG # HMD orientation jitter deadband in degrees
 RUNTIME_JITTER_FILTER_TRACKER_DEG=$RUNTIME_JITTER_FILTER_TRACKER_DEG # tracker/hand orientation jitter deadband in degrees
+RUNTIME_JITTER_FILTER_HMD_VEL_CM_S=$RUNTIME_JITTER_FILTER_HMD_VEL_CM_S # HMD linear velocity zero-deadband in cm/s
+RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S=$RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S # tracker/hand linear velocity zero-deadband in cm/s
+RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S=$RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S # HMD angular velocity zero-deadband in deg/s
+RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S=$RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S # tracker/hand angular velocity zero-deadband in deg/s
 CONTROLLER_INPUT_MODE=$CONTROLLER_INPUT_MODE # controller/hand gesture merge mode
 CONTROLLER_INPUT_TRANSPORT=$CONTROLLER_INPUT_TRANSPORT # controller input transport
 OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT # runtime-only gesture block gate

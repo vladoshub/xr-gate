@@ -30,12 +30,37 @@ bool threshold_enabled(double threshold_m) {
 
 bool hmd_filter_enabled(const RuntimeJitterFilterConfig& cfg) {
   return cfg.enabled && (threshold_enabled(cfg.hmd_threshold_m) ||
-                         threshold_enabled(cfg.hmd_angle_threshold_rad));
+                         threshold_enabled(cfg.hmd_angle_threshold_rad) ||
+                         threshold_enabled(cfg.hmd_velocity_threshold_mps) ||
+                         threshold_enabled(cfg.hmd_angular_velocity_threshold_radps));
 }
 
 bool tracker_filter_enabled(const RuntimeJitterFilterConfig& cfg) {
   return cfg.enabled && (threshold_enabled(cfg.tracker_threshold_m) ||
-                         threshold_enabled(cfg.tracker_angle_threshold_rad));
+                         threshold_enabled(cfg.tracker_angle_threshold_rad) ||
+                         threshold_enabled(cfg.tracker_velocity_threshold_mps) ||
+                         threshold_enabled(cfg.tracker_angular_velocity_threshold_radps));
+}
+
+template <typename T>
+void zero_vector_deadband(T& x, T& y, T& z, double threshold) {
+  if (!threshold_enabled(threshold)) return;
+  if (!finite3(x, y, z)) {
+    x = static_cast<T>(0);
+    y = static_cast<T>(0);
+    z = static_cast<T>(0);
+    return;
+  }
+  const double xd = static_cast<double>(x);
+  const double yd = static_cast<double>(y);
+  const double zd = static_cast<double>(z);
+  const double norm2 = xd * xd + yd * yd + zd * zd;
+  const double threshold2 = threshold * threshold;
+  if (norm2 <= threshold2) {
+    x = static_cast<T>(0);
+    y = static_cast<T>(0);
+    z = static_cast<T>(0);
+  }
 }
 
 bool normalize_quat(double& w, double& x, double& y, double& z) {
@@ -203,6 +228,13 @@ void HmdJitterFilter::filter(xr_runtime::HmdPoseF64V1& hmd, const RuntimeJitterF
 
   position_.filter(hmd.px, hmd.py, hmd.pz, cfg.hmd_threshold_m);
   orientation_.filter(hmd.qw, hmd.qx, hmd.qy, hmd.qz, cfg.hmd_angle_threshold_rad);
+
+  if ((hmd.flags & xr_runtime::HMD_FLAG_LINEAR_VELOCITY_VALID) != 0u) {
+    zero_vector_deadband(hmd.vx, hmd.vy, hmd.vz, cfg.hmd_velocity_threshold_mps);
+  }
+  if ((hmd.flags & xr_runtime::HMD_FLAG_ANGULAR_VELOCITY_VALID) != 0u) {
+    zero_vector_deadband(hmd.wx, hmd.wy, hmd.wz, cfg.hmd_angular_velocity_threshold_radps);
+  }
 }
 
 void HandSideJitterFilter::reset() {
@@ -235,6 +267,12 @@ void HandSideJitterFilter::filter(xr_runtime::HandSideF32V2& side, const Runtime
                              cfg.tracker_angle_threshold_rad);
     wrist_orientation_.filter(side.wrist_qw, side.wrist_qx, side.wrist_qy, side.wrist_qz,
                               cfg.tracker_angle_threshold_rad);
+    if ((side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u) {
+      zero_vector_deadband(side.vx, side.vy, side.vz, cfg.tracker_velocity_threshold_mps);
+    }
+    if ((side.flags & xr_runtime::HAND_ANGULAR_VELOCITY_VALID) != 0u) {
+      zero_vector_deadband(side.wx, side.wy, side.wz, cfg.tracker_angular_velocity_threshold_radps);
+    }
   } else {
     controller_.reset();
     palm_.reset();
@@ -274,6 +312,12 @@ void HandSideJitterFilter::filter(xr_runtime::HandSideF64V1& side, const Runtime
                              cfg.tracker_angle_threshold_rad);
     wrist_orientation_.filter(side.wrist_qw, side.wrist_qx, side.wrist_qy, side.wrist_qz,
                               cfg.tracker_angle_threshold_rad);
+    if ((side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u) {
+      zero_vector_deadband(side.vx, side.vy, side.vz, cfg.tracker_velocity_threshold_mps);
+    }
+    if ((side.flags & xr_runtime::HAND_ANGULAR_VELOCITY_VALID) != 0u) {
+      zero_vector_deadband(side.wx, side.wy, side.wz, cfg.tracker_angular_velocity_threshold_radps);
+    }
   } else {
     palm_.reset();
     wrist_.reset();
@@ -365,9 +409,14 @@ void BodyTrackerJitterFilter::filter(xr_tracking::BodyTrackerSetFrameF32V1& fram
 
   frame.tracker_count = std::min<uint32_t>(frame.tracker_count, xr_tracking::BODY_TRACKER_MAX_TRACKERS);
   for (uint32_t i = 0; i < frame.tracker_count; ++i) {
-    auto& pose = frame.trackers[i].pose;
+    auto& tracker = frame.trackers[i];
+    auto& pose = tracker.pose;
     tracker_positions_[i].filter(pose.px, pose.py, pose.pz, cfg.tracker_threshold_m);
     tracker_orientations_[i].filter(pose.qw, pose.qx, pose.qy, pose.qz, cfg.tracker_angle_threshold_rad);
+    if ((tracker.flags & xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) != 0u) {
+      zero_vector_deadband(pose.vx, pose.vy, pose.vz, cfg.tracker_velocity_threshold_mps);
+    }
+    zero_vector_deadband(pose.wx, pose.wy, pose.wz, cfg.tracker_angular_velocity_threshold_radps);
   }
   for (uint32_t i = frame.tracker_count; i < xr_tracking::BODY_TRACKER_MAX_TRACKERS; ++i) {
     tracker_positions_[i].reset();
@@ -400,6 +449,27 @@ void RuntimeJitterFilter::filter_hand(xr_runtime::HandTrackingFrameF64V1& hand) 
 
 void RuntimeJitterFilter::filter_body_trackers(xr_tracking::BodyTrackerSetFrameF32V1& frame) {
   body_.filter(frame, cfg_);
+}
+
+void RuntimeJitterFilter::filter_runtime_controller_state(
+    xr_runtime::RuntimeControllerStateFrameV1& frame) {
+  if (!tracker_filter_enabled(cfg_)) return;
+  zero_vector_deadband(frame.left.linear_velocity[0],
+                       frame.left.linear_velocity[1],
+                       frame.left.linear_velocity[2],
+                       cfg_.tracker_velocity_threshold_mps);
+  zero_vector_deadband(frame.right.linear_velocity[0],
+                       frame.right.linear_velocity[1],
+                       frame.right.linear_velocity[2],
+                       cfg_.tracker_velocity_threshold_mps);
+  zero_vector_deadband(frame.left.angular_velocity[0],
+                       frame.left.angular_velocity[1],
+                       frame.left.angular_velocity[2],
+                       cfg_.tracker_angular_velocity_threshold_radps);
+  zero_vector_deadband(frame.right.angular_velocity[0],
+                       frame.right.angular_velocity[1],
+                       frame.right.angular_velocity[2],
+                       cfg_.tracker_angular_velocity_threshold_radps);
 }
 
 }  // namespace xr_runtime_adapter::jitter_filter
