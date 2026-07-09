@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 #include <xr_runtime/registry/runtime_paths.hpp>
@@ -38,27 +39,49 @@ nlohmann::json fp_to_json(const DeviceFingerprint& fp) {
   };
 }
 
-DeviceFingerprint fp_from_json(const nlohmann::json& j) {
-  DeviceFingerprint fp;
-  fp.platform = j.value("platform", "linux");
-  fp.backend = j.value("backend", "evdev");
-  fp.event_path = j.value("event_path", "");
-  fp.by_id_path = j.value("by_id_path", "");
-  fp.by_path = j.value("by_path", "");
-  fp.name = j.value("name", "");
-  fp.phys = j.value("phys", "");
-  fp.uniq = j.value("uniq", "");
-  fp.bustype = j.value("bustype", 0u);
-  fp.vendor = j.value("vendor", 0u);
-  fp.product = j.value("product", 0u);
-  fp.version = j.value("version", 0u);
-  if (j.contains("stable_hash")) {
-    if (j["stable_hash"].is_string()) {
-      fp.stable_hash = std::stoull(j["stable_hash"].get<std::string>(), nullptr, 16);
-    } else {
-      fp.stable_hash = j.value("stable_hash", 0ull);
+std::string json_string_or(const nlohmann::json& j, const char* key, const std::string& fallback = {}) {
+  if (!j.contains(key) || j.at(key).is_null()) return fallback;
+  if (j.at(key).is_string()) return j.at(key).get<std::string>();
+  return fallback;
+}
+
+uint16_t json_u16_or(const nlohmann::json& j, const char* key, uint16_t fallback = 0) {
+  if (!j.contains(key) || j.at(key).is_null()) return fallback;
+  if (!j.at(key).is_number_integer() && !j.at(key).is_number_unsigned()) return fallback;
+  return static_cast<uint16_t>(j.at(key).get<unsigned int>());
+}
+
+uint64_t json_u64_or(const nlohmann::json& j, const char* key, uint64_t fallback = 0) {
+  if (!j.contains(key) || j.at(key).is_null()) return fallback;
+  const auto& v = j.at(key);
+  if (v.is_string()) {
+    const std::string raw = v.get<std::string>();
+    if (raw.empty()) return fallback;
+    try {
+      return std::stoull(raw, nullptr, 16);
+    } catch (...) {
+      return fallback;
     }
   }
+  if (v.is_number_integer() || v.is_number_unsigned()) return v.get<uint64_t>();
+  return fallback;
+}
+
+DeviceFingerprint fp_from_json(const nlohmann::json& j) {
+  DeviceFingerprint fp;
+  fp.platform = json_string_or(j, "platform", "linux");
+  fp.backend = json_string_or(j, "backend", "evdev");
+  fp.event_path = json_string_or(j, "event_path", "");
+  fp.by_id_path = json_string_or(j, "by_id_path", "");
+  fp.by_path = json_string_or(j, "by_path", "");
+  fp.name = json_string_or(j, "name", "");
+  fp.phys = json_string_or(j, "phys", "");
+  fp.uniq = json_string_or(j, "uniq", "");
+  fp.bustype = json_u16_or(j, "bustype", 0);
+  fp.vendor = json_u16_or(j, "vendor", 0);
+  fp.product = json_u16_or(j, "product", 0);
+  fp.version = json_u16_or(j, "version", 0);
+  fp.stable_hash = json_u64_or(j, "stable_hash", 0);
   return fp;
 }
 
@@ -135,6 +158,104 @@ nlohmann::json action_list_to_json(const std::vector<ControllerAction>& actions)
   return out;
 }
 
+
+nlohmann::json config_device_to_json(const ConfigDevice& d) {
+  nlohmann::json j = fp_to_json(d.fingerprint);
+  j["id"] = d.id;
+  return j;
+}
+
+ConfigDevice config_device_from_json(const nlohmann::json& j, int fallback_id) {
+  ConfigDevice d;
+  d.id = j.value("id", fallback_id);
+  d.fingerprint = fp_from_json(j);
+  return d;
+}
+
+DeviceFingerprint* find_config_device(AppConfig& cfg, int id) {
+  for (auto& d : cfg.devices) {
+    if (d.id == id) return &d.fingerprint;
+  }
+  return nullptr;
+}
+
+const DeviceFingerprint* find_config_device(const AppConfig& cfg, int id) {
+  for (const auto& d : cfg.devices) {
+    if (d.id == id) return &d.fingerprint;
+  }
+  return nullptr;
+}
+
+bool fingerprint_same_config_device(const DeviceFingerprint& a, const DeviceFingerprint& b) {
+  // Config device IDs must represent concrete physical input nodes, not just
+  // device models. Two identical controllers often share stable_hash, name,
+  // vendor/product/bustype, so those fields must not be used for de-dup here.
+  //
+  // Linux/Bluetooth note: evdev `phys` may identify the host adapter path rather
+  // than the concrete controller. Two VR-PARK controllers can therefore have the
+  // same phys value while their `uniq` values differ. Treat phys only as a weak
+  // fallback when no stronger field conflicts.
+  bool strong_conflict = false;
+  if (!a.uniq.empty() && !b.uniq.empty()) {
+    if (a.uniq == b.uniq) return true;
+    strong_conflict = true;
+  }
+  if (!a.by_id_path.empty() && !b.by_id_path.empty()) {
+    if (a.by_id_path == b.by_id_path) return true;
+    strong_conflict = true;
+  }
+  if (!a.by_path.empty() && !b.by_path.empty()) {
+    if (a.by_path == b.by_path) return true;
+    strong_conflict = true;
+  }
+  if (!a.event_path.empty() && !b.event_path.empty()) {
+    if (a.event_path == b.event_path) return true;
+    strong_conflict = true;
+  }
+
+  if (strong_conflict) return false;
+  if (!a.phys.empty() && !b.phys.empty() && a.phys == b.phys) return true;
+
+  // No stable per-device identity is available. Keep devices separate instead
+  // of merging same-name/same-model controllers. --connect-devices can later
+  // update name-only template devices with real fingerprints.
+  return false;
+}
+
+int ensure_config_device(AppConfig& cfg, const DeviceFingerprint& fp) {
+  for (const auto& d : cfg.devices) {
+    if (fingerprint_same_config_device(d.fingerprint, fp)) return d.id;
+  }
+  int next_id = 1;
+  for (const auto& d : cfg.devices) next_id = std::max(next_id, d.id + 1);
+  ConfigDevice d;
+  d.id = next_id;
+  d.fingerprint = fp;
+  cfg.devices.push_back(d);
+  return d.id;
+}
+
+void hydrate_binding_device(AppConfig& cfg, BindingConfig& b) {
+  if (b.device_id > 0) {
+    if (DeviceFingerprint* fp = find_config_device(cfg, b.device_id)) {
+      b.device = *fp;
+      return;
+    }
+  }
+  b.device_id = ensure_config_device(cfg, b.device);
+}
+
+void hydrate_switch_device(AppConfig& cfg) {
+  if (!cfg.layout_switch.enabled) return;
+  if (cfg.layout_switch.device_id > 0) {
+    if (DeviceFingerprint* fp = find_config_device(cfg, cfg.layout_switch.device_id)) {
+      cfg.layout_switch.device = *fp;
+      return;
+    }
+  }
+  cfg.layout_switch.device_id = ensure_config_device(cfg, cfg.layout_switch.device);
+}
+
 }  // namespace
 
 fs::path default_config_dir() {
@@ -205,14 +326,33 @@ AppConfig load_config_file(const fs::path& path) {
   cfg.input.button_pulse_startup_types = action_list_from_json(input, "button_pulse_startup_types");
   cfg.input.hold_toggle_debounce_ms = input.value("hold_toggle_debounce_ms", 1500u);
 
-  const auto binding_from_json = [](const nlohmann::json& bj) {
+  int fallback_device_id = 1;
+  for (const auto& dj : j.value("devices", nlohmann::json::array())) {
+    ConfigDevice d = config_device_from_json(dj, fallback_device_id++);
+    if (d.id > 0) cfg.devices.push_back(std::move(d));
+  }
+
+  const auto binding_from_json = [&](const nlohmann::json& bj) {
     BindingConfig b;
     b.side = parse_side(bj.value("side", "left"));
     b.action = parse_action(bj.value("action", "trigger"));
-    b.device = fp_from_json(bj.at("device"));
+    b.device_id = bj.value("device_id", 0);
+    if (bj.contains("device")) {
+      b.device = fp_from_json(bj.at("device"));
+    }
     b.input = input_from_json(bj.at("input"));
+    hydrate_binding_device(cfg, b);
     return b;
   };
+
+  if (j.contains("layout_switch") && j.at("layout_switch").is_object()) {
+    const auto& sj = j.at("layout_switch");
+    cfg.layout_switch.enabled = sj.value("enabled", false);
+    cfg.layout_switch.device_id = sj.value("device_id", 0);
+    if (sj.contains("device")) cfg.layout_switch.device = fp_from_json(sj.at("device"));
+    if (sj.contains("input")) cfg.layout_switch.input = input_from_json(sj.at("input"));
+    hydrate_switch_device(cfg);
+  }
 
   for (const auto& bj : j.value("bindings", nlohmann::json::array())) {
     cfg.bindings.push_back(binding_from_json(bj));
@@ -220,6 +360,14 @@ AppConfig load_config_file(const fs::path& path) {
 
   for (const auto& bj : j.value("hold_toggle_bindings", nlohmann::json::array())) {
     cfg.hold_toggle_bindings.push_back(binding_from_json(bj));
+  }
+
+  for (const auto& bj : j.value("alternative_bindings", nlohmann::json::array())) {
+    cfg.alternative_bindings.push_back(binding_from_json(bj));
+  }
+
+  for (const auto& bj : j.value("alternative_hold_toggle_bindings", nlohmann::json::array())) {
+    cfg.alternative_hold_toggle_bindings.push_back(binding_from_json(bj));
   }
   return cfg;
 }
@@ -259,11 +407,26 @@ void save_config_file(const AppConfig& cfg, const fs::path& path) {
       {"button_pulse_startup_types", action_list_to_json(cfg.input.button_pulse_startup_types)},
       {"hold_toggle_debounce_ms", cfg.input.hold_toggle_debounce_ms},
   };
+  j["devices"] = nlohmann::json::array();
+  for (const auto& d : cfg.devices) {
+    j["devices"].push_back(config_device_to_json(d));
+  }
+
+  if (cfg.layout_switch.enabled) {
+    j["layout_switch"] = {
+        {"enabled", true},
+        {"device_id", cfg.layout_switch.device_id},
+        {"input", input_to_json(cfg.layout_switch.input)},
+    };
+  } else {
+    j["layout_switch"] = {{"enabled", false}};
+  }
+
   const auto binding_to_json = [](const BindingConfig& b) {
     return nlohmann::json({
         {"side", to_string(b.side)},
         {"action", to_string(b.action)},
-        {"device", fp_to_json(b.device)},
+        {"device_id", b.device_id},
         {"input", input_to_json(b.input)},
     });
   };
@@ -276,6 +439,16 @@ void save_config_file(const AppConfig& cfg, const fs::path& path) {
   j["hold_toggle_bindings"] = nlohmann::json::array();
   for (const auto& b : cfg.hold_toggle_bindings) {
     j["hold_toggle_bindings"].push_back(binding_to_json(b));
+  }
+
+  j["alternative_bindings"] = nlohmann::json::array();
+  for (const auto& b : cfg.alternative_bindings) {
+    j["alternative_bindings"].push_back(binding_to_json(b));
+  }
+
+  j["alternative_hold_toggle_bindings"] = nlohmann::json::array();
+  for (const auto& b : cfg.alternative_hold_toggle_bindings) {
+    j["alternative_hold_toggle_bindings"].push_back(binding_to_json(b));
   }
 
   if (!path.parent_path().empty()) fs::create_directories(path.parent_path());

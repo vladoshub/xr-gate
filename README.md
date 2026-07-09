@@ -153,12 +153,34 @@ Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime con
 
 You can use 2 identical Bluetooth controllers.
 
+Train your devices:
+
 ```bash
 cd ~/xr-gate-release/xreal_ultra
 devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
 ```
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
+
+
+Or if you have VR-PARK controllers you can use this config:
+
+Copy config:
+
+```bash
+mkdir -p "$HOME/.config/xr_tracking/override_controller"
+
+cp ~/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpark.json \
+   "$HOME/.config/xr_tracking/override_controller/default.json"
+```
+
+Pair your controllers:
+```bash
+~/xr-gate-release/xreal_ultra/bin/override_controller/override_controller \
+  --config "$HOME/.config/xr_tracking/override_controller/default.json" \
+  --connect-devices
+```
+
 If you want to retrain, you can delete default.json for new train
 
 If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)

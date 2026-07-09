@@ -134,6 +134,17 @@ cmake --build "$BUILD_DIR" --target override_controller -j"$BUILD_JOBS"
 cp "$BUILD_DIR/override_controller" "$INSTALL_BIN_DIR/override_controller"
 chmod +x "$INSTALL_BIN_DIR/override_controller"
 
+CONFIGS_SRC_DIR="$BACKEND_DIR/configs"
+if [[ -d "$CONFIGS_SRC_DIR" ]]; then
+  mkdir -p "$INSTALL_BIN_DIR/configs"
+  while IFS= read -r -d '' cfg; do
+    cp -f "$cfg" "$INSTALL_BIN_DIR/configs/"
+    log "installed bundled config: $INSTALL_BIN_DIR/configs/$(basename "$cfg")"
+  done < <(find "$CONFIGS_SRC_DIR" -maxdepth 1 -type f -name '*.json' -print0 | sort -z)
+else
+  log "skip bundled configs: $CONFIGS_SRC_DIR not found"
+fi
+
 
 cat <<EOF2
 

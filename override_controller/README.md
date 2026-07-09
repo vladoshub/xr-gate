@@ -65,3 +65,23 @@ xinput
 ```
 
 Raw mouse movement is emitted as relative axes. Raw HID reports are exposed as bit-level key events (`RAW_HID_BIT_N`) using report-byte diffs; this is intentionally generic and should be replaced later with HID usage parsing if a specific controller needs semantic names.
+
+## Alternative layout
+
+During `--train`, the first optional prompt can capture one physical button as a global layout switch. If configured, the normal layout is trained first, and the trainer then offers an alternative layout. The alternative layout has the same structure as the default layout: normal bindings plus optional long-press toggle bindings.
+
+At runtime, a normal press on the layout switch toggles between the default and alternative layouts for both controller sides at once. The switch button is reserved during training and is not accepted as a controller action binding.
+
+## Config device registry and reconnect
+
+New configs store device fingerprints once in a top-level `devices` list. Bindings reference the device by `device_id` instead of duplicating the full device fingerprint in every action.
+
+Existing configs with inline `device` blocks are still readable. When they are saved again, they are normalized to the `devices` / `device_id` format.
+
+To update device fingerprints after Bluetooth reconnects, event path changes, or when a default config only has device names:
+
+```bash
+./override_controller --config ~/.config/xr_tracking/override_controller/default.json --connect-devices
+```
+
+The command lists currently readable input devices, shows the devices used by the config with their `left` / `right` usage, and asks you to press any button on each configured physical device. It then writes the refreshed device fingerprints back to the config.

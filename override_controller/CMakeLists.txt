@@ -74,3 +74,19 @@ endif()
 install(TARGETS override_controller
   RUNTIME DESTINATION bin/override_controller
 )
+
+set(OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/configs")
+if(EXISTS "${OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR}")
+  add_custom_command(TARGET override_controller POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:override_controller>/configs"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+      "${OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR}"
+      "$<TARGET_FILE_DIR:override_controller>/configs"
+    COMMENT "Copy override_controller bundled configs next to binary"
+  )
+
+  install(DIRECTORY "${OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR}/"
+    DESTINATION bin/override_controller/configs
+    FILES_MATCHING PATTERN "*.json"
+  )
+endif()
