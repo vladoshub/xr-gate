@@ -78,9 +78,22 @@ enum class ControllerAction {
   ThumbstickY,
 };
 
+struct ConfigDevice {
+  int id = 0;
+  DeviceFingerprint fingerprint;
+};
+
 struct BindingConfig {
   ControllerSide side = ControllerSide::Left;
   ControllerAction action = ControllerAction::Trigger;
+  int device_id = 0;
+  DeviceFingerprint device;
+  InputBindingSpec input;
+};
+
+struct LayoutSwitchConfig {
+  bool enabled = false;
+  int device_id = 0;
   DeviceFingerprint device;
   InputBindingSpec input;
 };
@@ -175,12 +188,16 @@ struct AppConfig {
   std::string name = "default";
   PublishConfig publish;
   InputConfig input;
+  std::vector<ConfigDevice> devices;
+  LayoutSwitchConfig layout_switch;
   std::vector<BindingConfig> bindings;
+  std::vector<BindingConfig> alternative_bindings;
 
   // Optional alternative bindings where one click toggles a virtual long press
   // until the next click. These bindings have priority over normal bindings
   // when they use the same physical input on the same controller side.
   std::vector<BindingConfig> hold_toggle_bindings;
+  std::vector<BindingConfig> alternative_hold_toggle_bindings;
 };
 
 struct SideOutputState {

@@ -1,0 +1,541 @@
+{
+  "alternative_bindings": [
+    {
+      "action": "trigger",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 272,
+        "kind": "key",
+        "name": "BTN_LEFT",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "thumbstick_click",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 115,
+        "kind": "key",
+        "name": "KEY_115",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_up",
+      "device_id": 1,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_down",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_left",
+      "device_id": 1,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_right",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "trigger",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 272,
+        "kind": "key",
+        "name": "BTN_LEFT",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "a",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 114,
+        "kind": "key",
+        "name": "KEY_114",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "b",
+      "device_id": 2,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "right"
+    },
+    {
+      "action": "x",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "right"
+    },
+    {
+      "action": "dpad_left",
+      "device_id": 2,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "right"
+    },
+    {
+      "action": "dpad_right",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "right"
+    }
+  ],
+  "alternative_hold_toggle_bindings": [
+    {
+      "action": "trigger",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 275,
+        "kind": "key",
+        "name": "BTN_SIDE",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "trigger",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 275,
+        "kind": "key",
+        "name": "BTN_SIDE",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "grip",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 115,
+        "kind": "key",
+        "name": "KEY_115",
+        "type": 1
+      },
+      "side": "right"
+    }
+  ],
+  "bindings": [
+    {
+      "action": "trigger",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 272,
+        "kind": "key",
+        "name": "BTN_LEFT",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_up",
+      "device_id": 1,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_down",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_left",
+      "device_id": 1,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "dpad_right",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "left"
+    },
+    {
+      "action": "trigger",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 272,
+        "kind": "key",
+        "name": "BTN_LEFT",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "thumbstick_click",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 114,
+        "kind": "key",
+        "name": "KEY_114",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "dpad_up",
+      "device_id": 2,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "right"
+    },
+    {
+      "action": "dpad_down",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 1,
+        "kind": "rel_axis",
+        "name": "REL_Y",
+        "type": 2
+      },
+      "side": "right"
+    },
+    {
+      "action": "dpad_left",
+      "device_id": 2,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "right"
+    },
+    {
+      "action": "dpad_right",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 0,
+        "kind": "rel_axis",
+        "name": "REL_X",
+        "type": 2
+      },
+      "side": "right"
+    }
+  ],
+  "devices": [
+    {
+      "backend": "evdev",
+      "bustype": 5,
+      "by_id_path": "",
+      "by_path": "",
+      "event_path": null,
+      "id": 1,
+      "name": "VR-PARK",
+      "phys": null,
+      "platform": "linux",
+      "product": null,
+      "stable_hash": null,
+      "uniq": null,
+      "vendor": null,
+      "version": null
+    },
+    {
+      "backend": "evdev",
+      "bustype": 5,
+      "by_id_path": "",
+      "by_path": "",
+      "event_path": null,
+      "id": 2,
+      "name": "VR-PARK",
+      "phys": null,
+      "platform": "linux",
+      "product": null,
+      "stable_hash": null,
+      "uniq": null,
+      "vendor": null,
+      "version": null
+    }
+  ],
+  "hold_toggle_bindings": [
+    {
+      "action": "trigger",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 275,
+        "kind": "key",
+        "name": "BTN_SIDE",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "grip",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 115,
+        "kind": "key",
+        "name": "KEY_115",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "trigger",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 275,
+        "kind": "key",
+        "name": "BTN_SIDE",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "grip",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 115,
+        "kind": "key",
+        "name": "KEY_115",
+        "type": 1
+      },
+      "side": "right"
+    }
+  ],
+  "input": {
+    "allow_shared_physical_device_sides": true,
+    "button_hold_ms": 120,
+    "button_pulse_gap_ms": 180,
+    "button_pulse_startup_ms": 0,
+    "button_pulse_startup_release_ms": 0,
+    "button_pulse_startup_types": [],
+    "button_release_grace_ms": 0,
+    "button_release_ms": 190,
+    "dpad_pulse_gap_ms": 130,
+    "dpad_release_ms": 140,
+    "event_wait_max_ms": 20,
+    "grab_devices": false,
+    "hold_toggle_debounce_ms": 1500,
+    "pulse_mode": false,
+    "reattach_devices": false,
+    "reattach_interval_ms": 1000,
+    "rel_axis_hold_ms": 160,
+    "rel_button_hold_ms": 800
+  },
+  "layout_switch": {
+    "device_id": 1,
+    "enabled": true,
+    "input": {
+      "abs_direction": 0,
+      "abs_flat": 0,
+      "abs_max": 0,
+      "abs_min": 0,
+      "code": 114,
+      "kind": "key",
+      "name": "KEY_114",
+      "type": 1
+    }
+  },
+  "name": "default",
+  "publish": {
+    "rate_hz": 90.0,
+    "registry": "/tmp/tracking_streams.json",
+    "shm_name": "controller_input",
+    "slot_count": 32,
+    "stream": "controller_input",
+    "tcp_bind_host": "127.0.0.1",
+    "tcp_port": 45672,
+    "transport": "shm",
+    "unlink_existing": true
+  },
+  "version": 1
+}
