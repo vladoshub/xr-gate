@@ -157,14 +157,8 @@ jobs:
         run: |
           df -h
           ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-
-          if [[ "${{ matrix.name }}" == "runtime" && -d override_controller/configs ]]; then
-            mkdir -p out/xreal_ultra/bin/override_controller/configs
-            find override_controller/configs -maxdepth 1 -type f -name '*.json' -print -exec cp -f {} out/xreal_ultra/bin/override_controller/configs/ \;
-          fi
-
           du -sh out/xreal_ultra || true
-          find out/xreal_ultra -maxdepth 5 -type f | sort | head -200
+          find out/xreal_ultra -maxdepth 4 -type f | sort | head -200
 
       - name: Archive partial package
         run: |
