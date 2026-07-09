@@ -2005,9 +2005,15 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
         const float binding_value = value_for_binding(b.cfg, ev->value);
         if (cfg.input.pulse_mode) {
           const int64_t pulse_ns = pulse_release_ns_for_binding(cfg.input, b.cfg);
-          if (binding_is_rel_button_like(b.cfg) && is_dpad_action(b.cfg.action)) {
+          if (binding_is_rel_button_like(b.cfg)) {
+            // EV_REL inputs are pulses even when they are mapped to non-D-pad
+            // virtual actions such as thumbstick_click, A/B, grip, or menu.
+            // Use the short D-pad pulse window for all button-like REL inputs;
+            // otherwise non-D-pad mappings fall back to rel_button_hold_ms
+            // (800 ms by default) and feel delayed/sticky compared to D-pad
+            // mappings.
             hold_ns = dpad_pulse_window_ns;
-          } else if (!binding_is_rel_button_like(b.cfg) && pulse_ns > 0) {
+          } else if (pulse_ns > 0) {
             release_grace_ns = button_pulse_grace_ns_for_event(cfg.input, b, ev->timestamp_ns, binding_value, pulse_ns);
           }
         }
