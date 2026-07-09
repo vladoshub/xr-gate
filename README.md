@@ -181,6 +181,12 @@ Pair your controllers:
   --connect-devices
 ```
 
+Enable auto-start override_controller in client:
+```bash
+CFG="$HOME/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json"
+sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
+```
+
 If you want to retrain, you can delete default.json for new train
 
 If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
