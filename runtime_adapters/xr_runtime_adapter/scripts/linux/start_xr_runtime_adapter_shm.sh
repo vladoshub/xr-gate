@@ -140,10 +140,23 @@ RUNTIME_JITTER_FILTER_HMD_CM="${RUNTIME_JITTER_FILTER_HMD_CM:-0.15}" # HMD posit
 RUNTIME_JITTER_FILTER_TRACKER_CM="${RUNTIME_JITTER_FILTER_TRACKER_CM:-0.25}" # tracker/hand position jitter deadband in cm
 RUNTIME_JITTER_FILTER_HMD_DEG="${RUNTIME_JITTER_FILTER_HMD_DEG:-0.10}" # HMD orientation jitter deadband in degrees
 RUNTIME_JITTER_FILTER_TRACKER_DEG="${RUNTIME_JITTER_FILTER_TRACKER_DEG:-1.0}" # tracker/hand orientation jitter deadband in degrees
+
+
 RUNTIME_JITTER_FILTER_HMD_VEL_CM_S="${RUNTIME_JITTER_FILTER_HMD_VEL_CM_S:-1.0}" # HMD linear velocity zero-deadband in cm/s
-RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S="${RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S:-5.0}" # tracker/hand linear velocity zero-deadband in cm/s
+RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S="${RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S:-2}" # tracker/hand linear velocity zero-deadband in cm/s
 RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S:-1.0}" # HMD angular velocity zero-deadband in deg/s
-RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S:-5.0}" # tracker/hand angular velocity zero-deadband in deg/s
+RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S:-5}" # tracker/hand angular velocity zero-deadband in deg/s
+
+
+RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA:-1.0}" # HMD linear velocity smoothing alpha; 1 disables, lower is smoother
+RUNTIME_JITTER_FILTER_TRACKER_VEL_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_TRACKER_VEL_SMOOTH_ALPHA:-0.70}" # tracker/hand linear velocity smoothing alpha; 1 disables, lower is smoother
+RUNTIME_JITTER_FILTER_HMD_ANG_VEL_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_ANG_VEL_SMOOTH_ALPHA:-1.0}" # HMD angular velocity smoothing alpha; 1 disables, lower is smoother
+RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_SMOOTH_ALPHA:-0.10}" # tracker/hand angular velocity smoothing alpha; 1 disables, lower is smoother
+
+RUNTIME_JITTER_FILTER_HMD_POS_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_POS_SMOOTH_ALPHA:-1.0}" # HMD position smoothing alpha; 1 disables, lower is smoother
+RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA:-0.75}" # tracker/hand position smoothing alpha; 1 disables, lower is smoother
+RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA:-1.0}" # HMD orientation smoothing alpha; 1 disables, lower is smoother
+RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA:-0.70}" # tracker/hand orientation smoothing alpha; 1 disables, lower is smoother
 
 
 # Controller locomotion space.
@@ -280,6 +293,14 @@ args=(
   --runtime-jitter-filter-tracker-vel-cm-s "$RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S"
   --runtime-jitter-filter-hmd-ang-vel-deg-s "$RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S"
   --runtime-jitter-filter-tracker-ang-vel-deg-s "$RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S"
+  --runtime-jitter-filter-hmd-vel-smooth-alpha "$RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA"
+  --runtime-jitter-filter-tracker-vel-smooth-alpha "$RUNTIME_JITTER_FILTER_TRACKER_VEL_SMOOTH_ALPHA"
+  --runtime-jitter-filter-hmd-ang-vel-smooth-alpha "$RUNTIME_JITTER_FILTER_HMD_ANG_VEL_SMOOTH_ALPHA"
+  --runtime-jitter-filter-tracker-ang-vel-smooth-alpha "$RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_SMOOTH_ALPHA"
+  --runtime-jitter-filter-hmd-pos-smooth-alpha "$RUNTIME_JITTER_FILTER_HMD_POS_SMOOTH_ALPHA"
+  --runtime-jitter-filter-tracker-pos-smooth-alpha "$RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA"
+  --runtime-jitter-filter-hmd-rot-smooth-alpha "$RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA"
+  --runtime-jitter-filter-tracker-rot-smooth-alpha "$RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA"
   --controller-input-mode "$CONTROLLER_INPUT_MODE"
   --controller-input-transport "$CONTROLLER_INPUT_TRANSPORT"
   --controller-input-registry "$CONTROLLER_INPUT_REGISTRY"
@@ -462,6 +483,14 @@ RUNTIME_JITTER_FILTER_HMD_VEL_CM_S=$RUNTIME_JITTER_FILTER_HMD_VEL_CM_S # HMD lin
 RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S=$RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S # tracker/hand linear velocity zero-deadband in cm/s
 RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S=$RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S # HMD angular velocity zero-deadband in deg/s
 RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S=$RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S # tracker/hand angular velocity zero-deadband in deg/s
+RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA # HMD linear velocity smoothing alpha
+RUNTIME_JITTER_FILTER_TRACKER_VEL_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_TRACKER_VEL_SMOOTH_ALPHA # tracker/hand linear velocity smoothing alpha
+RUNTIME_JITTER_FILTER_HMD_ANG_VEL_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_HMD_ANG_VEL_SMOOTH_ALPHA # HMD angular velocity smoothing alpha
+RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_SMOOTH_ALPHA # tracker/hand angular velocity smoothing alpha
+RUNTIME_JITTER_FILTER_HMD_POS_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_HMD_POS_SMOOTH_ALPHA # HMD position smoothing alpha
+RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA # tracker/hand position smoothing alpha
+RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA # HMD orientation smoothing alpha
+RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA # tracker/hand orientation smoothing alpha
 CONTROLLER_INPUT_MODE=$CONTROLLER_INPUT_MODE # controller/hand gesture merge mode
 CONTROLLER_INPUT_TRANSPORT=$CONTROLLER_INPUT_TRANSPORT # controller input transport
 OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT # runtime-only gesture block gate
