@@ -190,17 +190,31 @@ bool fingerprint_same_config_device(const DeviceFingerprint& a, const DeviceFing
   // Config device IDs must represent concrete physical input nodes, not just
   // device models. Two identical controllers often share stable_hash, name,
   // vendor/product/bustype, so those fields must not be used for de-dup here.
-  // Otherwise training left+right copies can collapse to one devices[] entry.
   //
-  // Important: do not fail just because event_path differs. Linux evdev paths
-  // can change after reconnect/reboot, while uniq/by-id/by-path/phys may still
-  // identify the same physical input node. Treat any strong concrete identity
-  // match as the same device; if none matches, keep devices separate.
-  if (!a.uniq.empty() && !b.uniq.empty() && a.uniq == b.uniq) return true;
-  if (!a.by_id_path.empty() && !b.by_id_path.empty() && a.by_id_path == b.by_id_path) return true;
-  if (!a.by_path.empty() && !b.by_path.empty() && a.by_path == b.by_path) return true;
+  // Linux/Bluetooth note: evdev `phys` may identify the host adapter path rather
+  // than the concrete controller. Two VR-PARK controllers can therefore have the
+  // same phys value while their `uniq` values differ. Treat phys only as a weak
+  // fallback when no stronger field conflicts.
+  bool strong_conflict = false;
+  if (!a.uniq.empty() && !b.uniq.empty()) {
+    if (a.uniq == b.uniq) return true;
+    strong_conflict = true;
+  }
+  if (!a.by_id_path.empty() && !b.by_id_path.empty()) {
+    if (a.by_id_path == b.by_id_path) return true;
+    strong_conflict = true;
+  }
+  if (!a.by_path.empty() && !b.by_path.empty()) {
+    if (a.by_path == b.by_path) return true;
+    strong_conflict = true;
+  }
+  if (!a.event_path.empty() && !b.event_path.empty()) {
+    if (a.event_path == b.event_path) return true;
+    strong_conflict = true;
+  }
+
+  if (strong_conflict) return false;
   if (!a.phys.empty() && !b.phys.empty() && a.phys == b.phys) return true;
-  if (!a.event_path.empty() && !b.event_path.empty() && a.event_path == b.event_path) return true;
 
   // No stable per-device identity is available. Keep devices separate instead
   // of merging same-name/same-model controllers. --connect-devices can later
