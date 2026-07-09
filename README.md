@@ -170,13 +170,13 @@ Copy config:
 ```bash
 mkdir -p "$HOME/.config/xr_tracking/override_controller"
 
-cp "~/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpark.json" \
+cp ~/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpark.json \
    "$HOME/.config/xr_tracking/override_controller/default.json"
 ```
 
 Pair your controllers:
 ```bash
-"~/xr-gate-release/xreal_ultra/bin/override_controller/override_controller" \
+~/xr-gate-release/xreal_ultra/bin/override_controller/override_controller \
   --config "$HOME/.config/xr_tracking/override_controller/default.json" \
   --connect-devices
 ```
