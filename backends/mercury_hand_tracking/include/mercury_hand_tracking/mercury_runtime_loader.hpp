@@ -3,6 +3,8 @@
 #include <xr_tracking/publishers/hand_tracking_shm_publisher.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -304,10 +306,81 @@ class MercuryRuntimeProcessor {
     frame.timestamp_ns = static_cast<uint64_t>(now_ns());
     frame.size_bytes = sizeof(HandTrackingFrameF32V2);
     frame.version = HAND_TRACKING_FORMAT_VERSION_V2;
+    derive_controller_velocities(frame);
     return frame;
   }
 
  private:
+  struct LastSidePose {
+    bool valid = false;
+    uint64_t timestamp_ns = 0;
+    float px = 0.0f;
+    float py = 0.0f;
+    float pz = 0.0f;
+  };
+
+  static constexpr uint32_t kHandPoseValid = 1u << 0;
+  static constexpr uint32_t kHandLinearVelocityValid = 1u << 1;
+
+  static bool finite3(float x, float y, float z) {
+    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+  }
+
+  void update_side_velocity(HandSideF32V2& side, LastSidePose& last, uint64_t timestamp_ns) {
+    const bool pose_valid = side.status != 0 && ((side.flags & kHandPoseValid) != 0u) &&
+                            finite3(side.controller_px, side.controller_py, side.controller_pz);
+    if (!pose_valid || timestamp_ns == 0) {
+      side.vx = 0.0f;
+      side.vy = 0.0f;
+      side.vz = 0.0f;
+      side.flags &= ~kHandLinearVelocityValid;
+      last = {};
+      return;
+    }
+
+    if (last.valid && timestamp_ns > last.timestamp_ns) {
+      const double dt_s = double(timestamp_ns - last.timestamp_ns) * 1e-9;
+      if (dt_s >= 1e-4 && dt_s <= 0.25) {
+        const float vx = static_cast<float>((double(side.controller_px) - double(last.px)) / dt_s);
+        const float vy = static_cast<float>((double(side.controller_py) - double(last.py)) / dt_s);
+        const float vz = static_cast<float>((double(side.controller_pz) - double(last.pz)) / dt_s);
+        if (finite3(vx, vy, vz)) {
+          side.vx = vx;
+          side.vy = vy;
+          side.vz = vz;
+          side.flags |= kHandLinearVelocityValid;
+        } else {
+          side.vx = 0.0f;
+          side.vy = 0.0f;
+          side.vz = 0.0f;
+          side.flags &= ~kHandLinearVelocityValid;
+        }
+      } else {
+        side.vx = 0.0f;
+        side.vy = 0.0f;
+        side.vz = 0.0f;
+        side.flags &= ~kHandLinearVelocityValid;
+      }
+    } else {
+      side.vx = 0.0f;
+      side.vy = 0.0f;
+      side.vz = 0.0f;
+      side.flags &= ~kHandLinearVelocityValid;
+    }
+
+    last.valid = true;
+    last.timestamp_ns = timestamp_ns;
+    last.px = side.controller_px;
+    last.py = side.controller_py;
+    last.pz = side.controller_pz;
+  }
+
+  void derive_controller_velocities(HandTrackingFrameF32V2& frame) {
+    const uint64_t timestamp_ns = frame.source_timestamp_ns != 0 ? frame.source_timestamp_ns : frame.timestamp_ns;
+    update_side_velocity(frame.left, last_side_pose_[0], timestamp_ns);
+    update_side_velocity(frame.right, last_side_pose_[1], timestamp_ns);
+  }
+
   MercuryRuntimeConfig cfg_;
   DynamicLibrary lib_;
   mercury_runtime_abi::create_fn create_ = nullptr;
@@ -315,6 +388,7 @@ class MercuryRuntimeProcessor {
   mercury_runtime_abi::process_gray8_fn process_gray8_ = nullptr;
   mercury_runtime_abi::last_error_fn last_error_ = nullptr;
   void* ctx_ = nullptr;
+  std::array<LastSidePose, 2> last_side_pose_{};
   std::string models_dir_storage_;
   std::string calib_json_storage_;
 };
