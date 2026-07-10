@@ -76,8 +76,11 @@ RUNTIME_HAND_GATE_HOLD_LOST_MS=50
 RUNTIME_HAND_GATE_PREDICT_LOST_MS=350
 RUNTIME_HAND_GATE_PREDICTION_DAMPING=0.5
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS=2.0
+RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY=0
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS=0
 ```
+
+Set `RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY=1` only when the downstream runtime should receive the decaying synthetic linear velocity as well as the already predicted pose. The default `0` avoids downstream double prediction. Angular velocity remains zero because hand orientation is held during the lost-hand prediction.
 
 For immediate inertial prediction after hand loss:
 
@@ -144,9 +147,11 @@ RUNTIME_BODY_TRACKER_HOLD_LOST_MS=150
 RUNTIME_BODY_TRACKER_PREDICT_LOST_MS=350
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS=0.8
 RUNTIME_BODY_TRACKER_PREDICTION_DAMPING=0.30
+RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY=0
+RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS=180
 ```
 
-This keeps short body tracker losses from immediately dropping the tracker. Prediction is applied per tracker, not to the whole body set.
+This keeps short body tracker losses from immediately dropping the tracker. Prediction is applied per tracker, not to the whole body set. Set `RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY=1` only when the downstream runtime should also receive the decaying synthetic linear velocity; the default `0` avoids double prediction.
 
 ## Spatial proxy mesh
 

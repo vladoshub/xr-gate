@@ -38,11 +38,12 @@ struct HandPoseStabilityFilterConfig {
   double max_continuity_velocity_mps = 1.25;
 
   // V2-only runtime smoothing. The gate still keeps the raw Mercury output safe:
-  // hold-lost plus prediction covers brief tracking loss, and confirmed reacquire blending
-  // avoids hard controller snaps after far-jump confirmation.
+  // hold-lost plus prediction covers brief tracking loss, and in-window reacquire blending
+  // continues from the latest predicted pose instead of snapping to the observed pose.
   double predict_lost_ms = 0.0;
   double max_prediction_velocity_mps = 2.0;
   double prediction_damping = 0.5;
+  bool publish_predicted_velocity = false;
   double reacquire_blend_ms = 0.0;
 
   std::string debug_csv;
@@ -152,6 +153,8 @@ class HandPoseStabilityFilter {
     os << "hand_gate_predict_lost_ms: " << cfg_.predict_lost_ms << "\n";
     os << "hand_gate_max_prediction_velocity_mps: " << cfg_.max_prediction_velocity_mps << "\n";
     os << "hand_gate_prediction_damping: " << cfg_.prediction_damping << "\n";
+    os << "hand_gate_publish_predicted_velocity: "
+       << (cfg_.publish_predicted_velocity ? "true" : "false") << "\n";
     os << "hand_gate_reacquire_blend_ms: " << cfg_.reacquire_blend_ms << "\n";
     os << "hand_gate_rows: " << stats_.rows << "\n";
     os << "hand_gate_left_orig_active: " << stats_.left_orig_active << "\n";
@@ -202,6 +205,9 @@ class HandPoseStabilityFilter {
 
     bool has_velocity = false;
     Vec3 velocity_mps{};
+
+    bool has_last_prediction = false;
+    xr_runtime::HandSideF32V2 last_prediction{};
 
     bool blend_active = false;
     xr_runtime::HandSideF32V2 blend_from{};
@@ -426,6 +432,18 @@ class HandPoseStabilityFilter {
     s.status = kHandStatusDegraded;
     s.flags |= xr_runtime::HAND_POSE_VALID;
 
+    // A held or internally predicted pose is already synthetic. Do not expose
+    // stale last-good velocity to downstream runtimes, otherwise they can
+    // extrapolate the synthetic pose a second time.
+    s.vx = 0.0f;
+    s.vy = 0.0f;
+    s.vz = 0.0f;
+    s.wx = 0.0f;
+    s.wy = 0.0f;
+    s.wz = 0.0f;
+    s.flags &= ~(xr_runtime::HAND_LINEAR_VELOCITY_VALID |
+                 xr_runtime::HAND_ANGULAR_VELOCITY_VALID);
+
     const uint64_t age_ns = source_ts >= state.last_good_source_ts
                                 ? source_ts - state.last_good_source_ts
                                 : 0;
@@ -490,18 +508,62 @@ class HandPoseStabilityFilter {
                                          const HandPoseStabilityFilterConfig& cfg,
                                          uint64_t prediction_elapsed_ns) {
     xr_runtime::HandSideF32V2 out = state.last_good;
-    const uint64_t dt_ns = std::min(prediction_elapsed_ns, predict_lost_ns(cfg));
+    const uint64_t horizon_ns = predict_lost_ns(cfg);
+    const uint64_t dt_ns = std::min(prediction_elapsed_ns, horizon_ns);
     const double dt_s = static_cast<double>(dt_ns) / 1e9;
     const double damping = std::clamp(cfg.prediction_damping, 0.0, 1.0);
     Vec3 v = state.has_velocity ? state.velocity_mps : Vec3{};
     v = clamp_velocity(v, cfg);
-    const Vec3 delta = scale(v, dt_s * damping);
+
+    // Do not extrapolate with a constant velocity for the whole lost window.
+    // The final visible hand samples are often noisy exactly when the hand is
+    // leaving the camera FOV.  Constant-velocity extrapolation can therefore
+    // overshoot and later look like the hand bounced back on reacquire.
+    // Integrate a velocity that decays linearly to zero at the end of the
+    // prediction window.  The trajectory stays monotonic and comes to rest.
+    const double progress = horizon_ns > 0
+        ? std::clamp(static_cast<double>(dt_ns) / static_cast<double>(horizon_ns), 0.0, 1.0)
+        : 1.0;
+    const double integrated_time_s = dt_s * (1.0 - 0.5 * progress);
+    const Vec3 delta = scale(v, damping * integrated_time_s);
     translate_side_v2(out, delta);
-    out.vx = static_cast<float>(v.x * damping);
-    out.vy = static_cast<float>(v.y * damping);
-    out.vz = static_cast<float>(v.z * damping);
+
     mark_degraded_hold_v2(out, source_ts, state, cfg);
+
+    // By default the predicted pose is published with zero velocity so that
+    // OpenVR/Monado cannot extrapolate it a second time.  An opt-in mode can
+    // publish the instantaneous velocity of the decelerating prediction.  This
+    // is the derivative of the trajectory above, not the stale last-good
+    // velocity, so it reaches zero at the end of the prediction window.
+    if (cfg.publish_predicted_velocity && state.has_velocity && horizon_ns > 0) {
+      const Vec3 predicted_v = scale(v, damping * (1.0 - progress));
+      out.vx = static_cast<float>(predicted_v.x);
+      out.vy = static_cast<float>(predicted_v.y);
+      out.vz = static_cast<float>(predicted_v.z);
+      out.flags |= xr_runtime::HAND_LINEAR_VELOCITY_VALID;
+    }
+
+    // Orientation is held during lost-hand prediction, so there is no matching
+    // synthetic angular trajectory to publish.
+    out.wx = 0.0f;
+    out.wy = 0.0f;
+    out.wz = 0.0f;
+    out.flags &= ~xr_runtime::HAND_ANGULAR_VELOCITY_VALID;
     return out;
+  }
+
+  static void remember_prediction_v2(HandStateV2& state,
+                                     const xr_runtime::HandSideF32V2& predicted) {
+    state.has_last_prediction = true;
+    state.last_prediction = predicted;
+  }
+
+  static bool can_blend_from_prediction_v2(const HandStateV2& state,
+                                           uint64_t source_ts,
+                                           const HandPoseStabilityFilterConfig& cfg) {
+    if (!state.has_last_prediction || reacquire_blend_ns(cfg) == 0) return false;
+    uint64_t prediction_elapsed_ns = 0;
+    return prediction_elapsed_v2(state, source_ts, cfg, prediction_elapsed_ns);
   }
 
   static xr_runtime::HandSideF32V2 blend_side_v2(const xr_runtime::HandSideF32V2& from,
@@ -512,6 +574,17 @@ class HandPoseStabilityFilter {
     out.status = t < 1.0 ? kHandStatusDegraded : to.status;
     out.flags |= xr_runtime::HAND_POSE_VALID;
     out.confidence = lerp_float(from.confidence, to.confidence, t);
+
+    // Ramp kinematic output from the synthetic prediction to the observed
+    // values together with the pose. Without this, the first blend frame uses
+    // the predicted position but the full observed velocity, which can create
+    // another visible kick in OpenVR/Monado prediction.
+    out.vx = lerp_float(from.vx, to.vx, t);
+    out.vy = lerp_float(from.vy, to.vy, t);
+    out.vz = lerp_float(from.vz, to.vz, t);
+    out.wx = lerp_float(from.wx, to.wx, t);
+    out.wy = lerp_float(from.wy, to.wy, t);
+    out.wz = lerp_float(from.wz, to.wz, t);
 
     out.controller_px = lerp_float(from.controller_px, to.controller_px, t);
     out.controller_py = lerp_float(from.controller_py, to.controller_py, t);
@@ -609,6 +682,7 @@ class HandPoseStabilityFilter {
       uint64_t prediction_elapsed_ns = 0;
       if (state.has_velocity && prediction_elapsed_v2(state, source_ts, cfg_, prediction_elapsed_ns)) {
         d.side = predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns);
+        remember_prediction_v2(state, d.side);
         d.gated_active = true;
         d.mode = "reject_velocity_predict";
         d.has_output = true;
@@ -795,6 +869,7 @@ class HandPoseStabilityFilter {
       if (t >= 1.0) {
         update_velocity_v2(state, input, source_ts, cfg_);
         state.blend_active = false;
+        state.has_last_prediction = false;
         out = input;
       }
 
@@ -815,6 +890,7 @@ class HandPoseStabilityFilter {
       state.has_pending = false;
       state.pending_count = 0;
       state.blend_active = false;
+      state.has_last_prediction = false;
 
       d.gated_active = true;
       d.mode = "accept_initial";
@@ -835,10 +911,30 @@ class HandPoseStabilityFilter {
       }
 
       if (d.jump_m <= cfg_.max_reacquire_jump_m) {
-        update_velocity_v2(state, input, source_ts, cfg_);
         state.has_pending = false;
         state.pending_count = 0;
+
+        if (can_blend_from_prediction_v2(state, source_ts, cfg_)) {
+          state.blend_active = true;
+          state.blend_from = state.last_prediction;
+          state.blend_start_ts = source_ts;
+          state.has_last_prediction = false;
+          xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, 0.0);
+          update_velocity_v2(state, out, source_ts, cfg_);
+
+          d.side = out;
+          d.gated_active = true;
+          d.mode = "accept_prediction_reacquire_blend";
+          d.has_output = true;
+          d.output = controller_v2(d.side);
+          stat_gated_active(hand_name)++;
+          stat_blended(hand_name)++;
+          return d;
+        }
+
+        update_velocity_v2(state, input, source_ts, cfg_);
         state.blend_active = false;
+        state.has_last_prediction = false;
 
         d.gated_active = true;
         d.mode = "accept_continuity";
@@ -876,17 +972,17 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
         state.pending_count = 0;
         stat_confirmed(hand_name)++;
 
-        const uint64_t blend_ns = reacquire_blend_ns(cfg_);
-        if (blend_ns > 0 && state.has_last_good) {
+        if (can_blend_from_prediction_v2(state, source_ts, cfg_)) {
           state.blend_active = true;
-          state.blend_from = state.last_good;
+          state.blend_from = state.last_prediction;
           state.blend_start_ts = source_ts;
+          state.has_last_prediction = false;
           xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, 0.0);
           update_velocity_v2(state, out, source_ts, cfg_);
 
           d.side = out;
           d.gated_active = true;
-          d.mode = "accept_confirmed_reacquire_blend";
+          d.mode = "accept_confirmed_prediction_reacquire_blend";
           d.has_output = true;
           d.output = controller_v2(d.side);
           stat_gated_active(hand_name)++;
@@ -896,6 +992,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
 
         update_velocity_v2(state, input, source_ts, cfg_);
         state.blend_active = false;
+        state.has_last_prediction = false;
 
         d.gated_active = true;
         d.mode = "accept_confirmed_reacquire";
@@ -910,6 +1007,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
         uint64_t prediction_elapsed_ns = 0;
         if (state.has_velocity && prediction_elapsed_v2(state, source_ts, cfg_, prediction_elapsed_ns)) {
           d.side = predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns);
+          remember_prediction_v2(state, d.side);
           d.gated_active = true;
           d.mode = "reject_jump_predict";
           d.has_output = true;
@@ -950,6 +1048,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
       uint64_t prediction_elapsed_ns = 0;
       if (state.has_velocity && prediction_elapsed_v2(state, source_ts, cfg_, prediction_elapsed_ns)) {
         d.side = predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns);
+        remember_prediction_v2(state, d.side);
         d.gated_active = true;
         d.mode = "predict_lost";
         d.has_output = true;

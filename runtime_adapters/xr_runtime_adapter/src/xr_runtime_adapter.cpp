@@ -2540,6 +2540,8 @@ int main(int argc, char** argv) {
   double runtime_body_tracker_max_prediction_velocity_mps = 0.8;
   double runtime_body_tracker_max_prediction_acceleration_mps2 = 0.0;
   double runtime_body_tracker_prediction_damping = 0.35;
+  bool runtime_body_tracker_publish_predicted_velocity = false;
+  double runtime_body_tracker_reacquire_blend_ms = 0.0;
   double runtime_body_tracker_prediction_publish_hz = 90.0;
   std::string runtime_body_tracker_predicted_status = "tracking";
 
@@ -2571,6 +2573,7 @@ int main(int argc, char** argv) {
   double runtime_hand_gate_predict_lost_ms = 0.0;
   double runtime_hand_gate_max_prediction_velocity_mps = 2.0;
   double runtime_hand_gate_prediction_damping = 0.5;
+  bool runtime_hand_gate_publish_predicted_velocity = false;
   double runtime_hand_gate_reacquire_blend_ms = 0.0;
   std::string runtime_hand_gate_debug_csv;
 
@@ -2579,6 +2582,18 @@ int main(int argc, char** argv) {
   double runtime_jitter_filter_tracker_cm = 0.50;
   double runtime_jitter_filter_hmd_deg = 0.15;
   double runtime_jitter_filter_tracker_deg = 0.75;
+  double runtime_jitter_filter_hmd_vel_cm_s = 1.0;
+  double runtime_jitter_filter_tracker_vel_cm_s = 5.0;
+  double runtime_jitter_filter_hmd_ang_vel_deg_s = 1.0;
+  double runtime_jitter_filter_tracker_ang_vel_deg_s = 5.0;
+  double runtime_jitter_filter_hmd_vel_smooth_alpha = 1.0;
+  double runtime_jitter_filter_tracker_vel_smooth_alpha = 1.0;
+  double runtime_jitter_filter_hmd_ang_vel_smooth_alpha = 1.0;
+  double runtime_jitter_filter_tracker_ang_vel_smooth_alpha = 1.0;
+  double runtime_jitter_filter_hmd_pos_smooth_alpha = 1.0;
+  double runtime_jitter_filter_tracker_pos_smooth_alpha = 1.0;
+  double runtime_jitter_filter_hmd_rot_smooth_alpha = 1.0;
+  double runtime_jitter_filter_tracker_rot_smooth_alpha = 1.0;
 
   std::string derived_thumbs_up_button = "a";
   std::string derived_index_point_button = "b";
@@ -2953,6 +2968,10 @@ int main(int argc, char** argv) {
                  "Cap body tracker prediction velocity change in metres per second squared; <=0 disables acceleration clamp");
   app.add_option("--runtime-body-tracker-prediction-damping", runtime_body_tracker_prediction_damping,
                  "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
+  app.add_option("--runtime-body-tracker-publish-predicted-velocity", runtime_body_tracker_publish_predicted_velocity,
+                 "Publish decaying linear velocity with predicted body tracker poses; false avoids downstream double prediction");
+  app.add_option("--runtime-body-tracker-reacquire-blend-ms", runtime_body_tracker_reacquire_blend_ms,
+                 "Blend body tracker pose from the last predicted pose when tracking returns during the prediction window; 0 disables");
   app.add_option("--runtime-body-tracker-prediction-publish-hz", runtime_body_tracker_prediction_publish_hz,
                  "Synthetic runtime body tracker publish rate while source stream is stale; <=0 publishes every poll");
   app.add_option("--runtime-body-tracker-predicted-status", runtime_body_tracker_predicted_status,
@@ -3011,8 +3030,10 @@ int main(int argc, char** argv) {
                  "Runtime hand gate: clamp predicted lost-hand linear velocity in meters/second");
   app.add_option("--runtime-hand-gate-prediction-damping", runtime_hand_gate_prediction_damping,
                  "Runtime hand gate: prediction damping factor in 0..1 before applying lost-hand velocity");
+  app.add_option("--runtime-hand-gate-publish-predicted-velocity", runtime_hand_gate_publish_predicted_velocity,
+                 "Runtime hand gate: publish decaying linear velocity with predicted hand poses; false avoids downstream double prediction");
   app.add_option("--runtime-hand-gate-reacquire-blend-ms", runtime_hand_gate_reacquire_blend_ms,
-                 "Runtime hand gate: blend duration after confirmed far reacquire; 0 disables");
+                 "Runtime hand gate: blend from the latest predicted pose when tracking returns during prediction; 0 disables");
   app.add_option("--runtime-hand-gate-debug-csv", runtime_hand_gate_debug_csv,
                  "Runtime hand gate: optional CSV path for gate decisions");
 
@@ -3026,6 +3047,30 @@ int main(int argc, char** argv) {
                  "Runtime jitter filter HMD orientation deadband in degrees; <=0 disables HMD orientation deadband");
   app.add_option("--runtime-jitter-filter-tracker-deg", runtime_jitter_filter_tracker_deg,
                  "Runtime jitter filter hand/body tracker orientation deadband in degrees; <=0 disables tracker orientation deadband");
+  app.add_option("--runtime-jitter-filter-hmd-vel-cm-s", runtime_jitter_filter_hmd_vel_cm_s,
+                 "Runtime jitter filter HMD linear velocity zero-deadband in centimeters per second; <=0 disables HMD velocity deadband");
+  app.add_option("--runtime-jitter-filter-tracker-vel-cm-s", runtime_jitter_filter_tracker_vel_cm_s,
+                 "Runtime jitter filter hand/body tracker linear velocity zero-deadband in centimeters per second; <=0 disables tracker velocity deadband");
+  app.add_option("--runtime-jitter-filter-hmd-ang-vel-deg-s", runtime_jitter_filter_hmd_ang_vel_deg_s,
+                 "Runtime jitter filter HMD angular velocity zero-deadband in degrees per second; <=0 disables HMD angular velocity deadband");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-deg-s", runtime_jitter_filter_tracker_ang_vel_deg_s,
+                 "Runtime jitter filter hand/body tracker angular velocity zero-deadband in degrees per second; <=0 disables tracker angular velocity deadband");
+  app.add_option("--runtime-jitter-filter-hmd-vel-smooth-alpha", runtime_jitter_filter_hmd_vel_smooth_alpha,
+                 "Runtime jitter filter HMD linear velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-vel-smooth-alpha", runtime_jitter_filter_tracker_vel_smooth_alpha,
+                 "Runtime jitter filter hand/body tracker linear velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-hmd-ang-vel-smooth-alpha", runtime_jitter_filter_hmd_ang_vel_smooth_alpha,
+                 "Runtime jitter filter HMD angular velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-smooth-alpha", runtime_jitter_filter_tracker_ang_vel_smooth_alpha,
+                 "Runtime jitter filter hand/body tracker angular velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-hmd-pos-smooth-alpha", runtime_jitter_filter_hmd_pos_smooth_alpha,
+                 "Runtime jitter filter HMD position EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-pos-smooth-alpha", runtime_jitter_filter_tracker_pos_smooth_alpha,
+                 "Runtime jitter filter hand/body tracker position EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-hmd-rot-smooth-alpha", runtime_jitter_filter_hmd_rot_smooth_alpha,
+                 "Runtime jitter filter HMD orientation SLERP smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-rot-smooth-alpha", runtime_jitter_filter_tracker_rot_smooth_alpha,
+                 "Runtime jitter filter hand/body tracker orientation SLERP smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
 
   app.add_option("--derived-thumbs-up-button", derived_thumbs_up_button,
                  "Runtime button mapped from visually-derived thumbs_up: none, a, b, menu, thumbstick, trigger, grip");
@@ -3285,6 +3330,9 @@ int main(int argc, char** argv) {
       std::cout << "[xr_runtime_adapter] warning: runtime body tracker stability gate is enabled but "
                 << "--publish-runtime-body-trackers-shm is disabled; gate has no runtime output to publish\n";
     }
+    if (runtime_body_tracker_reacquire_blend_ms < 0.0) {
+      throw std::runtime_error("--runtime-body-tracker-reacquire-blend-ms must be >= 0");
+    }
     if (runtime_body_tracker_prediction_publish_hz < 0.0) {
       throw std::runtime_error("--runtime-body-tracker-prediction-publish-hz must be >= 0");
     }
@@ -3369,6 +3417,9 @@ int main(int argc, char** argv) {
         std::cout << "runtime_body_tracker_max_prediction_velocity_mps: " << runtime_body_tracker_max_prediction_velocity_mps << "\n";
         std::cout << "runtime_body_tracker_max_prediction_acceleration_mps2: " << runtime_body_tracker_max_prediction_acceleration_mps2 << "\n";
         std::cout << "runtime_body_tracker_prediction_damping: " << runtime_body_tracker_prediction_damping << "\n";
+        std::cout << "runtime_body_tracker_publish_predicted_velocity: "
+                  << (runtime_body_tracker_publish_predicted_velocity ? "true" : "false") << "\n";
+        std::cout << "runtime_body_tracker_reacquire_blend_ms: " << runtime_body_tracker_reacquire_blend_ms << "\n";
         std::cout << "runtime_body_tracker_prediction_publish_hz: " << runtime_body_tracker_prediction_publish_hz << "\n";
         std::cout << "runtime_body_tracker_predicted_status: " << runtime_body_tracker_predicted_status << "\n";
       }
@@ -3423,6 +3474,8 @@ int main(int argc, char** argv) {
       std::cout << "runtime_hand_gate_predict_lost_ms: " << runtime_hand_gate_predict_lost_ms << "\n";
       std::cout << "runtime_hand_gate_max_prediction_velocity_mps: " << runtime_hand_gate_max_prediction_velocity_mps << "\n";
       std::cout << "runtime_hand_gate_prediction_damping: " << runtime_hand_gate_prediction_damping << "\n";
+      std::cout << "runtime_hand_gate_publish_predicted_velocity: "
+                << (runtime_hand_gate_publish_predicted_velocity ? "true" : "false") << "\n";
       std::cout << "runtime_hand_gate_reacquire_blend_ms: " << runtime_hand_gate_reacquire_blend_ms << "\n";
       if (!runtime_hand_gate_debug_csv.empty()) {
         std::cout << "runtime_hand_gate_debug_csv: " << runtime_hand_gate_debug_csv << "\n";
@@ -3434,6 +3487,18 @@ int main(int argc, char** argv) {
       std::cout << "runtime_jitter_filter_tracker_cm: " << runtime_jitter_filter_tracker_cm << "\n";
       std::cout << "runtime_jitter_filter_hmd_deg: " << runtime_jitter_filter_hmd_deg << "\n";
       std::cout << "runtime_jitter_filter_tracker_deg: " << runtime_jitter_filter_tracker_deg << "\n";
+      std::cout << "runtime_jitter_filter_hmd_vel_cm_s: " << runtime_jitter_filter_hmd_vel_cm_s << "\n";
+      std::cout << "runtime_jitter_filter_tracker_vel_cm_s: " << runtime_jitter_filter_tracker_vel_cm_s << "\n";
+      std::cout << "runtime_jitter_filter_hmd_ang_vel_deg_s: " << runtime_jitter_filter_hmd_ang_vel_deg_s << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_deg_s: " << runtime_jitter_filter_tracker_ang_vel_deg_s << "\n";
+      std::cout << "runtime_jitter_filter_hmd_vel_smooth_alpha: " << runtime_jitter_filter_hmd_vel_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_tracker_vel_smooth_alpha: " << runtime_jitter_filter_tracker_vel_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_hmd_ang_vel_smooth_alpha: " << runtime_jitter_filter_hmd_ang_vel_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_smooth_alpha: " << runtime_jitter_filter_tracker_ang_vel_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_hmd_pos_smooth_alpha: " << runtime_jitter_filter_hmd_pos_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_tracker_pos_smooth_alpha: " << runtime_jitter_filter_tracker_pos_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_hmd_rot_smooth_alpha: " << runtime_jitter_filter_hmd_rot_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_tracker_rot_smooth_alpha: " << runtime_jitter_filter_tracker_rot_smooth_alpha << "\n";
     }
     std::cout << "derived_thumbs_up_button: " << derived_thumbs_up_button << "\n";
     std::cout << "derived_index_point_button: " << derived_index_point_button << "\n";
@@ -3776,12 +3841,26 @@ int main(int argc, char** argv) {
       cfg.jitter_filter.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
       cfg.jitter_filter.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
       cfg.jitter_filter.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
+      cfg.jitter_filter.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
+      cfg.jitter_filter.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.hmd_velocity_smooth_alpha = runtime_jitter_filter_hmd_vel_smooth_alpha;
+      cfg.jitter_filter.tracker_velocity_smooth_alpha = runtime_jitter_filter_tracker_vel_smooth_alpha;
+      cfg.jitter_filter.hmd_angular_velocity_smooth_alpha = runtime_jitter_filter_hmd_ang_vel_smooth_alpha;
+      cfg.jitter_filter.tracker_angular_velocity_smooth_alpha = runtime_jitter_filter_tracker_ang_vel_smooth_alpha;
+      cfg.jitter_filter.hmd_position_smooth_alpha = runtime_jitter_filter_hmd_pos_smooth_alpha;
+      cfg.jitter_filter.tracker_position_smooth_alpha = runtime_jitter_filter_tracker_pos_smooth_alpha;
+      cfg.jitter_filter.hmd_orientation_smooth_alpha = runtime_jitter_filter_hmd_rot_smooth_alpha;
+      cfg.jitter_filter.tracker_orientation_smooth_alpha = runtime_jitter_filter_tracker_rot_smooth_alpha;
       cfg.stability_gate.enabled = runtime_body_tracker_stability_gate;
       cfg.stability_gate.hold_lost_ms = runtime_body_tracker_hold_lost_ms;
       cfg.stability_gate.predict_lost_ms = runtime_body_tracker_predict_lost_ms;
       cfg.stability_gate.max_prediction_velocity_mps = runtime_body_tracker_max_prediction_velocity_mps;
       cfg.stability_gate.max_prediction_acceleration_mps2 = runtime_body_tracker_max_prediction_acceleration_mps2;
       cfg.stability_gate.prediction_damping = runtime_body_tracker_prediction_damping;
+      cfg.stability_gate.publish_predicted_velocity = runtime_body_tracker_publish_predicted_velocity;
+      cfg.stability_gate.reacquire_blend_ms = runtime_body_tracker_reacquire_blend_ms;
       cfg.stability_gate.synthetic_publish_hz = runtime_body_tracker_prediction_publish_hz;
       cfg.stability_gate.predicted_status = runtime_body_tracker_predicted_status_value;
       body_tracker_thread = std::make_unique<BodyTrackerInputThread>(std::move(cfg));
@@ -3951,6 +4030,7 @@ int main(int argc, char** argv) {
       gate_cfg.predict_lost_ms = runtime_hand_gate_predict_lost_ms;
       gate_cfg.max_prediction_velocity_mps = runtime_hand_gate_max_prediction_velocity_mps;
       gate_cfg.prediction_damping = runtime_hand_gate_prediction_damping;
+      gate_cfg.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       gate_cfg.reacquire_blend_ms = runtime_hand_gate_reacquire_blend_ms;
       gate_cfg.debug_csv = runtime_hand_gate_debug_csv;
       runtime_hand_stability_filter.configure(std::move(gate_cfg));
@@ -3962,6 +4042,18 @@ int main(int argc, char** argv) {
     runtime_jitter_filter_cfg.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
     runtime_jitter_filter_cfg.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
     runtime_jitter_filter_cfg.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
+    runtime_jitter_filter_cfg.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
+    runtime_jitter_filter_cfg.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
+    runtime_jitter_filter_cfg.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+    runtime_jitter_filter_cfg.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+    runtime_jitter_filter_cfg.hmd_velocity_smooth_alpha = runtime_jitter_filter_hmd_vel_smooth_alpha;
+    runtime_jitter_filter_cfg.tracker_velocity_smooth_alpha = runtime_jitter_filter_tracker_vel_smooth_alpha;
+    runtime_jitter_filter_cfg.hmd_angular_velocity_smooth_alpha = runtime_jitter_filter_hmd_ang_vel_smooth_alpha;
+    runtime_jitter_filter_cfg.tracker_angular_velocity_smooth_alpha = runtime_jitter_filter_tracker_ang_vel_smooth_alpha;
+    runtime_jitter_filter_cfg.hmd_position_smooth_alpha = runtime_jitter_filter_hmd_pos_smooth_alpha;
+    runtime_jitter_filter_cfg.tracker_position_smooth_alpha = runtime_jitter_filter_tracker_pos_smooth_alpha;
+    runtime_jitter_filter_cfg.hmd_orientation_smooth_alpha = runtime_jitter_filter_hmd_rot_smooth_alpha;
+    runtime_jitter_filter_cfg.tracker_orientation_smooth_alpha = runtime_jitter_filter_tracker_rot_smooth_alpha;
     jitter_filter::RuntimeJitterFilter runtime_jitter_filter(runtime_jitter_filter_cfg);
 
     uint64_t runtime_pose_published = 0;
@@ -4704,6 +4796,9 @@ int main(int argc, char** argv) {
               runtime_controller_hand,
               fresh_controller_input,
               runtime_controller_hmd);
+          if (runtime_jitter_filter_enabled) {
+            runtime_jitter_filter.filter_runtime_controller_state(runtime_controller_state);
+          }
           if (runtime_controller_state_publisher) runtime_controller_state_publisher->publish(runtime_controller_state);
           if (runtime_controller_state_udp_publisher) runtime_controller_state_udp_publisher->send_controller_state(runtime_controller_state);
           ++runtime_controller_state_published;

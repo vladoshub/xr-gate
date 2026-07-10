@@ -17,6 +17,8 @@ struct BodyTrackerStabilityGateConfig {
   double max_prediction_velocity_mps = 0.8;
   double max_prediction_acceleration_mps2 = 0.0;
   double prediction_damping = 0.35;
+  bool publish_predicted_velocity = false;
+  double reacquire_blend_ms = 0.0;
   double synthetic_publish_hz = 90.0;
   uint32_t predicted_status = xr_tracking::BODY_TRACKER_STATUS_TRACKING;
 };
@@ -47,6 +49,13 @@ class BodyTrackerStabilityFilter {
     uint64_t last_good_ns = 0;
     Vec3 velocity_mps{};
     bool has_velocity = false;
+
+    bool has_last_prediction = false;
+    xr_tracking::BodyTrackerF32V1 last_prediction{};
+
+    bool blend_active = false;
+    xr_tracking::BodyTrackerF32V1 blend_from{};
+    uint64_t blend_start_ns = 0;
   };
 
   static bool finite3(float x, float y, float z);
@@ -56,12 +65,28 @@ class BodyTrackerStabilityFilter {
   static Vec3 add(Vec3 a, Vec3 b);
   static Vec3 pose_position(const xr_tracking::BodyTrackerF32V1& tracker);
   static void assign_position(xr_tracking::BodyTrackerF32V1& tracker, Vec3 p);
+  static float lerp_float(float a, float b, double t);
+  static void normalize_quat(float& qw, float& qx, float& qy, float& qz);
+  static void nlerp_quat(float aqw, float aqx, float aqy, float aqz,
+                         float bqw, float bqx, float bqy, float bqz,
+                         double t,
+                         float& oqw, float& oqx, float& oqy, float& oqz);
+  static xr_tracking::BodyTrackerF32V1 blend_tracker(
+      const xr_tracking::BodyTrackerF32V1& from,
+      const xr_tracking::BodyTrackerF32V1& to,
+      double t);
   static uint64_t tracker_key(const xr_tracking::BodyTrackerF32V1& tracker, uint32_t slot_index);
   static bool tracker_pose_is_good(const xr_tracking::BodyTrackerF32V1& tracker);
   static void append_tracker(xr_tracking::BodyTrackerSetFrameF32V1& frame,
                              const xr_tracking::BodyTrackerF32V1& tracker);
   static int64_t ms_to_ns(double ms);
 
+  bool within_prediction_window(const State& state, uint64_t now_ns) const;
+  bool can_start_reacquire_blend(const State& state, uint64_t now_ns) const;
+  xr_tracking::BodyTrackerF32V1 apply_reacquire_blend(
+      State& state,
+      const xr_tracking::BodyTrackerF32V1& observed,
+      uint64_t now_ns);
   Vec3 clamp_velocity(Vec3 v) const;
   Vec3 clamp_acceleration(Vec3 desired, Vec3 previous, double dt_s) const;
   State& find_or_create_state(uint64_t key);
