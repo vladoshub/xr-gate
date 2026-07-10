@@ -162,30 +162,42 @@ devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
 
+**Or if you have VR-PARK controllers you can use this config:**
 
-Or if you have VR-PARK controllers you can use this config:
 
-Copy config:
+1. Copy config:
 
 ```bash
 mkdir -p "$HOME/.config/xr_tracking/override_controller"
 
-cp ~/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpark.json \
+cp "$HOME/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpark.json" \
    "$HOME/.config/xr_tracking/override_controller/default.json"
 ```
 
-Pair your controllers:
+2. Connect controllers to PC
+
+3. Register your controllers:
 ```bash
 ~/xr-gate-release/xreal_ultra/bin/override_controller/override_controller \
   --config "$HOME/.config/xr_tracking/override_controller/default.json" \
   --connect-devices
 ```
 
-Enable auto-start override_controller in client:
+4. Enable auto-start override_controller in client:
 ```bash
 CFG="$HOME/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
+
+5. Enable runtime config with hand angle offset:
+```bash
+mv "$HOME/xr-gate-release/xreal_ultra/devices/xreal_ultra/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json" \
+   "$HOME/xr-gate-release/xreal_ultra/devices/xreal_ultra/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified_no_controllers.json"
+
+mv "$HOME/xr-gate-release/xreal_ultra/devices/xreal_ultra/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified_controllers.json" \
+   "$HOME/xr-gate-release/xreal_ultra/devices/xreal_ultra/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json"
+```
+
 
 If you want to retrain, you can delete default.json for new train
 
