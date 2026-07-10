@@ -60,6 +60,8 @@ RUNTIME_BODY_TRACKER_PREDICT_LOST_MS="${RUNTIME_BODY_TRACKER_PREDICT_LOST_MS:-35
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS:-0.8}" # cap body tracker prediction velocity
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2="${RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2:-0}" # cap body tracker prediction acceleration; 0 disables
 RUNTIME_BODY_TRACKER_PREDICTION_DAMPING="${RUNTIME_BODY_TRACKER_PREDICTION_DAMPING:-0.8}" # velocity damping during body tracker prediction
+RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY="${RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY:-1}" # publish decaying linear velocity during body tracker prediction; 0 avoids downstream double prediction
+RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS="${RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS:-180}" # blend from last predicted pose when tracker returns during prediction; 0 disables
 RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ="${RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ:-90}" # synthetic publish rate while source body tracker stream is stale
 RUNTIME_BODY_TRACKER_PREDICTED_STATUS="${RUNTIME_BODY_TRACKER_PREDICTED_STATUS:-tracking}" # predicted body tracker status; tracking, stale, lost
 
@@ -125,10 +127,11 @@ RUNTIME_HAND_GATE_MAX_JUMP_M="${RUNTIME_HAND_GATE_MAX_JUMP_M:-0.30}" # max allow
 RUNTIME_HAND_GATE_CONFIRM_FRAMES="${RUNTIME_HAND_GATE_CONFIRM_FRAMES:-5}" # frames required to confirm reacquired hand
 RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M="${RUNTIME_HAND_GATE_CONFIRM_MAX_STEP_M:-0.30}" # max per-frame step while confirming reacquire
 RUNTIME_HAND_GATE_HOLD_LOST_MS="${RUNTIME_HAND_GATE_HOLD_LOST_MS:-60}" # hold last valid hand pose after tracking loss
-RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-600}" # predict hand pose for this time after hold-lost phase
+RUNTIME_HAND_GATE_PREDICT_LOST_MS="${RUNTIME_HAND_GATE_PREDICT_LOST_MS:-400}" # predict hand pose for this time after hold-lost phase
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS:-3.0}" # cap prediction velocity for lost hands
 RUNTIME_HAND_GATE_PREDICTION_DAMPING="${RUNTIME_HAND_GATE_PREDICTION_DAMPING:-1}" # velocity damping during lost-hand prediction
-RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS="${RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS:-0}" # blend duration after reacquire
+RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY="${RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY:-1}" # publish decaying linear velocity during hand prediction; 0 avoids downstream double prediction
+RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS="${RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS:-180}" # blend duration after reacquire
 RUNTIME_HAND_GATE_DEBUG_CSV="${RUNTIME_HAND_GATE_DEBUG_CSV:-}" # optional CSV path for hand gate diagnostics
 RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS="${RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS:-7.0}" # max continuity velocity for hand gate
 
@@ -143,9 +146,9 @@ RUNTIME_JITTER_FILTER_TRACKER_DEG="${RUNTIME_JITTER_FILTER_TRACKER_DEG:-1.0}" # 
 
 
 RUNTIME_JITTER_FILTER_HMD_VEL_CM_S="${RUNTIME_JITTER_FILTER_HMD_VEL_CM_S:-1.0}" # HMD linear velocity zero-deadband in cm/s
-RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S="${RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S:-2}" # tracker/hand linear velocity zero-deadband in cm/s
+RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S="${RUNTIME_JITTER_FILTER_TRACKER_VEL_CM_S:-2.0}" # tracker/hand linear velocity zero-deadband in cm/s
 RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_HMD_ANG_VEL_DEG_S:-1.0}" # HMD angular velocity zero-deadband in deg/s
-RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S:-5}" # tracker/hand angular velocity zero-deadband in deg/s
+RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S="${RUNTIME_JITTER_FILTER_TRACKER_ANG_VEL_DEG_S:-2.5}" # tracker/hand angular velocity zero-deadband in deg/s
 
 
 RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_VEL_SMOOTH_ALPHA:-1.0}" # HMD linear velocity smoothing alpha; 1 disables, lower is smoother
@@ -157,8 +160,6 @@ RUNTIME_JITTER_FILTER_HMD_POS_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_POS_SMOO
 RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_TRACKER_POS_SMOOTH_ALPHA:-0.75}" # tracker/hand position smoothing alpha; 1 disables, lower is smoother
 RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_HMD_ROT_SMOOTH_ALPHA:-1.0}" # HMD orientation smoothing alpha; 1 disables, lower is smoother
 RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_TRACKER_ROT_SMOOTH_ALPHA:-0.70}" # tracker/hand orientation smoothing alpha; 1 disables, lower is smoother
-
-
 # Controller locomotion space.
 RUNTIME_CONTROLLER_MOVEMENT_SPACE="${RUNTIME_CONTROLLER_MOVEMENT_SPACE:-controller}"
 # Optional per-hand override. Empty value falls back to RUNTIME_CONTROLLER_MOVEMENT_SPACE.
@@ -234,6 +235,8 @@ args=(
   --runtime-body-tracker-max-prediction-velocity-mps "$RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS"
   --runtime-body-tracker-max-prediction-acceleration-mps2 "$RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2"
   --runtime-body-tracker-prediction-damping "$RUNTIME_BODY_TRACKER_PREDICTION_DAMPING"
+  --runtime-body-tracker-publish-predicted-velocity "$RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY"
+  --runtime-body-tracker-reacquire-blend-ms "$RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS"
   --runtime-body-tracker-prediction-publish-hz "$RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ"
   --runtime-body-tracker-predicted-status "$RUNTIME_BODY_TRACKER_PREDICTED_STATUS"
   --spatial-proxy-mesh-input "$SPATIAL_PROXY_MESH_INPUT"
@@ -283,6 +286,7 @@ args=(
   --runtime-hand-gate-predict-lost-ms "$RUNTIME_HAND_GATE_PREDICT_LOST_MS"
   --runtime-hand-gate-max-prediction-velocity-mps "$RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS"
   --runtime-hand-gate-prediction-damping "$RUNTIME_HAND_GATE_PREDICTION_DAMPING"
+  --runtime-hand-gate-publish-predicted-velocity "$RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY"
   --runtime-hand-gate-reacquire-blend-ms "$RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS"
   --runtime-hand-gate-max-continuity-velocity-mps "$RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS"
   --runtime-jitter-filter-hmd-cm "$RUNTIME_JITTER_FILTER_HMD_CM"
@@ -433,6 +437,8 @@ RUNTIME_BODY_TRACKER_PREDICT_LOST_MS=$RUNTIME_BODY_TRACKER_PREDICT_LOST_MS # pre
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS=$RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS # body tracker prediction velocity cap
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2=$RUNTIME_BODY_TRACKER_MAX_PREDICTION_ACCELERATION_MPS2 # body tracker prediction acceleration cap
 RUNTIME_BODY_TRACKER_PREDICTION_DAMPING=$RUNTIME_BODY_TRACKER_PREDICTION_DAMPING # body tracker prediction damping
+RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY=$RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY # publish decaying linear velocity during body tracker prediction
+RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS=$RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS # blend from last predicted pose on in-window reacquire
 RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ=$RUNTIME_BODY_TRACKER_PREDICTION_PUBLISH_HZ # synthetic publish rate while body tracker source is stale
 RUNTIME_BODY_TRACKER_PREDICTED_STATUS=$RUNTIME_BODY_TRACKER_PREDICTED_STATUS # predicted body tracker status
 HAND_SKELETON26_INPUT=$HAND_SKELETON26_INPUT # 26-joint hand skeleton input transport
@@ -471,6 +477,7 @@ RUNTIME_HAND_GATE_HOLD_LOST_MS=$RUNTIME_HAND_GATE_HOLD_LOST_MS # hold last valid
 RUNTIME_HAND_GATE_PREDICT_LOST_MS=$RUNTIME_HAND_GATE_PREDICT_LOST_MS # predict hand pose for this time after hold-lost phase
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS=$RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS # cap prediction velocity for lost hands
 RUNTIME_HAND_GATE_PREDICTION_DAMPING=$RUNTIME_HAND_GATE_PREDICTION_DAMPING # velocity damping during lost-hand prediction
+RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY=$RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY # publish decaying linear velocity during hand prediction
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS=$RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS # blend duration after reacquire
 RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS=$RUNTIME_HAND_GATE_MAX_CONTINUITY_VELOCITY_MPS # max continuity velocity for hand gate
 RUNTIME_HAND_GATE_DEBUG_CSV=$RUNTIME_HAND_GATE_DEBUG_CSV # optional CSV path for hand gate diagnostics

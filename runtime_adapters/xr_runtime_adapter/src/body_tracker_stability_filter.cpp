@@ -63,24 +63,29 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
     const uint64_t key = tracker_key(tracker, i);
     if (observed_key_count < observed_keys.size()) observed_keys[observed_key_count++] = key;
     if (tracker_pose_is_good(tracker)) {
-            const State* previous_state = find_state(key);
-            const double max_jump_m = cfg_.max_jump_m;
-            if (previous_state != nullptr && previous_state->active && previous_state->last_good_ns != 0 &&
-                std::isfinite(max_jump_m) && max_jump_m > 0.0) {
-                const double body_tracker_jump_reject_distance_m =
-                    norm(sub(pose_position(tracker), pose_position(previous_state->last_good)));
-                if (std::isfinite(body_tracker_jump_reject_distance_m) &&
-                    body_tracker_jump_reject_distance_m > max_jump_m) {
-                    auto predicted = predicted_tracker_for_key(key, now_ns);
-                    if (predicted) {
-                        append_tracker(out, *predicted);
-                    }
-                    continue;
-                }
-            }
-            update_state(tracker, key, sample_ns);
-            append_tracker(out, tracker);
-        } else {
+      State* previous_state = find_state(key);
+      const double max_jump_m = cfg_.max_jump_m;
+      if (previous_state != nullptr && previous_state->active && previous_state->last_good_ns != 0 &&
+          std::isfinite(max_jump_m) && max_jump_m > 0.0) {
+        const double body_tracker_jump_reject_distance_m =
+            norm(sub(pose_position(tracker), pose_position(previous_state->last_good)));
+        if (std::isfinite(body_tracker_jump_reject_distance_m) &&
+            body_tracker_jump_reject_distance_m > max_jump_m) {
+          auto predicted = predicted_tracker_for_key(key, now_ns);
+          if (predicted) {
+            append_tracker(out, *predicted);
+          }
+          continue;
+        }
+      }
+
+      xr_tracking::BodyTrackerF32V1 output_tracker = tracker;
+      if (previous_state != nullptr) {
+        output_tracker = apply_reacquire_blend(*previous_state, tracker, now_ns);
+      }
+      update_state(tracker, key, sample_ns);
+      append_tracker(out, output_tracker);
+    } else {
       auto predicted = predicted_tracker_for_key(key, now_ns);
       if (predicted) {
         append_tracker(out, *predicted);
@@ -163,6 +168,112 @@ void BodyTrackerStabilityFilter::assign_position(xr_tracking::BodyTrackerF32V1& 
   tracker.pose.px = static_cast<float>(p.x);
   tracker.pose.py = static_cast<float>(p.y);
   tracker.pose.pz = static_cast<float>(p.z);
+}
+
+float BodyTrackerStabilityFilter::lerp_float(float a, float b, double t) {
+  return static_cast<float>(static_cast<double>(a) +
+                            (static_cast<double>(b) - static_cast<double>(a)) * t);
+}
+
+void BodyTrackerStabilityFilter::normalize_quat(float& qw, float& qx, float& qy, float& qz) {
+  const double n = std::sqrt(static_cast<double>(qw) * qw + static_cast<double>(qx) * qx +
+                             static_cast<double>(qy) * qy + static_cast<double>(qz) * qz);
+  if (!std::isfinite(n) || n <= 1e-12) {
+    qw = 1.0f;
+    qx = 0.0f;
+    qy = 0.0f;
+    qz = 0.0f;
+    return;
+  }
+  qw = static_cast<float>(qw / n);
+  qx = static_cast<float>(qx / n);
+  qy = static_cast<float>(qy / n);
+  qz = static_cast<float>(qz / n);
+}
+
+void BodyTrackerStabilityFilter::nlerp_quat(float aqw, float aqx, float aqy, float aqz,
+                                             float bqw, float bqx, float bqy, float bqz,
+                                             double t,
+                                             float& oqw, float& oqx, float& oqy, float& oqz) {
+  const double dot = static_cast<double>(aqw) * bqw + static_cast<double>(aqx) * bqx +
+                     static_cast<double>(aqy) * bqy + static_cast<double>(aqz) * bqz;
+  if (dot < 0.0) {
+    bqw = -bqw;
+    bqx = -bqx;
+    bqy = -bqy;
+    bqz = -bqz;
+  }
+  oqw = lerp_float(aqw, bqw, t);
+  oqx = lerp_float(aqx, bqx, t);
+  oqy = lerp_float(aqy, bqy, t);
+  oqz = lerp_float(aqz, bqz, t);
+  normalize_quat(oqw, oqx, oqy, oqz);
+}
+
+xr_tracking::BodyTrackerF32V1 BodyTrackerStabilityFilter::blend_tracker(
+    const xr_tracking::BodyTrackerF32V1& from,
+    const xr_tracking::BodyTrackerF32V1& to,
+    double t) {
+  t = std::clamp(t, 0.0, 1.0);
+  xr_tracking::BodyTrackerF32V1 out = to;
+  out.pose.px = lerp_float(from.pose.px, to.pose.px, t);
+  out.pose.py = lerp_float(from.pose.py, to.pose.py, t);
+  out.pose.pz = lerp_float(from.pose.pz, to.pose.pz, t);
+  nlerp_quat(from.pose.qw, from.pose.qx, from.pose.qy, from.pose.qz,
+             to.pose.qw, to.pose.qx, to.pose.qy, to.pose.qz,
+             t, out.pose.qw, out.pose.qx, out.pose.qy, out.pose.qz);
+  out.pose.vx = lerp_float(from.pose.vx, to.pose.vx, t);
+  out.pose.vy = lerp_float(from.pose.vy, to.pose.vy, t);
+  out.pose.vz = lerp_float(from.pose.vz, to.pose.vz, t);
+  out.pose.wx = lerp_float(from.pose.wx, to.pose.wx, t);
+  out.pose.wy = lerp_float(from.pose.wy, to.pose.wy, t);
+  out.pose.wz = lerp_float(from.pose.wz, to.pose.wz, t);
+  out.confidence = lerp_float(from.confidence, to.confidence, t);
+  return out;
+}
+
+bool BodyTrackerStabilityFilter::within_prediction_window(const State& state, uint64_t now_ns) const {
+  if (!state.active || state.last_good_ns == 0 || now_ns < state.last_good_ns) return false;
+  const uint64_t hold_ns = static_cast<uint64_t>(ms_to_ns(cfg_.hold_lost_ms));
+  const uint64_t predict_ns = static_cast<uint64_t>(ms_to_ns(cfg_.predict_lost_ms));
+  if (predict_ns == 0) return false;
+  const uint64_t elapsed_ns = now_ns - state.last_good_ns;
+  return elapsed_ns > hold_ns && elapsed_ns <= hold_ns + predict_ns;
+}
+
+bool BodyTrackerStabilityFilter::can_start_reacquire_blend(const State& state,
+                                                            uint64_t now_ns) const {
+  return state.has_last_prediction && cfg_.reacquire_blend_ms > 0.0 &&
+         within_prediction_window(state, now_ns);
+}
+
+xr_tracking::BodyTrackerF32V1 BodyTrackerStabilityFilter::apply_reacquire_blend(
+    State& state,
+    const xr_tracking::BodyTrackerF32V1& observed,
+    uint64_t now_ns) {
+  if (!state.blend_active && can_start_reacquire_blend(state, now_ns)) {
+    state.blend_active = true;
+    state.blend_from = state.last_prediction;
+    state.blend_start_ns = now_ns;
+    state.has_last_prediction = false;
+  }
+
+  if (!state.blend_active) {
+    state.has_last_prediction = false;
+    return observed;
+  }
+
+  const uint64_t duration_ns = static_cast<uint64_t>(std::max<int64_t>(1, ms_to_ns(cfg_.reacquire_blend_ms)));
+  const uint64_t elapsed_ns = now_ns >= state.blend_start_ns ? now_ns - state.blend_start_ns : 0;
+  const double t = std::clamp(static_cast<double>(elapsed_ns) /
+                                  static_cast<double>(duration_ns),
+                              0.0, 1.0);
+  xr_tracking::BodyTrackerF32V1 out = blend_tracker(state.blend_from, observed, t);
+  if (t >= 1.0) {
+    state.blend_active = false;
+    out = observed;
+  }
+  return out;
 }
 
 uint64_t BodyTrackerStabilityFilter::tracker_key(const xr_tracking::BodyTrackerF32V1& tracker,
@@ -286,9 +397,12 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
   const uint64_t elapsed_ns = now_ns - state.last_good_ns;
   if (elapsed_ns > hold_ns + predict_ns) {
     state.active = false;
+    state.has_last_prediction = false;
+    state.blend_active = false;
     return std::nullopt;
   }
 
+  state.blend_active = false;
   xr_tracking::BodyTrackerF32V1 out = state.last_good;
   out.status = cfg_.predicted_status;
   out.flags |= xr_tracking::BODY_TRACKER_FLAG_POSE_VALID |
@@ -298,19 +412,52 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
 
   const uint64_t prediction_elapsed_ns = elapsed_ns > hold_ns ? (elapsed_ns - hold_ns) : 0;
   if (prediction_elapsed_ns > 0 && predict_ns > 0 && state.has_velocity) {
-    const double dt_s = static_cast<double>(std::min<uint64_t>(prediction_elapsed_ns, predict_ns)) / 1e9;
+    const uint64_t dt_ns = std::min<uint64_t>(prediction_elapsed_ns, predict_ns);
+    const double dt_s = static_cast<double>(dt_ns) / 1e9;
     const double damping = std::clamp(cfg_.prediction_damping, 0.0, 1.0);
+    const double progress = std::clamp(static_cast<double>(dt_ns) /
+                                           static_cast<double>(predict_ns),
+                                       0.0, 1.0);
     Vec3 v = clamp_velocity(state.velocity_mps);
-    const Vec3 delta = scale(v, dt_s * damping);
+
+    // Decelerate synthetic motion to zero over the prediction window instead
+    // of continuing at a constant velocity. This limits overshoot when the
+    // last observed velocity was noisy near an occlusion boundary.
+    const double integrated_time_s = dt_s * (1.0 - 0.5 * progress);
+    const Vec3 delta = scale(v, damping * integrated_time_s);
     assign_position(out, add(pose_position(out), delta));
-    out.pose.vx = static_cast<float>(v.x * damping);
-    out.pose.vy = static_cast<float>(v.y * damping);
-    out.pose.vz = static_cast<float>(v.z * damping);
-    out.flags |= xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+
+    // By default the predicted pose is published with zero velocity so that a
+    // runtime consumer cannot extrapolate it a second time.  When explicitly
+    // enabled, publish the instantaneous velocity of the decelerating
+    // trajectory above.  It reaches zero at the end of the prediction window.
+    if (cfg_.publish_predicted_velocity) {
+      const Vec3 predicted_v = scale(v, damping * (1.0 - progress));
+      out.pose.vx = static_cast<float>(predicted_v.x);
+      out.pose.vy = static_cast<float>(predicted_v.y);
+      out.pose.vz = static_cast<float>(predicted_v.z);
+      out.flags |= xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+    } else {
+      out.pose.vx = 0.0f;
+      out.pose.vy = 0.0f;
+      out.pose.vz = 0.0f;
+      out.flags &= ~xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+    }
+
+    // Orientation is held during prediction, so angular velocity remains zero.
+    out.pose.wx = 0.0f;
+    out.pose.wy = 0.0f;
+    out.pose.wz = 0.0f;
+    state.has_last_prediction = true;
+    state.last_prediction = out;
   } else {
     out.pose.vx = 0.0f;
     out.pose.vy = 0.0f;
     out.pose.vz = 0.0f;
+    out.pose.wx = 0.0f;
+    out.pose.wy = 0.0f;
+    out.pose.wz = 0.0f;
+    out.flags &= ~xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
   }
 
   const double total_ns = static_cast<double>(std::max<uint64_t>(hold_ns + predict_ns, 1));

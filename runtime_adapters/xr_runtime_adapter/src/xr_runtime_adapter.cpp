@@ -2540,6 +2540,8 @@ int main(int argc, char** argv) {
   double runtime_body_tracker_max_prediction_velocity_mps = 0.8;
   double runtime_body_tracker_max_prediction_acceleration_mps2 = 0.0;
   double runtime_body_tracker_prediction_damping = 0.35;
+  bool runtime_body_tracker_publish_predicted_velocity = false;
+  double runtime_body_tracker_reacquire_blend_ms = 0.0;
   double runtime_body_tracker_prediction_publish_hz = 90.0;
   std::string runtime_body_tracker_predicted_status = "tracking";
 
@@ -2571,6 +2573,7 @@ int main(int argc, char** argv) {
   double runtime_hand_gate_predict_lost_ms = 0.0;
   double runtime_hand_gate_max_prediction_velocity_mps = 2.0;
   double runtime_hand_gate_prediction_damping = 0.5;
+  bool runtime_hand_gate_publish_predicted_velocity = false;
   double runtime_hand_gate_reacquire_blend_ms = 0.0;
   std::string runtime_hand_gate_debug_csv;
 
@@ -2965,6 +2968,10 @@ int main(int argc, char** argv) {
                  "Cap body tracker prediction velocity change in metres per second squared; <=0 disables acceleration clamp");
   app.add_option("--runtime-body-tracker-prediction-damping", runtime_body_tracker_prediction_damping,
                  "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
+  app.add_option("--runtime-body-tracker-publish-predicted-velocity", runtime_body_tracker_publish_predicted_velocity,
+                 "Publish decaying linear velocity with predicted body tracker poses; false avoids downstream double prediction");
+  app.add_option("--runtime-body-tracker-reacquire-blend-ms", runtime_body_tracker_reacquire_blend_ms,
+                 "Blend body tracker pose from the last predicted pose when tracking returns during the prediction window; 0 disables");
   app.add_option("--runtime-body-tracker-prediction-publish-hz", runtime_body_tracker_prediction_publish_hz,
                  "Synthetic runtime body tracker publish rate while source stream is stale; <=0 publishes every poll");
   app.add_option("--runtime-body-tracker-predicted-status", runtime_body_tracker_predicted_status,
@@ -3023,8 +3030,10 @@ int main(int argc, char** argv) {
                  "Runtime hand gate: clamp predicted lost-hand linear velocity in meters/second");
   app.add_option("--runtime-hand-gate-prediction-damping", runtime_hand_gate_prediction_damping,
                  "Runtime hand gate: prediction damping factor in 0..1 before applying lost-hand velocity");
+  app.add_option("--runtime-hand-gate-publish-predicted-velocity", runtime_hand_gate_publish_predicted_velocity,
+                 "Runtime hand gate: publish decaying linear velocity with predicted hand poses; false avoids downstream double prediction");
   app.add_option("--runtime-hand-gate-reacquire-blend-ms", runtime_hand_gate_reacquire_blend_ms,
-                 "Runtime hand gate: blend duration after confirmed far reacquire; 0 disables");
+                 "Runtime hand gate: blend from the latest predicted pose when tracking returns during prediction; 0 disables");
   app.add_option("--runtime-hand-gate-debug-csv", runtime_hand_gate_debug_csv,
                  "Runtime hand gate: optional CSV path for gate decisions");
 
@@ -3321,6 +3330,9 @@ int main(int argc, char** argv) {
       std::cout << "[xr_runtime_adapter] warning: runtime body tracker stability gate is enabled but "
                 << "--publish-runtime-body-trackers-shm is disabled; gate has no runtime output to publish\n";
     }
+    if (runtime_body_tracker_reacquire_blend_ms < 0.0) {
+      throw std::runtime_error("--runtime-body-tracker-reacquire-blend-ms must be >= 0");
+    }
     if (runtime_body_tracker_prediction_publish_hz < 0.0) {
       throw std::runtime_error("--runtime-body-tracker-prediction-publish-hz must be >= 0");
     }
@@ -3405,6 +3417,9 @@ int main(int argc, char** argv) {
         std::cout << "runtime_body_tracker_max_prediction_velocity_mps: " << runtime_body_tracker_max_prediction_velocity_mps << "\n";
         std::cout << "runtime_body_tracker_max_prediction_acceleration_mps2: " << runtime_body_tracker_max_prediction_acceleration_mps2 << "\n";
         std::cout << "runtime_body_tracker_prediction_damping: " << runtime_body_tracker_prediction_damping << "\n";
+        std::cout << "runtime_body_tracker_publish_predicted_velocity: "
+                  << (runtime_body_tracker_publish_predicted_velocity ? "true" : "false") << "\n";
+        std::cout << "runtime_body_tracker_reacquire_blend_ms: " << runtime_body_tracker_reacquire_blend_ms << "\n";
         std::cout << "runtime_body_tracker_prediction_publish_hz: " << runtime_body_tracker_prediction_publish_hz << "\n";
         std::cout << "runtime_body_tracker_predicted_status: " << runtime_body_tracker_predicted_status << "\n";
       }
@@ -3459,6 +3474,8 @@ int main(int argc, char** argv) {
       std::cout << "runtime_hand_gate_predict_lost_ms: " << runtime_hand_gate_predict_lost_ms << "\n";
       std::cout << "runtime_hand_gate_max_prediction_velocity_mps: " << runtime_hand_gate_max_prediction_velocity_mps << "\n";
       std::cout << "runtime_hand_gate_prediction_damping: " << runtime_hand_gate_prediction_damping << "\n";
+      std::cout << "runtime_hand_gate_publish_predicted_velocity: "
+                << (runtime_hand_gate_publish_predicted_velocity ? "true" : "false") << "\n";
       std::cout << "runtime_hand_gate_reacquire_blend_ms: " << runtime_hand_gate_reacquire_blend_ms << "\n";
       if (!runtime_hand_gate_debug_csv.empty()) {
         std::cout << "runtime_hand_gate_debug_csv: " << runtime_hand_gate_debug_csv << "\n";
@@ -3842,6 +3859,8 @@ int main(int argc, char** argv) {
       cfg.stability_gate.max_prediction_velocity_mps = runtime_body_tracker_max_prediction_velocity_mps;
       cfg.stability_gate.max_prediction_acceleration_mps2 = runtime_body_tracker_max_prediction_acceleration_mps2;
       cfg.stability_gate.prediction_damping = runtime_body_tracker_prediction_damping;
+      cfg.stability_gate.publish_predicted_velocity = runtime_body_tracker_publish_predicted_velocity;
+      cfg.stability_gate.reacquire_blend_ms = runtime_body_tracker_reacquire_blend_ms;
       cfg.stability_gate.synthetic_publish_hz = runtime_body_tracker_prediction_publish_hz;
       cfg.stability_gate.predicted_status = runtime_body_tracker_predicted_status_value;
       body_tracker_thread = std::make_unique<BodyTrackerInputThread>(std::move(cfg));
@@ -4011,6 +4030,7 @@ int main(int argc, char** argv) {
       gate_cfg.predict_lost_ms = runtime_hand_gate_predict_lost_ms;
       gate_cfg.max_prediction_velocity_mps = runtime_hand_gate_max_prediction_velocity_mps;
       gate_cfg.prediction_damping = runtime_hand_gate_prediction_damping;
+      gate_cfg.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       gate_cfg.reacquire_blend_ms = runtime_hand_gate_reacquire_blend_ms;
       gate_cfg.debug_csv = runtime_hand_gate_debug_csv;
       runtime_hand_stability_filter.configure(std::move(gate_cfg));
