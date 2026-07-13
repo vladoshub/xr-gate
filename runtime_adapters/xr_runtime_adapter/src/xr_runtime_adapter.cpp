@@ -455,16 +455,21 @@ void parse_controller_override_hand_gestures(const nlohmann::json& j,
   parse_bool("right_hand_gestures_enabled", false);
 }
 
-double load_backend_gravity_magnitude(const std::string& path) {
+struct BackendControlSnapshot {
+  double gravity_magnitude = 9.80665;
+  uint64_t reset_counter = 0;
+};
+
+BackendControlSnapshot load_backend_control_snapshot(const std::string& path) {
   if (path.empty()) {
     throw std::runtime_error(
-        "runtime controller IMU acceleration integration requires a backend control file path");
+        "runtime controller IMU features require a backend control file path");
   }
 
   std::ifstream in(path);
   if (!in) {
     throw std::runtime_error(
-        "cannot open backend control file for controller IMU gravity: " + path);
+        "cannot open backend control file for controller IMU runtime: " + path);
   }
 
   nlohmann::json root;
@@ -480,14 +485,38 @@ double load_backend_gravity_magnitude(const std::string& path) {
         "backend control file '" + path +
         "' must contain numeric gravity_magnitude");
   }
+  if (!root.contains("reset_counter")) {
+    throw std::runtime_error(
+        "backend control file '" + path +
+        "' must contain non-negative integer reset_counter");
+  }
 
-  const double value = root.at("gravity_magnitude").get<double>();
-  if (!std::isfinite(value) || value <= 0.0) {
+  BackendControlSnapshot snapshot;
+  snapshot.gravity_magnitude = root.at("gravity_magnitude").get<double>();
+  if (!std::isfinite(snapshot.gravity_magnitude) || snapshot.gravity_magnitude <= 0.0) {
     throw std::runtime_error(
         "backend control file '" + path +
         "' has invalid gravity_magnitude; expected a positive finite number");
   }
-  return std::abs(value);
+  snapshot.gravity_magnitude = std::abs(snapshot.gravity_magnitude);
+
+  const auto& reset = root.at("reset_counter");
+  if (reset.is_number_unsigned()) {
+    snapshot.reset_counter = reset.get<uint64_t>();
+  } else if (reset.is_number_integer()) {
+    const int64_t signed_reset = reset.get<int64_t>();
+    if (signed_reset < 0) {
+      throw std::runtime_error(
+          "backend control file '" + path +
+          "' has invalid reset_counter; expected a non-negative integer");
+    }
+    snapshot.reset_counter = static_cast<uint64_t>(signed_reset);
+  } else {
+    throw std::runtime_error(
+        "backend control file '" + path +
+        "' has invalid reset_counter; expected a non-negative integer");
+  }
+  return snapshot;
 }
 
 ControllerOverrideFileConfig load_controller_override_file_config(const std::string& path) {
@@ -2670,7 +2699,9 @@ int main(int argc, char** argv) {
   bool runtime_controller_right_imu_yaw_correction = false;
   std::string runtime_controller_imu_gravity_control_file =
       xr_runtime::default_backend_control_file_path();
+  double runtime_controller_imu_control_poll_ms = 500.0;
   double runtime_controller_imu_gravity_mps2 = 9.80665;
+  uint64_t runtime_controller_imu_control_reset_counter = 0;
   double runtime_controller_imu_acceleration_deadband_mps2 = 0.15;
   double runtime_controller_imu_max_linear_acceleration_mps2 = 12.0;
   double runtime_controller_imu_yaw_correction_alpha = 0.05;
@@ -3067,7 +3098,10 @@ int main(int argc, char** argv) {
                  "Enable retained optical yaw correction for the right IMU orientation. Updates only while a real optical hand pose is available.");
   app.add_option("--runtime-controller-imu-gravity-control-file",
                  runtime_controller_imu_gravity_control_file,
-                 "Backend runtime control JSON used to read gravity_magnitude for controller IMU acceleration integration");
+                 "Backend runtime control JSON used to read gravity_magnitude and reset_counter for controller IMU runtime features");
+  app.add_option("--runtime-controller-imu-control-poll-ms",
+                 runtime_controller_imu_control_poll_ms,
+                 "Poll interval for backend gravity/reset_counter updates in milliseconds; 0 disables runtime polling");
   app.add_option("--runtime-controller-imu-acceleration-deadband-mps2", runtime_controller_imu_acceleration_deadband_mps2,
                  "IMU linear-acceleration magnitude deadband after gravity removal");
   app.add_option("--runtime-controller-imu-max-linear-acceleration-mps2", runtime_controller_imu_max_linear_acceleration_mps2,
@@ -3578,16 +3612,34 @@ int main(int argc, char** argv) {
       override_controller::parse_runtime_controller_orientation_source(
           runtime_controller_right_orientation_source,
           "--runtime-controller-right-orientation-source");
+  const bool runtime_controller_left_imu_source_configured =
+      runtime_controller_left_orientation_source_value ==
+      override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
+  const bool runtime_controller_right_imu_source_configured =
+      runtime_controller_right_orientation_source_value ==
+      override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
   const bool runtime_controller_imu_acceleration_configured =
       (runtime_controller_left_imu_acceleration_integration &&
-       runtime_controller_left_orientation_source_value ==
-           override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime) ||
+       runtime_controller_left_imu_source_configured) ||
       (runtime_controller_right_imu_acceleration_integration &&
-       runtime_controller_right_orientation_source_value ==
-           override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime);
-  if (runtime_controller_imu_acceleration_configured) {
-    runtime_controller_imu_gravity_mps2 =
-        load_backend_gravity_magnitude(runtime_controller_imu_gravity_control_file);
+       runtime_controller_right_imu_source_configured);
+  const bool runtime_controller_imu_control_configured =
+      (runtime_controller_left_imu_source_configured &&
+       (runtime_controller_left_imu_acceleration_integration ||
+        runtime_controller_left_imu_position_prediction ||
+        runtime_controller_left_imu_yaw_correction)) ||
+      (runtime_controller_right_imu_source_configured &&
+       (runtime_controller_right_imu_acceleration_integration ||
+        runtime_controller_right_imu_position_prediction ||
+        runtime_controller_right_imu_yaw_correction));
+  if (runtime_controller_imu_control_poll_ms < 0.0) {
+    throw std::runtime_error("--runtime-controller-imu-control-poll-ms must be >= 0");
+  }
+  if (runtime_controller_imu_control_configured) {
+    const BackendControlSnapshot snapshot =
+        load_backend_control_snapshot(runtime_controller_imu_gravity_control_file);
+    runtime_controller_imu_gravity_mps2 = snapshot.gravity_magnitude;
+    runtime_controller_imu_control_reset_counter = snapshot.reset_counter;
   }
 
   const override_controller::RuntimeControllerMovementSpace runtime_controller_left_movement_space_hand_tracking_value =
@@ -3852,6 +3904,14 @@ int main(int argc, char** argv) {
               << (runtime_controller_right_imu_yaw_correction ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_gravity_control_file: "
               << runtime_controller_imu_gravity_control_file << "\n";
+    std::cout << "runtime_controller_imu_control_poll_ms: "
+              << runtime_controller_imu_control_poll_ms << "\n";
+    std::cout << "runtime_controller_imu_control_reset_counter: "
+              << runtime_controller_imu_control_reset_counter
+              << (runtime_controller_imu_control_configured
+                      ? " (loaded from backend control file)"
+                      : " (unused; no stateful IMU runtime feature configured)")
+              << "\n";
     std::cout << "runtime_controller_imu_gravity_mps2: "
               << runtime_controller_imu_gravity_mps2
               << (runtime_controller_imu_acceleration_configured
@@ -4510,6 +4570,61 @@ int main(int argc, char** argv) {
     override_controller::RuntimeControllerSynthesisState runtime_controller_synthesis_state{};
 
     const auto start = std::chrono::steady_clock::now();
+    auto next_runtime_controller_imu_control_poll =
+        start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double, std::milli>(
+                        runtime_controller_imu_control_poll_ms));
+    std::string runtime_controller_imu_control_last_error;
+    uint64_t runtime_controller_imu_control_reload_count = 0;
+    const auto poll_runtime_controller_imu_control =
+        [&](std::chrono::steady_clock::time_point now) {
+          if (!runtime_controller_imu_control_configured ||
+              runtime_controller_imu_control_poll_ms <= 0.0 ||
+              now < next_runtime_controller_imu_control_poll) {
+            return;
+          }
+          next_runtime_controller_imu_control_poll =
+              now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<double, std::milli>(
+                            runtime_controller_imu_control_poll_ms));
+          try {
+            const BackendControlSnapshot snapshot =
+                load_backend_control_snapshot(runtime_controller_imu_gravity_control_file);
+            runtime_controller_imu_control_last_error.clear();
+            if (snapshot.reset_counter == runtime_controller_imu_control_reset_counter) {
+              return;
+            }
+
+            const uint64_t previous_reset_counter =
+                runtime_controller_imu_control_reset_counter;
+            runtime_controller_imu_control_reset_counter = snapshot.reset_counter;
+            runtime_controller_imu_gravity_mps2 = snapshot.gravity_magnitude;
+            runtime_controller_synthesis_cfg.left_imu_motion.gravity_mps2 =
+                static_cast<float>(snapshot.gravity_magnitude);
+            runtime_controller_synthesis_cfg.right_imu_motion.gravity_mps2 =
+                static_cast<float>(snapshot.gravity_magnitude);
+
+            // A backend reset changes the tracking reference. Do not carry an
+            // old optical anchor, integrated velocity, or retained yaw offset
+            // across that boundary.
+            runtime_controller_synthesis_state = {};
+            ++runtime_controller_imu_control_reload_count;
+            std::cout << "[xr_runtime_adapter] controller IMU control reset_counter "
+                      << previous_reset_counter << " -> "
+                      << runtime_controller_imu_control_reset_counter
+                      << "; gravity_magnitude="
+                      << runtime_controller_imu_gravity_mps2
+                      << "; reset per-side IMU prediction/yaw state\n";
+          } catch (const std::exception& e) {
+            const std::string message = e.what();
+            if (message != runtime_controller_imu_control_last_error) {
+              std::cerr << "[xr_runtime_adapter] controller IMU control poll failed: "
+                        << message << "; keeping previous gravity/state\n";
+              runtime_controller_imu_control_last_error = message;
+            }
+          }
+        };
+
     auto next_tick = start;
     const auto tick_period = std::chrono::duration<double>(1.0 / tick_rate_hz);
 
@@ -5389,6 +5504,8 @@ int main(int argc, char** argv) {
           ++runtime_pose_published;
         }
         if (runtime_controller_state_publisher || runtime_controller_state_udp_publisher) {
+          poll_runtime_controller_imu_control(std::chrono::steady_clock::now());
+
           std::optional<xr_runtime::HandTrackingFrameF32V2> runtime_controller_hand;
           if (frame.hand_v2.sequence != 0) {
             runtime_controller_hand = frame.hand_v2;
@@ -5741,6 +5858,10 @@ int main(int argc, char** argv) {
     std::cout << "runtime_hand_published: " << runtime_hand_published << "\n";
     std::cout << "runtime_hand_output: " << (runtime_hand_publisher ? "enabled" : "disabled") << "\n";
     std::cout << "runtime_controller_state_published: " << runtime_controller_state_published << "\n";
+    std::cout << "runtime_controller_imu_control_reload_count: "
+              << runtime_controller_imu_control_reload_count << "\n";
+    std::cout << "runtime_controller_imu_control_final_reset_counter: "
+              << runtime_controller_imu_control_reset_counter << "\n";
     std::cout << "runtime_controller_state_output: " << (runtime_controller_state_publisher ? "enabled" : "disabled") << "\n";
     std::cout << "runtime_controller_mode: " << xr_runtime::runtime_controller_mode_name(runtime_controller_mode_value) << "\n";
     std::cout << "runtime_controller_lost_hand_pose_fallback: "
