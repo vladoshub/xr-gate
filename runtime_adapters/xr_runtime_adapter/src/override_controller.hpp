@@ -66,6 +66,59 @@ struct RuntimeControllerImuOrientationConfig {
   float offset_rotation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
+// Optional IMU-assisted motion features. They are evaluated independently per
+// controller side and are active only while that side actually uses
+// IMU_OVERRIDE_CONTROLLER_RUNTIME with current valid sensor data.
+struct RuntimeControllerImuMotionConfig {
+  bool acceleration_integration_enabled = false;
+  bool position_prediction_enabled = false;
+  bool yaw_correction_enabled = false;
+
+  // specific_force_m_s2 includes gravity. Runtime tracking space uses +Y up.
+  float gravity_mps2 = 9.80665f;
+  float acceleration_deadband_mps2 = 0.15f;
+  float max_linear_acceleration_mps2 = 12.0f;
+
+  // Position loss handling mirrors HandPoseStabilityFilter:
+  // hold the last optical coordinate, then predict, then invalidate.
+  float hold_lost_ms = 0.0f;
+  float predict_lost_ms = 600.0f;
+  float max_prediction_velocity_mps = 3.0f;
+  float prediction_damping = 1.0f;
+  bool publish_predicted_velocity = false;
+  float reacquire_blend_ms = 0.0f;
+
+  // Optical hand orientation slowly updates a retained world-yaw offset. The
+  // offset remains active while the controller is outside the camera FOV.
+  float yaw_correction_alpha = 0.05f;
+  float yaw_correction_max_step_deg = 2.0f;
+};
+
+struct RuntimeControllerImuSideRuntimeState {
+  bool has_position_anchor = false;
+  bool prediction_active = false;
+  bool prediction_started = false;
+  bool reacquire_blend_active = false;
+  bool yaw_correction_valid = false;
+  uint64_t last_update_ns = 0;
+  uint64_t last_optical_pose_ns = 0;
+  uint64_t reacquire_blend_start_ns = 0;
+  float anchor_position_m[3] = {};
+  float anchor_velocity_mps[3] = {};
+  float position_m[3] = {};
+  float velocity_mps[3] = {};
+  float acceleration_position_delta_m[3] = {};
+  float acceleration_velocity_delta_mps[3] = {};
+  float reacquire_blend_from_position_m[3] = {};
+  float reacquire_blend_from_velocity_mps[3] = {};
+  float yaw_correction_rad = 0.0f;
+};
+
+struct RuntimeControllerSynthesisState {
+  RuntimeControllerImuSideRuntimeState left{};
+  RuntimeControllerImuSideRuntimeState right{};
+};
+
 struct RuntimeControllerSynthesisConfig {
   xr_runtime::RuntimeControllerMode mode = xr_runtime::RuntimeControllerMode::HAND_TRACKING_WITH_BUTTON_PRIORITY;
 
@@ -98,6 +151,8 @@ struct RuntimeControllerSynthesisConfig {
 
   RuntimeControllerImuOrientationConfig left_imu_orientation{};
   RuntimeControllerImuOrientationConfig right_imu_orientation{};
+  RuntimeControllerImuMotionConfig left_imu_motion{};
+  RuntimeControllerImuMotionConfig right_imu_motion{};
 
   LostHandPoseFallbackMode lost_hand_pose_fallback = LostHandPoseFallbackMode::PoseInvalid;
 
@@ -148,6 +203,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const RuntimeControllerSynthesisConfig& cfg,
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& filtered_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
-    const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose);
+    const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
+    RuntimeControllerSynthesisState* runtime_state = nullptr);
 
 }  // namespace xr_runtime_adapter::override_controller
