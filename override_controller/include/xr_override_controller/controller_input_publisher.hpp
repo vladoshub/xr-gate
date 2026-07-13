@@ -31,7 +31,7 @@ class ControllerInputShmPublisher {
   size_t size_ = 0;
   size_t header_size_ = 4096;
   size_t slot_header_size_ = 128;
-  size_t payload_size_ = sizeof(xr_runtime::ControllerInputV2);
+  size_t payload_size_ = sizeof(xr_runtime::ControllerInputV3);
   size_t slot_stride_ = 0;
   uint64_t sequence_ = 0;
 };

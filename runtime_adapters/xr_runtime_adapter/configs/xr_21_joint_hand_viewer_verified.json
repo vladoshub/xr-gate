@@ -338,6 +338,52 @@
         "z": -0.35
       }
     },
+    "imu_orientation": {
+      "left": {
+        "orientation_transform": {
+          "enabled": false,
+          "invert_x": false,
+          "invert_y": false,
+          "invert_z": false,
+          "basis_rotation": {
+            "rx_deg": 0.0,
+            "ry_deg": 0.0,
+            "rz_deg": 0.0
+          }
+        },
+        "orientation_offset": {
+          "enabled": false,
+          "multiply_order": "post",
+          "rotation_deg": {
+            "rx_deg": 0.0,
+            "ry_deg": 0.0,
+            "rz_deg": 0.0
+          }
+        }
+      },
+      "right": {
+        "orientation_transform": {
+          "enabled": false,
+          "invert_x": false,
+          "invert_y": false,
+          "invert_z": false,
+          "basis_rotation": {
+            "rx_deg": 0.0,
+            "ry_deg": 0.0,
+            "rz_deg": 0.0
+          }
+        },
+        "orientation_offset": {
+          "enabled": false,
+          "multiply_order": "post",
+          "rotation_deg": {
+            "rx_deg": 0.0,
+            "ry_deg": 0.0,
+            "rz_deg": 0.0
+          }
+        }
+      }
+    },
     "static_orientation": {
       "left_euler_deg": {
         "roll": 0.0,

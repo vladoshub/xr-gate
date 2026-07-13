@@ -114,6 +114,9 @@ struct ControllerOverrideFileConfig {
   bool has_right_static_orientation = false;
   std::array<float, 4> right_static_orientation_xyzw{0.0f, 0.0f, 0.0f, 1.0f};
 
+  override_controller::RuntimeControllerImuOrientationConfig left_imu_orientation{};
+  override_controller::RuntimeControllerImuOrientationConfig right_imu_orientation{};
+
   bool has_left_hand_gestures_enabled = false;
   bool left_hand_gestures_enabled = true;
   bool has_right_hand_gestures_enabled = false;
@@ -153,10 +156,10 @@ std::optional<std::array<float, 3>> json_euler_deg_optional(const nlohmann::json
     return out;
   }
   if (j.is_object()) {
-    // Prefer explicit roll/pitch/yaw names; accept x/y/z aliases for compact configs.
-    out[0] = j.value("roll", j.value("x", out[0]));
-    out[1] = j.value("pitch", j.value("y", out[1]));
-    out[2] = j.value("yaw", j.value("z", out[2]));
+    // Prefer explicit roll/pitch/yaw names; accept rx/ry/rz and x/y/z aliases.
+    out[0] = j.value("roll", j.value("rx_deg", j.value("x", out[0])));
+    out[1] = j.value("pitch", j.value("ry_deg", j.value("y", out[1])));
+    out[2] = j.value("yaw", j.value("rz_deg", j.value("z", out[2])));
     return out;
   }
   throw std::runtime_error(std::string(context) +
@@ -324,6 +327,107 @@ void parse_controller_override_static_orientation(const nlohmann::json& j,
   }
 }
 
+
+void copy_quat_xyzw(float dst[4], const std::array<float, 4>& src) {
+  for (size_t i = 0; i < 4; ++i) dst[i] = src[i];
+}
+
+std::optional<std::array<float, 4>> parse_orientation_rotation_quat(
+    const nlohmann::json& j,
+    const std::string& context,
+    bool basis_transform) {
+  if (!j.is_object()) return std::nullopt;
+
+  const char* quat_keys[] = {
+      basis_transform ? "basis_quat_xyzw" : "offset_quat_xyzw",
+      "quat_xyzw",
+      "quaternion_xyzw",
+  };
+  for (const char* key : quat_keys) {
+    if (j.contains(key)) {
+      return json_quat_xyzw_optional(j.at(key), (context + "." + key).c_str());
+    }
+  }
+
+  const char* euler_keys[] = {
+      basis_transform ? "basis_rotation" : "rotation_deg",
+      basis_transform ? "basis_rotation_deg" : "euler_deg",
+      "rotation",
+  };
+  for (const char* key : euler_keys) {
+    if (j.contains(key)) {
+      const auto euler = json_euler_deg_optional(j.at(key), (context + "." + key).c_str());
+      if (euler) return euler_deg_to_quat_xyzw(*euler);
+    }
+  }
+
+  if (j.contains("roll") || j.contains("pitch") || j.contains("yaw") ||
+      j.contains("rx_deg") || j.contains("ry_deg") || j.contains("rz_deg") ||
+      j.contains("x") || j.contains("y") || j.contains("z")) {
+    const auto euler = json_euler_deg_optional(j, context.c_str());
+    if (euler) return euler_deg_to_quat_xyzw(*euler);
+  }
+  return std::nullopt;
+}
+
+void parse_controller_imu_orientation_side(
+    const nlohmann::json& j,
+    override_controller::RuntimeControllerImuOrientationConfig& out,
+    const std::string& context) {
+  if (!j.is_object()) return;
+
+  if (j.contains("orientation_transform")) {
+    const auto& t = j.at("orientation_transform");
+    if (!t.is_object()) {
+      throw std::runtime_error(context + ".orientation_transform must be an object");
+    }
+    const auto q = parse_orientation_rotation_quat(
+        t, context + ".orientation_transform", true);
+    out.invert_x = t.value("invert_x", false);
+    out.invert_y = t.value("invert_y", false);
+    out.invert_z = t.value("invert_z", false);
+    const bool has_axis_inversion = out.invert_x || out.invert_y || out.invert_z;
+    out.transform_enabled = t.value("enabled", q.has_value() || has_axis_inversion);
+    if (q) copy_quat_xyzw(out.basis_rotation_xyzw, *q);
+  }
+
+  if (j.contains("orientation_offset")) {
+    const auto& o = j.at("orientation_offset");
+    if (!o.is_object()) {
+      throw std::runtime_error(context + ".orientation_offset must be an object");
+    }
+    const auto q = parse_orientation_rotation_quat(
+        o, context + ".orientation_offset", false);
+    out.offset_enabled = o.value("enabled", q.has_value());
+    if (q) copy_quat_xyzw(out.offset_rotation_xyzw, *q);
+
+    const std::string multiply_order = o.value("multiply_order", std::string("post"));
+    if (multiply_order == "pre" || multiply_order == "world") {
+      out.offset_pre_multiply = true;
+    } else if (multiply_order == "post" || multiply_order == "local") {
+      out.offset_pre_multiply = false;
+    } else {
+      throw std::runtime_error(
+          context + ".orientation_offset.multiply_order must be "
+          "'post'/'local' or 'pre'/'world'");
+    }
+  }
+}
+
+void parse_controller_override_imu_orientation(const nlohmann::json& j,
+                                               ControllerOverrideFileConfig& out,
+                                               const std::string& context) {
+  if (!j.is_object()) return;
+  if (j.contains("left")) {
+    parse_controller_imu_orientation_side(
+        j.at("left"), out.left_imu_orientation, context + ".left");
+  }
+  if (j.contains("right")) {
+    parse_controller_imu_orientation_side(
+        j.at("right"), out.right_imu_orientation, context + ".right");
+  }
+}
+
 void parse_controller_override_hand_gestures(const nlohmann::json& j,
                                              ControllerOverrideFileConfig& out) {
   if (!j.is_object()) return;
@@ -389,7 +493,7 @@ ControllerOverrideFileConfig load_controller_override_file_config(const std::str
   }
 
   // Per-side visual hand gesture gates. They control only hand-tracking-derived
-  // gestures; external ControllerInputV2 from override_controller is unaffected.
+  // gestures; external ControllerInputV3 from override_controller is unaffected.
   parse_controller_override_hand_gestures(j, cfg);
   if (j.contains("hand_gestures")) {
     parse_controller_override_hand_gestures(j.at("hand_gestures"), cfg);
@@ -416,6 +520,14 @@ ControllerOverrideFileConfig load_controller_override_file_config(const std::str
   if (j.contains("hand_position_static_orientation")) {
     parse_controller_override_static_orientation(j.at("hand_position_static_orientation"), cfg,
                                                  "controller_override.hand_position_static_orientation");
+  }
+
+  // Per-side IMU frame conversion and mounting alignment. These values are
+  // consumed only when the effective source for that side is
+  // IMU_OVERRIDE_CONTROLLER_RUNTIME; hand-tracking fallback is unchanged.
+  if (j.contains("imu_orientation")) {
+    parse_controller_override_imu_orientation(
+        j.at("imu_orientation"), cfg, "controller_override.imu_orientation");
   }
 
   if (j.contains("publish_runtime_controller_state_shm")) {
@@ -1959,7 +2071,7 @@ struct ControllerInputThreadSnapshot {
   uint64_t reattach_successes = 0;
   uint64_t reattach_failures = 0;
   std::string last_error;
-  std::optional<xr_runtime::ControllerInputV2> latest;
+  std::optional<xr_runtime::ControllerInputV3> latest;
 };
 
 class ControllerInputThread {
@@ -2026,16 +2138,15 @@ class ControllerInputThread {
 
   void run_shm_once() {
     auto info = xr_runtime::stream_info_from_registry(cfg_.input.registry, cfg_.input.stream);
-    if (info.format_name == xr_runtime::CONTROLLER_INPUT_FORMAT_NAME) {
-      run_shm_v1_once(std::move(info));
-      return;
+    if (info.format_name != xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME) {
+      throw std::runtime_error(
+          "unsupported controller input SHM ABI '" + info.format_name +
+          "'; expected CONTROLLER_INPUT_V3. Update override_controller and "
+          "xr_runtime_adapter from the same XR Gate release");
     }
-    run_shm_v2_once(std::move(info));
-  }
 
-  void run_shm_v2_once(xr_runtime::StreamInfo info) {
-    xr_runtime::TrackingRingReader<xr_runtime::ControllerInputV2> reader(
-        std::move(info), xr_runtime::CONTROLLER_INPUT_V2_FORMAT_NAME);
+    xr_runtime::TrackingRingReader<xr_runtime::ControllerInputV3> reader(
+        std::move(info), xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME);
     note_reattach_success();
     set_connected(true, "");
     uint64_t last_seq = 0;
@@ -2045,7 +2156,7 @@ class ControllerInputThread {
       if (frame && frame->sequence > last_seq) {
         last_seq = frame->sequence;
         last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        observe(std::move(*frame));
+        observe(*frame);
       } else {
         const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
         if (cfg_.input.max_age_ms > 0 &&
@@ -2057,31 +2168,15 @@ class ControllerInputThread {
     }
   }
 
-  void run_shm_v1_once(xr_runtime::StreamInfo info) {
-    xr_runtime::TrackingRingReader<xr_runtime::ControllerInputV1> reader(
-        std::move(info), xr_runtime::CONTROLLER_INPUT_FORMAT_NAME);
-    note_reattach_success();
-    set_connected(true, "");
-    uint64_t last_seq = 0;
-    uint64_t last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-    while (!stop_) {
-      auto frame = reader.latest();
-      if (frame && frame->sequence > last_seq) {
-        last_seq = frame->sequence;
-        last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        observe(xr_runtime::controller_input_v2_from_v1(*frame));
-      } else {
-        const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        if (cfg_.input.max_age_ms > 0 &&
-            xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - last_frame_ns)) >= cfg_.input.max_age_ms) {
-          throw std::runtime_error("controller input SHM stream stale; reattaching");
-        }
-        sleep_ms(1);
-      }
+  void observe(xr_runtime::ControllerInputV3 frame) {
+    if (frame.version != xr_runtime::CONTROLLER_INPUT_V3_FORMAT_VERSION ||
+        frame.size_bytes != sizeof(xr_runtime::ControllerInputV3)) {
+      throw std::runtime_error("invalid controller_input V3 frame header");
     }
-  }
-
-  void observe(xr_runtime::ControllerInputV2 frame) {
+    frame.left.imu.sample_count =
+        std::min(frame.left.imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES);
+    frame.right.imu.sample_count =
+        std::min(frame.right.imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES);
     const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
@@ -2386,6 +2481,65 @@ class BodyTrackerInputThread {
   std::unique_ptr<xr_tracking::BodyTrackerSetShmPublisher> runtime_publisher_;
 };
 
+bool runtime_controller_side_uses_imu_profile(
+    override_controller::RuntimeControllerOrientationSource configured,
+    const std::optional<xr_runtime::ControllerInputV3>& controller_input,
+    bool left) {
+  const xr_runtime::ControllerDeviceStateV3* side = nullptr;
+  if (controller_input) side = left ? &controller_input->left : &controller_input->right;
+  return override_controller::effective_runtime_controller_orientation_source(configured, side) ==
+         override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
+}
+
+bool runtime_hand_side_valid_for_frame(const xr_runtime::HandSideF32V2& side) {
+  if ((side.status != 1u && side.status != 2u) ||
+      (side.flags & xr_runtime::HAND_POSE_VALID) == 0u ||
+      !std::isfinite(side.controller_px) || !std::isfinite(side.controller_py) ||
+      !std::isfinite(side.controller_pz)) {
+    return false;
+  }
+  const float position_norm_sq = side.controller_px * side.controller_px +
+                                 side.controller_py * side.controller_py +
+                                 side.controller_pz * side.controller_pz;
+  return std::isfinite(position_norm_sq) && position_norm_sq > 1.0e-12f;
+}
+
+void recompute_runtime_hand_frame_status(xr_runtime::HandTrackingFrameF32V2& frame) {
+  frame.flags = 0;
+  frame.hand_count = 0;
+  frame.confidence = 0.0f;
+  bool degraded = false;
+  bool joints_valid = false;
+  if (runtime_hand_side_valid_for_frame(frame.left)) {
+    frame.flags |= xr_runtime::HAND_FLAG_LEFT_VALID;
+    ++frame.hand_count;
+    frame.confidence = std::max(frame.confidence, frame.left.confidence);
+    degraded = degraded || frame.left.status == 2u;
+    joints_valid = joints_valid || ((frame.left.flags & xr_runtime::HAND_JOINTS_VALID) != 0u);
+  }
+  if (runtime_hand_side_valid_for_frame(frame.right)) {
+    frame.flags |= xr_runtime::HAND_FLAG_RIGHT_VALID;
+    ++frame.hand_count;
+    frame.confidence = std::max(frame.confidence, frame.right.confidence);
+    degraded = degraded || frame.right.status == 2u;
+    joints_valid = joints_valid || ((frame.right.flags & xr_runtime::HAND_JOINTS_VALID) != 0u);
+  }
+  if (joints_valid) frame.flags |= xr_runtime::HAND_FLAG_JOINTS_VALID;
+  frame.tracking_status = frame.hand_count == 0 ? 0u : (degraded ? 2u : 1u);
+}
+
+void select_runtime_hand_profile_sides(
+    xr_runtime::HandTrackingFrameF32V2& output,
+    const xr_runtime::HandTrackingFrameF32V2& hand_tracking,
+    const xr_runtime::HandTrackingFrameF32V2& imu,
+    bool left_imu,
+    bool right_imu) {
+  output = hand_tracking;
+  if (left_imu) output.left = imu.left;
+  if (right_imu) output.right = imu.right;
+  recompute_runtime_hand_frame_status(output);
+}
+
 
 }  // namespace
 
@@ -2471,6 +2625,12 @@ int main(int argc, char** argv) {
 
   std::string runtime_controller_mode = "hand_tracking_with_button_priority";
   std::string runtime_controller_lost_hand_pose_fallback = "pose_invalid";
+  std::string runtime_controller_left_orientation_source = "HAND_TRACKING_BACKEND";
+  std::string runtime_controller_right_orientation_source = "HAND_TRACKING_BACKEND";
+  std::string runtime_controller_left_movement_space_hand_tracking = "controller";
+  std::string runtime_controller_right_movement_space_hand_tracking = "controller";
+  std::string runtime_controller_left_movement_space_imu = "controller";
+  std::string runtime_controller_right_movement_space_imu = "controller";
   bool publish_runtime_controller_state_shm = false;
   bool publish_runtime_controller_state_udp = false;
   std::string runtime_controller_state_udp_host = "127.0.0.1";
@@ -2568,32 +2728,39 @@ int main(int argc, char** argv) {
   double runtime_hand_gate_max_jump_m = 0.08;
   int runtime_hand_gate_confirm_frames = 4;
   double runtime_hand_gate_confirm_max_step_m = 0.03;
-  double runtime_hand_gate_hold_lost_ms = 180.0;
+  double runtime_hand_gate_hold_lost_ms_hand_tracking = 180.0;
+  double runtime_hand_gate_hold_lost_ms_imu = 180.0;
   double runtime_hand_gate_max_continuity_velocity_mps = 1.25;
-  double runtime_hand_gate_predict_lost_ms = 0.0;
+  double runtime_hand_gate_predict_lost_ms_hand_tracking = 0.0;
+  double runtime_hand_gate_predict_lost_ms_imu = 0.0;
   double runtime_hand_gate_max_prediction_velocity_mps = 2.0;
   double runtime_hand_gate_prediction_damping = 0.5;
   bool runtime_hand_gate_publish_predicted_velocity = false;
-  double runtime_hand_gate_reacquire_blend_ms = 0.0;
+  double runtime_hand_gate_reacquire_blend_ms_hand_tracking = 0.0;
+  double runtime_hand_gate_reacquire_blend_ms_imu = 0.0;
   std::string runtime_hand_gate_debug_csv;
 
   bool runtime_jitter_filter_enabled = false;
   double runtime_jitter_filter_hmd_cm = 0.20;
   double runtime_jitter_filter_tracker_cm = 0.50;
   double runtime_jitter_filter_hmd_deg = 0.15;
-  double runtime_jitter_filter_tracker_deg = 0.75;
+  double runtime_jitter_filter_tracker_deg_hand_tracking = 0.75;
+  double runtime_jitter_filter_tracker_deg_imu = 0.75;
   double runtime_jitter_filter_hmd_vel_cm_s = 1.0;
   double runtime_jitter_filter_tracker_vel_cm_s = 5.0;
   double runtime_jitter_filter_hmd_ang_vel_deg_s = 1.0;
-  double runtime_jitter_filter_tracker_ang_vel_deg_s = 5.0;
+  double runtime_jitter_filter_tracker_ang_vel_deg_s_hand_tracking = 5.0;
+  double runtime_jitter_filter_tracker_ang_vel_deg_s_imu = 5.0;
   double runtime_jitter_filter_hmd_vel_smooth_alpha = 1.0;
   double runtime_jitter_filter_tracker_vel_smooth_alpha = 1.0;
   double runtime_jitter_filter_hmd_ang_vel_smooth_alpha = 1.0;
-  double runtime_jitter_filter_tracker_ang_vel_smooth_alpha = 1.0;
+  double runtime_jitter_filter_tracker_ang_vel_smooth_alpha_hand_tracking = 1.0;
+  double runtime_jitter_filter_tracker_ang_vel_smooth_alpha_imu = 1.0;
   double runtime_jitter_filter_hmd_pos_smooth_alpha = 1.0;
   double runtime_jitter_filter_tracker_pos_smooth_alpha = 1.0;
   double runtime_jitter_filter_hmd_rot_smooth_alpha = 1.0;
-  double runtime_jitter_filter_tracker_rot_smooth_alpha = 1.0;
+  double runtime_jitter_filter_tracker_rot_smooth_alpha_hand_tracking = 1.0;
+  double runtime_jitter_filter_tracker_rot_smooth_alpha_imu = 1.0;
 
   std::string derived_thumbs_up_button = "a";
   std::string derived_index_point_button = "b";
@@ -2825,6 +2992,18 @@ int main(int argc, char** argv) {
   CLI::Option* runtime_controller_lost_hand_pose_fallback_option =
       app.add_option("--runtime-controller-lost-hand-pose-fallback", runtime_controller_lost_hand_pose_fallback,
                      "Hand-tracking controller modes: fallback pose when a hand is lost: pose_invalid, hmd_relative_with_input, hmd_relative_with_controller_present, or hmd_relative. hmd_relative_with_input keeps held override-controller hands body/HMD-relative only while physical buttons/axes are active.");
+  app.add_option("--runtime-controller-left-orientation-source", runtime_controller_left_orientation_source,
+                 "Left controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
+  app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
+                 "Right controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
+  app.add_option("--runtime-controller-left-movement-space-hand-tracking", runtime_controller_left_movement_space_hand_tracking,
+                 "Left controller movement space while using HAND_TRACKING_BACKEND: controller or hmd_pose");
+  app.add_option("--runtime-controller-right-movement-space-hand-tracking", runtime_controller_right_movement_space_hand_tracking,
+                 "Right controller movement space while using HAND_TRACKING_BACKEND: controller or hmd_pose");
+  app.add_option("--runtime-controller-left-movement-space-imu", runtime_controller_left_movement_space_imu,
+                 "Left controller movement space while using IMU_OVERRIDE_CONTROLLER_RUNTIME: controller or hmd_pose");
+  app.add_option("--runtime-controller-right-movement-space-imu", runtime_controller_right_movement_space_imu,
+                 "Right controller movement space while using IMU_OVERRIDE_CONTROLLER_RUNTIME: controller or hmd_pose");
   CLI::Option* publish_runtime_controller_state_shm_option =
       app.add_flag("--publish-runtime-controller-state-shm", publish_runtime_controller_state_shm,
                    "Publish RUNTIME_CONTROLLER_STATE_V1 output for OpenVR/Monado controller drivers");
@@ -3003,10 +3182,10 @@ int main(int argc, char** argv) {
                  "Ignore pinch/grab/button gesture values received from hand_tracking input before applying controller override or runtime-derived gestures");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
       app.add_option("--runtime-left-hand-gestures-enabled", runtime_left_hand_gestures_enabled,
-                     "Enable visual hand-tracking gestures for the left hand. ControllerInputV2 override buttons are unaffected. Normally set in config controller_override.hand_gestures.left_enabled");
+                     "Enable visual hand-tracking gestures for the left hand. ControllerInputV3 override buttons are unaffected. Normally set in config controller_override.hand_gestures.left_enabled");
   CLI::Option* runtime_right_hand_gestures_enabled_option =
       app.add_option("--runtime-right-hand-gestures-enabled", runtime_right_hand_gestures_enabled,
-                     "Enable visual hand-tracking gestures for the right hand. ControllerInputV2 override buttons are unaffected. Normally set in config controller_override.hand_gestures.right_enabled");
+                     "Enable visual hand-tracking gestures for the right hand. ControllerInputV3 override buttons are unaffected. Normally set in config controller_override.hand_gestures.right_enabled");
   app.add_option("--runtime-derive-extra-gesture-buttons", runtime_derive_extra_gesture_buttons,
                  "Derive extra visual hand gestures such as thumbs_up/index_point and map them to runtime button bits");
   app.add_option("--runtime-derive-extra-gesture-buttons-with-controller-input", runtime_derive_extra_gesture_buttons_with_controller_input,
@@ -3020,20 +3199,29 @@ int main(int argc, char** argv) {
                  "Runtime hand gate: consecutive stable frames required to accept a far reacquire candidate");
   app.add_option("--runtime-hand-gate-confirm-max-step-m", runtime_hand_gate_confirm_max_step_m,
                  "Runtime hand gate: max step in meters between pending reacquire confirmation frames");
-  app.add_option("--runtime-hand-gate-hold-lost-ms", runtime_hand_gate_hold_lost_ms,
-                 "Runtime hand gate: how long to hold the last good hand pose after tracking loss/rejected jump");
+  app.add_option("--runtime-hand-gate-hold-lost-ms,--runtime-hand-gate-hold-lost-ms-hand-tracking",
+                 runtime_hand_gate_hold_lost_ms_hand_tracking,
+                 "Runtime hand gate HAND_TRACKING profile: how long to hold the last good hand pose after tracking loss/rejected jump");
+  app.add_option("--runtime-hand-gate-hold-lost-ms-imu", runtime_hand_gate_hold_lost_ms_imu,
+                 "Runtime hand gate IMU profile: how long to hold the last good hand pose after tracking loss/rejected jump");
   app.add_option("--runtime-hand-gate-max-continuity-velocity-mps", runtime_hand_gate_max_continuity_velocity_mps,
                  "Runtime hand gate: reject continuous hand tracking updates faster than this velocity in meters/second; <=0 disables");
-  app.add_option("--runtime-hand-gate-predict-lost-ms", runtime_hand_gate_predict_lost_ms,
-                 "Runtime hand gate: lost-hand prediction window after hold_lost in milliseconds; 0 disables");
+  app.add_option("--runtime-hand-gate-predict-lost-ms,--runtime-hand-gate-predict-lost-ms-hand-tracking",
+                 runtime_hand_gate_predict_lost_ms_hand_tracking,
+                 "Runtime hand gate HAND_TRACKING profile: lost-hand prediction window after hold_lost in milliseconds; 0 disables");
+  app.add_option("--runtime-hand-gate-predict-lost-ms-imu", runtime_hand_gate_predict_lost_ms_imu,
+                 "Runtime hand gate IMU profile: lost-hand prediction window after hold_lost in milliseconds; 0 disables");
   app.add_option("--runtime-hand-gate-max-prediction-velocity-mps", runtime_hand_gate_max_prediction_velocity_mps,
                  "Runtime hand gate: clamp predicted lost-hand linear velocity in meters/second");
   app.add_option("--runtime-hand-gate-prediction-damping", runtime_hand_gate_prediction_damping,
                  "Runtime hand gate: prediction damping factor in 0..1 before applying lost-hand velocity");
   app.add_option("--runtime-hand-gate-publish-predicted-velocity", runtime_hand_gate_publish_predicted_velocity,
                  "Runtime hand gate: publish decaying linear velocity with predicted hand poses; false avoids downstream double prediction");
-  app.add_option("--runtime-hand-gate-reacquire-blend-ms", runtime_hand_gate_reacquire_blend_ms,
-                 "Runtime hand gate: blend from the latest predicted pose when tracking returns during prediction; 0 disables");
+  app.add_option("--runtime-hand-gate-reacquire-blend-ms,--runtime-hand-gate-reacquire-blend-ms-hand-tracking",
+                 runtime_hand_gate_reacquire_blend_ms_hand_tracking,
+                 "Runtime hand gate HAND_TRACKING profile: blend from the latest predicted pose when tracking returns during prediction; 0 disables");
+  app.add_option("--runtime-hand-gate-reacquire-blend-ms-imu", runtime_hand_gate_reacquire_blend_ms_imu,
+                 "Runtime hand gate IMU profile: blend from the latest predicted pose when tracking returns during prediction; 0 disables");
   app.add_option("--runtime-hand-gate-debug-csv", runtime_hand_gate_debug_csv,
                  "Runtime hand gate: optional CSV path for gate decisions");
 
@@ -3042,35 +3230,47 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-jitter-filter-hmd-cm", runtime_jitter_filter_hmd_cm,
                  "Runtime jitter filter HMD position deadband in centimeters; <=0 disables HMD position deadband");
   app.add_option("--runtime-jitter-filter-tracker-cm", runtime_jitter_filter_tracker_cm,
-                 "Runtime jitter filter hand/body tracker position deadband in centimeters; <=0 disables tracker position deadband");
+                 "Runtime jitter filter tracker position deadband in centimeters; <=0 disables tracker position deadband");
   app.add_option("--runtime-jitter-filter-hmd-deg", runtime_jitter_filter_hmd_deg,
                  "Runtime jitter filter HMD orientation deadband in degrees; <=0 disables HMD orientation deadband");
-  app.add_option("--runtime-jitter-filter-tracker-deg", runtime_jitter_filter_tracker_deg,
-                 "Runtime jitter filter hand/body tracker orientation deadband in degrees; <=0 disables tracker orientation deadband");
+  app.add_option("--runtime-jitter-filter-tracker-deg,--runtime-jitter-filter-tracker-deg-hand-tracking",
+                 runtime_jitter_filter_tracker_deg_hand_tracking,
+                 "Runtime jitter filter HAND_TRACKING profile orientation deadband in degrees; <=0 disables tracker orientation deadband");
+  app.add_option("--runtime-jitter-filter-tracker-deg-imu", runtime_jitter_filter_tracker_deg_imu,
+                 "Runtime jitter filter IMU profile orientation deadband in degrees; <=0 disables tracker orientation deadband");
   app.add_option("--runtime-jitter-filter-hmd-vel-cm-s", runtime_jitter_filter_hmd_vel_cm_s,
                  "Runtime jitter filter HMD linear velocity zero-deadband in centimeters per second; <=0 disables HMD velocity deadband");
   app.add_option("--runtime-jitter-filter-tracker-vel-cm-s", runtime_jitter_filter_tracker_vel_cm_s,
-                 "Runtime jitter filter hand/body tracker linear velocity zero-deadband in centimeters per second; <=0 disables tracker velocity deadband");
+                 "Runtime jitter filter tracker linear velocity zero-deadband in centimeters per second; <=0 disables tracker velocity deadband");
   app.add_option("--runtime-jitter-filter-hmd-ang-vel-deg-s", runtime_jitter_filter_hmd_ang_vel_deg_s,
                  "Runtime jitter filter HMD angular velocity zero-deadband in degrees per second; <=0 disables HMD angular velocity deadband");
-  app.add_option("--runtime-jitter-filter-tracker-ang-vel-deg-s", runtime_jitter_filter_tracker_ang_vel_deg_s,
-                 "Runtime jitter filter hand/body tracker angular velocity zero-deadband in degrees per second; <=0 disables tracker angular velocity deadband");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-deg-s,--runtime-jitter-filter-tracker-ang-vel-deg-s-hand-tracking",
+                 runtime_jitter_filter_tracker_ang_vel_deg_s_hand_tracking,
+                 "Runtime jitter filter HAND_TRACKING profile angular velocity zero-deadband in degrees per second; <=0 disables tracker angular velocity deadband");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-deg-s-imu", runtime_jitter_filter_tracker_ang_vel_deg_s_imu,
+                 "Runtime jitter filter IMU profile angular velocity zero-deadband in degrees per second; <=0 disables tracker angular velocity deadband");
   app.add_option("--runtime-jitter-filter-hmd-vel-smooth-alpha", runtime_jitter_filter_hmd_vel_smooth_alpha,
                  "Runtime jitter filter HMD linear velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
   app.add_option("--runtime-jitter-filter-tracker-vel-smooth-alpha", runtime_jitter_filter_tracker_vel_smooth_alpha,
-                 "Runtime jitter filter hand/body tracker linear velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+                 "Runtime jitter filter tracker linear velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
   app.add_option("--runtime-jitter-filter-hmd-ang-vel-smooth-alpha", runtime_jitter_filter_hmd_ang_vel_smooth_alpha,
                  "Runtime jitter filter HMD angular velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
-  app.add_option("--runtime-jitter-filter-tracker-ang-vel-smooth-alpha", runtime_jitter_filter_tracker_ang_vel_smooth_alpha,
-                 "Runtime jitter filter hand/body tracker angular velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-smooth-alpha,--runtime-jitter-filter-tracker-ang-vel-smooth-alpha-hand-tracking",
+                 runtime_jitter_filter_tracker_ang_vel_smooth_alpha_hand_tracking,
+                 "Runtime jitter filter HAND_TRACKING profile angular velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-ang-vel-smooth-alpha-imu", runtime_jitter_filter_tracker_ang_vel_smooth_alpha_imu,
+                 "Runtime jitter filter IMU profile angular velocity EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
   app.add_option("--runtime-jitter-filter-hmd-pos-smooth-alpha", runtime_jitter_filter_hmd_pos_smooth_alpha,
                  "Runtime jitter filter HMD position EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
   app.add_option("--runtime-jitter-filter-tracker-pos-smooth-alpha", runtime_jitter_filter_tracker_pos_smooth_alpha,
-                 "Runtime jitter filter hand/body tracker position EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+                 "Runtime jitter filter tracker position EMA smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
   app.add_option("--runtime-jitter-filter-hmd-rot-smooth-alpha", runtime_jitter_filter_hmd_rot_smooth_alpha,
                  "Runtime jitter filter HMD orientation SLERP smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
-  app.add_option("--runtime-jitter-filter-tracker-rot-smooth-alpha", runtime_jitter_filter_tracker_rot_smooth_alpha,
-                 "Runtime jitter filter hand/body tracker orientation SLERP smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-rot-smooth-alpha,--runtime-jitter-filter-tracker-rot-smooth-alpha-hand-tracking",
+                 runtime_jitter_filter_tracker_rot_smooth_alpha_hand_tracking,
+                 "Runtime jitter filter HAND_TRACKING profile orientation SLERP smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
+  app.add_option("--runtime-jitter-filter-tracker-rot-smooth-alpha-imu", runtime_jitter_filter_tracker_rot_smooth_alpha_imu,
+                 "Runtime jitter filter IMU profile orientation SLERP smoothing alpha in [0..1]; 1 disables smoothing, lower values smooth more");
 
   app.add_option("--derived-thumbs-up-button", derived_thumbs_up_button,
                  "Runtime button mapped from visually-derived thumbs_up: none, a, b, menu, thumbstick, trigger, grip");
@@ -3226,6 +3426,30 @@ int main(int argc, char** argv) {
       override_controller::parse_lost_hand_pose_fallback_mode(
           runtime_controller_lost_hand_pose_fallback,
           "--runtime-controller-lost-hand-pose-fallback");
+  const override_controller::RuntimeControllerOrientationSource runtime_controller_left_orientation_source_value =
+      override_controller::parse_runtime_controller_orientation_source(
+          runtime_controller_left_orientation_source,
+          "--runtime-controller-left-orientation-source");
+  const override_controller::RuntimeControllerOrientationSource runtime_controller_right_orientation_source_value =
+      override_controller::parse_runtime_controller_orientation_source(
+          runtime_controller_right_orientation_source,
+          "--runtime-controller-right-orientation-source");
+  const override_controller::RuntimeControllerMovementSpace runtime_controller_left_movement_space_hand_tracking_value =
+      override_controller::parse_runtime_controller_movement_space(
+          runtime_controller_left_movement_space_hand_tracking,
+          "--runtime-controller-left-movement-space-hand-tracking");
+  const override_controller::RuntimeControllerMovementSpace runtime_controller_right_movement_space_hand_tracking_value =
+      override_controller::parse_runtime_controller_movement_space(
+          runtime_controller_right_movement_space_hand_tracking,
+          "--runtime-controller-right-movement-space-hand-tracking");
+  const override_controller::RuntimeControllerMovementSpace runtime_controller_left_movement_space_imu_value =
+      override_controller::parse_runtime_controller_movement_space(
+          runtime_controller_left_movement_space_imu,
+          "--runtime-controller-left-movement-space-imu");
+  const override_controller::RuntimeControllerMovementSpace runtime_controller_right_movement_space_imu_value =
+      override_controller::parse_runtime_controller_movement_space(
+          runtime_controller_right_movement_space_imu,
+          "--runtime-controller-right-movement-space-imu");
 
   // In controller-buttons-only modes the hand pose is still used for controller
   // pose, but visual/backend hand gestures must not become controller inputs.
@@ -3452,6 +3676,49 @@ int main(int argc, char** argv) {
               << override_controller::lost_hand_pose_fallback_mode_name(
                      runtime_controller_lost_hand_pose_fallback_value)
               << "\n";
+    std::cout << "runtime_controller_left_orientation_source: "
+              << override_controller::runtime_controller_orientation_source_name(
+                     runtime_controller_left_orientation_source_value) << "\n";
+    std::cout << "runtime_controller_right_orientation_source: "
+              << override_controller::runtime_controller_orientation_source_name(
+                     runtime_controller_right_orientation_source_value) << "\n";
+    const auto log_imu_orientation_config = [](
+        const char* side,
+        const override_controller::RuntimeControllerImuOrientationConfig& cfg) {
+      std::cout << "runtime_controller_" << side
+                << "_imu_orientation_transform: enabled="
+                << (cfg.transform_enabled ? "true" : "false")
+                << " invert_xyz=[" << (cfg.invert_x ? "true" : "false") << ", "
+                << (cfg.invert_y ? "true" : "false") << ", "
+                << (cfg.invert_z ? "true" : "false") << "]"
+                << " basis_xyzw=[" << cfg.basis_rotation_xyzw[0] << ", "
+                << cfg.basis_rotation_xyzw[1] << ", "
+                << cfg.basis_rotation_xyzw[2] << ", "
+                << cfg.basis_rotation_xyzw[3] << "]\n";
+      std::cout << "runtime_controller_" << side
+                << "_imu_orientation_offset: enabled="
+                << (cfg.offset_enabled ? "true" : "false")
+                << " multiply_order="
+                << (cfg.offset_pre_multiply ? "pre" : "post")
+                << " offset_xyzw=[" << cfg.offset_rotation_xyzw[0] << ", "
+                << cfg.offset_rotation_xyzw[1] << ", "
+                << cfg.offset_rotation_xyzw[2] << ", "
+                << cfg.offset_rotation_xyzw[3] << "]\n";
+    };
+    log_imu_orientation_config("left", controller_override_file_config.left_imu_orientation);
+    log_imu_orientation_config("right", controller_override_file_config.right_imu_orientation);
+    std::cout << "runtime_controller_left_movement_space_hand_tracking: "
+              << override_controller::runtime_controller_movement_space_name(
+                     runtime_controller_left_movement_space_hand_tracking_value) << "\n";
+    std::cout << "runtime_controller_right_movement_space_hand_tracking: "
+              << override_controller::runtime_controller_movement_space_name(
+                     runtime_controller_right_movement_space_hand_tracking_value) << "\n";
+    std::cout << "runtime_controller_left_movement_space_imu: "
+              << override_controller::runtime_controller_movement_space_name(
+                     runtime_controller_left_movement_space_imu_value) << "\n";
+    std::cout << "runtime_controller_right_movement_space_imu: "
+              << override_controller::runtime_controller_movement_space_name(
+                     runtime_controller_right_movement_space_imu_value) << "\n";
     std::cout << "effective_runtime_left_hand_gestures_enabled: "
               << (effective_runtime_left_hand_gestures_enabled ? "true" : "false") << "\n";
     std::cout << "effective_runtime_right_hand_gestures_enabled: "
@@ -3469,14 +3736,17 @@ int main(int argc, char** argv) {
       std::cout << "runtime_hand_gate_max_jump_m: " << runtime_hand_gate_max_jump_m << "\n";
       std::cout << "runtime_hand_gate_confirm_frames: " << runtime_hand_gate_confirm_frames << "\n";
       std::cout << "runtime_hand_gate_confirm_max_step_m: " << runtime_hand_gate_confirm_max_step_m << "\n";
-      std::cout << "runtime_hand_gate_hold_lost_ms: " << runtime_hand_gate_hold_lost_ms << "\n";
+      std::cout << "runtime_hand_gate_hold_lost_ms_hand_tracking: " << runtime_hand_gate_hold_lost_ms_hand_tracking << "\n";
+      std::cout << "runtime_hand_gate_hold_lost_ms_imu: " << runtime_hand_gate_hold_lost_ms_imu << "\n";
       std::cout << "runtime_hand_gate_max_continuity_velocity_mps: " << runtime_hand_gate_max_continuity_velocity_mps << "\n";
-      std::cout << "runtime_hand_gate_predict_lost_ms: " << runtime_hand_gate_predict_lost_ms << "\n";
+      std::cout << "runtime_hand_gate_predict_lost_ms_hand_tracking: " << runtime_hand_gate_predict_lost_ms_hand_tracking << "\n";
+      std::cout << "runtime_hand_gate_predict_lost_ms_imu: " << runtime_hand_gate_predict_lost_ms_imu << "\n";
       std::cout << "runtime_hand_gate_max_prediction_velocity_mps: " << runtime_hand_gate_max_prediction_velocity_mps << "\n";
       std::cout << "runtime_hand_gate_prediction_damping: " << runtime_hand_gate_prediction_damping << "\n";
       std::cout << "runtime_hand_gate_publish_predicted_velocity: "
                 << (runtime_hand_gate_publish_predicted_velocity ? "true" : "false") << "\n";
-      std::cout << "runtime_hand_gate_reacquire_blend_ms: " << runtime_hand_gate_reacquire_blend_ms << "\n";
+      std::cout << "runtime_hand_gate_reacquire_blend_ms_hand_tracking: " << runtime_hand_gate_reacquire_blend_ms_hand_tracking << "\n";
+      std::cout << "runtime_hand_gate_reacquire_blend_ms_imu: " << runtime_hand_gate_reacquire_blend_ms_imu << "\n";
       if (!runtime_hand_gate_debug_csv.empty()) {
         std::cout << "runtime_hand_gate_debug_csv: " << runtime_hand_gate_debug_csv << "\n";
       }
@@ -3486,19 +3756,23 @@ int main(int argc, char** argv) {
       std::cout << "runtime_jitter_filter_hmd_cm: " << runtime_jitter_filter_hmd_cm << "\n";
       std::cout << "runtime_jitter_filter_tracker_cm: " << runtime_jitter_filter_tracker_cm << "\n";
       std::cout << "runtime_jitter_filter_hmd_deg: " << runtime_jitter_filter_hmd_deg << "\n";
-      std::cout << "runtime_jitter_filter_tracker_deg: " << runtime_jitter_filter_tracker_deg << "\n";
+      std::cout << "runtime_jitter_filter_tracker_deg_hand_tracking: " << runtime_jitter_filter_tracker_deg_hand_tracking << "\n";
+      std::cout << "runtime_jitter_filter_tracker_deg_imu: " << runtime_jitter_filter_tracker_deg_imu << "\n";
       std::cout << "runtime_jitter_filter_hmd_vel_cm_s: " << runtime_jitter_filter_hmd_vel_cm_s << "\n";
       std::cout << "runtime_jitter_filter_tracker_vel_cm_s: " << runtime_jitter_filter_tracker_vel_cm_s << "\n";
       std::cout << "runtime_jitter_filter_hmd_ang_vel_deg_s: " << runtime_jitter_filter_hmd_ang_vel_deg_s << "\n";
-      std::cout << "runtime_jitter_filter_tracker_ang_vel_deg_s: " << runtime_jitter_filter_tracker_ang_vel_deg_s << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_deg_s_hand_tracking: " << runtime_jitter_filter_tracker_ang_vel_deg_s_hand_tracking << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_deg_s_imu: " << runtime_jitter_filter_tracker_ang_vel_deg_s_imu << "\n";
       std::cout << "runtime_jitter_filter_hmd_vel_smooth_alpha: " << runtime_jitter_filter_hmd_vel_smooth_alpha << "\n";
       std::cout << "runtime_jitter_filter_tracker_vel_smooth_alpha: " << runtime_jitter_filter_tracker_vel_smooth_alpha << "\n";
       std::cout << "runtime_jitter_filter_hmd_ang_vel_smooth_alpha: " << runtime_jitter_filter_hmd_ang_vel_smooth_alpha << "\n";
-      std::cout << "runtime_jitter_filter_tracker_ang_vel_smooth_alpha: " << runtime_jitter_filter_tracker_ang_vel_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_smooth_alpha_hand_tracking: " << runtime_jitter_filter_tracker_ang_vel_smooth_alpha_hand_tracking << "\n";
+      std::cout << "runtime_jitter_filter_tracker_ang_vel_smooth_alpha_imu: " << runtime_jitter_filter_tracker_ang_vel_smooth_alpha_imu << "\n";
       std::cout << "runtime_jitter_filter_hmd_pos_smooth_alpha: " << runtime_jitter_filter_hmd_pos_smooth_alpha << "\n";
       std::cout << "runtime_jitter_filter_tracker_pos_smooth_alpha: " << runtime_jitter_filter_tracker_pos_smooth_alpha << "\n";
       std::cout << "runtime_jitter_filter_hmd_rot_smooth_alpha: " << runtime_jitter_filter_hmd_rot_smooth_alpha << "\n";
-      std::cout << "runtime_jitter_filter_tracker_rot_smooth_alpha: " << runtime_jitter_filter_tracker_rot_smooth_alpha << "\n";
+      std::cout << "runtime_jitter_filter_tracker_rot_smooth_alpha_hand_tracking: " << runtime_jitter_filter_tracker_rot_smooth_alpha_hand_tracking << "\n";
+      std::cout << "runtime_jitter_filter_tracker_rot_smooth_alpha_imu: " << runtime_jitter_filter_tracker_rot_smooth_alpha_imu << "\n";
     }
     std::cout << "derived_thumbs_up_button: " << derived_thumbs_up_button << "\n";
     std::cout << "derived_index_point_button: " << derived_index_point_button << "\n";
@@ -3840,19 +4114,19 @@ int main(int argc, char** argv) {
       cfg.jitter_filter.hmd_threshold_m = runtime_jitter_filter_hmd_cm / 100.0;
       cfg.jitter_filter.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
       cfg.jitter_filter.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
-      cfg.jitter_filter.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg_hand_tracking * 3.14159265358979323846 / 180.0;
       cfg.jitter_filter.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
       cfg.jitter_filter.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
       cfg.jitter_filter.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
-      cfg.jitter_filter.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+      cfg.jitter_filter.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s_hand_tracking * 3.14159265358979323846 / 180.0;
       cfg.jitter_filter.hmd_velocity_smooth_alpha = runtime_jitter_filter_hmd_vel_smooth_alpha;
       cfg.jitter_filter.tracker_velocity_smooth_alpha = runtime_jitter_filter_tracker_vel_smooth_alpha;
       cfg.jitter_filter.hmd_angular_velocity_smooth_alpha = runtime_jitter_filter_hmd_ang_vel_smooth_alpha;
-      cfg.jitter_filter.tracker_angular_velocity_smooth_alpha = runtime_jitter_filter_tracker_ang_vel_smooth_alpha;
+      cfg.jitter_filter.tracker_angular_velocity_smooth_alpha = runtime_jitter_filter_tracker_ang_vel_smooth_alpha_hand_tracking;
       cfg.jitter_filter.hmd_position_smooth_alpha = runtime_jitter_filter_hmd_pos_smooth_alpha;
       cfg.jitter_filter.tracker_position_smooth_alpha = runtime_jitter_filter_tracker_pos_smooth_alpha;
       cfg.jitter_filter.hmd_orientation_smooth_alpha = runtime_jitter_filter_hmd_rot_smooth_alpha;
-      cfg.jitter_filter.tracker_orientation_smooth_alpha = runtime_jitter_filter_tracker_rot_smooth_alpha;
+      cfg.jitter_filter.tracker_orientation_smooth_alpha = runtime_jitter_filter_tracker_rot_smooth_alpha_hand_tracking;
       cfg.stability_gate.enabled = runtime_body_tracker_stability_gate;
       cfg.stability_gate.hold_lost_ms = runtime_body_tracker_hold_lost_ms;
       cfg.stability_gate.predict_lost_ms = runtime_body_tracker_predict_lost_ms;
@@ -3985,6 +4259,20 @@ int main(int argc, char** argv) {
     runtime_controller_synthesis_cfg.left_hand_gestures_enabled = effective_runtime_left_hand_gestures_enabled;
     runtime_controller_synthesis_cfg.right_hand_gestures_enabled = effective_runtime_right_hand_gestures_enabled;
     runtime_controller_synthesis_cfg.lost_hand_pose_fallback = runtime_controller_lost_hand_pose_fallback_value;
+    runtime_controller_synthesis_cfg.left_orientation_source = runtime_controller_left_orientation_source_value;
+    runtime_controller_synthesis_cfg.right_orientation_source = runtime_controller_right_orientation_source_value;
+    runtime_controller_synthesis_cfg.left_imu_orientation =
+        controller_override_file_config.left_imu_orientation;
+    runtime_controller_synthesis_cfg.right_imu_orientation =
+        controller_override_file_config.right_imu_orientation;
+    runtime_controller_synthesis_cfg.left_hand_tracking_movement_space =
+        runtime_controller_left_movement_space_hand_tracking_value;
+    runtime_controller_synthesis_cfg.right_hand_tracking_movement_space =
+        runtime_controller_right_movement_space_hand_tracking_value;
+    runtime_controller_synthesis_cfg.left_imu_movement_space =
+        runtime_controller_left_movement_space_imu_value;
+    runtime_controller_synthesis_cfg.right_imu_movement_space =
+        runtime_controller_right_movement_space_imu_value;
 
     const auto start = std::chrono::steady_clock::now();
     auto next_tick = start;
@@ -4018,43 +4306,79 @@ int main(int argc, char** argv) {
       runtime_hmd_stability_filter.configure(std::move(hmd_gate_cfg));
     }
 
-    hand_filter::HandPoseStabilityFilter runtime_hand_stability_filter;
+    auto make_hand_gate_cfg = [&](double hold_lost_ms,
+                                  double predict_lost_ms,
+                                  double reacquire_blend_ms,
+                                  std::string debug_csv) {
+      hand_filter::HandPoseStabilityFilterConfig cfg;
+      cfg.enabled = runtime_hand_stability_gate;
+      cfg.max_reacquire_jump_m = runtime_hand_gate_max_jump_m;
+      cfg.confirm_frames = static_cast<uint32_t>(std::max(1, runtime_hand_gate_confirm_frames));
+      cfg.confirm_max_step_m = runtime_hand_gate_confirm_max_step_m;
+      cfg.hold_lost_ms = hold_lost_ms;
+      cfg.max_continuity_velocity_mps = runtime_hand_gate_max_continuity_velocity_mps;
+      cfg.predict_lost_ms = predict_lost_ms;
+      cfg.max_prediction_velocity_mps = runtime_hand_gate_max_prediction_velocity_mps;
+      cfg.prediction_damping = runtime_hand_gate_prediction_damping;
+      cfg.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
+      cfg.reacquire_blend_ms = reacquire_blend_ms;
+      cfg.debug_csv = std::move(debug_csv);
+      return cfg;
+    };
+
+    hand_filter::HandPoseStabilityFilter runtime_hand_stability_filter_hand_tracking;
+    hand_filter::HandPoseStabilityFilter runtime_hand_stability_filter_imu;
     if (runtime_hand_stability_gate) {
-      hand_filter::HandPoseStabilityFilterConfig gate_cfg;
-      gate_cfg.enabled = true;
-      gate_cfg.max_reacquire_jump_m = runtime_hand_gate_max_jump_m;
-      gate_cfg.confirm_frames = static_cast<uint32_t>(std::max(1, runtime_hand_gate_confirm_frames));
-      gate_cfg.confirm_max_step_m = runtime_hand_gate_confirm_max_step_m;
-      gate_cfg.hold_lost_ms = runtime_hand_gate_hold_lost_ms;
-      gate_cfg.max_continuity_velocity_mps = runtime_hand_gate_max_continuity_velocity_mps;
-      gate_cfg.predict_lost_ms = runtime_hand_gate_predict_lost_ms;
-      gate_cfg.max_prediction_velocity_mps = runtime_hand_gate_max_prediction_velocity_mps;
-      gate_cfg.prediction_damping = runtime_hand_gate_prediction_damping;
-      gate_cfg.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
-      gate_cfg.reacquire_blend_ms = runtime_hand_gate_reacquire_blend_ms;
-      gate_cfg.debug_csv = runtime_hand_gate_debug_csv;
-      runtime_hand_stability_filter.configure(std::move(gate_cfg));
+      runtime_hand_stability_filter_hand_tracking.configure(make_hand_gate_cfg(
+          runtime_hand_gate_hold_lost_ms_hand_tracking,
+          runtime_hand_gate_predict_lost_ms_hand_tracking,
+          runtime_hand_gate_reacquire_blend_ms_hand_tracking,
+          runtime_hand_gate_debug_csv));
+      runtime_hand_stability_filter_imu.configure(make_hand_gate_cfg(
+          runtime_hand_gate_hold_lost_ms_imu,
+          runtime_hand_gate_predict_lost_ms_imu,
+          runtime_hand_gate_reacquire_blend_ms_imu,
+          {}));
     }
 
-    jitter_filter::RuntimeJitterFilterConfig runtime_jitter_filter_cfg;
-    runtime_jitter_filter_cfg.enabled = runtime_jitter_filter_enabled;
-    runtime_jitter_filter_cfg.hmd_threshold_m = runtime_jitter_filter_hmd_cm / 100.0;
-    runtime_jitter_filter_cfg.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
-    runtime_jitter_filter_cfg.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
-    runtime_jitter_filter_cfg.tracker_angle_threshold_rad = runtime_jitter_filter_tracker_deg * 3.14159265358979323846 / 180.0;
-    runtime_jitter_filter_cfg.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
-    runtime_jitter_filter_cfg.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
-    runtime_jitter_filter_cfg.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
-    runtime_jitter_filter_cfg.tracker_angular_velocity_threshold_radps = runtime_jitter_filter_tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
-    runtime_jitter_filter_cfg.hmd_velocity_smooth_alpha = runtime_jitter_filter_hmd_vel_smooth_alpha;
-    runtime_jitter_filter_cfg.tracker_velocity_smooth_alpha = runtime_jitter_filter_tracker_vel_smooth_alpha;
-    runtime_jitter_filter_cfg.hmd_angular_velocity_smooth_alpha = runtime_jitter_filter_hmd_ang_vel_smooth_alpha;
-    runtime_jitter_filter_cfg.tracker_angular_velocity_smooth_alpha = runtime_jitter_filter_tracker_ang_vel_smooth_alpha;
-    runtime_jitter_filter_cfg.hmd_position_smooth_alpha = runtime_jitter_filter_hmd_pos_smooth_alpha;
-    runtime_jitter_filter_cfg.tracker_position_smooth_alpha = runtime_jitter_filter_tracker_pos_smooth_alpha;
-    runtime_jitter_filter_cfg.hmd_orientation_smooth_alpha = runtime_jitter_filter_hmd_rot_smooth_alpha;
-    runtime_jitter_filter_cfg.tracker_orientation_smooth_alpha = runtime_jitter_filter_tracker_rot_smooth_alpha;
-    jitter_filter::RuntimeJitterFilter runtime_jitter_filter(runtime_jitter_filter_cfg);
+    auto make_jitter_cfg = [&](double tracker_deg,
+                               double tracker_ang_vel_deg_s,
+                               double tracker_ang_vel_smooth_alpha,
+                               double tracker_rot_smooth_alpha) {
+      jitter_filter::RuntimeJitterFilterConfig cfg;
+      cfg.enabled = runtime_jitter_filter_enabled;
+      cfg.hmd_threshold_m = runtime_jitter_filter_hmd_cm / 100.0;
+      cfg.tracker_threshold_m = runtime_jitter_filter_tracker_cm / 100.0;
+      cfg.hmd_angle_threshold_rad = runtime_jitter_filter_hmd_deg * 3.14159265358979323846 / 180.0;
+      cfg.tracker_angle_threshold_rad = tracker_deg * 3.14159265358979323846 / 180.0;
+      cfg.hmd_velocity_threshold_mps = runtime_jitter_filter_hmd_vel_cm_s / 100.0;
+      cfg.tracker_velocity_threshold_mps = runtime_jitter_filter_tracker_vel_cm_s / 100.0;
+      cfg.hmd_angular_velocity_threshold_radps = runtime_jitter_filter_hmd_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+      cfg.tracker_angular_velocity_threshold_radps = tracker_ang_vel_deg_s * 3.14159265358979323846 / 180.0;
+      cfg.hmd_velocity_smooth_alpha = runtime_jitter_filter_hmd_vel_smooth_alpha;
+      cfg.tracker_velocity_smooth_alpha = runtime_jitter_filter_tracker_vel_smooth_alpha;
+      cfg.hmd_angular_velocity_smooth_alpha = runtime_jitter_filter_hmd_ang_vel_smooth_alpha;
+      cfg.tracker_angular_velocity_smooth_alpha = tracker_ang_vel_smooth_alpha;
+      cfg.hmd_position_smooth_alpha = runtime_jitter_filter_hmd_pos_smooth_alpha;
+      cfg.tracker_position_smooth_alpha = runtime_jitter_filter_tracker_pos_smooth_alpha;
+      cfg.hmd_orientation_smooth_alpha = runtime_jitter_filter_hmd_rot_smooth_alpha;
+      cfg.tracker_orientation_smooth_alpha = tracker_rot_smooth_alpha;
+      return cfg;
+    };
+
+    const jitter_filter::RuntimeJitterFilterConfig runtime_jitter_filter_cfg_hand_tracking = make_jitter_cfg(
+        runtime_jitter_filter_tracker_deg_hand_tracking,
+        runtime_jitter_filter_tracker_ang_vel_deg_s_hand_tracking,
+        runtime_jitter_filter_tracker_ang_vel_smooth_alpha_hand_tracking,
+        runtime_jitter_filter_tracker_rot_smooth_alpha_hand_tracking);
+    const jitter_filter::RuntimeJitterFilterConfig runtime_jitter_filter_cfg_imu = make_jitter_cfg(
+        runtime_jitter_filter_tracker_deg_imu,
+        runtime_jitter_filter_tracker_ang_vel_deg_s_imu,
+        runtime_jitter_filter_tracker_ang_vel_smooth_alpha_imu,
+        runtime_jitter_filter_tracker_rot_smooth_alpha_imu);
+    jitter_filter::RuntimeJitterFilter runtime_jitter_filter(runtime_jitter_filter_cfg_hand_tracking);
+    jitter_filter::HandJitterFilter runtime_hand_jitter_filter_hand_tracking;
+    jitter_filter::HandJitterFilter runtime_hand_jitter_filter_imu;
 
     uint64_t runtime_pose_published = 0;
     uint64_t runtime_hand_published = 0;
@@ -4425,8 +4749,42 @@ int main(int argc, char** argv) {
         }
       }
 
+      std::optional<xr_runtime::ControllerInputV3> controller_input_for_tracking_profiles;
+      if (controller_input_thread &&
+          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp)) {
+        const auto profile_snapshot = controller_input_thread->snapshot();
+        if (profile_snapshot.latest) {
+          const bool receive_stale = is_age_stale(
+              frame.read_timestamp_ns,
+              static_cast<int64_t>(profile_snapshot.latest_receive_timestamp_ns),
+              static_cast<double>(controller_input_config.max_age_ms));
+          const bool payload_stale = is_age_stale(
+              frame.read_timestamp_ns,
+              static_cast<int64_t>(profile_snapshot.latest->timestamp_ns),
+              static_cast<double>(controller_input_config.max_age_ms));
+          if (!receive_stale && !payload_stale && profile_snapshot.latest->sequence != 0) {
+            controller_input_for_tracking_profiles = *profile_snapshot.latest;
+          }
+        }
+      }
+      const bool left_uses_imu_profile = runtime_controller_side_uses_imu_profile(
+          runtime_controller_left_orientation_source_value,
+          controller_input_for_tracking_profiles,
+          true);
+      const bool right_uses_imu_profile = runtime_controller_side_uses_imu_profile(
+          runtime_controller_right_orientation_source_value,
+          controller_input_for_tracking_profiles,
+          false);
+
       if (runtime_hand_stability_gate && frame.hand_v2.sequence != 0) {
-        frame.hand_v2 = runtime_hand_stability_filter.filter(frame.hand_v2);
+        const auto hand_tracking_filtered =
+            runtime_hand_stability_filter_hand_tracking.filter(frame.hand_v2);
+        const auto imu_filtered = runtime_hand_stability_filter_imu.filter(frame.hand_v2);
+        select_runtime_hand_profile_sides(frame.hand_v2,
+                                          hand_tracking_filtered,
+                                          imu_filtered,
+                                          left_uses_imu_profile,
+                                          right_uses_imu_profile);
         frame.hand_v2_valid = frame.hand_v2.sequence != 0 && frame.hand_v2.hand_count > 0;
         const bool hand_filter_degraded =
             frame.hand_v2.tracking_status == 2u ||
@@ -4468,10 +4826,16 @@ int main(int argc, char** argv) {
       bool controller_has_nonzero_input = false;
       bool controller_left_connected = false;
       bool controller_right_connected = false;
+      bool controller_left_imu_present = false;
+      bool controller_right_imu_present = false;
+      bool controller_left_imu_active = false;
+      bool controller_right_imu_active = false;
+      uint32_t controller_left_imu_status = xr_runtime::CONTROLLER_IMU_NOT_SUPPORTED;
+      uint32_t controller_right_imu_status = xr_runtime::CONTROLLER_IMU_NOT_SUPPORTED;
       uint64_t frame_controller_sequence = 0;
-      std::optional<xr_runtime::ControllerInputV2> fresh_controller_input;
+      std::optional<xr_runtime::ControllerInputV3> fresh_controller_input;
       if (controller_input_thread &&
-          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm)) {
+          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp)) {
         const auto controller_snapshot = controller_input_thread->snapshot();
         if (controller_snapshot.latest) {
           const bool controller_receive_stale = is_age_stale(
@@ -4494,6 +4858,16 @@ int main(int argc, char** argv) {
                 override_controller::controller_device_is_present(controller_snapshot.latest->left);
             controller_right_connected =
                 override_controller::controller_device_is_present(controller_snapshot.latest->right);
+            controller_left_imu_present =
+                override_controller::controller_device_has_imu(controller_snapshot.latest->left);
+            controller_right_imu_present =
+                override_controller::controller_device_has_imu(controller_snapshot.latest->right);
+            controller_left_imu_active =
+                override_controller::controller_device_has_active_imu(controller_snapshot.latest->left);
+            controller_right_imu_active =
+                override_controller::controller_device_has_active_imu(controller_snapshot.latest->right);
+            controller_left_imu_status = controller_snapshot.latest->left.imu.status;
+            controller_right_imu_status = controller_snapshot.latest->right.imu.status;
             // In controller_buttons_runtime_only, the override_controller service
             // being fresh is enough to own controller buttons. Do not key this off
             // non-zero input or even per-side present status: otherwise an idle
@@ -4679,7 +5053,17 @@ int main(int argc, char** argv) {
 
         if (runtime_jitter_filter_enabled) {
           if (frame.hand_v2.sequence != 0) {
-            runtime_jitter_filter.filter_hand(frame.hand_v2);
+            auto hand_tracking_filtered = frame.hand_v2;
+            auto imu_filtered = frame.hand_v2;
+            runtime_hand_jitter_filter_hand_tracking.filter(
+                hand_tracking_filtered, runtime_jitter_filter_cfg_hand_tracking);
+            runtime_hand_jitter_filter_imu.filter(
+                imu_filtered, runtime_jitter_filter_cfg_imu);
+            select_runtime_hand_profile_sides(frame.hand_v2,
+                                              hand_tracking_filtered,
+                                              imu_filtered,
+                                              left_uses_imu_profile,
+                                              right_uses_imu_profile);
           }
           if (frame.hand.sequence != 0) {
             runtime_jitter_filter.filter_hand(frame.hand);
@@ -4797,7 +5181,20 @@ int main(int argc, char** argv) {
               fresh_controller_input,
               runtime_controller_hmd);
           if (runtime_jitter_filter_enabled) {
-            runtime_jitter_filter.filter_runtime_controller_state(runtime_controller_state);
+            const bool left_imu_orientation_used =
+                (runtime_controller_state.left.source_mask &
+                 xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION) != 0u;
+            const bool right_imu_orientation_used =
+                (runtime_controller_state.right.source_mask &
+                 xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION) != 0u;
+            runtime_jitter_filter.filter_runtime_controller_state(
+                runtime_controller_state,
+                left_imu_orientation_used ? runtime_jitter_filter_cfg_imu
+                                          : runtime_jitter_filter_cfg_hand_tracking,
+                right_imu_orientation_used ? runtime_jitter_filter_cfg_imu
+                                           : runtime_jitter_filter_cfg_hand_tracking,
+                left_imu_orientation_used,
+                right_imu_orientation_used);
           }
           if (runtime_controller_state_publisher) runtime_controller_state_publisher->publish(runtime_controller_state);
           if (runtime_controller_state_udp_publisher) runtime_controller_state_udp_publisher->send_controller_state(runtime_controller_state);
@@ -4924,8 +5321,17 @@ int main(int argc, char** argv) {
                     << " override_gesture_block_frames=" << override_controller_gesture_block_frames
                     << " override_gesture_allow_frames=" << override_controller_gesture_allow_frames
                     << " controller_seq=" << frame_controller_sequence
+                    << " controller_stream_connected=" << (controller_stream_connected ? "yes" : "no")
+                    << " controller_left_connected=" << (controller_left_connected ? "yes" : "no")
+                    << " controller_right_connected=" << (controller_right_connected ? "yes" : "no")
                     << " controller_input_mode=" << controller_input_config.mode
                     << " controller_input_transport=" << controller_input_config.transport
+                    << " controller_left_imu=" << (controller_left_imu_present ? "yes" : "no")
+                    << " controller_left_imu_active=" << (controller_left_imu_active ? "yes" : "no")
+                    << " controller_left_imu_status=" << xr_runtime::controller_imu_status_name(controller_left_imu_status)
+                    << " controller_right_imu=" << (controller_right_imu_present ? "yes" : "no")
+                    << " controller_right_imu_active=" << (controller_right_imu_active ? "yes" : "no")
+                    << " controller_right_imu_status=" << xr_runtime::controller_imu_status_name(controller_right_imu_status)
                     << " body_trackers=" << (body_tracker_health.enabled && body_tracker_health.connected ? "yes" : "no")
                     << " body_trackers_input=" << body_trackers_input
                     << " body_trackers_seq=" << body_tracker_health.last_sequence
@@ -5109,7 +5515,10 @@ int main(int argc, char** argv) {
       std::cout << "runtime_controller_state_stream: " << runtime_controller_state_stream << "\n";
       std::cout << "runtime_controller_state_frame: " << runtime_frame << "\n";
     }
-    std::cout << runtime_hand_stability_filter.summary_string();
+    std::cout << "hand_stability_gate_profile: HAND_TRACKING\n";
+    std::cout << runtime_hand_stability_filter_hand_tracking.summary_string();
+    std::cout << "hand_stability_gate_profile: IMU\n";
+    std::cout << runtime_hand_stability_filter_imu.summary_string();
     if (runtime_hand_publisher) {
       std::cout << "runtime_hand_registry: " << runtime_hand_registry << "\n";
       std::cout << "runtime_hand_stream: " << runtime_hand_stream << "\n";

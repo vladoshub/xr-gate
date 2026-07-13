@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include <xr_runtime/contracts/controller_input_contract.hpp>
+
 namespace xr_override_controller {
 
 constexpr uint64_t kButtonTrigger = 1ull << 0;
@@ -213,6 +215,12 @@ struct SideOutputState {
   uint32_t press_counters[32] = {};
   uint32_t release_counters[32] = {};
   std::string device_id;
+
+  // Defaults to CONTROLLER_IMU_NOT_SUPPORTED. A motion-controller provider
+  // sets this independently for each side so V3 consumers can distinguish a
+  // buttons-only controller from an IMU-capable controller even while its IMU
+  // data is configured, connected, stale, or lost.
+  xr_runtime::ControllerImuStateV1 imu;
 };
 
 struct OutputState {

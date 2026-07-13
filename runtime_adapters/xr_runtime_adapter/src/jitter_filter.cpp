@@ -620,6 +620,8 @@ void RuntimeJitterFilter::filter_body_trackers(xr_tracking::BodyTrackerSetFrameF
 }
 
 void RuntimeControllerStateJitterFilter::reset() {
+  left_orientation_.reset();
+  right_orientation_.reset();
   left_linear_velocity_.reset();
   right_linear_velocity_.reset();
   left_angular_velocity_.reset();
@@ -628,36 +630,69 @@ void RuntimeControllerStateJitterFilter::reset() {
 
 void RuntimeControllerStateJitterFilter::filter(
     xr_runtime::RuntimeControllerStateFrameV1& frame, const RuntimeJitterFilterConfig& cfg) {
-  if (!tracker_filter_enabled(cfg)) {
-    reset();
-    return;
-  }
+  filter(frame, cfg, cfg, false, false);
+}
 
-  left_linear_velocity_.filter(frame.left.linear_velocity[0],
-                               frame.left.linear_velocity[1],
-                               frame.left.linear_velocity[2],
-                               cfg.tracker_velocity_threshold_mps,
-                               cfg.tracker_velocity_smooth_alpha);
-  right_linear_velocity_.filter(frame.right.linear_velocity[0],
-                                frame.right.linear_velocity[1],
-                                frame.right.linear_velocity[2],
-                                cfg.tracker_velocity_threshold_mps,
-                                cfg.tracker_velocity_smooth_alpha);
-  left_angular_velocity_.filter(frame.left.angular_velocity[0],
-                                frame.left.angular_velocity[1],
-                                frame.left.angular_velocity[2],
-                                cfg.tracker_angular_velocity_threshold_radps,
-                                cfg.tracker_angular_velocity_smooth_alpha);
-  right_angular_velocity_.filter(frame.right.angular_velocity[0],
-                                 frame.right.angular_velocity[1],
-                                 frame.right.angular_velocity[2],
-                                 cfg.tracker_angular_velocity_threshold_radps,
-                                 cfg.tracker_angular_velocity_smooth_alpha);
+void RuntimeControllerStateJitterFilter::filter(
+    xr_runtime::RuntimeControllerStateFrameV1& frame,
+    const RuntimeJitterFilterConfig& left_cfg,
+    const RuntimeJitterFilterConfig& right_cfg,
+    bool filter_left_orientation,
+    bool filter_right_orientation) {
+  auto filter_side = [](xr_runtime::RuntimeControllerSideStateV1& side,
+                        const RuntimeJitterFilterConfig& cfg,
+                        bool filter_orientation,
+                        OrientationDeadbandFilter& orientation,
+                        VectorDeadbandSmoothingFilter& linear_velocity,
+                        VectorDeadbandSmoothingFilter& angular_velocity) {
+    if (!tracker_filter_enabled(cfg)) {
+      orientation.reset();
+      linear_velocity.reset();
+      angular_velocity.reset();
+      return;
+    }
+    if (filter_orientation &&
+        (side.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
+      orientation.filter(side.orientation_xyzw[3],
+                         side.orientation_xyzw[0],
+                         side.orientation_xyzw[1],
+                         side.orientation_xyzw[2],
+                         cfg.tracker_angle_threshold_rad,
+                         cfg.tracker_orientation_smooth_alpha);
+    } else {
+      orientation.reset();
+    }
+    linear_velocity.filter(side.linear_velocity[0],
+                           side.linear_velocity[1],
+                           side.linear_velocity[2],
+                           cfg.tracker_velocity_threshold_mps,
+                           cfg.tracker_velocity_smooth_alpha);
+    angular_velocity.filter(side.angular_velocity[0],
+                            side.angular_velocity[1],
+                            side.angular_velocity[2],
+                            cfg.tracker_angular_velocity_threshold_radps,
+                            cfg.tracker_angular_velocity_smooth_alpha);
+  };
+
+  filter_side(frame.left, left_cfg, filter_left_orientation,
+              left_orientation_, left_linear_velocity_, left_angular_velocity_);
+  filter_side(frame.right, right_cfg, filter_right_orientation,
+              right_orientation_, right_linear_velocity_, right_angular_velocity_);
 }
 
 void RuntimeJitterFilter::filter_runtime_controller_state(
     xr_runtime::RuntimeControllerStateFrameV1& frame) {
   controller_state_.filter(frame, cfg_);
+}
+
+void RuntimeJitterFilter::filter_runtime_controller_state(
+    xr_runtime::RuntimeControllerStateFrameV1& frame,
+    const RuntimeJitterFilterConfig& left_cfg,
+    const RuntimeJitterFilterConfig& right_cfg,
+    bool filter_left_orientation,
+    bool filter_right_orientation) {
+  controller_state_.filter(frame, left_cfg, right_cfg,
+                           filter_left_orientation, filter_right_orientation);
 }
 
 }  // namespace xr_runtime_adapter::jitter_filter

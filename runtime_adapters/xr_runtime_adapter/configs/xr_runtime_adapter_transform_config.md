@@ -992,6 +992,52 @@ Example:
       "z": -0.35
     }
   },
+  "imu_orientation": {
+    "left": {
+      "orientation_transform": {
+        "enabled": false,
+        "invert_x": false,
+        "invert_y": false,
+        "invert_z": false,
+        "basis_rotation": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      },
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "rotation_deg": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
+    },
+    "right": {
+      "orientation_transform": {
+        "enabled": false,
+        "invert_x": false,
+        "invert_y": false,
+        "invert_z": false,
+        "basis_rotation": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      },
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "rotation_deg": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
+    }
+  },
   "static_orientation": {
     "left_euler_deg": {
       "roll": 0.0,
@@ -1190,6 +1236,74 @@ Example:
   "yaw": 0.0
 }
 ```
+
+### 10.6 `imu_orientation`
+
+This block is applied independently for the left and right controller only when
+that side is actually using `IMU_OVERRIDE_CONTROLLER_RUNTIME`.
+
+```json
+"imu_orientation": {
+  "left": {
+    "orientation_transform": {
+      "enabled": true,
+      "invert_x": false,
+      "invert_y": false,
+      "invert_z": false,
+      "basis_rotation": {
+        "rx_deg": 0.0,
+        "ry_deg": 0.0,
+        "rz_deg": 0.0
+      }
+    },
+    "orientation_offset": {
+      "enabled": true,
+      "multiply_order": "post",
+      "rotation_deg": {
+        "rx_deg": 0.0,
+        "ry_deg": 0.0,
+        "rz_deg": 0.0
+      }
+    }
+  }
+}
+```
+
+`orientation_transform` converts the IMU provider/sensor coordinate convention.
+Axis inversion is applied first, followed by the basis rotation:
+
+```text
+q_axes       = invert_coordinate_axes(q_imu, invert_x, invert_y, invert_z)
+q_transformed = basis * q_axes * inverse(basis)
+```
+
+`invert_x`, `invert_y`, and `invert_z` invert individual coordinate axes. This
+is a coordinate-basis conversion, not direct negation of matching quaternion
+components. For example, inverting only X keeps the quaternion X component and
+negates its Y and Z components. The same coordinate conversion is applied to
+IMU angular velocity, which is treated as an axial vector.
+
+Use this for axis handedness/direction and basis differences between the IMU
+provider and the XR runtime.
+
+`orientation_offset` aligns the physical controller/sensor mounting with the
+virtual controller orientation.
+
+```text
+multiply_order=post/local:
+  q_output = q_transformed * q_offset
+
+multiply_order=pre/world:
+  q_output = q_offset * q_transformed
+```
+
+`post` is normally appropriate for a fixed sensor-to-controller mounting offset.
+For a post offset, sensor-local angular velocity is also converted into the
+resulting controller-local axes.
+
+When IMU data for a side is unavailable or invalid, that side falls back to
+`HAND_TRACKING_BACKEND`; neither the IMU transform nor the IMU offset is then
+applied.
 
 ---
 

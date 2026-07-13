@@ -73,7 +73,7 @@ HOLD_TOGGLE_DEBOUNCE_MS="${HOLD_TOGGLE_DEBOUNCE_MS:-${OVERRIDE_CONTROLLER_HOLD_T
 # adapter is configured with the same --controller-input-registry.
 CONTROLLER_INPUT_REGISTRY="${CONTROLLER_INPUT_REGISTRY:-${XR_CONTROLLER_INPUT_REGISTRY:-/tmp/tracking_streams.json}}" # registry JSON used to publish controller_input stream metadata
 CONTROLLER_INPUT_REGISTRY="$(expand_tilde "$CONTROLLER_INPUT_REGISTRY")"                    # normalize ~/ in controller_input registry path
-CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}"                      # published ControllerInputV2 stream name
+CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}"                      # published ControllerInputV3 stream name
 CONTROLLER_INPUT_SHM_NAME="${CONTROLLER_INPUT_SHM_NAME:-controller_input}"                  # shared-memory object name for controller_input payloads
 CONTROLLER_INPUT_RATE_HZ="${CONTROLLER_INPUT_RATE_HZ:-90}"                                  # controller_input publish rate expected by runtime adapter/SteamVR path
 CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-32}"                                      # ring-buffer slot count for controller_input SHM
