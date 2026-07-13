@@ -46,24 +46,6 @@ REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
 EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum evdev poll wait before publishing current state
-REL_AXIS_HOLD_MS="${REL_AXIS_HOLD_MS:-${OVERRIDE_CONTROLLER_REL_AXIS_HOLD_MS:-0}}"          # legacy hold time for relative-axis events; 0 disables it
-REL_BUTTON_HOLD_MS="${REL_BUTTON_HOLD_MS:-${OVERRIDE_CONTROLLER_REL_BUTTON_HOLD_MS:-0}}"    # legacy hold time for relative-button/D-pad pulses; 0 disables it
-BUTTON_HOLD_MS="${BUTTON_HOLD_MS:-${OVERRIDE_CONTROLLER_BUTTON_HOLD_MS:-0}}"                # legacy minimum hold time for button presses; 0 disables it
-BUTTON_RELEASE_GRACE_MS="${BUTTON_RELEASE_GRACE_MS:-${OVERRIDE_CONTROLLER_BUTTON_RELEASE_GRACE_MS:-0}}" # legacy release grace bridge after button release; 0 disables it
-
-PULSE_MODE="${PULSE_MODE:-${OVERRIDE_CONTROLLER_PULSE_MODE:-1}}"                            # enable pulse-source filtering for controllers that emit repeated short pulses
-
-DPAD_PULSE_GAP_MS="${DPAD_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_DPAD_PULSE_GAP_MS:-50}}"     # expected maximum gap between D-pad pulse events
-DPAD_RELEASE_MS="${DPAD_RELEASE_MS:-${OVERRIDE_CONTROLLER_DPAD_RELEASE_MS:-60}}"           # virtual D-pad release timeout after the last pulse
-
-BUTTON_PULSE_GAP_MS="${BUTTON_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_GAP_MS:-0}}" # expected maximum gap between button pulse events
-BUTTON_RELEASE_MS="${BUTTON_RELEASE_MS:-${OVERRIDE_CONTROLLER_BUTTON_RELEASE_MS:-0}}"     # virtual button release timeout after the last pulse
-
-BUTTON_PULSE_STARTUP_MS="${BUTTON_PULSE_STARTUP_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_STARTUP_MS:-0}}" # optional early startup window for longer pulse bridging; 0 disables it
-BUTTON_PULSE_STARTUP_RELEASE_MS="${BUTTON_PULSE_STARTUP_RELEASE_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_STARTUP_RELEASE_MS:-0}}" # release timeout used only during the startup window
-BUTTON_PULSE_STARTUP_TYPES="${BUTTON_PULSE_STARTUP_TYPES:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_STARTUP_TYPES:-trigger}}" # comma-separated action types that may use startup pulse bridging
-
-HOLD_TOGGLE_DEBOUNCE_MS="${HOLD_TOGGLE_DEBOUNCE_MS:-${OVERRIDE_CONTROLLER_HOLD_TOGGLE_DEBOUNCE_MS:-100}}" # debounce window for click-to-toggle virtual long-press mode
 
 
 # ControllerInput publisher settings. These must match xr_runtime_adapter
@@ -169,19 +151,6 @@ args+=("--allow-shared-physical-device-sides" "$ALLOW_SHARED_PHYSICAL_DEVICE_SID
 args+=("--reattach-devices" "$REATTACH_DEVICES")
 args+=("--reattach-interval-ms" "$REATTACH_INTERVAL_MS")
 args+=("--event-wait-max-ms" "$EVENT_WAIT_MAX_MS")
-args+=("--rel-axis-hold-ms" "$REL_AXIS_HOLD_MS")
-args+=("--rel-button-hold-ms" "$REL_BUTTON_HOLD_MS")
-args+=("--button-hold-ms" "$BUTTON_HOLD_MS")
-args+=("--button-release-grace-ms" "$BUTTON_RELEASE_GRACE_MS")
-args+=("--pulse-mode" "$PULSE_MODE")
-args+=("--dpad-pulse-gap-ms" "$DPAD_PULSE_GAP_MS")
-args+=("--dpad-release-ms" "$DPAD_RELEASE_MS")
-args+=("--button-pulse-gap-ms" "$BUTTON_PULSE_GAP_MS")
-args+=("--button-release-ms" "$BUTTON_RELEASE_MS")
-args+=("--button-pulse-startup-ms" "$BUTTON_PULSE_STARTUP_MS")
-args+=("--button-pulse-startup-release-ms" "$BUTTON_PULSE_STARTUP_RELEASE_MS")
-args+=("--button-pulse-startup-types" "$BUTTON_PULSE_STARTUP_TYPES")
-args+=("--hold-toggle-debounce-ms" "$HOLD_TOGGLE_DEBOUNCE_MS")
 
 if [[ -n "$CONFIG_PATH" ]]; then
   args+=("--config" "$CONFIG_PATH")
@@ -215,10 +184,6 @@ log "CONTROLLER_INPUT_STREAM=$CONTROLLER_INPUT_STREAM"
 log "CONTROLLER_INPUT_SHM_NAME=$CONTROLLER_INPUT_SHM_NAME"
 log "CONTROLLER_INPUT_RATE_HZ=$CONTROLLER_INPUT_RATE_HZ CONTROLLER_INPUT_SLOTS=$CONTROLLER_INPUT_SLOTS"
 log "GRAB_DEVICES=$GRAB_DEVICES ALLOW_SHARED_PHYSICAL_DEVICE_SIDES=$ALLOW_SHARED_PHYSICAL_DEVICE_SIDES REATTACH_DEVICES=$REATTACH_DEVICES REATTACH_INTERVAL_MS=$REATTACH_INTERVAL_MS"
-log "HOLD_MS rel_axis=$REL_AXIS_HOLD_MS rel_button=$REL_BUTTON_HOLD_MS button=$BUTTON_HOLD_MS release_grace=$BUTTON_RELEASE_GRACE_MS"
-log "PULSE_MODE=$PULSE_MODE dpad_gap=$DPAD_PULSE_GAP_MS dpad_release=$DPAD_RELEASE_MS button_gap=$BUTTON_PULSE_GAP_MS button_release=$BUTTON_RELEASE_MS button_startup_ms=$BUTTON_PULSE_STARTUP_MS button_startup_release_ms=$BUTTON_PULSE_STARTUP_RELEASE_MS button_startup_types=$BUTTON_PULSE_STARTUP_TYPES"
-log "HOLD_TOGGLE_DEBOUNCE_MS=$HOLD_TOGGLE_DEBOUNCE_MS"
-log "EVENT_WAIT_MAX_MS=$EVENT_WAIT_MAX_MS REL_AXIS_HOLD_MS=$REL_AXIS_HOLD_MS REL_BUTTON_HOLD_MS=$REL_BUTTON_HOLD_MS BUTTON_HOLD_MS=$BUTTON_HOLD_MS BUTTON_RELEASE_GRACE_MS=$BUTTON_RELEASE_GRACE_MS"
 log "TRAIN=$TRAIN LIST_DEVICES=$LIST_DEVICES NON_INTERACTIVE=$NON_INTERACTIVE VERBOSE=$VERBOSE USE_SUDO=$USE_SUDO"
 
 print_input_permission_hint_if_needed

@@ -85,3 +85,10 @@ To update device fingerprints after Bluetooth reconnects, event path changes, or
 ```
 
 The command lists currently readable input devices, shows the devices used by the config with their `left` / `right` usage, and asks you to press any button on each configured physical device. It then writes the refreshed device fingerprints back to the config.
+
+## Per-device pulse and hold settings
+
+Pulse filtering and synthetic hold timings are configured independently in
+`devices[].input`. This allows two identical or mixed controller models to use
+different event timing. Missing settings use zero/disabled defaults; there is no
+global timing fallback from the launcher script.

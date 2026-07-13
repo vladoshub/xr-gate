@@ -158,10 +158,48 @@ nlohmann::json action_list_to_json(const std::vector<ControllerAction>& actions)
   return out;
 }
 
+DeviceInputConfig device_input_from_json(const nlohmann::json& device_json) {
+  DeviceInputConfig out;
+  if (!device_json.contains("input") || !device_json.at("input").is_object()) return out;
+  const auto& input = device_json.at("input");
+  out.rel_axis_hold_ms = input.value("rel_axis_hold_ms", 0u);
+  out.rel_button_hold_ms = input.value("rel_button_hold_ms", 0u);
+  out.button_hold_ms = input.value("button_hold_ms", 0u);
+  out.button_release_grace_ms = input.value("button_release_grace_ms", 0u);
+  out.pulse_mode = input.value("pulse_mode", false);
+  out.dpad_pulse_gap_ms = input.value("dpad_pulse_gap_ms", 0u);
+  out.dpad_release_ms = input.value("dpad_release_ms", 0u);
+  out.button_pulse_gap_ms = input.value("button_pulse_gap_ms", 0u);
+  out.button_release_ms = input.value("button_release_ms", 0u);
+  out.button_pulse_startup_ms = input.value("button_pulse_startup_ms", 0u);
+  out.button_pulse_startup_release_ms = input.value("button_pulse_startup_release_ms", 0u);
+  out.button_pulse_startup_types = action_list_from_json(input, "button_pulse_startup_types");
+  out.hold_toggle_debounce_ms = input.value("hold_toggle_debounce_ms", 0u);
+  return out;
+}
+
+nlohmann::json device_input_to_json(const DeviceInputConfig& input) {
+  return {
+      {"rel_axis_hold_ms", input.rel_axis_hold_ms},
+      {"rel_button_hold_ms", input.rel_button_hold_ms},
+      {"button_hold_ms", input.button_hold_ms},
+      {"button_release_grace_ms", input.button_release_grace_ms},
+      {"pulse_mode", input.pulse_mode},
+      {"dpad_pulse_gap_ms", input.dpad_pulse_gap_ms},
+      {"dpad_release_ms", input.dpad_release_ms},
+      {"button_pulse_gap_ms", input.button_pulse_gap_ms},
+      {"button_release_ms", input.button_release_ms},
+      {"button_pulse_startup_ms", input.button_pulse_startup_ms},
+      {"button_pulse_startup_release_ms", input.button_pulse_startup_release_ms},
+      {"button_pulse_startup_types", action_list_to_json(input.button_pulse_startup_types)},
+      {"hold_toggle_debounce_ms", input.hold_toggle_debounce_ms},
+  };
+}
 
 nlohmann::json config_device_to_json(const ConfigDevice& d) {
   nlohmann::json j = fp_to_json(d.fingerprint);
   j["id"] = d.id;
+  j["input"] = device_input_to_json(d.input);
   return j;
 }
 
@@ -169,6 +207,7 @@ ConfigDevice config_device_from_json(const nlohmann::json& j, int fallback_id) {
   ConfigDevice d;
   d.id = j.value("id", fallback_id);
   d.fingerprint = fp_from_json(j);
+  d.input = device_input_from_json(j);
   return d;
 }
 
@@ -312,19 +351,6 @@ AppConfig load_config_file(const fs::path& path) {
   cfg.input.reattach_devices = input.value("reattach_devices", true);
   cfg.input.reattach_interval_ms = input.value("reattach_interval_ms", 1000u);
   cfg.input.event_wait_max_ms = input.value("event_wait_max_ms", 20u);
-  cfg.input.rel_axis_hold_ms = input.value("rel_axis_hold_ms", 160u);
-  cfg.input.rel_button_hold_ms = input.value("rel_button_hold_ms", 800u);
-  cfg.input.button_hold_ms = input.value("button_hold_ms", 120u);
-  cfg.input.button_release_grace_ms = input.value("button_release_grace_ms", 0u);
-  cfg.input.pulse_mode = input.value("pulse_mode", false);
-  cfg.input.dpad_pulse_gap_ms = input.value("dpad_pulse_gap_ms", 130u);
-  cfg.input.dpad_release_ms = input.value("dpad_release_ms", 140u);
-  cfg.input.button_pulse_gap_ms = input.value("button_pulse_gap_ms", 180u);
-  cfg.input.button_release_ms = input.value("button_release_ms", 190u);
-  cfg.input.button_pulse_startup_ms = input.value("button_pulse_startup_ms", 0u);
-  cfg.input.button_pulse_startup_release_ms = input.value("button_pulse_startup_release_ms", 0u);
-  cfg.input.button_pulse_startup_types = action_list_from_json(input, "button_pulse_startup_types");
-  cfg.input.hold_toggle_debounce_ms = input.value("hold_toggle_debounce_ms", 1500u);
 
   int fallback_device_id = 1;
   for (const auto& dj : j.value("devices", nlohmann::json::array())) {
@@ -374,7 +400,7 @@ AppConfig load_config_file(const fs::path& path) {
 
 void save_config_file(const AppConfig& cfg, const fs::path& path) {
   nlohmann::json j;
-  j["version"] = 1;
+  j["version"] = 2;
   j["name"] = cfg.name;
   j["publish"] = {
       {"transport", cfg.publish.transport},
@@ -393,19 +419,6 @@ void save_config_file(const AppConfig& cfg, const fs::path& path) {
       {"reattach_devices", cfg.input.reattach_devices},
       {"reattach_interval_ms", cfg.input.reattach_interval_ms},
       {"event_wait_max_ms", cfg.input.event_wait_max_ms},
-      {"rel_axis_hold_ms", cfg.input.rel_axis_hold_ms},
-      {"rel_button_hold_ms", cfg.input.rel_button_hold_ms},
-      {"button_hold_ms", cfg.input.button_hold_ms},
-      {"button_release_grace_ms", cfg.input.button_release_grace_ms},
-      {"pulse_mode", cfg.input.pulse_mode},
-      {"dpad_pulse_gap_ms", cfg.input.dpad_pulse_gap_ms},
-      {"dpad_release_ms", cfg.input.dpad_release_ms},
-      {"button_pulse_gap_ms", cfg.input.button_pulse_gap_ms},
-      {"button_release_ms", cfg.input.button_release_ms},
-      {"button_pulse_startup_ms", cfg.input.button_pulse_startup_ms},
-      {"button_pulse_startup_release_ms", cfg.input.button_pulse_startup_release_ms},
-      {"button_pulse_startup_types", action_list_to_json(cfg.input.button_pulse_startup_types)},
-      {"hold_toggle_debounce_ms", cfg.input.hold_toggle_debounce_ms},
   };
   j["devices"] = nlohmann::json::array();
   for (const auto& d : cfg.devices) {
