@@ -41,6 +41,19 @@ struct DeviceFingerprint {
 
 struct DeviceInfo {
   DeviceFingerprint fingerprint;
+
+  // Runtime-only routing metadata used by CompositeInputProvider. It is never
+  // serialized into the user config; stable identity remains in fingerprint.
+  size_t provider_slot = 0;
+  size_t provider_device_index = 0;
+
+  // A provider may know a stable device identity while its transport is
+  // disconnected (paired BLE controller). Such a device remains matchable to
+  // config bindings, but `readable` stays false until input is flowing.
+  bool identity_known = false;
+
+  // Native handle used by some providers (Linux evdev). External/BLE providers
+  // can remain readable with fd == -1.
   int fd = -1;
   bool readable = false;
   std::string open_error;

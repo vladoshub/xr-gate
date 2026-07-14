@@ -10,6 +10,7 @@ namespace xr_override_controller {
 
 class LinuxEvdevInputProvider final : public InputProvider {
  public:
+  std::string provider_name() const override { return "evdev"; }
   std::vector<DeviceInfo> scan_devices(bool open_readable) override;
   void flush_events(std::vector<DeviceInfo>& devices) override;
   std::optional<InputEvent> wait_event(std::vector<DeviceInfo>& devices, int timeout_ms, bool include_stdin) override;

@@ -45,7 +45,19 @@ ALLOW_SHARED_PHYSICAL_DEVICE_SIDES="${ALLOW_SHARED_PHYSICAL_DEVICE_SIDES:-${OVER
 REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}}"          # periodically rescan/reopen input devices after disconnect/reconnect
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
-EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum evdev poll wait before publishing current state
+EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum provider event wait before publishing current state
+
+# Input providers. Gear VR remains opt-in, but its implementation is native C++
+# and talks directly to BlueZ over the system D-Bus. Example: PROVIDERS=evdev,gearvr_ble
+PROVIDERS="${PROVIDERS:-${OVERRIDE_CONTROLLER_PROVIDERS:-evdev}}"
+GEARVR_INITIAL_SCAN_MS="${GEARVR_INITIAL_SCAN_MS:-${OVERRIDE_CONTROLLER_GEARVR_INITIAL_SCAN_MS:-1500}}"
+GEARVR_RECONNECT_MS="${GEARVR_RECONNECT_MS:-${OVERRIDE_CONTROLLER_GEARVR_RECONNECT_MS:-1000}}"
+GEARVR_TOUCHPAD_MODE="${GEARVR_TOUCHPAD_MODE:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_MODE:-relative_stick}}"
+GEARVR_TOUCHPAD_DEADZONE="${GEARVR_TOUCHPAD_DEADZONE:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_DEADZONE:-0.12}}"
+GEARVR_TOUCHPAD_RADIUS="${GEARVR_TOUCHPAD_RADIUS:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_RADIUS:-90}}"
+GEARVR_TOUCHPAD_INVERT_X="${GEARVR_TOUCHPAD_INVERT_X:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_INVERT_X:-0}}"
+GEARVR_TOUCHPAD_INVERT_Y="${GEARVR_TOUCHPAD_INVERT_Y:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_INVERT_Y:-1}}"
+GEARVR_MADGWICK_BETA="${GEARVR_MADGWICK_BETA:-${OVERRIDE_CONTROLLER_GEARVR_MADGWICK_BETA:-0.04}}"
 
 
 # ControllerInput publisher settings. These must match xr_runtime_adapter
@@ -65,6 +77,7 @@ FIX_REGISTRY_PERMISSIONS="${FIX_REGISTRY_PERMISSIONS:-1}"                       
 [[ -d "$OVERRIDE_CONTROLLER_DIR" ]] || fatal "override_controller source dir not found: $OVERRIDE_CONTROLLER_DIR"
 
 print_input_permission_hint_if_needed() {
+  [[ ",$PROVIDERS," == *,evdev,* || ",$PROVIDERS," == *,linux_evdev,* ]] || return 0
   [[ "$(uname -s)" == "Linux" ]] || return 0
   [[ "${EUID:-$(id -u)}" -eq 0 ]] && return 0
   [[ -d /dev/input ]] || return 0
@@ -151,6 +164,21 @@ args+=("--allow-shared-physical-device-sides" "$ALLOW_SHARED_PHYSICAL_DEVICE_SID
 args+=("--reattach-devices" "$REATTACH_DEVICES")
 args+=("--reattach-interval-ms" "$REATTACH_INTERVAL_MS")
 args+=("--event-wait-max-ms" "$EVENT_WAIT_MAX_MS")
+args+=("--providers" "$PROVIDERS")
+if [[ ",$PROVIDERS," == *,gearvr_ble,* || ",$PROVIDERS," == *,gearvr,* ]]; then
+  if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" && ! -S /run/dbus/system_bus_socket ]]; then
+    fatal "system D-Bus is unavailable (no DBUS_SYSTEM_BUS_ADDRESS and no /run/dbus/system_bus_socket)"
+  fi
+  command -v bluetoothctl >/dev/null 2>&1 || log "bluetoothctl not found; pairing must already be complete, but native provider can still use BlueZ D-Bus"
+  args+=("--gearvr-initial-scan-ms" "$GEARVR_INITIAL_SCAN_MS")
+  args+=("--gearvr-reconnect-ms" "$GEARVR_RECONNECT_MS")
+  args+=("--gearvr-touchpad-mode" "$GEARVR_TOUCHPAD_MODE")
+  args+=("--gearvr-touchpad-deadzone" "$GEARVR_TOUCHPAD_DEADZONE")
+  args+=("--gearvr-touchpad-radius" "$GEARVR_TOUCHPAD_RADIUS")
+  args+=("--gearvr-touchpad-invert-x" "$GEARVR_TOUCHPAD_INVERT_X")
+  args+=("--gearvr-touchpad-invert-y" "$GEARVR_TOUCHPAD_INVERT_Y")
+  args+=("--gearvr-madgwick-beta" "$GEARVR_MADGWICK_BETA")
+fi
 
 if [[ -n "$CONFIG_PATH" ]]; then
   args+=("--config" "$CONFIG_PATH")
@@ -183,6 +211,10 @@ log "CONTROLLER_INPUT_REGISTRY=$CONTROLLER_INPUT_REGISTRY"
 log "CONTROLLER_INPUT_STREAM=$CONTROLLER_INPUT_STREAM"
 log "CONTROLLER_INPUT_SHM_NAME=$CONTROLLER_INPUT_SHM_NAME"
 log "CONTROLLER_INPUT_RATE_HZ=$CONTROLLER_INPUT_RATE_HZ CONTROLLER_INPUT_SLOTS=$CONTROLLER_INPUT_SLOTS"
+log "PROVIDERS=$PROVIDERS"
+if [[ ",$PROVIDERS," == *,gearvr_ble,* || ",$PROVIDERS," == *,gearvr,* ]]; then
+  log "GEARVR_NATIVE_BLUEZ=1 TOUCHPAD_MODE=$GEARVR_TOUCHPAD_MODE DEADZONE=$GEARVR_TOUCHPAD_DEADZONE RADIUS=$GEARVR_TOUCHPAD_RADIUS INVERT=($GEARVR_TOUCHPAD_INVERT_X,$GEARVR_TOUCHPAD_INVERT_Y)"
+fi
 log "GRAB_DEVICES=$GRAB_DEVICES ALLOW_SHARED_PHYSICAL_DEVICE_SIDES=$ALLOW_SHARED_PHYSICAL_DEVICE_SIDES REATTACH_DEVICES=$REATTACH_DEVICES REATTACH_INTERVAL_MS=$REATTACH_INTERVAL_MS"
 log "TRAIN=$TRAIN LIST_DEVICES=$LIST_DEVICES NON_INTERACTIVE=$NON_INTERACTIVE VERBOSE=$VERBOSE USE_SUDO=$USE_SUDO"
 

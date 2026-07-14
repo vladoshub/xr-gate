@@ -73,6 +73,16 @@ struct Args {
   bool connect_devices = false;
   bool non_interactive = false;
   bool verbose = false;
+
+  std::vector<std::string> providers;
+  uint32_t gearvr_initial_scan_ms = 1500;
+  uint32_t gearvr_reconnect_ms = 1000;
+  std::string gearvr_touchpad_mode = "relative_stick";
+  double gearvr_touchpad_deadzone = 0.12;
+  double gearvr_touchpad_radius = 90.0;
+  bool gearvr_touchpad_invert_x = false;
+  bool gearvr_touchpad_invert_y = true;
+  double gearvr_madgwick_beta = 0.04;
 };
 
 void usage() {
@@ -99,6 +109,16 @@ void usage() {
       "  --no-reattach-devices    Disable device reattach/rescan\n"
       "  --reattach-interval-ms <n> Rescan interval. Default: 1000\n"
       "  --event-wait-max-ms <n>  Max event select wait. Higher reduces idle CPU\n"
+      "  --provider <name>        Enable input provider; repeatable. Linux: evdev, gearvr_ble\n"
+      "  --providers <csv>        Comma-separated provider list\n"
+      "  --gearvr-initial-scan-ms <n> Initial paired-controller discovery wait\n"
+      "  --gearvr-reconnect-ms <n> BLE reconnect delay\n"
+      "  --gearvr-touchpad-mode <relative_stick|absolute_stick|dpad|raw>\n"
+      "  --gearvr-touchpad-deadzone <0..1>\n"
+      "  --gearvr-touchpad-radius <pixels>\n"
+      "  --gearvr-touchpad-invert-x <bool>\n"
+      "  --gearvr-touchpad-invert-y <bool>\n"
+      "  --gearvr-madgwick-beta <value>\n"
       "  --non-interactive        Do not prompt; fail if config is missing/ambiguous\n"
       "  --verbose                Print more runtime diagnostics\n"
       "  --help\n";
@@ -118,6 +138,19 @@ std::string trim_copy(std::string v) {
   return v;
 }
 
+
+void append_csv_values(std::vector<std::string>& out, const std::string& raw) {
+  size_t start = 0;
+  while (start <= raw.size()) {
+    const size_t comma = raw.find(',', start);
+    const std::string token = trim_copy(raw.substr(start, comma == std::string::npos
+                                                             ? std::string::npos
+                                                             : comma - start));
+    if (!token.empty()) out.push_back(token);
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+}
 
 std::string action_list_to_string(const std::vector<ControllerAction>& actions) {
   if (actions.empty()) return "<all>";
@@ -179,12 +212,47 @@ Args parse_args(int argc, char** argv) {
       a.reattach_interval_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
     } else if (v == "--event-wait-max-ms") {
       a.event_wait_max_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--provider") {
+      a.providers.push_back(need(v.c_str()));
+    } else if (v == "--providers") {
+      append_csv_values(a.providers, need(v.c_str()));
+    } else if (v == "--gearvr-initial-scan-ms") {
+      a.gearvr_initial_scan_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--gearvr-reconnect-ms") {
+      a.gearvr_reconnect_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--gearvr-touchpad-mode") {
+      a.gearvr_touchpad_mode = need(v.c_str());
+    } else if (v == "--gearvr-touchpad-deadzone") {
+      a.gearvr_touchpad_deadzone = std::stod(need(v.c_str()));
+    } else if (v == "--gearvr-touchpad-radius") {
+      a.gearvr_touchpad_radius = std::stod(need(v.c_str()));
+    } else if (v == "--gearvr-touchpad-invert-x") {
+      a.gearvr_touchpad_invert_x = parse_bool_arg(need(v.c_str()), v.c_str());
+    } else if (v == "--gearvr-touchpad-invert-y") {
+      a.gearvr_touchpad_invert_y = parse_bool_arg(need(v.c_str()), v.c_str());
+    } else if (v == "--gearvr-madgwick-beta") {
+      a.gearvr_madgwick_beta = std::stod(need(v.c_str()));
     } else if (v == "--train") a.train = true;
     else if (v == "--list-devices") a.list_devices = true;
     else if (v == "--connect-devices" || v == "connect-devices") a.connect_devices = true;
     else if (v == "--non-interactive") a.non_interactive = true;
     else if (v == "--verbose") a.verbose = true;
     else throw std::runtime_error("unknown argument: " + v);
+  }
+  if (a.gearvr_touchpad_mode != "relative_stick" &&
+      a.gearvr_touchpad_mode != "absolute_stick" &&
+      a.gearvr_touchpad_mode != "dpad" &&
+      a.gearvr_touchpad_mode != "raw") {
+    throw std::runtime_error("--gearvr-touchpad-mode expects relative_stick, absolute_stick, dpad, or raw");
+  }
+  if (!(a.gearvr_touchpad_deadzone >= 0.0 && a.gearvr_touchpad_deadzone < 1.0)) {
+    throw std::runtime_error("--gearvr-touchpad-deadzone must be in [0,1)");
+  }
+  if (!(a.gearvr_touchpad_radius > 0.0)) {
+    throw std::runtime_error("--gearvr-touchpad-radius must be > 0");
+  }
+  if (!(a.gearvr_madgwick_beta >= 0.0)) {
+    throw std::runtime_error("--gearvr-madgwick-beta must be >= 0");
   }
   return a;
 }
@@ -754,7 +822,17 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
   auto devices = provider.scan_devices(true);
   print_devices(devices);
   if (devices.empty()) throw std::runtime_error("no readable input devices found");
-  const auto readable_count = std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) { return d.readable; });
+  auto readable_count = std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) { return d.readable; });
+  if (readable_count == 0 && provider.requires_polling()) {
+    std::cout << "[override_controller] waiting up to 15 seconds for an external controller to connect; "
+                 "wake it by pressing a button...\n";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (!g_stop && std::chrono::steady_clock::now() < deadline) {
+      (void)provider.wait_event(devices, 250, false);
+      readable_count = std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) { return d.readable; });
+      if (readable_count > 0) break;
+    }
+  }
   if (readable_count == 0) {
 #if defined(_WIN32)
     throw std::runtime_error(
@@ -762,9 +840,9 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
         "check that the process can access the desktop/session input state.");
 #else
     throw std::runtime_error(
-        "no readable /dev/input/event* devices. On Linux, add the current user to the input group "
-        "and re-login: sudo usermod -aG input $USER. For a quick temporary test, run the start script "
-        "with USE_SUDO=1, or grant a temporary ACL: sudo setfacl -m u:$USER:rw /dev/input/event*.");
+        "no readable input devices. For evdev, add the current user to the input group and re-login: "
+        "sudo usermod -aG input $USER. For Gear VR, pair/trust the controller in BlueZ, enable "
+        "the gearvr_ble provider, and wake the controller by pressing a button.");
 #endif
   }
 
@@ -1105,7 +1183,7 @@ std::vector<RuntimeBinding> resolve_binding_configs(const AppConfig& app_config,
     int best_idx = -1;
     bool ambiguous = false;
     for (size_t i = 0; i < devices.size(); ++i) {
-      if (!devices[i].readable) continue;
+      if (!devices[i].readable && !devices[i].identity_known) continue;
       const int score = fingerprint_match_score(b.device, devices[i].fingerprint);
       if (score > best_score) {
         best_score = score;
@@ -1220,7 +1298,7 @@ RuntimeLayoutSwitch resolve_layout_switch(const AppConfig& cfg,
   // for left/right copies of the same controller.
   int strict_matches = 0;
   for (size_t i = 0; i < devices.size(); ++i) {
-    if (!devices[i].readable) continue;
+    if (!devices[i].readable && !devices[i].identity_known) continue;
     if (!fingerprint_same_strict_input_device(cfg.layout_switch.device, devices[i].fingerprint)) continue;
     out.device_index = static_cast<int>(i);
     out.match_score = fingerprint_match_score(cfg.layout_switch.device, devices[i].fingerprint);
@@ -1296,7 +1374,8 @@ void update_counters(uint64_t prev, uint64_t now, uint32_t press[32], uint32_t r
   }
 }
 
-OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
+OutputState compose_state(InputProvider& provider,
+                          const std::vector<RuntimeBinding>& bindings,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
                           CounterState& counters,
@@ -1304,10 +1383,42 @@ OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
   OutputState out;
   std::set<std::string> left_devices;
   std::set<std::string> right_devices;
+  const auto imu_rank = [](const xr_runtime::ControllerImuStateV1& imu) {
+    switch (imu.status) {
+      case xr_runtime::CONTROLLER_IMU_ACTIVE: return 5;
+      case xr_runtime::CONTROLLER_IMU_STALE: return 4;
+      case xr_runtime::CONTROLLER_IMU_CONNECTED: return 3;
+      case xr_runtime::CONTROLLER_IMU_LOST: return 2;
+      case xr_runtime::CONTROLLER_IMU_CONFIGURED: return 1;
+      default: return 0;
+    }
+  };
   auto apply_runtime_binding = [&](const RuntimeBinding& b) {
-    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() && devices[b.device_index].readable && devices[b.device_index].fd >= 0;
+    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() && devices[b.device_index].readable;
     SideOutputState& side = b.cfg.side == ControllerSide::Left ? out.left : out.right;
     side.configured = true;
+    int imu_device_index = -1;
+    if (b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size()) {
+      imu_device_index = b.device_index;
+    } else {
+      int best_score = -1;
+      bool ambiguous = false;
+      for (size_t i = 0; i < devices.size(); ++i) {
+        const int score = fingerprint_match_score(b.cfg.device, devices[i].fingerprint);
+        if (score > best_score) {
+          best_score = score;
+          imu_device_index = static_cast<int>(i);
+          ambiguous = false;
+        } else if (score == best_score && score > 0) {
+          ambiguous = true;
+        }
+      }
+      if (best_score < 55 || ambiguous) imu_device_index = -1;
+    }
+    if (imu_device_index >= 0) {
+      const auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+      if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
+    }
     if (resolved) {
       side.connected = true;
       const auto id = hex_u64(devices[b.device_index].fingerprint.stable_hash);
@@ -1483,7 +1594,7 @@ std::set<size_t> collect_resolved_device_indices(const std::vector<RuntimeBindin
 
 size_t count_open_devices(const std::vector<DeviceInfo>& devices) {
   return static_cast<size_t>(std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) {
-    return d.readable && d.fd >= 0;
+    return d.readable;
   }));
 }
 
@@ -1491,14 +1602,14 @@ size_t count_connected_bindings(const std::vector<RuntimeBinding>& bindings,
                                 const std::vector<DeviceInfo>& devices) {
   return static_cast<size_t>(std::count_if(bindings.begin(), bindings.end(), [&](const RuntimeBinding& b) {
     return b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() &&
-           devices[b.device_index].readable && devices[b.device_index].fd >= 0;
+           devices[b.device_index].readable;
   }));
 }
 
 
 bool runtime_binding_is_resolved(const RuntimeBinding& b, const std::vector<DeviceInfo>& devices) {
   return b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() &&
-         devices[b.device_index].readable && devices[b.device_index].fd >= 0;
+         devices[b.device_index].readable;
 }
 
 bool event_matches_runtime_binding(const RuntimeBinding& b, const InputEvent& ev) {
@@ -1834,7 +1945,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     }
 
     std::optional<InputEvent> ev;
-    if (count_open_devices(devices) > 0) {
+    if (count_open_devices(devices) > 0 || provider.requires_polling()) {
       ev = provider.wait_event(devices, wait_ms, false);
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
@@ -2059,7 +2170,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     decay_button_hold_bindings(active_bindings_for_decay, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(active_bindings_for_decay, active_toggle_bindings_for_decay, devices, counters,
+      const auto out = compose_state(provider, active_bindings_for_decay, active_toggle_bindings_for_decay, devices, counters,
                                      cfg.input.allow_shared_physical_device_sides);
       publisher.publish(out);
       clear_one_frame_relative_bindings(active_bindings_for_decay);
@@ -2090,7 +2201,17 @@ int main(int argc, char** argv) {
 
     Args args = parse_args(argc, argv);
     const fs::path executable_dir = current_executable_dir(argc > 0 ? argv[0] : nullptr);
-    auto provider = make_platform_input_provider();
+    InputProviderOptions provider_options;
+    provider_options.providers = args.providers;
+    provider_options.gearvr_initial_scan_ms = args.gearvr_initial_scan_ms;
+    provider_options.gearvr_reconnect_ms = args.gearvr_reconnect_ms;
+    provider_options.gearvr_touchpad_mode = args.gearvr_touchpad_mode;
+    provider_options.gearvr_touchpad_deadzone = args.gearvr_touchpad_deadzone;
+    provider_options.gearvr_touchpad_radius = args.gearvr_touchpad_radius;
+    provider_options.gearvr_touchpad_invert_x = args.gearvr_touchpad_invert_x;
+    provider_options.gearvr_touchpad_invert_y = args.gearvr_touchpad_invert_y;
+    provider_options.gearvr_madgwick_beta = args.gearvr_madgwick_beta;
+    auto provider = make_input_provider(provider_options);
     if (!provider) throw std::runtime_error("no input provider for this platform yet");
 
     if (args.list_devices) {

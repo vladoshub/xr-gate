@@ -145,7 +145,6 @@ else
   log "skip bundled configs: $CONFIGS_SRC_DIR not found"
 fi
 
-
 cat <<EOF2
 
 [OK] override_controller built:
@@ -157,6 +156,10 @@ Quick checks:
 
 Typical launch via start script:
   $ROOT_PROJECT/override_controller/scripts/linux/start_override_controller.sh
+
+Gear VR BLE runtime (only when PROVIDERS includes gearvr_ble):
+  Uses the native BlueZ system D-Bus API through libsystemd.so.0.
+  Pair/trust controllers once with bluetoothctl; no Python/Bleak dependency.
 
 Direct launch:
   $INSTALL_BIN_DIR/override_controller

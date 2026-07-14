@@ -121,6 +121,9 @@ if [[ "$INSTALL_APT" == "1" ]]; then
 
     # Common native runtime libraries frequently needed by packaged C++ binaries.
     libdbus-1-3 libsystemd0 libstdc++6 zlib1g libgcc-s1 libgomp1
+
+    #BLE
+    bluez
   )
   apt_install_required "${runtime_packages[@]}"
 fi

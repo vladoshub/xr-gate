@@ -271,6 +271,7 @@
         "NON_INTERACTIVE": "1",
         "GRAB_DEVICES": "1",
         "REATTACH_DEVICES": "1",
+        "PROVIDERS" : "evdev",
         "REATTACH_INTERVAL_MS": "3000"
       },
       "wait_streams": [
