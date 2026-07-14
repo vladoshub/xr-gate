@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace xr_runtime_adapter::override_controller {
@@ -34,12 +35,12 @@ float controller_axis_or_button(float axis, uint64_t buttons, uint64_t button_bi
   return std::max(clamp01(axis), (buttons & button_bit) != 0ull ? 1.0f : 0.0f);
 }
 
-bool controller_side_is_present(const xr_runtime::ControllerDeviceStateV2& controller) {
+bool controller_side_is_present(const xr_runtime::ControllerDeviceStateV3& controller) {
   return controller.status == xr_runtime::CONTROLLER_INPUT_ACTIVE ||
          controller.status == xr_runtime::CONTROLLER_INPUT_CONNECTED;
 }
 
-bool controller_side_has_input(const xr_runtime::ControllerDeviceStateV2& controller) {
+bool controller_side_has_input(const xr_runtime::ControllerDeviceStateV3& controller) {
   if (!controller_side_is_present(controller)) return false;
   if ((controller.flags & (xr_runtime::CONTROLLER_DEVICE_BUTTONS_VALID |
                            xr_runtime::CONTROLLER_DEVICE_ANALOG_VALID)) != 0u) {
@@ -52,7 +53,7 @@ bool controller_side_has_input(const xr_runtime::ControllerDeviceStateV2& contro
          std::abs(controller.thumbstick_y) > 0.0001f;
 }
 
-bool controller_side_has_nonzero_input(const xr_runtime::ControllerDeviceStateV2& controller) {
+bool controller_side_has_nonzero_input(const xr_runtime::ControllerDeviceStateV3& controller) {
   if (!controller_side_is_present(controller)) return false;
   const uint64_t buttons = normalize_controller_dpad_buttons(controller.buttons);
   return buttons != 0 ||
@@ -100,6 +101,38 @@ Qf q_mul(Qf a, Qf b) {
   return normalize_q(q_mul_raw(a, b));
 }
 
+Qf apply_basis_transform(Qf basis, Qf q) {
+  basis = normalize_q(basis);
+  return q_mul(q_mul(basis, normalize_q(q)), q_conj(basis));
+}
+
+Qf apply_axis_inversion(Qf q, bool invert_x, bool invert_y, bool invert_z) {
+  q = normalize_q(q);
+  const float sx = invert_x ? -1.0f : 1.0f;
+  const float sy = invert_y ? -1.0f : 1.0f;
+  const float sz = invert_z ? -1.0f : 1.0f;
+
+  // For a coordinate-basis reflection S=diag(sx,sy,sz), orientation changes as
+  // R' = S * R * S^-1. Quaternion vector components are axial, therefore:
+  // v' = det(S) * S * v.
+  q.x *= sy * sz;
+  q.y *= sx * sz;
+  q.z *= sx * sy;
+  return normalize_q(q);
+}
+
+void apply_axis_inversion_to_axial_vector(float v[3],
+                                          bool invert_x,
+                                          bool invert_y,
+                                          bool invert_z) {
+  const float sx = invert_x ? -1.0f : 1.0f;
+  const float sy = invert_y ? -1.0f : 1.0f;
+  const float sz = invert_z ? -1.0f : 1.0f;
+  v[0] *= sy * sz;
+  v[1] *= sx * sz;
+  v[2] *= sx * sy;
+}
+
 void q_rotate(Qf q, const float in[3], float out[3]) {
   q = normalize_q(q);
   const Qf p{0.0f, in[0], in[1], in[2]};
@@ -135,36 +168,15 @@ bool horizontal_yaw_basis_from_q(Qf q, float right[3], float forward[3]) {
   return normalize_horizontal(right);
 }
 
-RuntimeControllerMovementSpace runtime_controller_movement_space_from_value(
-    const char* value,
-    RuntimeControllerMovementSpace fallback) {
-  if (value == nullptr || value[0] == '\0') return fallback;
-  const std::string v(value);
-  if (v == "controller" || v == "hand" || v == "controller_local" || v == "local") {
-    return RuntimeControllerMovementSpace::Controller;
-  }
-  if (v == "hmd_pose" || v == "head_pose" ||
-      v == "hmd_orientation" || v == "head_orientation" ||
-      v == "hmd_yaw" || v == "head_yaw") {
-    return RuntimeControllerMovementSpace::HmdPose;
-  }
-  return fallback;
-}
-
 RuntimeControllerMovementSpace effective_runtime_controller_movement_space(
     const RuntimeControllerSynthesisConfig& cfg,
-    bool left) {
-  // Global default keeps the old behavior. Per-hand envs let locomotion fixes be
-  // enabled only for the side used by a given game/binding.
-  RuntimeControllerMovementSpace global_space = runtime_controller_movement_space_from_value(
-      std::getenv("RUNTIME_CONTROLLER_MOVEMENT_SPACE"), cfg.movement_space);
-
-  const char* side_env = std::getenv(left ? "RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE"
-                                         : "RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE");
-  if (side_env != nullptr && side_env[0] != '\0') {
-    return runtime_controller_movement_space_from_value(side_env, global_space);
+    bool left,
+    RuntimeControllerOrientationSource orientation_source) {
+  if (orientation_source == RuntimeControllerOrientationSource::ImuOverrideControllerRuntime) {
+    return left ? cfg.left_imu_movement_space : cfg.right_imu_movement_space;
   }
-  return global_space;
+  return left ? cfg.left_hand_tracking_movement_space
+              : cfg.right_hand_tracking_movement_space;
 }
 
 Qf q_from_xyzw(const float q_xyzw[4]) {
@@ -179,8 +191,606 @@ void set_orientation_xyzw(xr_runtime::RuntimeControllerSideStateV1& out, Qf q) {
   out.orientation_xyzw[3] = q.w;
 }
 
+bool finite_q_xyzw(const float q[4]) {
+  return std::isfinite(q[0]) && std::isfinite(q[1]) &&
+         std::isfinite(q[2]) && std::isfinite(q[3]);
+}
 
-bool controller_side_has_movement_input(const xr_runtime::ControllerDeviceStateV2& controller) {
+bool nonzero_q_xyzw(const float q[4]) {
+  const float n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+  return std::isfinite(n2) && n2 > 1.0e-8f;
+}
+
+bool latest_valid_imu_sample(const xr_runtime::ControllerImuStateV1& imu,
+                             uint32_t required_flag,
+                             const xr_runtime::ControllerImuSampleV1*& sample) {
+  const uint32_t count = std::min<uint32_t>(imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES);
+  for (uint32_t i = count; i > 0; --i) {
+    const auto& candidate = imu.samples[i - 1];
+    if ((candidate.flags & required_flag) != 0u) {
+      sample = &candidate;
+      return true;
+    }
+  }
+  sample = nullptr;
+  return false;
+}
+
+void apply_axis_inversion_to_polar_vector(float v[3],
+                                          bool invert_x,
+                                          bool invert_y,
+                                          bool invert_z) {
+  if (invert_x) v[0] = -v[0];
+  if (invert_y) v[1] = -v[1];
+  if (invert_z) v[2] = -v[2];
+}
+
+bool finite_v3(const float v[3]) {
+  return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);
+}
+
+float v3_length(const float v[3]) {
+  return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+void clamp_v3_length(float v[3], float max_length) {
+  if (!std::isfinite(max_length) || max_length <= 0.0f) return;
+  const float length = v3_length(v);
+  if (!std::isfinite(length) || length <= max_length || length <= 1.0e-6f) return;
+  const float scale = max_length / length;
+  v[0] *= scale;
+  v[1] *= scale;
+  v[2] *= scale;
+}
+
+float wrap_pi(float angle) {
+  constexpr float kPi = 3.14159265358979323846f;
+  constexpr float kTwoPi = 2.0f * kPi;
+  if (!std::isfinite(angle)) return 0.0f;
+  while (angle > kPi) angle -= kTwoPi;
+  while (angle < -kPi) angle += kTwoPi;
+  return angle;
+}
+
+bool yaw_rad_from_q(Qf q, float& yaw) {
+  float right[3]{};
+  float forward[3]{};
+  if (!horizontal_yaw_basis_from_q(q, right, forward)) return false;
+  yaw = std::atan2(-forward[0], -forward[2]);
+  return std::isfinite(yaw);
+}
+
+Qf yaw_q(float yaw) {
+  return normalize_q({std::cos(0.5f * yaw), 0.0f, std::sin(0.5f * yaw), 0.0f});
+}
+
+struct RuntimeImuSample {
+  bool orientation_valid = false;
+  bool angular_velocity_valid = false;
+  bool specific_force_valid = false;
+  uint64_t timestamp_ns = 0;
+  Qf orientation{};
+  float angular_velocity_rad_s[3] = {};
+  float specific_force_m_s2[3] = {};
+};
+
+RuntimeImuSample runtime_imu_sample(
+    const xr_runtime::ControllerDeviceStateV3& controller,
+    const RuntimeControllerImuOrientationConfig& cfg) {
+  RuntimeImuSample out{};
+  if (!controller_device_has_active_orientation_imu(controller)) return out;
+
+  const Qf basis = q_from_xyzw(cfg.basis_rotation_xyzw);
+  const Qf offset = q_from_xyzw(cfg.offset_rotation_xyzw);
+
+  Qf orientation = q_from_xyzw(controller.imu.orientation_xyzw);
+  if (cfg.transform_enabled) {
+    orientation = apply_axis_inversion(
+        orientation, cfg.invert_x, cfg.invert_y, cfg.invert_z);
+    orientation = apply_basis_transform(basis, orientation);
+  }
+  if (cfg.offset_enabled) {
+    orientation = cfg.offset_pre_multiply
+        ? q_mul(offset, orientation)
+        : q_mul(orientation, offset);
+  }
+  out.orientation = orientation;
+  out.orientation_valid = true;
+  out.timestamp_ns = controller.imu.orientation_timestamp_ns != 0
+      ? controller.imu.orientation_timestamp_ns
+      : controller.imu.latest_sample_timestamp_ns;
+
+  const xr_runtime::ControllerImuSampleV1* latest_gyro = nullptr;
+  if (latest_valid_imu_sample(controller.imu, xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID,
+                              latest_gyro) && latest_gyro != nullptr) {
+    float angular_velocity[3] = {
+        latest_gyro->angular_velocity_rad_s[0],
+        latest_gyro->angular_velocity_rad_s[1],
+        latest_gyro->angular_velocity_rad_s[2],
+    };
+    float transformed[3] = {};
+    if (cfg.transform_enabled) {
+      apply_axis_inversion_to_axial_vector(
+          angular_velocity, cfg.invert_x, cfg.invert_y, cfg.invert_z);
+      q_rotate(basis, angular_velocity, transformed);
+      std::copy(std::begin(transformed), std::end(transformed), angular_velocity);
+    }
+    if (cfg.offset_enabled && !cfg.offset_pre_multiply) {
+      q_rotate(q_conj(offset), angular_velocity, transformed);
+      std::copy(std::begin(transformed), std::end(transformed), angular_velocity);
+    }
+    if (finite_v3(angular_velocity)) {
+      std::copy(std::begin(angular_velocity), std::end(angular_velocity),
+                out.angular_velocity_rad_s);
+      out.angular_velocity_valid = true;
+      out.timestamp_ns = std::max(out.timestamp_ns, latest_gyro->timestamp_ns);
+    }
+  }
+
+  const xr_runtime::ControllerImuSampleV1* latest_accel = nullptr;
+  if (latest_valid_imu_sample(controller.imu, xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID,
+                              latest_accel) && latest_accel != nullptr) {
+    float specific_force[3] = {
+        latest_accel->specific_force_m_s2[0],
+        latest_accel->specific_force_m_s2[1],
+        latest_accel->specific_force_m_s2[2],
+    };
+    float transformed[3] = {};
+    if (cfg.transform_enabled) {
+      apply_axis_inversion_to_polar_vector(
+          specific_force, cfg.invert_x, cfg.invert_y, cfg.invert_z);
+      q_rotate(basis, specific_force, transformed);
+      std::copy(std::begin(transformed), std::end(transformed), specific_force);
+    }
+    if (cfg.offset_enabled && !cfg.offset_pre_multiply) {
+      q_rotate(q_conj(offset), specific_force, transformed);
+      std::copy(std::begin(transformed), std::end(transformed), specific_force);
+    }
+    if (finite_v3(specific_force)) {
+      std::copy(std::begin(specific_force), std::end(specific_force),
+                out.specific_force_m_s2);
+      out.specific_force_valid = true;
+      out.timestamp_ns = std::max(out.timestamp_ns, latest_accel->timestamp_ns);
+    }
+  }
+
+  return out;
+}
+
+bool real_optical_hand_pose(const xr_runtime::HandSideF32V2* hand_side) {
+  return hand_side != nullptr && hand_side->status == 1u &&
+         (hand_side->flags & xr_runtime::HAND_POSE_VALID) != 0u &&
+         std::isfinite(hand_side->controller_px) &&
+         std::isfinite(hand_side->controller_py) &&
+         std::isfinite(hand_side->controller_pz);
+}
+
+void update_yaw_correction(
+    RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeControllerImuMotionConfig& cfg,
+    Qf imu_orientation,
+    const xr_runtime::HandSideF32V2* optical_hand_side,
+    uint64_t timestamp_ns) {
+  if (!cfg.yaw_correction_enabled || !real_optical_hand_pose(optical_hand_side)) return;
+
+  const float optical_q_xyzw[4] = {
+      optical_hand_side->controller_qx,
+      optical_hand_side->controller_qy,
+      optical_hand_side->controller_qz,
+      optical_hand_side->controller_qw,
+  };
+  if (!finite_q_xyzw(optical_q_xyzw) || !nonzero_q_xyzw(optical_q_xyzw)) return;
+  const Qf optical_orientation = normalize_q({optical_hand_side->controller_qw,
+                                               optical_hand_side->controller_qx,
+                                               optical_hand_side->controller_qy,
+                                               optical_hand_side->controller_qz});
+  float imu_yaw = 0.0f;
+  float optical_yaw = 0.0f;
+  if (!yaw_rad_from_q(imu_orientation, imu_yaw) ||
+      !yaw_rad_from_q(optical_orientation, optical_yaw)) {
+    return;
+  }
+
+  const float desired = wrap_pi(optical_yaw - imu_yaw);
+  if (!state.yaw_correction_valid) {
+    state.yaw_correction_rad = desired;
+    state.yaw_correction_valid = true;
+    return;
+  }
+
+  const float alpha = std::clamp(cfg.yaw_correction_alpha, 0.0f, 1.0f);
+  float step = wrap_pi(desired - state.yaw_correction_rad) * alpha;
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+  const float max_step = std::max(0.0f, cfg.yaw_correction_max_step_deg) * kDegToRad;
+  if (max_step > 0.0f) step = std::clamp(step, -max_step, max_step);
+  state.yaw_correction_rad = wrap_pi(state.yaw_correction_rad + step);
+  (void)timestamp_ns;
+}
+
+void apply_runtime_yaw_correction(
+    RuntimeImuSample& imu,
+    const RuntimeControllerImuMotionConfig& motion_cfg,
+    RuntimeControllerImuSideRuntimeState* runtime_state,
+    const xr_runtime::HandSideF32V2* optical_hand_side,
+    uint64_t timestamp_ns) {
+  if (!imu.orientation_valid || runtime_state == nullptr ||
+      !motion_cfg.yaw_correction_enabled) {
+    return;
+  }
+  update_yaw_correction(*runtime_state, motion_cfg, imu.orientation,
+                        optical_hand_side, timestamp_ns);
+  if (runtime_state->yaw_correction_valid) {
+    imu.orientation = q_mul(yaw_q(runtime_state->yaw_correction_rad), imu.orientation);
+  }
+}
+
+void apply_imu_orientation_override(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const RuntimeImuSample& imu) {
+  if ((out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) == 0u) return;
+  if (!imu.orientation_valid) return;
+
+  set_orientation_xyzw(out, imu.orientation);
+
+  out.source_mask &= ~(xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_STATIC_ORIENTATION);
+  out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION;
+  out.last_pose_ns = imu.timestamp_ns;
+
+  if (imu.angular_velocity_valid) {
+    out.angular_velocity[0] = imu.angular_velocity_rad_s[0];
+    out.angular_velocity[1] = imu.angular_velocity_rad_s[1];
+    out.angular_velocity[2] = imu.angular_velocity_rad_s[2];
+  }
+}
+
+bool runtime_world_linear_acceleration(
+    const RuntimeImuSample& imu,
+    const RuntimeControllerImuMotionConfig& cfg,
+    float out_acceleration[3]) {
+  if (!cfg.acceleration_integration_enabled ||
+      !imu.orientation_valid || !imu.specific_force_valid) {
+    return false;
+  }
+
+  q_rotate(imu.orientation, imu.specific_force_m_s2, out_acceleration);
+  out_acceleration[1] -= std::max(0.0f, cfg.gravity_mps2);
+  if (!finite_v3(out_acceleration)) return false;
+
+  const float deadband = std::max(0.0f, cfg.acceleration_deadband_mps2);
+  const float magnitude = v3_length(out_acceleration);
+  if (!std::isfinite(magnitude)) return false;
+  if (magnitude <= deadband) {
+    out_acceleration[0] = 0.0f;
+    out_acceleration[1] = 0.0f;
+    out_acceleration[2] = 0.0f;
+  } else if (deadband > 0.0f && magnitude > 1.0e-6f) {
+    const float adjusted = magnitude - deadband;
+    const float scale = adjusted / magnitude;
+    out_acceleration[0] *= scale;
+    out_acceleration[1] *= scale;
+    out_acceleration[2] *= scale;
+  }
+  clamp_v3_length(out_acceleration, cfg.max_linear_acceleration_mps2);
+  return true;
+}
+
+void invalidate_runtime_controller_pose(xr_runtime::RuntimeControllerSideStateV1& out) {
+  out.flags &= ~(xr_runtime::RUNTIME_CONTROLLER_POSE_VALID |
+                 xr_runtime::RUNTIME_CONTROLLER_TRACKED |
+                 xr_runtime::RUNTIME_CONTROLLER_SYNTHETIC_POSE);
+  out.flags |= xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID;
+  out.source_mask &= ~(xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_POSITION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_SYNTHETIC_POSE |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION);
+  out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID;
+  out.linear_velocity[0] = 0.0f;
+  out.linear_velocity[1] = 0.0f;
+  out.linear_velocity[2] = 0.0f;
+}
+
+uint64_t nonnegative_ms_to_ns(float value_ms) {
+  const double value = std::max(0.0, static_cast<double>(value_ms)) * 1.0e6;
+  if (value >= static_cast<double>(std::numeric_limits<uint64_t>::max())) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return static_cast<uint64_t>(value);
+}
+
+uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
+  if (std::numeric_limits<uint64_t>::max() - a < b) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return a + b;
+}
+
+void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
+                                   bool clear_anchor) {
+  state.prediction_active = false;
+  state.prediction_started = false;
+  state.reacquire_blend_active = false;
+  state.reacquire_blend_start_ns = 0;
+  state.last_update_ns = 0;
+  std::fill(std::begin(state.acceleration_position_delta_m),
+            std::end(state.acceleration_position_delta_m), 0.0f);
+  std::fill(std::begin(state.acceleration_velocity_delta_mps),
+            std::end(state.acceleration_velocity_delta_mps), 0.0f);
+  if (clear_anchor) {
+    state.has_position_anchor = false;
+    state.last_optical_pose_ns = 0;
+    std::fill(std::begin(state.anchor_position_m),
+              std::end(state.anchor_position_m), 0.0f);
+    std::fill(std::begin(state.anchor_velocity_mps),
+              std::end(state.anchor_velocity_mps), 0.0f);
+  }
+}
+
+void accept_optical_position_anchor(
+    RuntimeControllerImuSideRuntimeState& state,
+    const xr_runtime::HandSideF32V2& hand_side,
+    const RuntimeControllerImuMotionConfig& cfg,
+    uint64_t timestamp_ns) {
+  state.has_position_anchor = true;
+  state.last_optical_pose_ns = timestamp_ns;
+  state.last_update_ns = timestamp_ns;
+  state.anchor_position_m[0] = hand_side.controller_px;
+  state.anchor_position_m[1] = hand_side.controller_py;
+  state.anchor_position_m[2] = hand_side.controller_pz;
+  std::copy(std::begin(state.anchor_position_m),
+            std::end(state.anchor_position_m), state.position_m);
+
+  if ((hand_side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
+      std::isfinite(hand_side.vx) && std::isfinite(hand_side.vy) &&
+      std::isfinite(hand_side.vz)) {
+    state.anchor_velocity_mps[0] = hand_side.vx;
+    state.anchor_velocity_mps[1] = hand_side.vy;
+    state.anchor_velocity_mps[2] = hand_side.vz;
+    clamp_v3_length(state.anchor_velocity_mps, cfg.max_prediction_velocity_mps);
+  } else {
+    std::fill(std::begin(state.anchor_velocity_mps),
+              std::end(state.anchor_velocity_mps), 0.0f);
+  }
+  std::copy(std::begin(state.anchor_velocity_mps),
+            std::end(state.anchor_velocity_mps), state.velocity_mps);
+  clear_imu_position_loss_state(state, false);
+  state.last_update_ns = timestamp_ns;
+}
+
+void publish_synthetic_controller_position(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const float position_m[3],
+    const float velocity_mps[3],
+    bool publish_velocity,
+    bool imu_prediction,
+    uint64_t pose_timestamp_ns) {
+  out.flags &= ~xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID;
+  out.flags |= xr_runtime::RUNTIME_CONTROLLER_CONNECTED |
+               xr_runtime::RUNTIME_CONTROLLER_POSE_VALID |
+               xr_runtime::RUNTIME_CONTROLLER_TRACKED |
+               xr_runtime::RUNTIME_CONTROLLER_SYNTHETIC_POSE |
+               xr_runtime::RUNTIME_CONTROLLER_POSE_STALE;
+  out.source_mask &= ~(xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_POSITION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION);
+  out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE |
+                     xr_runtime::RUNTIME_CONTROLLER_SOURCE_SYNTHETIC_POSE;
+  if (imu_prediction) {
+    out.source_mask |=
+        xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION;
+  }
+  out.position[0] = position_m[0];
+  out.position[1] = position_m[1];
+  out.position[2] = position_m[2];
+  if (publish_velocity) {
+    out.linear_velocity[0] = velocity_mps[0];
+    out.linear_velocity[1] = velocity_mps[1];
+    out.linear_velocity[2] = velocity_mps[2];
+  } else {
+    out.linear_velocity[0] = 0.0f;
+    out.linear_velocity[1] = 0.0f;
+    out.linear_velocity[2] = 0.0f;
+  }
+  out.last_pose_ns = pose_timestamp_ns;
+}
+
+void update_or_apply_imu_position_prediction(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const RuntimeImuSample& imu,
+    const RuntimeControllerImuMotionConfig& cfg,
+    RuntimeControllerImuSideRuntimeState* state,
+    const xr_runtime::HandSideF32V2* hand_side,
+    uint64_t timestamp_ns) {
+  if (state == nullptr) return;
+
+  const uint64_t hold_ns = nonnegative_ms_to_ns(cfg.hold_lost_ms);
+  const uint64_t predict_ns = nonnegative_ms_to_ns(cfg.predict_lost_ms);
+  const uint64_t lost_output_ns = saturating_add_u64(hold_ns, predict_ns);
+  const uint64_t blend_ns = nonnegative_ms_to_ns(cfg.reacquire_blend_ms);
+
+  if (real_optical_hand_pose(hand_side)) {
+    const float optical_position[3] = {
+        hand_side->controller_px,
+        hand_side->controller_py,
+        hand_side->controller_pz,
+    };
+    float optical_velocity[3] = {};
+    const bool optical_velocity_valid =
+        (hand_side->flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
+        std::isfinite(hand_side->vx) && std::isfinite(hand_side->vy) &&
+        std::isfinite(hand_side->vz);
+    if (optical_velocity_valid) {
+      optical_velocity[0] = hand_side->vx;
+      optical_velocity[1] = hand_side->vy;
+      optical_velocity[2] = hand_side->vz;
+      clamp_v3_length(optical_velocity, cfg.max_prediction_velocity_mps);
+    }
+
+    // Match HandPoseStabilityFilter: blend only when returning from an actual
+    // prediction phase. A hand that returned during hold can be accepted
+    // directly because the published coordinate never moved.
+    if (!state->reacquire_blend_active && state->prediction_active &&
+        blend_ns > 0 && state->has_position_anchor) {
+      state->reacquire_blend_active = true;
+      state->reacquire_blend_start_ns = timestamp_ns;
+      std::copy(std::begin(state->position_m), std::end(state->position_m),
+                state->reacquire_blend_from_position_m);
+      std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
+                state->reacquire_blend_from_velocity_mps);
+      state->prediction_active = false;
+    }
+
+    if (state->reacquire_blend_active) {
+      const uint64_t elapsed_ns = timestamp_ns >= state->reacquire_blend_start_ns
+          ? timestamp_ns - state->reacquire_blend_start_ns
+          : 0;
+      const float t = blend_ns > 0
+          ? std::clamp(static_cast<float>(elapsed_ns) /
+                           static_cast<float>(blend_ns),
+                       0.0f, 1.0f)
+          : 1.0f;
+      for (int axis = 0; axis < 3; ++axis) {
+        state->position_m[axis] =
+            state->reacquire_blend_from_position_m[axis] +
+            (optical_position[axis] -
+             state->reacquire_blend_from_position_m[axis]) * t;
+        const float target_velocity =
+            optical_velocity_valid ? optical_velocity[axis] : 0.0f;
+        state->velocity_mps[axis] =
+            state->reacquire_blend_from_velocity_mps[axis] +
+            (target_velocity -
+             state->reacquire_blend_from_velocity_mps[axis]) * t;
+      }
+
+      if (t < 1.0f) {
+        // As in HandPoseStabilityFilter, the blended output becomes the latest
+        // continuity anchor. If optical tracking drops again mid-blend, the
+        // next hold/predict cycle starts from what was actually published.
+        state->has_position_anchor = true;
+        state->last_optical_pose_ns = timestamp_ns;
+        state->last_update_ns = timestamp_ns;
+        std::copy(std::begin(state->position_m), std::end(state->position_m),
+                  state->anchor_position_m);
+        std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
+                  state->anchor_velocity_mps);
+        publish_synthetic_controller_position(
+            out, state->position_m, state->velocity_mps, true, true,
+            imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
+        return;
+      }
+    }
+
+    accept_optical_position_anchor(*state, *hand_side, cfg, timestamp_ns);
+    return;
+  }
+
+  if (!cfg.position_prediction_enabled || !imu.orientation_valid ||
+      !state->has_position_anchor || state->last_optical_pose_ns == 0 ||
+      timestamp_ns <= state->last_optical_pose_ns) {
+    state->prediction_active = false;
+    state->prediction_started = false;
+    state->reacquire_blend_active = false;
+    return;
+  }
+
+  const uint64_t elapsed_ns = timestamp_ns - state->last_optical_pose_ns;
+  if (lost_output_ns == 0 || elapsed_ns > lost_output_ns) {
+    clear_imu_position_loss_state(*state, true);
+    invalidate_runtime_controller_pose(out);
+    return;
+  }
+
+  state->reacquire_blend_active = false;
+
+  // Phase 1 is identical to image-based hand prediction: hold the last good
+  // optical coordinate and expose no stale velocity to downstream prediction.
+  if (elapsed_ns <= hold_ns || predict_ns == 0) {
+    state->prediction_active = false;
+    state->prediction_started = false;
+    std::copy(std::begin(state->anchor_position_m),
+              std::end(state->anchor_position_m), state->position_m);
+    std::fill(std::begin(state->velocity_mps),
+              std::end(state->velocity_mps), 0.0f);
+    publish_synthetic_controller_position(
+        out, state->position_m, state->velocity_mps, false, false,
+        imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
+    return;
+  }
+
+  // Phase 2 uses the same prediction window, damping curve and timeout as the
+  // image path. Only coordinate calculation differs: optional IMU acceleration
+  // is added to the last optical velocity trajectory.
+  const uint64_t prediction_elapsed_ns = elapsed_ns - hold_ns;
+  const uint64_t clamped_prediction_ns =
+      std::min(prediction_elapsed_ns, predict_ns);
+  const float prediction_elapsed_s =
+      static_cast<float>(clamped_prediction_ns) / 1.0e9f;
+  const float progress = predict_ns > 0
+      ? std::clamp(static_cast<float>(clamped_prediction_ns) /
+                       static_cast<float>(predict_ns),
+                   0.0f, 1.0f)
+      : 1.0f;
+  const float damping = std::clamp(cfg.prediction_damping, 0.0f, 1.0f);
+
+  if (!state->prediction_started) {
+    state->prediction_started = true;
+    state->last_update_ns = timestamp_ns;
+    std::fill(std::begin(state->acceleration_position_delta_m),
+              std::end(state->acceleration_position_delta_m), 0.0f);
+    std::fill(std::begin(state->acceleration_velocity_delta_mps),
+              std::end(state->acceleration_velocity_delta_mps), 0.0f);
+  }
+
+  uint64_t dt_ns = state->last_update_ns != 0 &&
+                           timestamp_ns > state->last_update_ns
+                       ? timestamp_ns - state->last_update_ns
+                       : 0;
+  dt_ns = std::min<uint64_t>(dt_ns, 50'000'000ull);
+  const float dt_s = static_cast<float>(dt_ns) / 1.0e9f;
+  state->last_update_ns = timestamp_ns;
+
+  float acceleration[3] = {};
+  const bool acceleration_valid =
+      runtime_world_linear_acceleration(imu, cfg, acceleration);
+  if (dt_s > 0.0f && acceleration_valid) {
+    // Fade the acceleration contribution with the same remaining-window factor
+    // used for published prediction velocity. This keeps noisy IMU acceleration
+    // from causing a final-frame kick immediately before timeout.
+    const float acceleration_weight = 1.0f - progress;
+    for (int axis = 0; axis < 3; ++axis) {
+      const float a = acceleration[axis] * acceleration_weight;
+      state->acceleration_position_delta_m[axis] +=
+          state->acceleration_velocity_delta_mps[axis] * dt_s +
+          0.5f * a * dt_s * dt_s;
+      state->acceleration_velocity_delta_mps[axis] += a * dt_s;
+    }
+    clamp_v3_length(state->acceleration_velocity_delta_mps,
+                    cfg.max_prediction_velocity_mps);
+  }
+
+  const float integrated_time_s =
+      prediction_elapsed_s * (1.0f - 0.5f * progress);
+  for (int axis = 0; axis < 3; ++axis) {
+    const float base_delta =
+        state->anchor_velocity_mps[axis] * damping * integrated_time_s;
+    state->position_m[axis] = state->anchor_position_m[axis] + base_delta +
+                              state->acceleration_position_delta_m[axis];
+    state->velocity_mps[axis] =
+        (state->anchor_velocity_mps[axis] * damping +
+         state->acceleration_velocity_delta_mps[axis]) *
+        (1.0f - progress);
+  }
+  clamp_v3_length(state->velocity_mps, cfg.max_prediction_velocity_mps);
+
+  publish_synthetic_controller_position(
+      out, state->position_m, state->velocity_mps,
+      cfg.publish_predicted_velocity, true,
+      imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
+  state->prediction_active = true;
+}
+
+
+bool controller_side_has_movement_input(const xr_runtime::ControllerDeviceStateV3& controller) {
   if (!controller_side_is_present(controller)) return false;
   const uint64_t buttons = normalize_controller_dpad_buttons(controller.buttons);
   const uint64_t dpad_mask = xr_runtime::CONTROLLER_BUTTON_DPAD_UP |
@@ -218,7 +828,8 @@ void apply_hmd_yaw_orientation_for_movement(
 
   // Position still comes from hand tracking; only orientation is synthesized for
   // locomotion. Keep the hand-position source, but do not advertise hand yaw.
-  out.source_mask &= ~xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION;
+  out.source_mask &= ~(xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION);
   out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_STATIC_ORIENTATION;
 }
 
@@ -313,7 +924,7 @@ void mark_pose_invalid(xr_runtime::RuntimeControllerSideStateV1& out) {
 
 bool should_use_lost_hand_hmd_relative_fallback(
     LostHandPoseFallbackMode mode,
-    const xr_runtime::ControllerDeviceStateV2* controller_side) {
+    const xr_runtime::ControllerDeviceStateV3* controller_side) {
   switch (mode) {
     case LostHandPoseFallbackMode::PoseInvalid:
       return false;
@@ -335,7 +946,7 @@ void apply_dpad_to_thumbstick(uint64_t buttons, float& x, float& y) {
 }
 
 void fill_inputs_from_controller(xr_runtime::RuntimeControllerSideStateV1& out,
-                                 const xr_runtime::ControllerDeviceStateV2& controller,
+                                 const xr_runtime::ControllerDeviceStateV3& controller,
                                  const RuntimeControllerSynthesisConfig& cfg) {
   if (!controller_side_is_present(controller)) return;
   const uint64_t buttons = normalize_controller_dpad_buttons(controller.buttons);
@@ -386,8 +997,10 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   bool left,
                   const RuntimeControllerSynthesisConfig& cfg,
                   const xr_runtime::HandTrackingFrameF32V2* hand,
-                  const xr_runtime::ControllerInputV2* controller_input,
-                  const xr_runtime::HmdPoseF64V1* hmd) {
+                  const xr_runtime::ControllerInputV3* controller_input,
+                  const xr_runtime::HmdPoseF64V1* hmd,
+                  uint64_t timestamp_ns,
+                  RuntimeControllerImuSideRuntimeState* runtime_state) {
   out.role = left ? xr_runtime::CONTROLLER_SIDE_LEFT : xr_runtime::CONTROLLER_SIDE_RIGHT;
   copy_debug_source(out, xr_runtime::runtime_controller_mode_name(cfg.mode));
 
@@ -398,7 +1011,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
     valid_hand_side = hand_side_is_valid(*hand, *hand_side, left);
   }
 
-  const xr_runtime::ControllerDeviceStateV2* controller_side = nullptr;
+  const xr_runtime::ControllerDeviceStateV3* controller_side = nullptr;
   if (controller_input != nullptr) {
     controller_side = left ? &controller_input->left : &controller_input->right;
   }
@@ -433,7 +1046,30 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 
   if (controller_side != nullptr) {
     fill_inputs_from_controller(out, *controller_side, cfg);
-    const RuntimeControllerMovementSpace movement_space = effective_runtime_controller_movement_space(cfg, left);
+    const RuntimeControllerOrientationSource configured_orientation_source =
+        left ? cfg.left_orientation_source : cfg.right_orientation_source;
+    const RuntimeControllerOrientationSource orientation_source =
+        effective_runtime_controller_orientation_source(configured_orientation_source, controller_side);
+    if (orientation_source == RuntimeControllerOrientationSource::ImuOverrideControllerRuntime) {
+      const RuntimeControllerImuOrientationConfig& imu_orientation_cfg =
+          left ? cfg.left_imu_orientation : cfg.right_imu_orientation;
+      const RuntimeControllerImuMotionConfig& imu_motion_cfg =
+          left ? cfg.left_imu_motion : cfg.right_imu_motion;
+      RuntimeImuSample imu = runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      apply_runtime_yaw_correction(
+          imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
+      update_or_apply_imu_position_prediction(
+          out, imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
+      apply_imu_orientation_override(out, imu);
+    } else if (runtime_state != nullptr) {
+      // The feature is dormant while this side uses hand-tracking fallback.
+      // Drop the old optical anchor so a later IMU reconnect cannot resume a
+      // prediction from stale coordinates.
+      clear_imu_position_loss_state(*runtime_state, true);
+    }
+
+    const RuntimeControllerMovementSpace movement_space =
+        effective_runtime_controller_movement_space(cfg, left, orientation_source);
     if (movement_space == RuntimeControllerMovementSpace::HmdPose &&
                hmd != nullptr &&
                controller_side_has_movement_input(*controller_side)) {
@@ -447,7 +1083,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                                           : cfg.right_hand_gestures_enabled;
   if (cfg.mode == xr_runtime::RuntimeControllerMode::HAND_TRACKING_WITH_BUTTON_PRIORITY &&
       valid_hand_side && hand_gestures_enabled) {
-    // Whether hand gestures are allowed while an external ControllerInputV2 stream
+    // Whether hand gestures are allowed while an external ControllerInputV3 stream
     // exists is decided by xr_runtime_adapter per frame.  Do not key this off
     // controller_side presence here, otherwise hand_plus_controller cannot combine
     // physical controller input with pinch/grab gestures.
@@ -461,6 +1097,59 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 }
 
 }  // namespace
+
+RuntimeControllerMovementSpace parse_runtime_controller_movement_space(
+    const std::string& value,
+    const char* option_name) {
+  if (value == "controller" || value == "hand" ||
+      value == "controller_local" || value == "local") {
+    return RuntimeControllerMovementSpace::Controller;
+  }
+  if (value == "hmd_pose" || value == "head_pose" ||
+      value == "hmd_orientation" || value == "head_orientation" ||
+      value == "hmd_yaw" || value == "head_yaw") {
+    return RuntimeControllerMovementSpace::HmdPose;
+  }
+  throw std::runtime_error(std::string(option_name) +
+                           " must be one of: controller, hmd_pose");
+}
+
+const char* runtime_controller_movement_space_name(RuntimeControllerMovementSpace value) {
+  switch (value) {
+    case RuntimeControllerMovementSpace::Controller:
+      return "controller";
+    case RuntimeControllerMovementSpace::HmdPose:
+      return "hmd_pose";
+  }
+  return "unknown";
+}
+
+RuntimeControllerOrientationSource parse_runtime_controller_orientation_source(
+    const std::string& value,
+    const char* option_name) {
+  if (value == "HAND_TRACKING_BACKEND" || value == "hand_tracking_backend" ||
+      value == "hand_tracking" || value == "backend") {
+    return RuntimeControllerOrientationSource::HandTrackingBackend;
+  }
+  if (value == "IMU_OVERRIDE_CONTROLLER_RUNTIME" ||
+      value == "imu_override_controller_runtime" ||
+      value == "imu") {
+    return RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
+  }
+  throw std::runtime_error(std::string(option_name) +
+                           " must be one of: HAND_TRACKING_BACKEND, "
+                           "IMU_OVERRIDE_CONTROLLER_RUNTIME");
+}
+
+const char* runtime_controller_orientation_source_name(RuntimeControllerOrientationSource value) {
+  switch (value) {
+    case RuntimeControllerOrientationSource::HandTrackingBackend:
+      return "HAND_TRACKING_BACKEND";
+    case RuntimeControllerOrientationSource::ImuOverrideControllerRuntime:
+      return "IMU_OVERRIDE_CONTROLLER_RUNTIME";
+  }
+  return "UNKNOWN";
+}
 
 LostHandPoseFallbackMode parse_lost_hand_pose_fallback_mode(const std::string& value,
                                                                    const char* option_name) {
@@ -548,31 +1237,62 @@ uint32_t controller_buttons_to_runtime_mask(uint64_t buttons) {
   return static_cast<uint32_t>(normalize_controller_dpad_buttons(buttons)) & runtime_controller_button_mask();
 }
 
-bool controller_device_is_present(const xr_runtime::ControllerDeviceStateV2& controller) {
+bool controller_device_is_present(const xr_runtime::ControllerDeviceStateV3& controller) {
   return controller_side_is_present(controller);
 }
 
-bool controller_device_has_nonzero_input(const xr_runtime::ControllerDeviceStateV2& controller) {
+bool controller_device_has_nonzero_input(const xr_runtime::ControllerDeviceStateV3& controller) {
   return controller_side_has_nonzero_input(controller);
 }
 
-bool controller_input_has_present_controller(const xr_runtime::ControllerInputV2& controller) {
+bool controller_device_has_imu(const xr_runtime::ControllerDeviceStateV3& controller) {
+  return (controller.flags & xr_runtime::CONTROLLER_DEVICE_IMU_PRESENT) != 0u ||
+         xr_runtime::controller_imu_is_present(controller.imu);
+}
+
+bool controller_device_has_active_imu(const xr_runtime::ControllerDeviceStateV3& controller) {
+  return (controller.flags & xr_runtime::CONTROLLER_DEVICE_IMU_ACTIVE) != 0u &&
+         xr_runtime::controller_imu_has_current_data(controller.imu);
+}
+
+bool controller_device_has_active_orientation_imu(
+    const xr_runtime::ControllerDeviceStateV3& controller) {
+  if (!controller_device_has_active_imu(controller)) return false;
+  if ((controller.imu.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) == 0u) {
+    return false;
+  }
+  return finite_q_xyzw(controller.imu.orientation_xyzw) &&
+         nonzero_q_xyzw(controller.imu.orientation_xyzw);
+}
+
+RuntimeControllerOrientationSource effective_runtime_controller_orientation_source(
+    RuntimeControllerOrientationSource configured,
+    const xr_runtime::ControllerDeviceStateV3* controller) {
+  if (configured == RuntimeControllerOrientationSource::ImuOverrideControllerRuntime &&
+      controller != nullptr &&
+      controller_device_has_active_orientation_imu(*controller)) {
+    return RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
+  }
+  return RuntimeControllerOrientationSource::HandTrackingBackend;
+}
+
+bool controller_input_has_present_controller(const xr_runtime::ControllerInputV3& controller) {
   return controller_device_is_present(controller.left) ||
          controller_device_is_present(controller.right);
 }
 
-bool controller_input_has_nonzero_input(const xr_runtime::ControllerInputV2& controller) {
+bool controller_input_has_nonzero_input(const xr_runtime::ControllerInputV3& controller) {
   return controller_device_has_nonzero_input(controller.left) ||
          controller_device_has_nonzero_input(controller.right);
 }
 
 void apply_controller_gesture_override(
     xr_runtime::HandTrackingFrameF32V2& hand,
-    const xr_runtime::ControllerInputV2& controller,
+    const xr_runtime::ControllerInputV3& controller,
     xr_runtime::ControllerInputConflictPolicy policy,
     float trigger_pinch_threshold,
     float grip_grab_threshold) {
-  auto apply_side = [&](xr_runtime::HandSideF32V2& side, const xr_runtime::ControllerDeviceStateV2& controller_side) {
+  auto apply_side = [&](xr_runtime::HandSideF32V2& side, const xr_runtime::ControllerDeviceStateV3& controller_side) {
     if (!controller_side_has_nonzero_input(controller_side)) return;
 
     const uint64_t buttons = normalize_controller_dpad_buttons(controller_side.buttons);
@@ -628,18 +1348,21 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     uint64_t timestamp_ns,
     const RuntimeControllerSynthesisConfig& cfg,
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& filtered_hand,
-    const std::optional<xr_runtime::ControllerInputV2>& controller_input,
-    const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose) {
+    const std::optional<xr_runtime::ControllerInputV3>& controller_input,
+    const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
+    RuntimeControllerSynthesisState* runtime_state) {
   xr_runtime::RuntimeControllerStateFrameV1 frame{};
   frame.sequence = sequence;
   frame.timestamp_ns = timestamp_ns;
 
   const xr_runtime::HandTrackingFrameF32V2* hand = filtered_hand ? &(*filtered_hand) : nullptr;
-  const xr_runtime::ControllerInputV2* controller = controller_input ? &(*controller_input) : nullptr;
+  const xr_runtime::ControllerInputV3* controller = controller_input ? &(*controller_input) : nullptr;
   const xr_runtime::HmdPoseF64V1* hmd = runtime_hmd_pose ? &(*runtime_hmd_pose) : nullptr;
 
-  compose_side(frame.left, true, cfg, hand, controller, hmd);
-  compose_side(frame.right, false, cfg, hand, controller, hmd);
+  compose_side(frame.left, true, cfg, hand, controller, hmd, timestamp_ns,
+               runtime_state != nullptr ? &runtime_state->left : nullptr);
+  compose_side(frame.right, false, cfg, hand, controller, hmd, timestamp_ns,
+               runtime_state != nullptr ? &runtime_state->right : nullptr);
 
   if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {
     frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_CONNECTED;

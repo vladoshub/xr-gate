@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Watch override_controller ControllerInputV2 SHM stream.
+"""Watch the override_controller ControllerInputV3 SHM stream.
 
-This is a debug tool for checking whether physical controller presses survive
-through override_controller into the published controller_input stream.
-It prints button/axis transitions, press durations, gaps, and counter deltas.
+This is a debug tool for checking whether physical controller presses and V3
+per-side IMU state survive through override_controller into controller_input.
+It prints button/axis transitions, press durations, gaps, counter deltas, and
+IMU capability/current-data status.
 """
 
 from __future__ import annotations
@@ -42,13 +43,14 @@ NAME_TO_BIT = {name: bit for bit, name in BUTTONS}
 # Packed ABI from shared/include/xr_runtime/contracts/controller_input_contract.hpp
 RING_HEADER_STRUCT = struct.Struct("<8s7IQ")  # 44 bytes with #pragma pack(1)
 SLOT_HEADER_STRUCT = struct.Struct("<QQQQII")  # first 40 bytes of 128-byte slot header
-FRAME_SIZE = 856
-SIDE_SIZE = 400
 FRAME_HEADER_SIZE = 56
-LEFT_OFF = FRAME_HEADER_SIZE
-RIGHT_OFF = FRAME_HEADER_SIZE + SIDE_SIZE
+V3_FRAME_SIZE = 1432
+V3_SIDE_SIZE = 688
+V3_IMU_OFF = 400
+IMU_SAMPLE_SIZE = 48
+IMU_SAMPLES_OFF = 80
 
-# ControllerDeviceStateV2 offsets inside each side payload.
+# ControllerDeviceStateV3 fixed button/analog prefix offsets.
 SIDE_STATUS_OFF = 0
 SIDE_SIDE_OFF = 4
 SIDE_FLAGS_OFF = 8
@@ -73,6 +75,14 @@ STATUS_NAMES = {
     3: "stale",
     4: "lost",
 }
+IMU_STATUS_NAMES = {
+    0: "not_supported",
+    1: "configured",
+    2: "connected",
+    3: "active",
+    4: "stale",
+    5: "lost",
+}
 
 @dataclass
 class RegistryInfo:
@@ -82,6 +92,20 @@ class RegistryInfo:
     slot_stride: int
     slot_header_size: int
     payload_size: int
+
+@dataclass
+class ImuState:
+    status: int = 0
+    capability_flags: int = 0
+    data_flags: int = 0
+    sample_count: int = 0
+    sequence: int = 0
+    latest_sample_timestamp_ns: int = 0
+    latest_device_timestamp_ticks: int = 0
+    orientation_timestamp_ns: int = 0
+    orientation_xyzw: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    magnetic_field_uT: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    temperature_c: float = 0.0
 
 @dataclass
 class SideState:
@@ -99,6 +123,7 @@ class SideState:
     press_counters: Tuple[int, ...]
     release_counters: Tuple[int, ...]
     device_id: str
+    imu: ImuState
 
 @dataclass
 class Frame:
@@ -123,6 +148,17 @@ def bits_to_names(mask: int) -> List[str]:
     return [name for bit, name in BUTTONS if mask & (1 << bit)]
 
 
+def parse_imu(buf: bytes, base: int) -> ImuState:
+    status, capabilities, data_flags, sample_count = struct.unpack_from("<IIII", buf, base)
+    sequence, latest_ts, latest_device_ts, orientation_ts = struct.unpack_from("<QQQQ", buf, base + 16)
+    orientation = struct.unpack_from("<4f", buf, base + 48)
+    magnetic = struct.unpack_from("<3f", buf, base + 64)
+    temperature = struct.unpack_from("<f", buf, base + 76)[0]
+    return ImuState(status, capabilities, data_flags, min(sample_count, 4), sequence,
+                    latest_ts, latest_device_ts, orientation_ts, orientation,
+                    magnetic, temperature)
+
+
 def parse_side(buf: bytes, base: int) -> SideState:
     status, side, flags, source_type = struct.unpack_from("<IIII", buf, base)
     buttons, touches, changed_buttons = struct.unpack_from("<QQQ", buf, base + SIDE_BUTTONS_OFF)
@@ -131,18 +167,26 @@ def parse_side(buf: bytes, base: int) -> SideState:
     release = struct.unpack_from("<32I", buf, base + SIDE_RELEASE_COUNTERS_OFF)
     raw_id = buf[base + SIDE_DEVICE_ID_OFF:base + SIDE_DEVICE_ID_OFF + 64]
     device_id = raw_id.split(b"\0", 1)[0].decode("utf-8", "replace")
+    imu = parse_imu(buf, base + V3_IMU_OFF)
     return SideState(status, side, flags, source_type, buttons, touches, changed_buttons,
-                     trigger, grip, tx, ty, press, release, device_id)
+                     trigger, grip, tx, ty, press, release, device_id, imu)
 
 
 def parse_frame(payload: bytes) -> Frame:
-    if len(payload) < FRAME_SIZE:
-        raise ValueError(f"payload too small: {len(payload)} < {FRAME_SIZE}")
+    if len(payload) < 8:
+        raise ValueError(f"payload too small: {len(payload)}")
     version, size_bytes = struct.unpack_from("<II", payload, 0)
+    if version != 3:
+        raise ValueError(
+            f"unsupported controller_input version: {version}; expected V3"
+        )
+    expected_size, side_size = V3_FRAME_SIZE, V3_SIDE_SIZE
+    if size_bytes != expected_size or len(payload) < expected_size:
+        raise ValueError(f"invalid V{version} payload size: header={size_bytes} available={len(payload)} expected={expected_size}")
     sequence, timestamp_ns, source_timestamp_ns, reset_counter = struct.unpack_from("<QQQQ", payload, 8)
     flags, active_mask, connected_mask, _reserved0 = struct.unpack_from("<IIII", payload, 40)
-    left = parse_side(payload, LEFT_OFF)
-    right = parse_side(payload, RIGHT_OFF)
+    left = parse_side(payload, FRAME_HEADER_SIZE)
+    right = parse_side(payload, FRAME_HEADER_SIZE + side_size)
     return Frame(version, size_bytes, sequence, timestamp_ns, source_timestamp_ns,
                  reset_counter, flags, active_mask, connected_mask, left, right)
 
@@ -159,9 +203,9 @@ def read_registry(path: Path, stream: str) -> RegistryInfo:
         shm_name=str(s.get("shm_name", stream)),
         header_size=int(s.get("header_size", 4096)),
         slot_count=int(s.get("slot_count", 1024)),
-        slot_stride=int(s.get("slot_stride", 128 + FRAME_SIZE)),
+        slot_stride=int(s.get("slot_stride", 128 + V3_FRAME_SIZE)),
         slot_header_size=int(s.get("slot_header_size", 128)),
-        payload_size=int(s.get("payload_size", FRAME_SIZE)),
+        payload_size=int(s.get("payload_size", V3_FRAME_SIZE)),
     )
 
 
@@ -197,10 +241,11 @@ def read_frame(mm: mmap.mmap, info: RegistryInfo, expected_seq: Optional[int] = 
     seq_begin_1, seq_end_1, ts, source_ts, payload_size, flags = SLOT_HEADER_STRUCT.unpack_from(mm, off)
     if seq_begin_1 != seq_end_1 or (seq_begin_1 & 1):
         return None
-    if payload_size < FRAME_SIZE:
+    if payload_size < 8:
         return None
     payload_off = off + info.slot_header_size
-    payload = bytes(mm[payload_off:payload_off + FRAME_SIZE])
+    payload_len = min(payload_size, info.payload_size)
+    payload = bytes(mm[payload_off:payload_off + payload_len])
     seq_begin_2, seq_end_2, *_ = SLOT_HEADER_STRUCT.unpack_from(mm, off)
     if seq_begin_1 != seq_begin_2 or seq_end_1 != seq_end_2:
         return None
@@ -208,15 +253,17 @@ def read_frame(mm: mmap.mmap, info: RegistryInfo, expected_seq: Optional[int] = 
         frame = parse_frame(payload)
     except Exception:
         return None
-    if frame.version != 2 or frame.size_bytes != FRAME_SIZE:
+    if frame.version != 3:
         return None
     return frame
 
 
 def side_label(side_name: str, side: SideState) -> str:
     status = STATUS_NAMES.get(side.status, str(side.status))
+    imu_status = IMU_STATUS_NAMES.get(side.imu.status, str(side.imu.status))
+    imu = f" imu={imu_status} imu_samples={side.imu.sample_count} imu_flags=0x{side.imu.data_flags:x}"
     dev = f" dev={side.device_id}" if side.device_id else ""
-    return f"{side_name} status={status} buttons={bits_to_names(side.buttons)} tx={side.thumbstick_x:+.2f} ty={side.thumbstick_y:+.2f}{dev}"
+    return f"{side_name} status={status} buttons={bits_to_names(side.buttons)} tx={side.thumbstick_x:+.2f} ty={side.thumbstick_y:+.2f}{imu}{dev}"
 
 
 def iter_selected_bits(mask: Optional[str]) -> Iterable[int]:

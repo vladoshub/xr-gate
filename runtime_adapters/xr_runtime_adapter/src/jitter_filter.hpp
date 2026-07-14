@@ -132,8 +132,15 @@ class RuntimeControllerStateJitterFilter {
  public:
   void reset();
   void filter(xr_runtime::RuntimeControllerStateFrameV1& frame, const RuntimeJitterFilterConfig& cfg);
+  void filter(xr_runtime::RuntimeControllerStateFrameV1& frame,
+              const RuntimeJitterFilterConfig& left_cfg,
+              const RuntimeJitterFilterConfig& right_cfg,
+              bool filter_left_orientation,
+              bool filter_right_orientation);
 
  private:
+  OrientationDeadbandFilter left_orientation_;
+  OrientationDeadbandFilter right_orientation_;
   VectorDeadbandSmoothingFilter left_linear_velocity_;
   VectorDeadbandSmoothingFilter right_linear_velocity_;
   VectorDeadbandSmoothingFilter left_angular_velocity_;
@@ -154,6 +161,11 @@ class RuntimeJitterFilter {
   void filter_hand(xr_runtime::HandTrackingFrameF64V1& hand);
   void filter_body_trackers(xr_tracking::BodyTrackerSetFrameF32V1& frame);
   void filter_runtime_controller_state(xr_runtime::RuntimeControllerStateFrameV1& frame);
+  void filter_runtime_controller_state(xr_runtime::RuntimeControllerStateFrameV1& frame,
+                                       const RuntimeJitterFilterConfig& left_cfg,
+                                       const RuntimeJitterFilterConfig& right_cfg,
+                                       bool filter_left_orientation,
+                                       bool filter_right_orientation);
 
  private:
   RuntimeJitterFilterConfig cfg_{};

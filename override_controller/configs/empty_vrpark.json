@@ -410,7 +410,22 @@
       "stable_hash": null,
       "uniq": null,
       "vendor": null,
-      "version": null
+      "version": null,
+      "input": {
+        "rel_axis_hold_ms": 0,
+        "rel_button_hold_ms": 0,
+        "button_hold_ms": 0,
+        "button_release_grace_ms": 0,
+        "pulse_mode": true,
+        "dpad_pulse_gap_ms": 50,
+        "dpad_release_ms": 60,
+        "button_pulse_gap_ms": 0,
+        "button_release_ms": 0,
+        "button_pulse_startup_ms": 0,
+        "button_pulse_startup_release_ms": 0,
+        "button_pulse_startup_types": ["trigger"],
+        "hold_toggle_debounce_ms": 100
+      }
     },
     {
       "backend": "evdev",
@@ -426,7 +441,22 @@
       "stable_hash": null,
       "uniq": null,
       "vendor": null,
-      "version": null
+      "version": null,
+      "input": {
+        "rel_axis_hold_ms": 0,
+        "rel_button_hold_ms": 0,
+        "button_hold_ms": 0,
+        "button_release_grace_ms": 0,
+        "pulse_mode": true,
+        "dpad_pulse_gap_ms": 50,
+        "dpad_release_ms": 60,
+        "button_pulse_gap_ms": 0,
+        "button_release_ms": 0,
+        "button_pulse_startup_ms": 0,
+        "button_pulse_startup_release_ms": 0,
+        "button_pulse_startup_types": ["trigger"],
+        "hold_toggle_debounce_ms": 100
+      }
     }
   ],
   "hold_toggle_bindings": [
@@ -493,23 +523,10 @@
   ],
   "input": {
     "allow_shared_physical_device_sides": true,
-    "button_hold_ms": 120,
-    "button_pulse_gap_ms": 180,
-    "button_pulse_startup_ms": 0,
-    "button_pulse_startup_release_ms": 0,
-    "button_pulse_startup_types": [],
-    "button_release_grace_ms": 0,
-    "button_release_ms": 190,
-    "dpad_pulse_gap_ms": 130,
-    "dpad_release_ms": 140,
     "event_wait_max_ms": 20,
     "grab_devices": false,
-    "hold_toggle_debounce_ms": 1500,
-    "pulse_mode": false,
     "reattach_devices": false,
-    "reattach_interval_ms": 1000,
-    "rel_axis_hold_ms": 160,
-    "rel_button_hold_ms": 800
+    "reattach_interval_ms": 1000
   },
   "layout_switch": {
     "device_id": 1,
@@ -537,5 +554,5 @@
     "transport": "shm",
     "unlink_existing": true
   },
-  "version": 1
+  "version": 2
 }

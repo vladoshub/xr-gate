@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -147,11 +148,21 @@ enum ControllerDeviceFlags : uint32_t {
   CONTROLLER_DEVICE_POSE_VALID = 1u << 0,
   CONTROLLER_DEVICE_BUTTONS_VALID = 1u << 1,
   CONTROLLER_DEVICE_ANALOG_VALID = 1u << 2,
+  // The side is backed by an IMU-capable provider. This remains set while the
+  // IMU is configured/connected/stale/lost so consumers can distinguish an
+  // IMU controller from a buttons-only controller.
+  CONTROLLER_DEVICE_IMU_PRESENT = 1u << 3,
+  // At least one current IMU datum is valid in ControllerDeviceStateV3::imu.
+  CONTROLLER_DEVICE_IMU_ACTIVE = 1u << 4,
 };
 
 enum ControllerInputFrameFlags : uint32_t {
   CONTROLLER_INPUT_FRAME_ACTIVE_LEFT = 1u << 0,
   CONTROLLER_INPUT_FRAME_ACTIVE_RIGHT = 1u << 1,
+  CONTROLLER_INPUT_FRAME_IMU_PRESENT_LEFT = 1u << 2,
+  CONTROLLER_INPUT_FRAME_IMU_PRESENT_RIGHT = 1u << 3,
+  CONTROLLER_INPUT_FRAME_IMU_ACTIVE_LEFT = 1u << 4,
+  CONTROLLER_INPUT_FRAME_IMU_ACTIVE_RIGHT = 1u << 5,
 };
 
 enum ControllerInputSourceType : uint32_t {
@@ -161,7 +172,48 @@ enum ControllerInputSourceType : uint32_t {
   CONTROLLER_INPUT_SOURCE_BLUETOOTH_GAMEPAD = 3,
   CONTROLLER_INPUT_SOURCE_HID = 4,
   CONTROLLER_INPUT_SOURCE_SYNTHETIC = 5,
+  CONTROLLER_INPUT_SOURCE_MOTION_CONTROLLER = 6,
 };
+
+enum ControllerImuStatus : uint32_t {
+  // This controller side is buttons/axes only and has no IMU provider.
+  CONTROLLER_IMU_NOT_SUPPORTED = 0,
+  // An IMU provider is configured for this side, but it has not connected yet.
+  CONTROLLER_IMU_CONFIGURED = 1,
+  // The IMU transport is connected, but no current valid sample is available.
+  CONTROLLER_IMU_CONNECTED = 2,
+  // Current IMU data is available.
+  CONTROLLER_IMU_ACTIVE = 3,
+  // The last IMU data is retained but older than the provider freshness limit.
+  CONTROLLER_IMU_STALE = 4,
+  // The configured IMU provider disconnected after previously being available.
+  CONTROLLER_IMU_LOST = 5,
+};
+
+enum ControllerImuCapabilityFlags : uint32_t {
+  CONTROLLER_IMU_CAP_GYROSCOPE = 1u << 0,
+  CONTROLLER_IMU_CAP_ACCELEROMETER = 1u << 1,
+  CONTROLLER_IMU_CAP_MAGNETOMETER = 1u << 2,
+  CONTROLLER_IMU_CAP_ORIENTATION = 1u << 3,
+  CONTROLLER_IMU_CAP_TEMPERATURE = 1u << 4,
+  CONTROLLER_IMU_CAP_DEVICE_TIMESTAMP = 1u << 5,
+  CONTROLLER_IMU_CAP_MULTI_SAMPLE_PACKET = 1u << 6,
+};
+
+enum ControllerImuDataFlags : uint32_t {
+  CONTROLLER_IMU_GYROSCOPE_VALID = 1u << 0,
+  CONTROLLER_IMU_ACCELEROMETER_VALID = 1u << 1,
+  CONTROLLER_IMU_MAGNETOMETER_VALID = 1u << 2,
+  CONTROLLER_IMU_ORIENTATION_VALID = 1u << 3,
+  CONTROLLER_IMU_TEMPERATURE_VALID = 1u << 4,
+  CONTROLLER_IMU_GYROSCOPE_CALIBRATED = 1u << 5,
+  CONTROLLER_IMU_ACCELEROMETER_CALIBRATED = 1u << 6,
+  CONTROLLER_IMU_MAGNETOMETER_CALIBRATED = 1u << 7,
+  // timestamp_ns has been mapped into the producer monotonic clock domain.
+  CONTROLLER_IMU_HOST_TIME_SYNCED = 1u << 8,
+};
+
+inline constexpr uint32_t CONTROLLER_IMU_MAX_SAMPLES = 4;
 
 enum ControllerButtonBits : uint64_t {
   CONTROLLER_BUTTON_TRIGGER = 1ull << 0,
@@ -199,40 +251,55 @@ inline constexpr uint64_t CONTROLLER_BUTTON_KNOWN_MASK =
     CONTROLLER_BUTTON_Y |
     CONTROLLER_BUTTON_SYSTEM;
 
-struct ControllerDeviceStateV1 {
-  uint32_t status = CONTROLLER_INPUT_UNAVAILABLE;
-  uint32_t side = CONTROLLER_SIDE_UNKNOWN;
+#pragma pack(push, 1)
+// One sensor sample. timestamp_ns is in the producer monotonic clock domain
+// when CONTROLLER_IMU_HOST_TIME_SYNCED is set in flags; device_timestamp_ticks
+// preserves the extended raw device counter when available.
+// angular_velocity_rad_s and specific_force_m_s2 are expressed in the
+// controller sensor-local axes. specific_force_m_s2 includes gravity, matching
+// a physical accelerometer. samples are ordered oldest to newest.
+struct ControllerImuSampleV1 {
+  uint64_t timestamp_ns = 0;
+  uint64_t device_timestamp_ticks = 0;
+
+  float angular_velocity_rad_s[3] = {};
+  float specific_force_m_s2[3] = {};
+
   uint32_t flags = 0;
   uint32_t reserved0 = 0;
-
-  uint64_t buttons = 0;
-  uint64_t touches = 0;
-
-  float trigger = 0.0f;
-  float grip = 0.0f;
-  float thumbstick_x = 0.0f;
-  float thumbstick_y = 0.0f;
-
-  uint32_t press_counters[32] = {};
-  uint32_t release_counters[32] = {};
-
-  char device_id[64] = {};
 };
 
-struct ControllerInputV1 {
-  uint32_t version = 1;
-  uint32_t size_bytes = sizeof(ControllerInputV1);
+// Per-controller IMU state. status explicitly distinguishes buttons-only
+// controllers (NOT_SUPPORTED) from an IMU controller that is configured,
+// connected, active, stale, or lost.
+struct ControllerImuStateV1 {
+  uint32_t status = CONTROLLER_IMU_NOT_SUPPORTED;
+  uint32_t capability_flags = 0;
+  // Validity/calibration of the latest state-level values. Per-sample gyro and
+  // accelerometer validity is also carried in ControllerImuSampleV1::flags.
+  uint32_t data_flags = 0;
+  uint32_t sample_count = 0;
 
   uint64_t sequence = 0;
-  uint64_t timestamp_ns = 0;
-  uint64_t source_timestamp_ns = 0;
+  uint64_t latest_sample_timestamp_ns = 0;
+  uint64_t latest_device_timestamp_ticks = 0;
+  uint64_t orientation_timestamp_ns = 0;
 
-  ControllerDeviceStateV1 left;
-  ControllerDeviceStateV1 right;
+  // q_provider_from_sensor in xyzw order. The provider reference frame is not
+  // necessarily the XR tracking frame; mounting/optical fusion belongs in the
+  // runtime adapter.
+  float orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
+  // Sensor-local axes.
+  float magnetic_field_uT[3] = {};
+  float temperature_c = 0.0f;
+
+  ControllerImuSampleV1 samples[CONTROLLER_IMU_MAX_SAMPLES] = {};
+  uint32_t reserved[4] = {};
 };
 
-#pragma pack(push, 1)
-struct ControllerDeviceStateV2 {
+// Current controller input ABI: buttons/axes followed by per-side IMU state.
+struct ControllerDeviceStateV3 {
   uint32_t status = CONTROLLER_INPUT_UNAVAILABLE;
   uint32_t side = CONTROLLER_SIDE_UNKNOWN;
   uint32_t flags = 0;
@@ -256,11 +323,13 @@ struct ControllerDeviceStateV2 {
   uint32_t release_counters[32] = {};
 
   char device_id[64] = {};
+
+  ControllerImuStateV1 imu;
 };
 
-struct ControllerInputV2 {
-  uint32_t version = 2;
-  uint32_t size_bytes = sizeof(ControllerInputV2);
+struct ControllerInputV3 {
+  uint32_t version = 3;
+  uint32_t size_bytes = sizeof(ControllerInputV3);
 
   uint64_t sequence = 0;
   uint64_t timestamp_ns = 0;
@@ -272,72 +341,59 @@ struct ControllerInputV2 {
   uint32_t connected_mask = 0;
   uint32_t reserved0 = 0;
 
-  ControllerDeviceStateV2 left;
-  ControllerDeviceStateV2 right;
+  ControllerDeviceStateV3 left;
+  ControllerDeviceStateV3 right;
 };
 #pragma pack(pop)
 
-static_assert(sizeof(ControllerDeviceStateV2) == 400, "ControllerDeviceStateV2 must stay ABI-stable at 400 bytes");
-static_assert(sizeof(ControllerInputV2) == 856, "ControllerInputV2 must stay ABI-stable at 856 bytes");
+static_assert(sizeof(ControllerImuSampleV1) == 48, "ControllerImuSampleV1 must stay ABI-stable at 48 bytes");
+static_assert(sizeof(ControllerImuStateV1) == 288, "ControllerImuStateV1 must stay ABI-stable at 288 bytes");
+static_assert(offsetof(ControllerDeviceStateV3, imu) == 400,
+              "ControllerDeviceStateV3 IMU offset must stay ABI-stable at 400 bytes");
+static_assert(sizeof(ControllerDeviceStateV3) == 688, "ControllerDeviceStateV3 must stay ABI-stable at 688 bytes");
+static_assert(sizeof(ControllerInputV3) == 1432, "ControllerInputV3 must stay ABI-stable at 1432 bytes");
 
-inline ControllerDeviceStateV2 controller_device_v2_from_v1(const ControllerDeviceStateV1& v1) {
-  ControllerDeviceStateV2 v2{};
-  v2.status = v1.status;
-  v2.side = v1.side;
-  v2.flags = v1.flags;
-  v2.buttons = v1.buttons;
-  v2.touches = v1.touches;
-  v2.changed_buttons = 0;
-  v2.trigger = v1.trigger;
-  v2.grip = v1.grip;
-  v2.thumbstick_x = v1.thumbstick_x;
-  v2.thumbstick_y = v1.thumbstick_y;
-  std::memcpy(v2.press_counters, v1.press_counters, sizeof(v1.press_counters));
-  std::memcpy(v2.release_counters, v1.release_counters, sizeof(v1.release_counters));
-  std::memcpy(v2.device_id, v1.device_id, sizeof(v1.device_id));
-  return v2;
+using ControllerDeviceState = ControllerDeviceStateV3;
+using ControllerInput = ControllerInputV3;
+
+inline bool controller_imu_is_present(const ControllerImuStateV1& imu) {
+  return imu.status != CONTROLLER_IMU_NOT_SUPPORTED;
 }
 
-inline ControllerInputV2 controller_input_v2_from_v1(const ControllerInputV1& v1) {
-  ControllerInputV2 v2{};
-  v2.sequence = v1.sequence;
-  v2.timestamp_ns = v1.timestamp_ns;
-  v2.source_timestamp_ns = v1.source_timestamp_ns;
-  v2.left = controller_device_v2_from_v1(v1.left);
-  v2.right = controller_device_v2_from_v1(v1.right);
-  if (v2.left.status == CONTROLLER_INPUT_ACTIVE) v2.active_mask |= CONTROLLER_INPUT_FRAME_ACTIVE_LEFT;
-  if (v2.right.status == CONTROLLER_INPUT_ACTIVE) v2.active_mask |= CONTROLLER_INPUT_FRAME_ACTIVE_RIGHT;
-  if (v2.left.status == CONTROLLER_INPUT_ACTIVE || v2.left.status == CONTROLLER_INPUT_CONNECTED) {
-    v2.connected_mask |= CONTROLLER_INPUT_FRAME_ACTIVE_LEFT;
-  }
-  if (v2.right.status == CONTROLLER_INPUT_ACTIVE || v2.right.status == CONTROLLER_INPUT_CONNECTED) {
-    v2.connected_mask |= CONTROLLER_INPUT_FRAME_ACTIVE_RIGHT;
-  }
-  return v2;
+inline bool controller_imu_has_current_data(const ControllerImuStateV1& imu) {
+  return imu.status == CONTROLLER_IMU_ACTIVE && imu.data_flags != 0u;
 }
 
-constexpr const char* CONTROLLER_INPUT_FORMAT_NAME = "CONTROLLER_INPUT_V1";
-constexpr uint32_t CONTROLLER_INPUT_FORMAT_VERSION = 1;
-constexpr const char* CONTROLLER_INPUT_V2_FORMAT_NAME = "CONTROLLER_INPUT_V2";
-constexpr uint32_t CONTROLLER_INPUT_V2_FORMAT_VERSION = 2;
-constexpr uint32_t CONTROLLER_INPUT_TCP_MAGIC = 0x43495631u; // "CIV1" marker
-constexpr uint32_t CONTROLLER_INPUT_TCP_VERSION = 1;
-constexpr uint32_t CONTROLLER_INPUT_TCP_MAGIC_V2 = 0x43495632u; // "CIV2" marker
-constexpr uint32_t CONTROLLER_INPUT_TCP_VERSION_V2 = 2;
+inline const char* controller_imu_status_name(uint32_t status) {
+  switch (status) {
+    case CONTROLLER_IMU_NOT_SUPPORTED: return "not_supported";
+    case CONTROLLER_IMU_CONFIGURED: return "configured";
+    case CONTROLLER_IMU_CONNECTED: return "connected";
+    case CONTROLLER_IMU_ACTIVE: return "active";
+    case CONTROLLER_IMU_STALE: return "stale";
+    case CONTROLLER_IMU_LOST: return "lost";
+    default: return "unknown";
+  }
+}
+
+constexpr const char* CONTROLLER_INPUT_V3_FORMAT_NAME = "CONTROLLER_INPUT_V3";
+constexpr uint32_t CONTROLLER_INPUT_V3_FORMAT_VERSION = 3;
+constexpr uint32_t CONTROLLER_INPUT_TCP_MAGIC_V3 = 0x43495633u; // "CIV3" marker
+constexpr uint32_t CONTROLLER_INPUT_TCP_VERSION_V3 = 3;
 
 #pragma pack(push, 1)
-struct ControllerInputTcpHeaderV1 {
-  uint32_t magic = CONTROLLER_INPUT_TCP_MAGIC;
-  uint16_t version = CONTROLLER_INPUT_TCP_VERSION;
-  uint16_t header_size = sizeof(ControllerInputTcpHeaderV1);
-  uint32_t payload_size = sizeof(ControllerInputV1);
+struct ControllerInputTcpHeader {
+  uint32_t magic = CONTROLLER_INPUT_TCP_MAGIC_V3;
+  uint16_t version = CONTROLLER_INPUT_TCP_VERSION_V3;
+  uint16_t header_size = sizeof(ControllerInputTcpHeader);
+  uint32_t payload_size = sizeof(ControllerInputV3);
   uint32_t reserved0 = 0;
   uint64_t sequence = 0;
   uint64_t timestamp_ns = 0;
 };
 #pragma pack(pop)
 
-static_assert(sizeof(ControllerInputTcpHeaderV1) == 32, "controller input TCP header must be 32 bytes");
+static_assert(sizeof(ControllerInputTcpHeader) == 32, "controller input TCP header must be 32 bytes");
 
 #ifndef _WIN32
 class ControllerInputTcpClient {
@@ -354,32 +410,26 @@ class ControllerInputTcpClient {
   ControllerInputTcpClient(const ControllerInputTcpClient&) = delete;
   ControllerInputTcpClient& operator=(const ControllerInputTcpClient&) = delete;
 
-  ControllerInputV2 read_next() {
-    ControllerInputTcpHeaderV1 header{};
+  ControllerInputV3 read_next() {
+    ControllerInputTcpHeader header{};
     read_exact(&header, sizeof(header));
-    if (header.magic == CONTROLLER_INPUT_TCP_MAGIC && header.version == CONTROLLER_INPUT_TCP_VERSION) {
-      if (header.payload_size != sizeof(ControllerInputV1)) {
-        throw std::runtime_error("unexpected controller_input TCP V1 payload size");
-      }
-      ControllerInputV1 frame{};
-      read_exact(&frame, sizeof(frame));
-      if (frame.size_bytes != sizeof(ControllerInputV1)) {
-        throw std::runtime_error("invalid controller_input V1 frame size_bytes");
-      }
-      return controller_input_v2_from_v1(frame);
+    if (header.magic != CONTROLLER_INPUT_TCP_MAGIC_V3 ||
+        header.version != CONTROLLER_INPUT_TCP_VERSION_V3 ||
+        header.header_size != sizeof(ControllerInputTcpHeader)) {
+      throw std::runtime_error(
+          "unsupported controller_input TCP ABI; expected CIV3/version 3. "
+          "Update override_controller and xr_runtime_adapter from the same XR Gate release");
     }
-    if (header.magic == CONTROLLER_INPUT_TCP_MAGIC_V2 && header.version == CONTROLLER_INPUT_TCP_VERSION_V2) {
-      if (header.payload_size != sizeof(ControllerInputV2)) {
-        throw std::runtime_error("unexpected controller_input TCP V2 payload size");
-      }
-      ControllerInputV2 frame{};
-      read_exact(&frame, sizeof(frame));
-      if (frame.version != 2 || frame.size_bytes != sizeof(ControllerInputV2)) {
-        throw std::runtime_error("invalid controller_input V2 frame header");
-      }
-      return frame;
+    if (header.payload_size != sizeof(ControllerInputV3)) {
+      throw std::runtime_error("unexpected controller_input TCP V3 payload size");
     }
-    throw std::runtime_error("invalid or unsupported controller_input TCP magic/version");
+    ControllerInputV3 frame{};
+    read_exact(&frame, sizeof(frame));
+    if (frame.version != CONTROLLER_INPUT_V3_FORMAT_VERSION ||
+        frame.size_bytes != sizeof(ControllerInputV3)) {
+      throw std::runtime_error("invalid controller_input V3 frame header");
+    }
+    return frame;
   }
 
  private:
@@ -451,32 +501,26 @@ class ControllerInputTcpClient {
   ControllerInputTcpClient(const ControllerInputTcpClient&) = delete;
   ControllerInputTcpClient& operator=(const ControllerInputTcpClient&) = delete;
 
-  ControllerInputV2 read_next() {
-    ControllerInputTcpHeaderV1 header{};
+  ControllerInputV3 read_next() {
+    ControllerInputTcpHeader header{};
     read_exact(&header, sizeof(header));
-    if (header.magic == CONTROLLER_INPUT_TCP_MAGIC && header.version == CONTROLLER_INPUT_TCP_VERSION) {
-      if (header.payload_size != sizeof(ControllerInputV1)) {
-        throw std::runtime_error("unexpected controller_input TCP V1 payload size");
-      }
-      ControllerInputV1 frame{};
-      read_exact(&frame, sizeof(frame));
-      if (frame.size_bytes != sizeof(ControllerInputV1)) {
-        throw std::runtime_error("invalid controller_input V1 frame size_bytes");
-      }
-      return controller_input_v2_from_v1(frame);
+    if (header.magic != CONTROLLER_INPUT_TCP_MAGIC_V3 ||
+        header.version != CONTROLLER_INPUT_TCP_VERSION_V3 ||
+        header.header_size != sizeof(ControllerInputTcpHeader)) {
+      throw std::runtime_error(
+          "unsupported controller_input TCP ABI; expected CIV3/version 3. "
+          "Update override_controller and xr_runtime_adapter from the same XR Gate release");
     }
-    if (header.magic == CONTROLLER_INPUT_TCP_MAGIC_V2 && header.version == CONTROLLER_INPUT_TCP_VERSION_V2) {
-      if (header.payload_size != sizeof(ControllerInputV2)) {
-        throw std::runtime_error("unexpected controller_input TCP V2 payload size");
-      }
-      ControllerInputV2 frame{};
-      read_exact(&frame, sizeof(frame));
-      if (frame.version != 2 || frame.size_bytes != sizeof(ControllerInputV2)) {
-        throw std::runtime_error("invalid controller_input V2 frame header");
-      }
-      return frame;
+    if (header.payload_size != sizeof(ControllerInputV3)) {
+      throw std::runtime_error("unexpected controller_input TCP V3 payload size");
     }
-    throw std::runtime_error("invalid or unsupported controller_input TCP magic/version");
+    ControllerInputV3 frame{};
+    read_exact(&frame, sizeof(frame));
+    if (frame.version != CONTROLLER_INPUT_V3_FORMAT_VERSION ||
+        frame.size_bytes != sizeof(ControllerInputV3)) {
+      throw std::runtime_error("invalid controller_input V3 frame header");
+    }
+    return frame;
   }
 
  private:

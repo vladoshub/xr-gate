@@ -187,6 +187,8 @@ std::string ev_key_name(uint16_t code) {
     case BTN_THUMBL: return "BTN_THUMBL";
     case BTN_THUMBR: return "BTN_THUMBR";
     case BTN_LEFT: return "BTN_LEFT";
+    case BTN_TRIGGER: return "BTN_TRIGGER";
+    case BTN_TOUCH: return "BTN_TOUCH";
     case BTN_RIGHT: return "BTN_RIGHT";
     case BTN_MIDDLE: return "BTN_MIDDLE";
     case BTN_SIDE: return "BTN_SIDE";
@@ -200,6 +202,10 @@ std::string ev_key_name(uint16_t code) {
     case KEY_ENTER: return "KEY_ENTER";
     case KEY_KPENTER: return "KEY_KPENTER";
     case KEY_SPACE: return "KEY_SPACE";
+    case KEY_BACK: return "KEY_BACK";
+    case KEY_HOMEPAGE: return "KEY_HOMEPAGE";
+    case KEY_VOLUMEUP: return "KEY_VOLUMEUP";
+    case KEY_VOLUMEDOWN: return "KEY_VOLUMEDOWN";
     case KEY_ESC: return "KEY_ESC";
     case KEY_Q: return "KEY_Q";
     case KEY_E: return "KEY_E";

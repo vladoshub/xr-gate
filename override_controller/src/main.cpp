@@ -68,37 +68,21 @@ struct Args {
   bool reattach_devices = true;
   uint32_t reattach_interval_ms = 0;
   uint32_t event_wait_max_ms = 0;
-  uint32_t rel_axis_hold_ms = 0;
-  uint32_t rel_button_hold_ms = 0;
-  uint32_t button_hold_ms = 0;
-  uint32_t button_release_grace_ms = 0;
-  bool pulse_mode_override_set = false;
-  bool pulse_mode = false;
-  uint32_t dpad_pulse_gap_ms = 0;
-  uint32_t dpad_release_ms = 0;
-  uint32_t button_pulse_gap_ms = 0;
-  uint32_t button_release_ms = 0;
-  uint32_t button_pulse_startup_ms = 0;
-  uint32_t button_pulse_startup_release_ms = 0;
-  std::vector<ControllerAction> button_pulse_startup_types;
-  uint32_t hold_toggle_debounce_ms = 0;
-  bool rel_axis_hold_ms_set = false;
-  bool rel_button_hold_ms_set = false;
-  bool button_hold_ms_set = false;
-  bool button_release_grace_ms_set = false;
-  bool dpad_pulse_gap_ms_set = false;
-  bool dpad_release_ms_set = false;
-  bool button_pulse_gap_ms_set = false;
-  bool button_release_ms_set = false;
-  bool button_pulse_startup_ms_set = false;
-  bool button_pulse_startup_release_ms_set = false;
-  bool button_pulse_startup_types_set = false;
-  bool hold_toggle_debounce_ms_set = false;
   bool train = false;
   bool list_devices = false;
   bool connect_devices = false;
   bool non_interactive = false;
   bool verbose = false;
+
+  std::vector<std::string> providers;
+  uint32_t gearvr_initial_scan_ms = 1500;
+  uint32_t gearvr_reconnect_ms = 1000;
+  std::string gearvr_touchpad_mode = "relative_stick";
+  double gearvr_touchpad_deadzone = 0.12;
+  double gearvr_touchpad_radius = 90.0;
+  bool gearvr_touchpad_invert_x = false;
+  bool gearvr_touchpad_invert_y = true;
+  double gearvr_madgwick_beta = 0.04;
 };
 
 void usage() {
@@ -125,18 +109,16 @@ void usage() {
       "  --no-reattach-devices    Disable device reattach/rescan\n"
       "  --reattach-interval-ms <n> Rescan interval. Default: 1000\n"
       "  --event-wait-max-ms <n>  Max event select wait. Higher reduces idle CPU\n"
-      "  --rel-axis-hold-ms <n>   Pulse hold for mouse-style REL axes. Default: 160\n"
-      "  --rel-button-hold-ms <n> Pulse hold for EV_REL D-pad/buttons. Default: 800\n"
-      "  --button-hold-ms <n>    Minimum digital press hold across publish ticks. Default: 120\n"
-      "  --button-release-grace-ms <n> Delay digital release to bridge repeated short pulses. Default: 0\n"
-      "  --pulse-mode <bool>     Enable generic pulse-source interpretation for pulsing controllers\n"
-      "  --dpad-pulse-gap-ms <n> Expected max D-pad inter-pulse gap. Default: 130\n"
-      "  --dpad-release-ms <n>   Virtual D-pad release timeout in pulse mode. Default: 140\n"
-      "  --button-pulse-gap-ms <n> Expected max button inter-pulse gap. Default: 180\n"
-      "  --button-release-ms <n> Virtual button release timeout in pulse mode. Default: 190\n"
-      "  --button-pulse-startup-ms <n> Initial button pulse warmup window. Default: 0 disabled\n"
-      "  --button-pulse-startup-release-ms <n> Button release timeout during warmup. Default: 0 disabled\n"
-      "  --button-pulse-startup-types <list> Comma-separated actions for startup warmup. Empty: all buttons\n"
+      "  --provider <name>        Enable input provider; repeatable. Linux: evdev, gearvr_ble\n"
+      "  --providers <csv>        Comma-separated provider list\n"
+      "  --gearvr-initial-scan-ms <n> Initial paired-controller discovery wait\n"
+      "  --gearvr-reconnect-ms <n> BLE reconnect delay\n"
+      "  --gearvr-touchpad-mode <relative_stick|absolute_stick|dpad|raw>\n"
+      "  --gearvr-touchpad-deadzone <0..1>\n"
+      "  --gearvr-touchpad-radius <pixels>\n"
+      "  --gearvr-touchpad-invert-x <bool>\n"
+      "  --gearvr-touchpad-invert-y <bool>\n"
+      "  --gearvr-madgwick-beta <value>\n"
       "  --non-interactive        Do not prompt; fail if config is missing/ambiguous\n"
       "  --verbose                Print more runtime diagnostics\n"
       "  --help\n";
@@ -156,17 +138,18 @@ std::string trim_copy(std::string v) {
   return v;
 }
 
-std::vector<ControllerAction> parse_action_list_arg(const std::string& raw) {
-  std::vector<ControllerAction> out;
+
+void append_csv_values(std::vector<std::string>& out, const std::string& raw) {
   size_t start = 0;
   while (start <= raw.size()) {
     const size_t comma = raw.find(',', start);
-    const std::string token = trim_copy(raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
-    if (!token.empty()) out.push_back(parse_action(token));
+    const std::string token = trim_copy(raw.substr(start, comma == std::string::npos
+                                                             ? std::string::npos
+                                                             : comma - start));
+    if (!token.empty()) out.push_back(token);
     if (comma == std::string::npos) break;
     start = comma + 1;
   }
-  return out;
 }
 
 std::string action_list_to_string(const std::vector<ControllerAction>& actions) {
@@ -229,51 +212,47 @@ Args parse_args(int argc, char** argv) {
       a.reattach_interval_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
     } else if (v == "--event-wait-max-ms") {
       a.event_wait_max_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--rel-axis-hold-ms") {
-      a.rel_axis_hold_ms_set = true;
-      a.rel_axis_hold_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--rel-button-hold-ms") {
-      a.rel_button_hold_ms_set = true;
-      a.rel_button_hold_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-hold-ms") {
-      a.button_hold_ms_set = true;
-      a.button_hold_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-release-grace-ms") {
-      a.button_release_grace_ms_set = true;
-      a.button_release_grace_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--pulse-mode") {
-      a.pulse_mode_override_set = true;
-      a.pulse_mode = parse_bool_arg(need(v.c_str()), v.c_str());
-    } else if (v == "--dpad-pulse-gap-ms") {
-      a.dpad_pulse_gap_ms_set = true;
-      a.dpad_pulse_gap_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--dpad-release-ms") {
-      a.dpad_release_ms_set = true;
-      a.dpad_release_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-pulse-gap-ms") {
-      a.button_pulse_gap_ms_set = true;
-      a.button_pulse_gap_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-release-ms") {
-      a.button_release_ms_set = true;
-      a.button_release_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-pulse-startup-ms") {
-      a.button_pulse_startup_ms_set = true;
-      a.button_pulse_startup_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-pulse-startup-release-ms") {
-      a.button_pulse_startup_release_ms_set = true;
-      a.button_pulse_startup_release_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--button-pulse-startup-types") {
-      a.button_pulse_startup_types_set = true;
-      a.button_pulse_startup_types = parse_action_list_arg(need(v.c_str()));
-    } else if (v == "--hold-toggle-debounce-ms") {
-      a.hold_toggle_debounce_ms_set = true;
-      a.hold_toggle_debounce_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--provider") {
+      a.providers.push_back(need(v.c_str()));
+    } else if (v == "--providers") {
+      append_csv_values(a.providers, need(v.c_str()));
+    } else if (v == "--gearvr-initial-scan-ms") {
+      a.gearvr_initial_scan_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--gearvr-reconnect-ms") {
+      a.gearvr_reconnect_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--gearvr-touchpad-mode") {
+      a.gearvr_touchpad_mode = need(v.c_str());
+    } else if (v == "--gearvr-touchpad-deadzone") {
+      a.gearvr_touchpad_deadzone = std::stod(need(v.c_str()));
+    } else if (v == "--gearvr-touchpad-radius") {
+      a.gearvr_touchpad_radius = std::stod(need(v.c_str()));
+    } else if (v == "--gearvr-touchpad-invert-x") {
+      a.gearvr_touchpad_invert_x = parse_bool_arg(need(v.c_str()), v.c_str());
+    } else if (v == "--gearvr-touchpad-invert-y") {
+      a.gearvr_touchpad_invert_y = parse_bool_arg(need(v.c_str()), v.c_str());
+    } else if (v == "--gearvr-madgwick-beta") {
+      a.gearvr_madgwick_beta = std::stod(need(v.c_str()));
     } else if (v == "--train") a.train = true;
     else if (v == "--list-devices") a.list_devices = true;
     else if (v == "--connect-devices" || v == "connect-devices") a.connect_devices = true;
     else if (v == "--non-interactive") a.non_interactive = true;
     else if (v == "--verbose") a.verbose = true;
     else throw std::runtime_error("unknown argument: " + v);
+  }
+  if (a.gearvr_touchpad_mode != "relative_stick" &&
+      a.gearvr_touchpad_mode != "absolute_stick" &&
+      a.gearvr_touchpad_mode != "dpad" &&
+      a.gearvr_touchpad_mode != "raw") {
+    throw std::runtime_error("--gearvr-touchpad-mode expects relative_stick, absolute_stick, dpad, or raw");
+  }
+  if (!(a.gearvr_touchpad_deadzone >= 0.0 && a.gearvr_touchpad_deadzone < 1.0)) {
+    throw std::runtime_error("--gearvr-touchpad-deadzone must be in [0,1)");
+  }
+  if (!(a.gearvr_touchpad_radius > 0.0)) {
+    throw std::runtime_error("--gearvr-touchpad-radius must be > 0");
+  }
+  if (!(a.gearvr_madgwick_beta >= 0.0)) {
+    throw std::runtime_error("--gearvr-madgwick-beta must be >= 0");
   }
   return a;
 }
@@ -837,26 +816,23 @@ void apply_publish_overrides(AppConfig& cfg, const Args& args) {
   if (args.reattach_devices_override_set) cfg.input.reattach_devices = args.reattach_devices;
   if (args.reattach_interval_ms > 0) cfg.input.reattach_interval_ms = args.reattach_interval_ms;
   if (args.event_wait_max_ms > 0) cfg.input.event_wait_max_ms = args.event_wait_max_ms;
-  if (args.rel_axis_hold_ms_set) cfg.input.rel_axis_hold_ms = args.rel_axis_hold_ms;
-  if (args.rel_button_hold_ms_set) cfg.input.rel_button_hold_ms = args.rel_button_hold_ms;
-  if (args.button_hold_ms_set) cfg.input.button_hold_ms = args.button_hold_ms;
-  if (args.button_release_grace_ms_set) cfg.input.button_release_grace_ms = args.button_release_grace_ms;
-  if (args.pulse_mode_override_set) cfg.input.pulse_mode = args.pulse_mode;
-  if (args.dpad_pulse_gap_ms_set) cfg.input.dpad_pulse_gap_ms = args.dpad_pulse_gap_ms;
-  if (args.dpad_release_ms_set) cfg.input.dpad_release_ms = args.dpad_release_ms;
-  if (args.button_pulse_gap_ms_set) cfg.input.button_pulse_gap_ms = args.button_pulse_gap_ms;
-  if (args.button_release_ms_set) cfg.input.button_release_ms = args.button_release_ms;
-  if (args.button_pulse_startup_ms_set) cfg.input.button_pulse_startup_ms = args.button_pulse_startup_ms;
-  if (args.button_pulse_startup_release_ms_set) cfg.input.button_pulse_startup_release_ms = args.button_pulse_startup_release_ms;
-  if (args.button_pulse_startup_types_set) cfg.input.button_pulse_startup_types = args.button_pulse_startup_types;
-  if (args.hold_toggle_debounce_ms_set) cfg.input.hold_toggle_debounce_ms = args.hold_toggle_debounce_ms;
 }
 
 AppConfig train_config(InputProvider& provider, const fs::path& config_path, const std::string& name) {
   auto devices = provider.scan_devices(true);
   print_devices(devices);
   if (devices.empty()) throw std::runtime_error("no readable input devices found");
-  const auto readable_count = std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) { return d.readable; });
+  auto readable_count = std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) { return d.readable; });
+  if (readable_count == 0 && provider.requires_polling()) {
+    std::cout << "[override_controller] waiting up to 15 seconds for an external controller to connect; "
+                 "wake it by pressing a button...\n";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (!g_stop && std::chrono::steady_clock::now() < deadline) {
+      (void)provider.wait_event(devices, 250, false);
+      readable_count = std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) { return d.readable; });
+      if (readable_count > 0) break;
+    }
+  }
   if (readable_count == 0) {
 #if defined(_WIN32)
     throw std::runtime_error(
@@ -864,9 +840,9 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
         "check that the process can access the desktop/session input state.");
 #else
     throw std::runtime_error(
-        "no readable /dev/input/event* devices. On Linux, add the current user to the input group "
-        "and re-login: sudo usermod -aG input $USER. For a quick temporary test, run the start script "
-        "with USE_SUDO=1, or grant a temporary ACL: sudo setfacl -m u:$USER:rw /dev/input/event*.");
+        "no readable input devices. For evdev, add the current user to the input group and re-login: "
+        "sudo usermod -aG input $USER. For Gear VR, pair/trust the controller in BlueZ, enable "
+        "the gearvr_ble provider, and wake the controller by pressing a button.");
 #endif
   }
 
@@ -1002,6 +978,7 @@ std::vector<fs::path> connect_device_config_candidates(const fs::path& config_di
 
 struct RuntimeBinding {
   BindingConfig cfg;
+  DeviceInputConfig device_input;
   int device_index = -1;
   int match_score = 0;
   float value = 0.0f;
@@ -1011,6 +988,7 @@ struct RuntimeBinding {
   int64_t pulse_series_start_ns = 0;
   int64_t pulse_series_until_ns = 0;
   int64_t toggle_debounce_until_ns = 0;
+  bool clear_after_publish = false;
   bool connected = false;
 };
 
@@ -1089,7 +1067,7 @@ int64_t pulse_window_ns(uint32_t gap_ms, uint32_t release_ms) {
   return static_cast<int64_t>(std::max(gap_ms, release_ms)) * 1000000LL;
 }
 
-int64_t pulse_release_ns_for_binding(const InputConfig& input, const BindingConfig& cfg) {
+int64_t pulse_release_ns_for_binding(const DeviceInputConfig& input, const BindingConfig& cfg) {
   if (!input.pulse_mode || !binding_uses_min_hold(cfg)) return 0;
   if (is_dpad_action(cfg.action)) {
     return pulse_window_ns(input.dpad_pulse_gap_ms, input.dpad_release_ms);
@@ -1097,13 +1075,13 @@ int64_t pulse_release_ns_for_binding(const InputConfig& input, const BindingConf
   return pulse_window_ns(input.button_pulse_gap_ms, input.button_release_ms);
 }
 
-bool button_pulse_startup_applies_to_action(const InputConfig& input, ControllerAction action) {
+bool button_pulse_startup_applies_to_action(const DeviceInputConfig& input, ControllerAction action) {
   if (input.button_pulse_startup_types.empty()) return true;
   return std::find(input.button_pulse_startup_types.begin(), input.button_pulse_startup_types.end(), action) !=
          input.button_pulse_startup_types.end();
 }
 
-int64_t button_pulse_grace_ns_for_event(const InputConfig& input, RuntimeBinding& b, int64_t event_ns, float value, int64_t normal_grace_ns) {
+int64_t button_pulse_grace_ns_for_event(const DeviceInputConfig& input, RuntimeBinding& b, int64_t event_ns, float value, int64_t normal_grace_ns) {
   if (!input.pulse_mode || binding_is_rel_button_like(b.cfg) || !binding_uses_min_hold(b.cfg)) {
     return normal_grace_ns;
   }
@@ -1135,28 +1113,41 @@ int64_t button_pulse_grace_ns_for_event(const InputConfig& input, RuntimeBinding
 
 void update_binding_value_from_event(RuntimeBinding& b, float value, int64_t event_ns, int64_t hold_ns, int64_t release_grace_ns) {
   b.last_event_ns = event_ns;
-  if (!binding_uses_min_hold(b.cfg) || (hold_ns <= 0 && release_grace_ns <= 0)) {
-    b.value = value;
-    b.physical_value = value;
-    b.active_until_ns = 0;
-    return;
-  }
 
-  if (binding_is_rel_button_like(b.cfg)) {
-    // EV_REL D-pad/button events are pulses, not physical held states. Keep an
-    // active window after each pulse, but do not mark physical_value as held or
-    // the button would remain stuck forever without a release event.
+  // EV_REL inputs never have a physical release state. With a non-zero hold
+  // window they remain active until the configured timeout. With a zero hold
+  // window they are still published for exactly one controller_input frame,
+  // then cleared immediately after that frame.
+  if (b.cfg.input.kind == InputKind::RelAxis) {
     b.physical_value = 0.0f;
-    if (value >= 0.50f) {
-      b.active_until_ns = std::max(b.active_until_ns, event_ns + hold_ns);
-      b.value = 1.0f;
-    } else {
-      b.value = event_ns <= b.active_until_ns ? 1.0f : 0.0f;
+    const bool active = is_axis_action(b.cfg.action) ? std::abs(value) > 0.0f : value >= 0.50f;
+    if (active) {
+      b.value = value;
+      if (hold_ns > 0) {
+        b.active_until_ns = std::max(b.active_until_ns, event_ns + hold_ns);
+        b.clear_after_publish = false;
+      } else {
+        b.active_until_ns = 0;
+        b.clear_after_publish = true;
+      }
+    } else if (hold_ns <= 0 || event_ns > b.active_until_ns) {
+      b.value = 0.0f;
+      b.active_until_ns = 0;
+      b.clear_after_publish = false;
     }
     return;
   }
 
+  if (!binding_uses_min_hold(b.cfg) || (hold_ns <= 0 && release_grace_ns <= 0)) {
+    b.value = value;
+    b.physical_value = value;
+    b.active_until_ns = 0;
+    b.clear_after_publish = false;
+    return;
+  }
+
   b.physical_value = value;
+  b.clear_after_publish = false;
   if (value >= 0.50f) {
     b.active_until_ns = std::max(b.active_until_ns, event_ns + hold_ns);
     b.value = value;
@@ -1175,7 +1166,9 @@ void update_binding_value_from_event(RuntimeBinding& b, float value, int64_t eve
   b.value = event_ns <= b.active_until_ns ? 1.0f : 0.0f;
 }
 
-std::vector<RuntimeBinding> resolve_binding_configs(const std::vector<BindingConfig>& configs,
+
+std::vector<RuntimeBinding> resolve_binding_configs(const AppConfig& app_config,
+                                                   const std::vector<BindingConfig>& configs,
                                                    const std::vector<DeviceInfo>& devices,
                                                    bool log_warnings = true,
                                                    const char* label = "binding") {
@@ -1183,11 +1176,14 @@ std::vector<RuntimeBinding> resolve_binding_configs(const std::vector<BindingCon
   for (const auto& b : configs) {
     RuntimeBinding rb;
     rb.cfg = b;
+    if (const ConfigDevice* device = find_config_device(app_config, b.device_id)) {
+      rb.device_input = device->input;
+    }
     int best_score = -1;
     int best_idx = -1;
     bool ambiguous = false;
     for (size_t i = 0; i < devices.size(); ++i) {
-      if (!devices[i].readable) continue;
+      if (!devices[i].readable && !devices[i].identity_known) continue;
       const int score = fingerprint_match_score(b.device, devices[i].fingerprint);
       if (score > best_score) {
         best_score = score;
@@ -1218,26 +1214,26 @@ std::vector<RuntimeBinding> resolve_binding_configs(const std::vector<BindingCon
 }
 
 std::vector<RuntimeBinding> resolve_bindings(const AppConfig& cfg, const std::vector<DeviceInfo>& devices, bool log_warnings = true) {
-  return resolve_binding_configs(cfg.bindings, devices, log_warnings, "binding");
+  return resolve_binding_configs(cfg, cfg.bindings, devices, log_warnings, "binding");
 }
 
 std::vector<RuntimeBinding> resolve_hold_toggle_bindings(const AppConfig& cfg,
                                                          const std::vector<DeviceInfo>& devices,
                                                          bool log_warnings = true) {
-  return resolve_binding_configs(cfg.hold_toggle_bindings, devices, log_warnings, "hold-toggle binding");
+  return resolve_binding_configs(cfg, cfg.hold_toggle_bindings, devices, log_warnings, "hold-toggle binding");
 }
 
 
 std::vector<RuntimeBinding> resolve_alternative_bindings(const AppConfig& cfg,
                                                          const std::vector<DeviceInfo>& devices,
                                                          bool log_warnings = true) {
-  return resolve_binding_configs(cfg.alternative_bindings, devices, log_warnings, "alternative binding");
+  return resolve_binding_configs(cfg, cfg.alternative_bindings, devices, log_warnings, "alternative binding");
 }
 
 std::vector<RuntimeBinding> resolve_alternative_hold_toggle_bindings(const AppConfig& cfg,
                                                                      const std::vector<DeviceInfo>& devices,
                                                                      bool log_warnings = true) {
-  return resolve_binding_configs(cfg.alternative_hold_toggle_bindings, devices, log_warnings,
+  return resolve_binding_configs(cfg, cfg.alternative_hold_toggle_bindings, devices, log_warnings,
                                  "alternative hold-toggle binding");
 }
 
@@ -1302,7 +1298,7 @@ RuntimeLayoutSwitch resolve_layout_switch(const AppConfig& cfg,
   // for left/right copies of the same controller.
   int strict_matches = 0;
   for (size_t i = 0; i < devices.size(); ++i) {
-    if (!devices[i].readable) continue;
+    if (!devices[i].readable && !devices[i].identity_known) continue;
     if (!fingerprint_same_strict_input_device(cfg.layout_switch.device, devices[i].fingerprint)) continue;
     out.device_index = static_cast<int>(i);
     out.match_score = fingerprint_match_score(cfg.layout_switch.device, devices[i].fingerprint);
@@ -1378,7 +1374,8 @@ void update_counters(uint64_t prev, uint64_t now, uint32_t press[32], uint32_t r
   }
 }
 
-OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
+OutputState compose_state(InputProvider& provider,
+                          const std::vector<RuntimeBinding>& bindings,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
                           CounterState& counters,
@@ -1386,10 +1383,42 @@ OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
   OutputState out;
   std::set<std::string> left_devices;
   std::set<std::string> right_devices;
+  const auto imu_rank = [](const xr_runtime::ControllerImuStateV1& imu) {
+    switch (imu.status) {
+      case xr_runtime::CONTROLLER_IMU_ACTIVE: return 5;
+      case xr_runtime::CONTROLLER_IMU_STALE: return 4;
+      case xr_runtime::CONTROLLER_IMU_CONNECTED: return 3;
+      case xr_runtime::CONTROLLER_IMU_LOST: return 2;
+      case xr_runtime::CONTROLLER_IMU_CONFIGURED: return 1;
+      default: return 0;
+    }
+  };
   auto apply_runtime_binding = [&](const RuntimeBinding& b) {
-    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() && devices[b.device_index].readable && devices[b.device_index].fd >= 0;
+    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() && devices[b.device_index].readable;
     SideOutputState& side = b.cfg.side == ControllerSide::Left ? out.left : out.right;
     side.configured = true;
+    int imu_device_index = -1;
+    if (b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size()) {
+      imu_device_index = b.device_index;
+    } else {
+      int best_score = -1;
+      bool ambiguous = false;
+      for (size_t i = 0; i < devices.size(); ++i) {
+        const int score = fingerprint_match_score(b.cfg.device, devices[i].fingerprint);
+        if (score > best_score) {
+          best_score = score;
+          imu_device_index = static_cast<int>(i);
+          ambiguous = false;
+        } else if (score == best_score && score > 0) {
+          ambiguous = true;
+        }
+      }
+      if (best_score < 55 || ambiguous) imu_device_index = -1;
+    }
+    if (imu_device_index >= 0) {
+      const auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+      if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
+    }
     if (resolved) {
       side.connected = true;
       const auto id = hex_u64(devices[b.device_index].fingerprint.stable_hash);
@@ -1458,10 +1487,12 @@ OutputState compose_state(const std::vector<RuntimeBinding>& bindings,
   return out;
 }
 
-void decay_relative_axis_bindings(std::vector<RuntimeBinding>& bindings, int64_t now, int64_t hold_ns) {
+void decay_relative_axis_bindings(std::vector<RuntimeBinding>& bindings, int64_t now) {
   for (auto& b : bindings) {
     if (b.cfg.input.kind != InputKind::RelAxis || !is_axis_action(b.cfg.action)) continue;
+    if (b.clear_after_publish) continue;
     if (b.value == 0.0f && b.physical_value == 0.0f) continue;
+    const int64_t hold_ns = static_cast<int64_t>(b.device_input.rel_axis_hold_ms) * 1000000LL;
     if (b.last_event_ns == 0 || now - b.last_event_ns > hold_ns) {
       b.value = 0.0f;
       b.physical_value = 0.0f;
@@ -1472,6 +1503,7 @@ void decay_relative_axis_bindings(std::vector<RuntimeBinding>& bindings, int64_t
 void decay_button_hold_bindings(std::vector<RuntimeBinding>& bindings, int64_t now) {
   for (auto& b : bindings) {
     if (!binding_uses_min_hold(b.cfg)) continue;
+    if (b.clear_after_publish) continue;
     if (b.physical_value >= 0.50f) {
       b.value = b.physical_value;
       continue;
@@ -1489,6 +1521,16 @@ void decay_button_hold_bindings(std::vector<RuntimeBinding>& bindings, int64_t n
   }
 }
 
+void clear_one_frame_relative_bindings(std::vector<RuntimeBinding>& bindings) {
+  for (auto& b : bindings) {
+    if (!b.clear_after_publish) continue;
+    b.value = 0.0f;
+    b.physical_value = 0.0f;
+    b.active_until_ns = 0;
+    b.clear_after_publish = false;
+  }
+}
+
 void clear_runtime_bindings(std::vector<RuntimeBinding>& bindings) {
   for (auto& b : bindings) {
     b.value = 0.0f;
@@ -1497,6 +1539,7 @@ void clear_runtime_bindings(std::vector<RuntimeBinding>& bindings) {
     b.pulse_series_start_ns = 0;
     b.pulse_series_until_ns = 0;
     b.toggle_debounce_until_ns = 0;
+    b.clear_after_publish = false;
   }
 }
 
@@ -1551,7 +1594,7 @@ std::set<size_t> collect_resolved_device_indices(const std::vector<RuntimeBindin
 
 size_t count_open_devices(const std::vector<DeviceInfo>& devices) {
   return static_cast<size_t>(std::count_if(devices.begin(), devices.end(), [](const DeviceInfo& d) {
-    return d.readable && d.fd >= 0;
+    return d.readable;
   }));
 }
 
@@ -1559,14 +1602,14 @@ size_t count_connected_bindings(const std::vector<RuntimeBinding>& bindings,
                                 const std::vector<DeviceInfo>& devices) {
   return static_cast<size_t>(std::count_if(bindings.begin(), bindings.end(), [&](const RuntimeBinding& b) {
     return b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() &&
-           devices[b.device_index].readable && devices[b.device_index].fd >= 0;
+           devices[b.device_index].readable;
   }));
 }
 
 
 bool runtime_binding_is_resolved(const RuntimeBinding& b, const std::vector<DeviceInfo>& devices) {
   return b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() &&
-         devices[b.device_index].readable && devices[b.device_index].fd >= 0;
+         devices[b.device_index].readable;
 }
 
 bool event_matches_runtime_binding(const RuntimeBinding& b, const InputEvent& ev) {
@@ -1620,13 +1663,14 @@ void preserve_runtime_binding_state(std::vector<RuntimeBinding>& target,
     dst.pulse_series_start_ns = it->pulse_series_start_ns;
     dst.pulse_series_until_ns = it->pulse_series_until_ns;
     dst.toggle_debounce_until_ns = it->toggle_debounce_until_ns;
+    dst.clear_after_publish = it->clear_after_publish;
   }
 }
 
 bool any_runtime_binding_active(const std::vector<RuntimeBinding>& bindings) {
   return std::any_of(bindings.begin(), bindings.end(), [](const RuntimeBinding& b) {
     return b.value >= 0.50f || b.physical_value >= 0.50f || b.active_until_ns != 0 ||
-           b.pulse_series_until_ns != 0;
+           b.pulse_series_until_ns != 0 || b.clear_after_publish;
   });
 }
 
@@ -1636,6 +1680,7 @@ void clear_runtime_binding_value(RuntimeBinding& b) {
   b.active_until_ns = 0;
   b.pulse_series_start_ns = 0;
   b.pulse_series_until_ns = 0;
+  b.clear_after_publish = false;
 }
 
 bool binding_device_mapping_changed(const std::vector<RuntimeBinding>& a,
@@ -1860,20 +1905,25 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
             << (cfg.input.allow_shared_physical_device_sides ? "true" : "false")
             << " reattach_devices=" << (cfg.input.reattach_devices ? "true" : "false")
             << " reattach_interval_ms=" << cfg.input.reattach_interval_ms
-            << " event_wait_max_ms=" << cfg.input.event_wait_max_ms
-            << " rel_axis_hold_ms=" << cfg.input.rel_axis_hold_ms
-            << " rel_button_hold_ms=" << cfg.input.rel_button_hold_ms
-            << " button_hold_ms=" << cfg.input.button_hold_ms
-            << " button_release_grace_ms=" << cfg.input.button_release_grace_ms
-            << " pulse_mode=" << (cfg.input.pulse_mode ? "true" : "false")
-            << " dpad_pulse_gap_ms=" << cfg.input.dpad_pulse_gap_ms
-            << " dpad_release_ms=" << cfg.input.dpad_release_ms
-            << " button_pulse_gap_ms=" << cfg.input.button_pulse_gap_ms
-            << " button_release_ms=" << cfg.input.button_release_ms
-            << " button_pulse_startup_ms=" << cfg.input.button_pulse_startup_ms
-            << " button_pulse_startup_release_ms=" << cfg.input.button_pulse_startup_release_ms
-            << " button_pulse_startup_types=" << action_list_to_string(cfg.input.button_pulse_startup_types)
-            << " hold_toggle_debounce_ms=" << cfg.input.hold_toggle_debounce_ms << "\n";
+            << " event_wait_max_ms=" << cfg.input.event_wait_max_ms << "\n";
+  for (const auto& device : cfg.devices) {
+    const auto& input = device.input;
+    std::cout << "[override_controller] device_input id=" << device.id
+              << " device=" << short_device_label(device.fingerprint)
+              << " rel_axis_hold_ms=" << input.rel_axis_hold_ms
+              << " rel_button_hold_ms=" << input.rel_button_hold_ms
+              << " button_hold_ms=" << input.button_hold_ms
+              << " button_release_grace_ms=" << input.button_release_grace_ms
+              << " pulse_mode=" << (input.pulse_mode ? "true" : "false")
+              << " dpad_pulse_gap_ms=" << input.dpad_pulse_gap_ms
+              << " dpad_release_ms=" << input.dpad_release_ms
+              << " button_pulse_gap_ms=" << input.button_pulse_gap_ms
+              << " button_release_ms=" << input.button_release_ms
+              << " button_pulse_startup_ms=" << input.button_pulse_startup_ms
+              << " button_pulse_startup_release_ms=" << input.button_pulse_startup_release_ms
+              << " button_pulse_startup_types=" << action_list_to_string(input.button_pulse_startup_types)
+              << " hold_toggle_debounce_ms=" << input.hold_toggle_debounce_ms << "\n";
+  }
 
   ControllerInputPublisher publisher(cfg.publish);
   CounterState counters;
@@ -1883,13 +1933,6 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
       std::chrono::duration<double>(1.0 / rate_hz));
   const auto reattach_interval = std::chrono::milliseconds(std::max<uint32_t>(100, cfg.input.reattach_interval_ms));
   const int event_wait_cap_ms = static_cast<int>(std::max<uint32_t>(1, cfg.input.event_wait_max_ms));
-  const int64_t rel_axis_hold_ns = static_cast<int64_t>(std::max<uint32_t>(1, cfg.input.rel_axis_hold_ms)) * 1000000LL;
-  const int64_t rel_button_hold_ns = static_cast<int64_t>(std::max<uint32_t>(1, cfg.input.rel_button_hold_ms)) * 1000000LL;
-  const int64_t button_hold_ns = static_cast<int64_t>(cfg.input.button_hold_ms) * 1000000LL;
-  const int64_t button_release_grace_ns = static_cast<int64_t>(cfg.input.button_release_grace_ms) * 1000000LL;
-  const int64_t dpad_pulse_window_ns = pulse_window_ns(cfg.input.dpad_pulse_gap_ms, cfg.input.dpad_release_ms);
-  const int64_t hold_toggle_debounce_ns =
-      static_cast<int64_t>(cfg.input.hold_toggle_debounce_ms) * 1000000LL;
   auto next_publish = std::chrono::steady_clock::now();
   auto next_reattach_check = std::chrono::steady_clock::now() + reattach_interval;
 
@@ -1902,7 +1945,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     }
 
     std::optional<InputEvent> ev;
-    if (count_open_devices(devices) > 0) {
+    if (count_open_devices(devices) > 0 || provider.requires_polling()) {
       ev = provider.wait_event(devices, wait_ms, false);
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
@@ -1970,6 +2013,8 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
           // when a pulse-style controller emits repeats while held; some
           // Bluetooth remotes have early repeat gaps close to one second.
           const bool new_click = ev->timestamp_ns > tb.toggle_debounce_until_ns;
+          const int64_t hold_toggle_debounce_ns =
+              static_cast<int64_t>(tb.device_input.hold_toggle_debounce_ms) * 1000000LL;
           tb.toggle_debounce_until_ns = ev->timestamp_ns + hold_toggle_debounce_ns;
           if (new_click) {
             tb.value = tb.value >= 0.50f ? 0.0f : 1.0f;
@@ -2000,21 +2045,30 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
         if (suppressed_normal_bindings.count(i) != 0) continue;
         auto& b = active_bindings[i];
         if (!event_matches_runtime_binding(b, *ev)) continue;
-        int64_t hold_ns = binding_is_rel_button_like(b.cfg) ? rel_button_hold_ns : button_hold_ns;
-        int64_t release_grace_ns = binding_is_rel_button_like(b.cfg) ? 0 : button_release_grace_ns;
+        const auto& device_input = b.device_input;
+        int64_t hold_ns = 0;
+        if (b.cfg.input.kind == InputKind::RelAxis && is_axis_action(b.cfg.action)) {
+          hold_ns = static_cast<int64_t>(device_input.rel_axis_hold_ms) * 1000000LL;
+        } else if (binding_is_rel_button_like(b.cfg)) {
+          hold_ns = static_cast<int64_t>(device_input.rel_button_hold_ms) * 1000000LL;
+        } else {
+          hold_ns = static_cast<int64_t>(device_input.button_hold_ms) * 1000000LL;
+        }
+        int64_t release_grace_ns = binding_is_rel_button_like(b.cfg)
+            ? 0
+            : static_cast<int64_t>(device_input.button_release_grace_ms) * 1000000LL;
         const float binding_value = value_for_binding(b.cfg, ev->value);
-        if (cfg.input.pulse_mode) {
-          const int64_t pulse_ns = pulse_release_ns_for_binding(cfg.input, b.cfg);
+        if (device_input.pulse_mode) {
+          const int64_t pulse_ns = pulse_release_ns_for_binding(device_input, b.cfg);
           if (binding_is_rel_button_like(b.cfg)) {
             // EV_REL inputs are pulses even when they are mapped to non-D-pad
             // virtual actions such as thumbstick_click, A/B, grip, or menu.
-            // Use the short D-pad pulse window for all button-like REL inputs;
-            // otherwise non-D-pad mappings fall back to rel_button_hold_ms
-            // (800 ms by default) and feel delayed/sticky compared to D-pad
-            // mappings.
-            hold_ns = dpad_pulse_window_ns;
+            // Use this physical device's D-pad pulse window for every
+            // button-like REL mapping.
+            hold_ns = pulse_window_ns(device_input.dpad_pulse_gap_ms, device_input.dpad_release_ms);
           } else if (pulse_ns > 0) {
-            release_grace_ns = button_pulse_grace_ns_for_event(cfg.input, b, ev->timestamp_ns, binding_value, pulse_ns);
+            release_grace_ns = button_pulse_grace_ns_for_event(
+                device_input, b, ev->timestamp_ns, binding_value, pulse_ns);
           }
         }
         update_binding_value_from_event(b, binding_value, ev->timestamp_ns, hold_ns, release_grace_ns);
@@ -2112,13 +2166,14 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     const int64_t now_ns = monotonic_now_ns();
     auto& active_bindings_for_decay = alternative_layout_active ? alternative_bindings : bindings;
     auto& active_toggle_bindings_for_decay = alternative_layout_active ? alternative_hold_toggle_bindings : hold_toggle_bindings;
-    decay_relative_axis_bindings(active_bindings_for_decay, now_ns, rel_axis_hold_ns);
+    decay_relative_axis_bindings(active_bindings_for_decay, now_ns);
     decay_button_hold_bindings(active_bindings_for_decay, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(active_bindings_for_decay, active_toggle_bindings_for_decay, devices, counters,
+      const auto out = compose_state(provider, active_bindings_for_decay, active_toggle_bindings_for_decay, devices, counters,
                                      cfg.input.allow_shared_physical_device_sides);
       publisher.publish(out);
+      clear_one_frame_relative_bindings(active_bindings_for_decay);
       do {
         next_publish += period;
       } while (next_publish <= now);
@@ -2146,7 +2201,17 @@ int main(int argc, char** argv) {
 
     Args args = parse_args(argc, argv);
     const fs::path executable_dir = current_executable_dir(argc > 0 ? argv[0] : nullptr);
-    auto provider = make_platform_input_provider();
+    InputProviderOptions provider_options;
+    provider_options.providers = args.providers;
+    provider_options.gearvr_initial_scan_ms = args.gearvr_initial_scan_ms;
+    provider_options.gearvr_reconnect_ms = args.gearvr_reconnect_ms;
+    provider_options.gearvr_touchpad_mode = args.gearvr_touchpad_mode;
+    provider_options.gearvr_touchpad_deadzone = args.gearvr_touchpad_deadzone;
+    provider_options.gearvr_touchpad_radius = args.gearvr_touchpad_radius;
+    provider_options.gearvr_touchpad_invert_x = args.gearvr_touchpad_invert_x;
+    provider_options.gearvr_touchpad_invert_y = args.gearvr_touchpad_invert_y;
+    provider_options.gearvr_madgwick_beta = args.gearvr_madgwick_beta;
+    auto provider = make_input_provider(provider_options);
     if (!provider) throw std::runtime_error("no input provider for this platform yet");
 
     if (args.list_devices) {

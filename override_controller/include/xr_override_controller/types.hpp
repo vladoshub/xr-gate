@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include <xr_runtime/contracts/controller_input_contract.hpp>
+
 namespace xr_override_controller {
 
 constexpr uint64_t kButtonTrigger = 1ull << 0;
@@ -39,6 +41,19 @@ struct DeviceFingerprint {
 
 struct DeviceInfo {
   DeviceFingerprint fingerprint;
+
+  // Runtime-only routing metadata used by CompositeInputProvider. It is never
+  // serialized into the user config; stable identity remains in fingerprint.
+  size_t provider_slot = 0;
+  size_t provider_device_index = 0;
+
+  // A provider may know a stable device identity while its transport is
+  // disconnected (paired BLE controller). Such a device remains matchable to
+  // config bindings, but `readable` stays false until input is flowing.
+  bool identity_known = false;
+
+  // Native handle used by some providers (Linux evdev). External/BLE providers
+  // can remain readable with fd == -1.
   int fd = -1;
   bool readable = false;
   std::string open_error;
@@ -78,9 +93,32 @@ enum class ControllerAction {
   ThumbstickY,
 };
 
+struct DeviceInputConfig {
+  // Per-physical-device pulse/hold behavior. Every field defaults to zero
+  // (or false/empty), so devices without an explicit input block use raw
+  // input semantics with no synthetic hold, grace, pulse bridging, or debounce.
+  uint32_t rel_axis_hold_ms = 0;
+  uint32_t rel_button_hold_ms = 0;
+  uint32_t button_hold_ms = 0;
+  uint32_t button_release_grace_ms = 0;
+
+  bool pulse_mode = false;
+  uint32_t dpad_pulse_gap_ms = 0;
+  uint32_t dpad_release_ms = 0;
+  uint32_t button_pulse_gap_ms = 0;
+  uint32_t button_release_ms = 0;
+
+  uint32_t button_pulse_startup_ms = 0;
+  uint32_t button_pulse_startup_release_ms = 0;
+  std::vector<ControllerAction> button_pulse_startup_types;
+
+  uint32_t hold_toggle_debounce_ms = 0;
+};
+
 struct ConfigDevice {
   int id = 0;
   DeviceFingerprint fingerprint;
+  DeviceInputConfig input;
 };
 
 struct BindingConfig {
@@ -117,71 +155,19 @@ struct PublishConfig {
 struct InputConfig {
   // Linux evdev: use EVIOCGRAB on devices that matched configured bindings.
   // EVIOCGRAB is device-wide; it cannot grab only individual bound keys.
-  // This prevents mapped HID/media/mouse events from also reaching the desktop/Steam.
-  // Other platforms should implement this through their platform input provider.
   bool grab_devices = false;
 
   // Allow bindings for both virtual controller sides to resolve to the same
-  // physical input device. When true, the same physical key/button may drive
-  // both left and right if it is explicitly bound for both sides.
+  // physical input device.
   bool allow_shared_physical_device_sides = true;
 
-  // Periodically rescan/re-resolve configured devices. This lets Bluetooth HID
-  // devices recover after disconnect/reconnect because /dev/input/eventX often
-  // changes while stable fingerprint fields such as uniq/by-id remain usable.
+  // Periodically rescan/re-resolve configured devices after reconnect.
   bool reattach_devices = false;
   uint32_t reattach_interval_ms = 1000;
 
-  // Event wait cap for the service loop. Larger values reduce idle CPU wakeups;
-  // publish cadence still follows PublishConfig::rate_hz.
+  // Event wait cap for the service loop. Publish cadence is configured
+  // independently in PublishConfig.
   uint32_t event_wait_max_ms = 20;
-
-  // Mouse-style EV_REL stick axes are deltas, not held states. Keep them
-  // active for this short pulse window after the latest delta event.
-  uint32_t rel_axis_hold_ms = 160;
-
-  // Mouse-style EV_REL D-pad/button actions are also deltas, but games often
-  // need enough hold time to detect press-and-hold actions reliably.
-  uint32_t rel_button_hold_ms = 800;
-
-  // Minimum visible hold for digital/button-like actions. This prevents very
-  // short Bluetooth/evdev press+release pairs from disappearing between two
-  // 90 Hz publish ticks.
-  uint32_t button_hold_ms = 120;
-
-  // Some Bluetooth/media/mouse-style controllers emit repeated short key
-  // pulses while the user physically holds a button. Keep a released button
-  // logically active for this grace window so the next repeat pulse can bridge
-  // into the same controller_input hold. Default 0 keeps normal keys
-  // responsive; set 1000-1500 ms for pulse-only devices during diagnostics.
-  uint32_t button_release_grace_ms = 0;
-
-  // Generic pulse-source mode for remote/mouse-style controllers that emit a
-  // stream of short pulses instead of stable button down/up state. When enabled,
-  // D-pad and button bindings get separate short release windows to bridge the
-  // expected inter-pulse gaps without using long, sticky global holds.
-  bool pulse_mode = false;
-  uint32_t dpad_pulse_gap_ms = 130;
-  uint32_t dpad_release_ms = 140;
-  uint32_t button_pulse_gap_ms = 180;
-  uint32_t button_release_ms = 190;
-
-  // Some pulse-style controllers have a slow/irregular repeat cadence during
-  // the first seconds after a physical button is held, then become stable.
-  // When non-zero, button pulse-mode uses this larger release timeout only
-  // during the initial per-binding warmup window. Keep defaults disabled.
-  // If button_pulse_startup_types is empty, the warmup applies to all
-  // non-D-pad button-like actions for backward compatibility. Otherwise it
-  // applies only to listed action names, e.g. ["trigger"].
-  uint32_t button_pulse_startup_ms = 0;
-  uint32_t button_pulse_startup_release_ms = 0;
-  std::vector<ControllerAction> button_pulse_startup_types;
-
-  // Hold-toggle bindings are driven by click edges. Pulse-style controllers may
-  // emit repeated edges while the physical button is still held, sometimes with
-  // large early gaps. Keep the toggle disarmed for this window after each pulse
-  // so one physical hold/click cannot toggle on/off repeatedly.
-  uint32_t hold_toggle_debounce_ms = 1500;
 };
 
 struct AppConfig {
@@ -213,6 +199,12 @@ struct SideOutputState {
   uint32_t press_counters[32] = {};
   uint32_t release_counters[32] = {};
   std::string device_id;
+
+  // Defaults to CONTROLLER_IMU_NOT_SUPPORTED. A motion-controller provider
+  // sets this independently for each side so V3 consumers can distinguish a
+  // buttons-only controller from an IMU-capable controller even while its IMU
+  // data is configured, connected, stale, or lost.
+  xr_runtime::ControllerImuStateV1 imu;
 };
 
 struct OutputState {

@@ -45,25 +45,19 @@ ALLOW_SHARED_PHYSICAL_DEVICE_SIDES="${ALLOW_SHARED_PHYSICAL_DEVICE_SIDES:-${OVER
 REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}}"          # periodically rescan/reopen input devices after disconnect/reconnect
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
-EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum evdev poll wait before publishing current state
-REL_AXIS_HOLD_MS="${REL_AXIS_HOLD_MS:-${OVERRIDE_CONTROLLER_REL_AXIS_HOLD_MS:-0}}"          # legacy hold time for relative-axis events; 0 disables it
-REL_BUTTON_HOLD_MS="${REL_BUTTON_HOLD_MS:-${OVERRIDE_CONTROLLER_REL_BUTTON_HOLD_MS:-0}}"    # legacy hold time for relative-button/D-pad pulses; 0 disables it
-BUTTON_HOLD_MS="${BUTTON_HOLD_MS:-${OVERRIDE_CONTROLLER_BUTTON_HOLD_MS:-0}}"                # legacy minimum hold time for button presses; 0 disables it
-BUTTON_RELEASE_GRACE_MS="${BUTTON_RELEASE_GRACE_MS:-${OVERRIDE_CONTROLLER_BUTTON_RELEASE_GRACE_MS:-0}}" # legacy release grace bridge after button release; 0 disables it
+EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum provider event wait before publishing current state
 
-PULSE_MODE="${PULSE_MODE:-${OVERRIDE_CONTROLLER_PULSE_MODE:-1}}"                            # enable pulse-source filtering for controllers that emit repeated short pulses
-
-DPAD_PULSE_GAP_MS="${DPAD_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_DPAD_PULSE_GAP_MS:-50}}"     # expected maximum gap between D-pad pulse events
-DPAD_RELEASE_MS="${DPAD_RELEASE_MS:-${OVERRIDE_CONTROLLER_DPAD_RELEASE_MS:-60}}"           # virtual D-pad release timeout after the last pulse
-
-BUTTON_PULSE_GAP_MS="${BUTTON_PULSE_GAP_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_GAP_MS:-0}}" # expected maximum gap between button pulse events
-BUTTON_RELEASE_MS="${BUTTON_RELEASE_MS:-${OVERRIDE_CONTROLLER_BUTTON_RELEASE_MS:-0}}"     # virtual button release timeout after the last pulse
-
-BUTTON_PULSE_STARTUP_MS="${BUTTON_PULSE_STARTUP_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_STARTUP_MS:-0}}" # optional early startup window for longer pulse bridging; 0 disables it
-BUTTON_PULSE_STARTUP_RELEASE_MS="${BUTTON_PULSE_STARTUP_RELEASE_MS:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_STARTUP_RELEASE_MS:-0}}" # release timeout used only during the startup window
-BUTTON_PULSE_STARTUP_TYPES="${BUTTON_PULSE_STARTUP_TYPES:-${OVERRIDE_CONTROLLER_BUTTON_PULSE_STARTUP_TYPES:-trigger}}" # comma-separated action types that may use startup pulse bridging
-
-HOLD_TOGGLE_DEBOUNCE_MS="${HOLD_TOGGLE_DEBOUNCE_MS:-${OVERRIDE_CONTROLLER_HOLD_TOGGLE_DEBOUNCE_MS:-100}}" # debounce window for click-to-toggle virtual long-press mode
+# Input providers. Gear VR remains opt-in, but its implementation is native C++
+# and talks directly to BlueZ over the system D-Bus. Example: PROVIDERS=evdev,gearvr_ble
+PROVIDERS="${PROVIDERS:-${OVERRIDE_CONTROLLER_PROVIDERS:-evdev}}"
+GEARVR_INITIAL_SCAN_MS="${GEARVR_INITIAL_SCAN_MS:-${OVERRIDE_CONTROLLER_GEARVR_INITIAL_SCAN_MS:-1500}}"
+GEARVR_RECONNECT_MS="${GEARVR_RECONNECT_MS:-${OVERRIDE_CONTROLLER_GEARVR_RECONNECT_MS:-1000}}"
+GEARVR_TOUCHPAD_MODE="${GEARVR_TOUCHPAD_MODE:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_MODE:-relative_stick}}"
+GEARVR_TOUCHPAD_DEADZONE="${GEARVR_TOUCHPAD_DEADZONE:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_DEADZONE:-0.12}}"
+GEARVR_TOUCHPAD_RADIUS="${GEARVR_TOUCHPAD_RADIUS:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_RADIUS:-90}}"
+GEARVR_TOUCHPAD_INVERT_X="${GEARVR_TOUCHPAD_INVERT_X:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_INVERT_X:-0}}"
+GEARVR_TOUCHPAD_INVERT_Y="${GEARVR_TOUCHPAD_INVERT_Y:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_INVERT_Y:-1}}"
+GEARVR_MADGWICK_BETA="${GEARVR_MADGWICK_BETA:-${OVERRIDE_CONTROLLER_GEARVR_MADGWICK_BETA:-0.04}}"
 
 
 # ControllerInput publisher settings. These must match xr_runtime_adapter
@@ -73,7 +67,7 @@ HOLD_TOGGLE_DEBOUNCE_MS="${HOLD_TOGGLE_DEBOUNCE_MS:-${OVERRIDE_CONTROLLER_HOLD_T
 # adapter is configured with the same --controller-input-registry.
 CONTROLLER_INPUT_REGISTRY="${CONTROLLER_INPUT_REGISTRY:-${XR_CONTROLLER_INPUT_REGISTRY:-/tmp/tracking_streams.json}}" # registry JSON used to publish controller_input stream metadata
 CONTROLLER_INPUT_REGISTRY="$(expand_tilde "$CONTROLLER_INPUT_REGISTRY")"                    # normalize ~/ in controller_input registry path
-CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}"                      # published ControllerInputV2 stream name
+CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}"                      # published ControllerInputV3 stream name
 CONTROLLER_INPUT_SHM_NAME="${CONTROLLER_INPUT_SHM_NAME:-controller_input}"                  # shared-memory object name for controller_input payloads
 CONTROLLER_INPUT_RATE_HZ="${CONTROLLER_INPUT_RATE_HZ:-90}"                                  # controller_input publish rate expected by runtime adapter/SteamVR path
 CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-32}"                                      # ring-buffer slot count for controller_input SHM
@@ -83,6 +77,7 @@ FIX_REGISTRY_PERMISSIONS="${FIX_REGISTRY_PERMISSIONS:-1}"                       
 [[ -d "$OVERRIDE_CONTROLLER_DIR" ]] || fatal "override_controller source dir not found: $OVERRIDE_CONTROLLER_DIR"
 
 print_input_permission_hint_if_needed() {
+  [[ ",$PROVIDERS," == *,evdev,* || ",$PROVIDERS," == *,linux_evdev,* ]] || return 0
   [[ "$(uname -s)" == "Linux" ]] || return 0
   [[ "${EUID:-$(id -u)}" -eq 0 ]] && return 0
   [[ -d /dev/input ]] || return 0
@@ -169,19 +164,21 @@ args+=("--allow-shared-physical-device-sides" "$ALLOW_SHARED_PHYSICAL_DEVICE_SID
 args+=("--reattach-devices" "$REATTACH_DEVICES")
 args+=("--reattach-interval-ms" "$REATTACH_INTERVAL_MS")
 args+=("--event-wait-max-ms" "$EVENT_WAIT_MAX_MS")
-args+=("--rel-axis-hold-ms" "$REL_AXIS_HOLD_MS")
-args+=("--rel-button-hold-ms" "$REL_BUTTON_HOLD_MS")
-args+=("--button-hold-ms" "$BUTTON_HOLD_MS")
-args+=("--button-release-grace-ms" "$BUTTON_RELEASE_GRACE_MS")
-args+=("--pulse-mode" "$PULSE_MODE")
-args+=("--dpad-pulse-gap-ms" "$DPAD_PULSE_GAP_MS")
-args+=("--dpad-release-ms" "$DPAD_RELEASE_MS")
-args+=("--button-pulse-gap-ms" "$BUTTON_PULSE_GAP_MS")
-args+=("--button-release-ms" "$BUTTON_RELEASE_MS")
-args+=("--button-pulse-startup-ms" "$BUTTON_PULSE_STARTUP_MS")
-args+=("--button-pulse-startup-release-ms" "$BUTTON_PULSE_STARTUP_RELEASE_MS")
-args+=("--button-pulse-startup-types" "$BUTTON_PULSE_STARTUP_TYPES")
-args+=("--hold-toggle-debounce-ms" "$HOLD_TOGGLE_DEBOUNCE_MS")
+args+=("--providers" "$PROVIDERS")
+if [[ ",$PROVIDERS," == *,gearvr_ble,* || ",$PROVIDERS," == *,gearvr,* ]]; then
+  if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" && ! -S /run/dbus/system_bus_socket ]]; then
+    fatal "system D-Bus is unavailable (no DBUS_SYSTEM_BUS_ADDRESS and no /run/dbus/system_bus_socket)"
+  fi
+  command -v bluetoothctl >/dev/null 2>&1 || log "bluetoothctl not found; pairing must already be complete, but native provider can still use BlueZ D-Bus"
+  args+=("--gearvr-initial-scan-ms" "$GEARVR_INITIAL_SCAN_MS")
+  args+=("--gearvr-reconnect-ms" "$GEARVR_RECONNECT_MS")
+  args+=("--gearvr-touchpad-mode" "$GEARVR_TOUCHPAD_MODE")
+  args+=("--gearvr-touchpad-deadzone" "$GEARVR_TOUCHPAD_DEADZONE")
+  args+=("--gearvr-touchpad-radius" "$GEARVR_TOUCHPAD_RADIUS")
+  args+=("--gearvr-touchpad-invert-x" "$GEARVR_TOUCHPAD_INVERT_X")
+  args+=("--gearvr-touchpad-invert-y" "$GEARVR_TOUCHPAD_INVERT_Y")
+  args+=("--gearvr-madgwick-beta" "$GEARVR_MADGWICK_BETA")
+fi
 
 if [[ -n "$CONFIG_PATH" ]]; then
   args+=("--config" "$CONFIG_PATH")
@@ -214,11 +211,11 @@ log "CONTROLLER_INPUT_REGISTRY=$CONTROLLER_INPUT_REGISTRY"
 log "CONTROLLER_INPUT_STREAM=$CONTROLLER_INPUT_STREAM"
 log "CONTROLLER_INPUT_SHM_NAME=$CONTROLLER_INPUT_SHM_NAME"
 log "CONTROLLER_INPUT_RATE_HZ=$CONTROLLER_INPUT_RATE_HZ CONTROLLER_INPUT_SLOTS=$CONTROLLER_INPUT_SLOTS"
+log "PROVIDERS=$PROVIDERS"
+if [[ ",$PROVIDERS," == *,gearvr_ble,* || ",$PROVIDERS," == *,gearvr,* ]]; then
+  log "GEARVR_NATIVE_BLUEZ=1 TOUCHPAD_MODE=$GEARVR_TOUCHPAD_MODE DEADZONE=$GEARVR_TOUCHPAD_DEADZONE RADIUS=$GEARVR_TOUCHPAD_RADIUS INVERT=($GEARVR_TOUCHPAD_INVERT_X,$GEARVR_TOUCHPAD_INVERT_Y)"
+fi
 log "GRAB_DEVICES=$GRAB_DEVICES ALLOW_SHARED_PHYSICAL_DEVICE_SIDES=$ALLOW_SHARED_PHYSICAL_DEVICE_SIDES REATTACH_DEVICES=$REATTACH_DEVICES REATTACH_INTERVAL_MS=$REATTACH_INTERVAL_MS"
-log "HOLD_MS rel_axis=$REL_AXIS_HOLD_MS rel_button=$REL_BUTTON_HOLD_MS button=$BUTTON_HOLD_MS release_grace=$BUTTON_RELEASE_GRACE_MS"
-log "PULSE_MODE=$PULSE_MODE dpad_gap=$DPAD_PULSE_GAP_MS dpad_release=$DPAD_RELEASE_MS button_gap=$BUTTON_PULSE_GAP_MS button_release=$BUTTON_RELEASE_MS button_startup_ms=$BUTTON_PULSE_STARTUP_MS button_startup_release_ms=$BUTTON_PULSE_STARTUP_RELEASE_MS button_startup_types=$BUTTON_PULSE_STARTUP_TYPES"
-log "HOLD_TOGGLE_DEBOUNCE_MS=$HOLD_TOGGLE_DEBOUNCE_MS"
-log "EVENT_WAIT_MAX_MS=$EVENT_WAIT_MAX_MS REL_AXIS_HOLD_MS=$REL_AXIS_HOLD_MS REL_BUTTON_HOLD_MS=$REL_BUTTON_HOLD_MS BUTTON_HOLD_MS=$BUTTON_HOLD_MS BUTTON_RELEASE_GRACE_MS=$BUTTON_RELEASE_GRACE_MS"
 log "TRAIN=$TRAIN LIST_DEVICES=$LIST_DEVICES NON_INTERACTIVE=$NON_INTERACTIVE VERBOSE=$VERBOSE USE_SUDO=$USE_SUDO"
 
 print_input_permission_hint_if_needed

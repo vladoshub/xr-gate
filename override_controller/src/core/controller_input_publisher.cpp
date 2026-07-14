@@ -64,18 +64,34 @@ std::string normalize_posix_name(std::string name) {
   return name;
 }
 
-void fill_side(xr_runtime::ControllerDeviceStateV2& dst,
+void fill_side(xr_runtime::ControllerDeviceStateV3& dst,
                const SideOutputState& src,
                xr_runtime::ControllerSide side) {
-  dst = xr_runtime::ControllerDeviceStateV2{};
+  dst = xr_runtime::ControllerDeviceStateV3{};
   dst.side = side;
-  if (!src.configured) {
+  dst.imu = src.imu;
+  dst.imu.sample_count = std::min(dst.imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES);
+
+  const bool imu_present = xr_runtime::controller_imu_is_present(dst.imu);
+  if (!src.configured && !imu_present) {
     dst.status = xr_runtime::CONTROLLER_INPUT_UNAVAILABLE;
     return;
   }
-  dst.status = src.connected ? xr_runtime::CONTROLLER_INPUT_ACTIVE : xr_runtime::CONTROLLER_INPUT_LOST;
-  dst.flags = xr_runtime::CONTROLLER_DEVICE_BUTTONS_VALID | xr_runtime::CONTROLLER_DEVICE_ANALOG_VALID;
-  dst.source_type = xr_runtime::CONTROLLER_INPUT_SOURCE_HID;
+
+  const bool imu_transport_present =
+      dst.imu.status == xr_runtime::CONTROLLER_IMU_CONNECTED ||
+      dst.imu.status == xr_runtime::CONTROLLER_IMU_ACTIVE ||
+      dst.imu.status == xr_runtime::CONTROLLER_IMU_STALE;
+  dst.status = (src.connected || imu_transport_present)
+      ? xr_runtime::CONTROLLER_INPUT_ACTIVE
+      : xr_runtime::CONTROLLER_INPUT_LOST;
+  if (src.configured) {
+    dst.flags |= xr_runtime::CONTROLLER_DEVICE_BUTTONS_VALID |
+                 xr_runtime::CONTROLLER_DEVICE_ANALOG_VALID;
+  }
+  dst.source_type = imu_present
+      ? xr_runtime::CONTROLLER_INPUT_SOURCE_MOTION_CONTROLLER
+      : xr_runtime::CONTROLLER_INPUT_SOURCE_HID;
   dst.buttons = src.buttons;
   dst.touches = src.touches;
   dst.changed_buttons = src.changed_buttons;
@@ -88,13 +104,19 @@ void fill_side(xr_runtime::ControllerDeviceStateV2& dst,
   std::memcpy(dst.press_counters, src.press_counters, sizeof(dst.press_counters));
   std::memcpy(dst.release_counters, src.release_counters, sizeof(dst.release_counters));
   std::snprintf(dst.device_id, sizeof(dst.device_id), "%s", src.device_id.c_str());
+  if (imu_present) {
+    dst.flags |= xr_runtime::CONTROLLER_DEVICE_IMU_PRESENT;
+  }
+  if (xr_runtime::controller_imu_has_current_data(dst.imu)) {
+    dst.flags |= xr_runtime::CONTROLLER_DEVICE_IMU_ACTIVE;
+  }
 }
 
-xr_runtime::ControllerInputV2 controller_input_frame_from_output(const OutputState& state,
+xr_runtime::ControllerInputV3 controller_input_frame_from_output(const OutputState& state,
                                                                  uint64_t sequence,
                                                                  uint64_t timestamp_ns) {
-  xr_runtime::ControllerInputV2 frame{};
-  frame.version = xr_runtime::CONTROLLER_INPUT_V2_FORMAT_VERSION;
+  xr_runtime::ControllerInputV3 frame{};
+  frame.version = xr_runtime::CONTROLLER_INPUT_V3_FORMAT_VERSION;
   frame.size_bytes = sizeof(frame);
   frame.sequence = sequence;
   frame.timestamp_ns = timestamp_ns;
@@ -114,6 +136,18 @@ xr_runtime::ControllerInputV2 controller_input_frame_from_output(const OutputSta
   if (frame.right.status == xr_runtime::CONTROLLER_INPUT_ACTIVE ||
       frame.right.status == xr_runtime::CONTROLLER_INPUT_CONNECTED) {
     frame.connected_mask |= xr_runtime::CONTROLLER_INPUT_FRAME_ACTIVE_RIGHT;
+  }
+  if (xr_runtime::controller_imu_is_present(frame.left.imu)) {
+    frame.flags |= xr_runtime::CONTROLLER_INPUT_FRAME_IMU_PRESENT_LEFT;
+  }
+  if (xr_runtime::controller_imu_is_present(frame.right.imu)) {
+    frame.flags |= xr_runtime::CONTROLLER_INPUT_FRAME_IMU_PRESENT_RIGHT;
+  }
+  if (xr_runtime::controller_imu_has_current_data(frame.left.imu)) {
+    frame.flags |= xr_runtime::CONTROLLER_INPUT_FRAME_IMU_ACTIVE_LEFT;
+  }
+  if (xr_runtime::controller_imu_has_current_data(frame.right.imu)) {
+    frame.flags |= xr_runtime::CONTROLLER_INPUT_FRAME_IMU_ACTIVE_RIGHT;
   }
   return frame;
 }
@@ -182,7 +216,7 @@ ControllerInputShmPublisher::ControllerInputShmPublisher(PublishConfig cfg) : cf
 #if XR_OVERRIDE_CONTROLLER_HAS_POSIX_SHM
   if (cfg_.slot_count == 0) throw std::runtime_error("controller input slot_count must be > 0");
   slot_header_size_ = sizeof(xr_runtime::RingSlotHeaderV1);
-  payload_size_ = sizeof(xr_runtime::ControllerInputV2);
+  payload_size_ = sizeof(xr_runtime::ControllerInputV3);
   slot_stride_ = slot_header_size_ + payload_size_;
   size_ = header_size_ + static_cast<size_t>(cfg_.slot_count) * slot_stride_;
 
@@ -206,7 +240,7 @@ ControllerInputShmPublisher::ControllerInputShmPublisher(PublishConfig cfg) : cf
   std::memset(data_, 0, size_);
   auto* h = reinterpret_cast<xr_runtime::RingHeaderV1*>(data_);
   std::memset(h, 0, sizeof(*h));
-  const char magic[8] = {'C','I','N','P','U','T','2','\0'};
+  const char magic[8] = {'C','I','N','P','U','T','3','\0'};
   std::memcpy(h->magic, magic, 8);
   h->version = 1;
   h->header_size = static_cast<uint32_t>(header_size_);
@@ -239,7 +273,7 @@ ControllerInputShmPublisher::~ControllerInputShmPublisher() {
 void ControllerInputShmPublisher::publish(const OutputState& state) {
 #if XR_OVERRIDE_CONTROLLER_HAS_POSIX_SHM
   if (!data_) return;
-  xr_runtime::ControllerInputV2 frame = controller_input_frame_from_output(state, ++sequence_, now_ns_u64());
+  xr_runtime::ControllerInputV3 frame = controller_input_frame_from_output(state, ++sequence_, now_ns_u64());
 
   const uint64_t committed_seq = frame.sequence * 2;
   const uint64_t writing_seq = committed_seq - 1;
@@ -269,11 +303,19 @@ void ControllerInputShmPublisher::write_metadata() {
   nlohmann::json meta = {
       {"stream_id", cfg_.stream_id},
       {"kind", "CONTROLLER_INPUT"},
-      {"format_name", xr_runtime::CONTROLLER_INPUT_V2_FORMAT_NAME},
-      {"format_version", xr_runtime::CONTROLLER_INPUT_V2_FORMAT_VERSION},
-      {"payload_schema", "ControllerInputV2"},
+      {"format_name", xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME},
+      {"format_version", xr_runtime::CONTROLLER_INPUT_V3_FORMAT_VERSION},
+      {"payload_schema", "ControllerInputV3"},
       {"timestamp_clock", "monotonic_ns"},
       {"producer", "override_controller"},
+      {"imu", {
+          {"per_controller_status", true},
+          {"max_samples_per_frame", xr_runtime::CONTROLLER_IMU_MAX_SAMPLES},
+          {"orientation_order", "xyzw"},
+          {"angular_velocity_unit", "rad/s"},
+          {"specific_force_unit", "m/s^2"},
+          {"specific_force_includes_gravity", true},
+          {"magnetic_field_unit", "uT"}}},
       {"button_bits", {
           {"trigger", 0}, {"grip", 1}, {"menu", 2}, {"a", 3}, {"b", 4},
           {"thumbstick", 5}, {"dpad_up", 6}, {"dpad_down", 7},
@@ -320,16 +362,16 @@ void ControllerInputShmPublisher::update_registry() const {
   j["streams"][cfg_.stream_id] = {
       {"shm_name", cfg_.shm_name},
       {"kind", "CONTROLLER_INPUT"},
-      {"format_name", xr_runtime::CONTROLLER_INPUT_V2_FORMAT_NAME},
-      {"format_version", xr_runtime::CONTROLLER_INPUT_V2_FORMAT_VERSION},
+      {"format_name", xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME},
+      {"format_version", xr_runtime::CONTROLLER_INPUT_V3_FORMAT_VERSION},
       {"payload_size", payload_size_},
       {"slot_count", cfg_.slot_count},
       {"header_size", header_size_},
       {"slot_header_size", slot_header_size_},
       {"slot_stride", slot_stride_},
       {"frame_id", "controller_input"},
-      {"payload_schema", "ControllerInputV2"},
-      {"payload_version", 2},
+      {"payload_schema", "ControllerInputV3"},
+      {"payload_version", 3},
       {"created_by", "override_controller"},
       {"timestamp_clock", "monotonic_ns"},
   };
@@ -444,10 +486,10 @@ struct ControllerInputTcpPublisher::Impl {
     clients.clear();
   }
 
-  void publish_frame(const xr_runtime::ControllerInputV2& frame) {
-    xr_runtime::ControllerInputTcpHeaderV1 header{};
-    header.magic = xr_runtime::CONTROLLER_INPUT_TCP_MAGIC_V2;
-    header.version = xr_runtime::CONTROLLER_INPUT_TCP_VERSION_V2;
+  void publish_frame(const xr_runtime::ControllerInputV3& frame) {
+    xr_runtime::ControllerInputTcpHeader header{};
+    header.magic = xr_runtime::CONTROLLER_INPUT_TCP_MAGIC_V3;
+    header.version = xr_runtime::CONTROLLER_INPUT_TCP_VERSION_V3;
     header.header_size = sizeof(header);
     header.payload_size = sizeof(frame);
     header.sequence = frame.sequence;
