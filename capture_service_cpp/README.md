@@ -307,3 +307,34 @@ profile keeps the historical values: 8 camera frames and 2048 normalized/raw IMU
 The canonical XREAL Ultra profile now uses the same `service` / `camera` / `imu` schema as
 external devices. Legacy `capture_service.xreal_linux.*` keys are accepted only for
 backward compatibility.
+
+## Linux launcher
+
+The hardware-independent runtime launcher lives with the service:
+
+```text
+capture_service_cpp/scripts/linux/start_capture_service_cpp.sh
+```
+
+It resolves the installed binary, applies generic runtime options and then
+appends user CLI arguments so explicit CLI values retain highest precedence.
+Device profiles should remain thin wrappers: source their device environment,
+export `CONFIG_PATH` and other profile defaults, and execute the service
+launcher from:
+
+```text
+$XR_BIN_ROOT/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+with a source-tree fallback to the path above.
+
+Common launcher variables:
+
+- `CAPTURE_SERVICE_CPP_BIN`
+- `CONFIG_PATH`, or `CONFIG_DIR` plus `CONFIG_NAME`
+- `PUBLISH`
+- `REGISTRY_PATH`
+- `CAPTURE_NAMESPACE`
+- `TCP_BIND_HOST`, `TCP_PORT`
+- `NO_CAMERA`, `NO_IMU`, `DURATION`
+- `STOP_EXISTING`

@@ -160,6 +160,14 @@ jobs:
           du -sh out/xreal_ultra || true
           find out/xreal_ultra -maxdepth 4 -type f | sort | head -200
 
+      - name: Validate capture launchers
+        if: ${{ matrix.name == 'capture' }}
+        run: |
+          test -x out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          bash -n out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+          bash -n out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+
       - name: Archive partial package
         run: |
           tar -C out -czf xreal_ultra_${{ matrix.name }}.tar.gz xreal_ultra
