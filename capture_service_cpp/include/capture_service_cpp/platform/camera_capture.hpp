@@ -10,8 +10,9 @@ class CameraCapture {
  public:
   CameraCapture() = default;
 
-  bool open(const RuntimeConfig& cfg);
+  bool open(const CameraDeviceConfig& cfg, const std::string& label);
   bool read(cv::Mat& frame);
+  void release();
 
  private:
   cv::VideoCapture cap_;

@@ -1,26 +1,58 @@
 #include "capture_service_cpp/platform/camera_capture.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 
 namespace xr_capture_cpp {
 namespace {
 
-int camera_api_to_opencv(const RuntimeConfig& cfg) {
-  if (cfg.camera_api == "dshow" || cfg.camera_api == "DSHOW") return cv::CAP_DSHOW;
-  if (cfg.camera_api == "msmf" || cfg.camera_api == "MSMF") return cv::CAP_MSMF;
+std::string lowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+int camera_api_to_opencv(const std::string& api_name) {
+  const std::string api = lowercase(api_name);
+  if (api == "dshow") return cv::CAP_DSHOW;
+  if (api == "msmf") return cv::CAP_MSMF;
   return cv::CAP_ANY;
+}
+
+void apply_properties(cv::VideoCapture& cap, const CameraDeviceConfig& cfg) {
+  if (cfg.raw_format) cap.set(cv::CAP_PROP_FORMAT, -1);
+  cap.set(cv::CAP_PROP_CONVERT_RGB, cfg.convert_rgb ? 1.0 : 0.0);
+  if (cfg.buffer_size > 0) cap.set(cv::CAP_PROP_BUFFERSIZE, cfg.buffer_size);
+  if (cfg.width > 0) cap.set(cv::CAP_PROP_FRAME_WIDTH, cfg.width);
+  if (cfg.height > 0) cap.set(cv::CAP_PROP_FRAME_HEIGHT, cfg.height);
+  if (cfg.fps > 0) cap.set(cv::CAP_PROP_FPS, cfg.fps);
 }
 
 }  // namespace
 
-bool CameraCapture::open(const RuntimeConfig& cfg) {
-  const int api = camera_api_to_opencv(cfg);
-  std::cerr << "[capture_service_cpp] opening camera index=" << cfg.camera_index << " api=" << cfg.camera_api << std::endl;
-  return cap_.open(cfg.camera_index, api);
+bool CameraCapture::open(const CameraDeviceConfig& cfg, const std::string& label) {
+  const int api = camera_api_to_opencv(cfg.api);
+  bool ok = false;
+  if (!cfg.device_path.empty()) {
+    std::cerr << "[capture_service_cpp] opening " << label << " device=" << cfg.device_path
+              << " api=" << cfg.api << std::endl;
+    ok = cap_.open(cfg.device_path, api);
+  } else {
+    std::cerr << "[capture_service_cpp] opening " << label << " index=" << cfg.index
+              << " api=" << cfg.api << std::endl;
+    ok = cap_.open(cfg.index, api);
+  }
+  if (!ok) return false;
+  apply_properties(cap_, cfg);
+  return cap_.isOpened();
 }
 
 bool CameraCapture::read(cv::Mat& frame) {
   return cap_.read(frame);
+}
+
+void CameraCapture::release() {
+  cap_.release();
 }
 
 }  // namespace xr_capture_cpp

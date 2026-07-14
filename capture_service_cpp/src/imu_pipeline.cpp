@@ -1,65 +1,69 @@
 #include "capture_service_cpp/imu_pipeline.hpp"
 
-#include "capture_service_cpp/platform/hid_input_device.hpp"
-#include "capture_service_cpp/vendor/xreal_imu_codec.hpp"
-
 #include <array>
 #include <iostream>
 #include <thread>
 
 namespace xr_capture_cpp {
 
-void imu_thread(const RuntimeConfig& cfg, StreamPublishers* publishers) {
-  HidInputDevice dev;
-  dev.open_interface(kXrealHidVendorId, kXrealHidProductId, kXrealImuInterfaceNumber, "XREAL HID IMU interface 2");
+void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, StreamPublishers* publishers) {
+  try {
+    const std::string source_name = source->name();
+    source->open();
+    std::cerr << "[capture_service_cpp] IMU source started: " << source_name << std::endl;
 
-  const auto& start_cmd = xreal_imu_start_command();
-  const int wr = dev.write(start_cmd.data(), start_cmd.size());
-  std::cerr << "[capture_service_cpp] imu start command write result=" << wr << std::endl;
-  if (wr < 0) {
-    std::cerr << "[capture_service_cpp][ERROR] HID IMU start command failed; assuming device disconnect" << std::endl;
-    request_stop_with_exit_code(kExitDeviceLost);
-    return;
-  }
-
-  const int drop_first = env_int("CPP_CAPTURE_IMU_DROP_FIRST_PACKETS", kXrealDefaultImuDropFirstPackets);
-  const int stall_exit_ms = env_int("CPP_CAPTURE_IMU_STALL_EXIT_MS", 2000);
-  uint64_t raw_count = 0;
-  uint64_t imu_count = 0;
-  std::array<uint8_t, kXrealHidPacketSize> packet{};
-  uint64_t last_packet_ns = steady_ns();
-
-  while (!g_stop.load()) {
-    const int n = dev.read_timeout(packet.data(), packet.size(), 50);
-    if (n < 0) {
-      std::cerr << "[capture_service_cpp][ERROR] HID IMU read failed; assuming device disconnect" << std::endl;
-      request_stop_with_exit_code(kExitDeviceLost);
-      break;
-    }
-    if (n == 0) {
-      if (stall_exit_ms > 0) {
-        const uint64_t now = steady_ns();
-        if (now - last_packet_ns >= static_cast<uint64_t>(stall_exit_ms) * 1000000ULL) {
-          std::cerr << "[capture_service_cpp][ERROR] no HID IMU packets for " << stall_exit_ms
-                    << " ms; assuming device disconnect/stall" << std::endl;
+    uint64_t last_data_ns = steady_ns();
+    uint64_t published_samples = 0;
+    while (!g_stop.load()) {
+      ImuReadResult result;
+      const SourceReadStatus status = source->read(result);
+      if (status == SourceReadStatus::EndOfStream) {
+        std::cerr << "[capture_service_cpp][ERROR] IMU source ended: " << source_name << std::endl;
+        request_stop_with_exit_code(kExitDeviceLost);
+        break;
+      }
+      if (status == SourceReadStatus::Data) last_data_ns = steady_ns();
+      if (status == SourceReadStatus::Timeout ||
+          status == SourceReadStatus::TransportActivity) {
+        if (cfg.imu.stall_exit_ms > 0 &&
+            steady_ns() - last_data_ns >= static_cast<uint64_t>(cfg.imu.stall_exit_ms) * 1000000ULL) {
+          std::cerr << "[capture_service_cpp][ERROR] no valid IMU samples for "
+                    << cfg.imu.stall_exit_ms << " ms from " << source_name << std::endl;
           request_stop_with_exit_code(kExitDeviceLost);
           break;
         }
+        if (status == SourceReadStatus::Timeout) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        continue;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      continue;
-    }
-    const uint64_t ts = steady_ns();
-    last_packet_ns = ts;
-    ++raw_count;
-    if (cfg.raw_hid_enabled) publishers->publish("xreal_raw_hid", packet.data(), static_cast<size_t>(n), ts, 0, 0, kFormatBytes, 0, "xreal_raw_hid");
-    if (static_cast<int>(raw_count) <= drop_first) continue;
 
-    float payload[6] = {};
-    if (!normalize_xreal_imu_packet(packet.data(), static_cast<size_t>(n), payload)) continue;
-    publishers->publish("imu0", reinterpret_cast<const uint8_t*>(payload), sizeof(payload), ts, 0, 0, kFormatImuF32Le, 0, "imu0");
-    ++imu_count;
-    if (imu_count % 1000 == 0) std::cerr << "[capture_service_cpp] imu raw=" << raw_count << " normalized=" << imu_count << std::endl;
+      if (cfg.imu.raw_enabled && !result.raw_packet.empty()) {
+        publishers->publish(cfg.imu.raw_stream_id, result.raw_packet.data(), result.raw_packet.size(),
+                            result.receive_timestamp_ns ? result.receive_timestamp_ns : steady_ns(),
+                            0, 0, kFormatBytes, 0, cfg.imu.raw_frame_id);
+      }
+      if (!result.has_sample) continue;
+
+      std::array<float, 6> payload{};
+      for (size_t i = 0; i < 3; ++i) {
+        payload[i] = result.sample.gyro_rad_s[i];
+        payload[i + 3] = result.sample.accel_m_s2[i];
+      }
+      publishers->publish(cfg.imu.stream_id, reinterpret_cast<const uint8_t*>(payload.data()), sizeof(payload),
+                          result.sample.timestamp_ns ? result.sample.timestamp_ns : steady_ns(),
+                          0, 0, kFormatImuF32Le, 0, cfg.imu.frame_id);
+      ++published_samples;
+      if (published_samples % 1000 == 0) {
+        std::cerr << "[capture_service_cpp] IMU source=" << source_name
+                  << " published_samples=" << published_samples << std::endl;
+      }
+    }
+    source->close();
+  } catch (const std::exception& e) {
+    std::cerr << "[capture_service_cpp][ERROR] IMU pipeline: " << e.what() << std::endl;
+    request_stop_with_exit_code(kExitRuntimeError);
+    try { source->close(); } catch (...) {}
   }
 }
 

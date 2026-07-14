@@ -8,10 +8,14 @@
 namespace xr_capture_cpp {
 
 void apply_platform_runtime_defaults(RuntimeConfig& cfg) {
-  cfg.registry_path = env_or("REGISTRY_PATH", "capture_service_streams.json");
-  cfg.namespace_name = env_or("NAMESPACE", "xreal_air2ultra_windows");
-  cfg.publish_modes = split_publish_modes(env_or("PUBLISH", "tcp"));
-  cfg.camera_api = env_or("CPP_CAPTURE_CAMERA_API", "msmf");
+  cfg.registry_path = "capture_service_streams.json";
+  cfg.namespace_name = "xreal_air2ultra_windows";
+  cfg.publish_modes = {"tcp"};
+  cfg.camera.primary.index = 0;
+  cfg.camera.primary.api = "msmf";
+  cfg.camera.primary.raw_format = true;
+  cfg.camera.primary.convert_rgb = false;
+  cfg.camera.primary.buffer_size = 1;
 }
 
 void print_platform_camera_usage(std::ostream& os) {

@@ -245,6 +245,10 @@ copy_runtime_scripts() {
   # are copied here. Build/install scripts, CMake files and source trees stay out
   # of the deploy package.
   copy_runtime_file \
+    "$XR_ROOT_PROJECT/capture_service_cpp/scripts/linux/start_capture_service_cpp.sh" \
+    "$XR_OUT_BIN_ROOT/scripts/capture_service_cpp/start_capture_service_cpp.sh"
+
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/backends/basalt_vio/scripts/linux/start_basalt.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/basalt_vio/start_basalt.sh"
   copy_runtime_file \
@@ -564,6 +568,7 @@ required=(
   "$XR_OUT_DEVICE_HOME/xreal_ultra.env"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_service_cpp"
+  "$XR_OUT_BIN_ROOT/scripts/capture_service_cpp/start_capture_service_cpp.sh"
   "$XR_OUT_BIN_ROOT/python/capture_client/client.py"
   "$XR_OUT_BIN_ROOT/python-runtime/env.sh"
   "$XR_OUT_BIN_ROOT/python-runtime/venv/bin/python"
