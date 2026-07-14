@@ -3,7 +3,6 @@
 #include "capture_service_cpp/common.hpp"
 
 #include <opencv2/opencv.hpp>
-
 #include <string>
 
 namespace xr_capture_cpp {

@@ -41,4 +41,8 @@ if (-not $exe) {
   throw "capture_service_cpp.exe was not produced"
 }
 Copy-Item $exe.FullName (Join-Path $InstallBinDir "capture_service_cpp.exe") -Force
+$ConfigsDir = Join-Path $BackendDir "configs"
+if (Test-Path $ConfigsDir) {
+  Copy-Item $ConfigsDir (Join-Path $InstallBinDir "configs") -Recurse -Force
+}
 Write-Host "[build_capture_service_cpp_windows] installed: $InstallBinDir\capture_service_cpp.exe"
