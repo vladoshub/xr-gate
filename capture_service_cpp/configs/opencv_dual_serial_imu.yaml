@@ -1,0 +1,62 @@
+version: 1
+
+service:
+  namespace: generic_dual_serial_imu
+  registry_path: /tmp/capture_service_streams.json
+  publish:
+    - shm
+
+camera:
+  enabled: true
+  driver: opencv
+  slot_count: 8
+  layout: dual
+  stereo_order: left_right
+  primary:
+    device:
+      linux: /dev/video2
+    index: 1
+    api: auto
+    width: 640
+    height: 480
+    fps: 60
+    raw_format: false
+    convert_rgb: true
+  secondary:
+    device:
+      linux: /dev/video3
+    index: 2
+    api: auto
+    width: 640
+    height: 480
+    fps: 60
+    raw_format: false
+    convert_rgb: true
+  output:
+    width: 640
+    height: 480
+    left_stream: camera0
+    right_stream: camera1
+  transform:
+    left:
+      rotate: none
+      flip: none
+    right:
+      rotate: none
+      flip: none
+
+imu:
+  enabled: true
+  driver: serial
+  slot_count: 2048
+  output:
+    stream: imu0
+  raw:
+    enabled: false
+  serial:
+    port:
+      linux: /dev/ttyACM0
+      windows: COM5
+    baud_rate: 921600
+    protocol: csv_f32
+    timestamp_mode: device

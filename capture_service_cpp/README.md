@@ -1,111 +1,284 @@
 # capture_service_cpp
 
-Experimental native C++ capture service for XREAL Air 2 Ultra.
-
-The default, known-good fallback remains `capture_service_python`. This backend is opt-in and is used to test a direct native camera session that avoids some GStreamer/Python camera-session failure modes, including sessions that keep producing black frames until the service is restarted.
-
-Compatibility target:
+Native C++ capture service for XR Gate. Camera and IMU sources are selected independently at runtime and are normalized into the existing XR Gate stream contracts:
 
 ```text
-/tmp/capture_service_streams.json
-camera0            IMAGE 480x640 GRAY8
-camera1            IMAGE 480x640 GRAY8
-xreal_raw_hid      BYTES
-imu0               IMU_F32_LE
+camera0  IMAGE GRAY8
+camera1  IMAGE GRAY8
+imu0     IMU_F32_LE: gx, gy, gz [rad/s], ax, ay, az [m/s²]
 ```
 
-## Transports
+The rest of the XR Gate pipeline does not need to know which physical camera or IMU produced the streams.
 
-Linux:
+## Compatibility
+
+When no configuration file exists, the service uses the built-in XREAL Ultra profile. This preserves the previous behavior:
 
 ```text
-SHM: supported
-TCP: supported
+camera source: xreal_ultra
+IMU source:    xreal_hid
+camera0:       480x640 GRAY8
+camera1:       480x640 GRAY8
+imu0:          IMU_F32_LE
+xreal_raw_hid: BYTES
 ```
 
-Windows:
+The XREAL raw camera decoder, eye transforms, HID start command, IMU normalization, stream IDs, SHM/TCP publishers and registry format remain unchanged.
+
+## Configuration
+
+Default location:
 
 ```text
-SHM: intentionally unsupported
-TCP: supported
+~/.config/xr_tracking/capture_service_cpp/config.yaml
 ```
 
-TCP uses the same `capture_net_v1_json_payload` protocol as the Python `capture_service` TCP publisher, including `CAPHELLO`, `SUBSCRIBE`, and `CAPMSG1` messages.
-
-## Camera orientation
-
-The direct raw camera decoder outputs eye frames in the XREAL raw camera convention. For the current XREAL Air 2 Ultra profile, `camera0` uses `ccw90`, while `camera1` uses `ccw90` plus a post-rotation `xy` flip. The flip is needed because the right-eye image is portrait but upside down after the 90-degree rotation.
-
-Runtime overrides:
+An exact file can be selected from CLI:
 
 ```bash
-XR_CAPTURE_CPP_LEFT_ROTATE=0|90|cw90|270|ccw90|180
-XR_CAPTURE_CPP_RIGHT_ROTATE=0|90|cw90|270|ccw90|180
-XR_CAPTURE_CPP_LEFT_FLIP=none|x|y|xy
-XR_CAPTURE_CPP_RIGHT_FLIP=none|x|y|xy
+capture_service_cpp --config-path /path/to/profile.yaml
 ```
 
-Legacy variable names are also accepted: `CPP_CAPTURE_LEFT_ROTATE`, `CPP_CAPTURE_RIGHT_ROTATE`, `CPP_CAPTURE_LEFT_FLIP`, and `CPP_CAPTURE_RIGHT_FLIP`.
-
-To test another right-eye convention without rebuilding:
+A directory and file name can be supplied separately:
 
 ```bash
-XR_CAPTURE_CPP_RIGHT_ROTATE=ccw90 \
-XR_CAPTURE_CPP_RIGHT_FLIP=none \
-CAPTURE_SERVICE_IMPL=cpp \
-./run_xr_client.sh
+capture_service_cpp \
+  --config-dir ~/.config/xr_tracking/capture_service_cpp \
+  --config-name ultraleap_nrf54l15.yaml
 ```
 
-## Layout
+Environment equivalents:
 
 ```text
-include/capture_service_cpp/common.hpp
-include/capture_service_cpp/shm_publisher.hpp
-include/capture_service_cpp/tcp_fanout.hpp
-include/capture_service_cpp/stream_publishers.hpp
-include/capture_service_cpp/camera_pipeline.hpp
-include/capture_service_cpp/imu_pipeline.hpp
-include/capture_service_cpp/platform/*        platform seams: camera open, HID access, process id, runtime defaults, POSIX/Windows SHM
-include/capture_service_cpp/vendor/*          XREAL-only decoder/profile/IMU codec/stream specs
-src/common.cpp
-src/tcp_fanout.cpp
-src/stream_publishers.cpp
-src/camera_pipeline.cpp                         camera pipeline orchestration; no Linux open logic
-src/imu_pipeline.cpp                            IMU pipeline orchestration; no hidapi packet parsing constants
-src/main.cpp
-src/platform/linux/*
-src/platform/windows/*
-src/vendor/*
+XR_CAPTURE_CPP_CONFIG
+XR_CAPTURE_CPP_CONFIG_DIR
+XR_CAPTURE_CPP_CONFIG_NAME
 ```
 
-The stream contracts and defaults remain unchanged: Linux still defaults to SHM, Windows still defaults to TCP-only, and XREAL stream ids remain `camera0`, `camera1`, `xreal_raw_hid`, and `imu0`.
+Precedence is:
+
+```text
+CLI > environment > YAML > platform defaults / built-in XREAL profile
+```
+
+If an explicitly selected file does not exist, startup fails. If only the default `config.yaml` is absent, the built-in XREAL profile is used.
+
+The parser intentionally supports the subset needed by these profiles: nested mappings, scalar values, comments, inline arrays, block scalar arrays and indented multiline scalar continuations. It does not require `yaml-cpp`.
+
+Existing device profiles wrapped in a top-level `capture_service:` mapping remain supported. The legacy XREAL keys under `xreal_linux.camera` and `xreal_linux.imu` are translated to the runtime-independent camera/IMU configuration, so current XREAL launch scripts and profiles do not need to be rewritten immediately.
+
+## Independent source selection
+
+Example: normal side-by-side UVC camera plus nRF54L15 over USB CDC/UART:
+
+```yaml
+version: 1
+
+service:
+  namespace: external_stereo_nrf54l15
+  registry_path: /tmp/capture_service_streams.json
+  publish: [shm]
+
+camera:
+  enabled: true
+  driver: opencv
+  layout: side_by_side_horizontal
+  stereo_order: left_right
+  primary:
+    device:
+      linux: /dev/video2
+    index: 1
+    api: auto
+    width: 1280
+    height: 480
+    fps: 90
+    raw_format: false
+    convert_rgb: true
+  output:
+    left_stream: camera0
+    right_stream: camera1
+    width: 640
+    height: 480
+  transform:
+    left:
+      rotate: none
+      flip: none
+    right:
+      rotate: none
+      flip: none
+
+imu:
+  enabled: true
+  driver: serial
+  output:
+    stream: imu0
+  raw:
+    enabled: false
+  serial:
+    port:
+      linux: /dev/ttyACM0
+      windows: COM5
+    baud_rate: 921600
+    protocol: xr_imu_v1
+    timestamp_mode: device
+```
+
+Example: external camera while retaining the XREAL glasses IMU:
+
+```yaml
+camera:
+  driver: opencv
+  layout: side_by_side_horizontal
+  primary:
+    device:
+      linux: /dev/video2
+    index: 1
+  output:
+    width: 640
+    height: 480
+
+imu:
+  driver: xreal_hid
+```
+
+Camera and IMU source selection is never coupled.
+
+## Camera drivers
+
+### `xreal_ultra`
+
+Uses the existing vendor-packed XREAL camera decoder. Default output is the verified 480x640 orientation:
+
+```yaml
+camera:
+  driver: xreal_ultra
+  layout: xreal_packed
+```
+
+### `opencv`
+
+Uses normal OpenCV/V4L2/Media Foundation/DirectShow inputs. Supported layouts:
+
+```text
+side_by_side_horizontal
+side_by_side_vertical
+dual
+```
+
+`dual` opens `camera.primary` and `camera.secondary` as separate devices. This provides the generic cross-platform seam for future cameras. A vendor-packed Ultraleap stream can be added later as another `ICameraSource` without changing publishers or the downstream pipeline.
+
+Final left and right dimensions must match `camera.output.width` and `camera.output.height`; the service fails rather than silently resizing calibration-sensitive camera frames.
+
+## IMU drivers
+
+### `xreal_hid`
+
+Uses the existing XREAL HID path and normalization. VID, PID and interface can be overridden:
+
+```yaml
+imu:
+  driver: xreal_hid
+  xreal_hid:
+    vendor_id: 0x3318
+    product_id: 0x0426
+    interface: 2
+    drop_first_packets: 500
+```
+
+### `serial`
+
+Cross-platform transport:
+
+```text
+Linux:  /dev/ttyACM*, /dev/ttyUSB*
+Windows: COM*
+```
+
+Supported protocols:
+
+```text
+xr_imu_v1  binary fixed-size packet with sequence, device timestamp and CRC32
+csv_f32    development text protocol
+```
+
+See [`docs/serial_imu_protocol.md`](docs/serial_imu_protocol.md).
+
+For HMD VIO, firmware should send raw calibrated-unit gyro/accelerometer samples without Madgwick/Mahony orientation fusion or startup gyro-bias subtraction. Basalt continues to estimate IMU bias in the existing pipeline.
+
+## CLI overrides
+
+```text
+--config PATH
+--config-path PATH
+--config-dir DIR
+--config-name NAME
+--registry PATH
+--namespace NAME
+--publish shm|tcp|shm,tcp
+--tcp-bind HOST
+--tcp-port PORT
+--camera-driver xreal_ultra|opencv
+--camera-layout side_by_side_horizontal|side_by_side_vertical|dual
+--video-device PATH
+--camera-index N
+--camera-api v4l2|gstreamer|msmf|dshow|any
+--secondary-video-device PATH
+--secondary-camera-index N
+--imu-driver xreal_hid|serial
+--serial-port PORT
+--serial-baud RATE
+--raw-imu
+--no-raw-imu
+--no-camera
+--no-imu
+--duration SEC
+```
+
+Legacy XREAL environment overrides for camera orientation and device selection remain supported.
+
+## Architecture
+
+```text
+config.yaml
+   ├── ICameraSource
+   │     ├── XrealCameraSource
+   │     └── OpenCvStereoCameraSource
+   └── IImuSource
+         ├── XrealHidImuSource
+         └── SerialImuSource
+                 │
+                 ▼
+      normalized StereoFrame / ImuSample
+                 │
+                 ▼
+      unchanged camera/IMU pipelines
+                 │
+                 ▼
+      unchanged SHM/TCP publishers
+                 │
+                 ▼
+      camera0 / camera1 / imu0
+```
+
+OS-specific code is limited to camera opening, serial ports, process/runtime defaults and SHM. Device codecs and source orchestration are platform-neutral.
+
+## Included profiles
+
+```text
+configs/xreal_ultra.yaml
+configs/opencv_sbs_nrf54l15.yaml
+configs/opencv_sbs_xreal_imu.yaml
+configs/opencv_dual_serial_imu.yaml
+```
 
 ## Build on Linux
 
 ```bash
+sudo apt install -y libopencv-dev libhidapi-dev pkg-config
 capture_service_cpp/scripts/linux/build_capture_service_cpp.sh
 ```
 
-## Run on Linux with SHM
-
-```bash
-CAPTURE_SERVICE_IMPL=cpp \
-PUBLISH=shm \
-devices/xreal_ultra/linux/scripts/capture_service/start_capture_service.sh
-```
-
-## Run on Linux with TCP
-
-```bash
-CAPTURE_SERVICE_IMPL=cpp \
-PUBLISH=tcp \
-TCP_PORT=45660 \
-devices/xreal_ultra/linux/scripts/capture_service/start_capture_service.sh
-```
-
 ## Build on Windows
-
-Native Windows support is experimental and TCP-only. OpenCV may or may not expose the raw XREAL UVC frame in the same layout as Linux; if it returns converted BGR/RGB frames, the raw XREAL decoder will reject frames.
 
 ```powershell
 capture_service_cpp\scripts\windows\build_capture_service_cpp.ps1 `
@@ -113,26 +286,24 @@ capture_service_cpp\scripts\windows\build_capture_service_cpp.ps1 `
   -HidApiRoot C:\path\to\hidapi
 ```
 
-## Run on Windows with TCP
+Windows remains TCP-only. Camera devices use OpenCV Media Foundation, DirectShow or another configured backend; serial IMU uses the native Win32 COM API.
 
-```powershell
-capture_service_cpp\scripts\windows\start_capture_service_tcp.ps1 `
-  -TcpPort 45660 `
-  -CameraIndex 0 `
-  -CameraApi msmf
+## Transports
+
+```text
+Linux:  SHM and TCP
+Windows: TCP
 ```
 
-## Third-party
+TCP uses the existing `capture_net_v1_json_payload` protocol.
 
-The camera raw-frame reorder logic is based on MIT-licensed `nrealAirLinuxDriver` work. The upstream code is kept under `third_party/nrealAirLinuxDriver`, and the license notice is preserved in `THIRD_PARTY_NOTICES.md`.
 
-This driver is unofficial. MCU tools are separate, opt-in only, and must not be used by the normal runtime path.
+### Per-source SHM ring sizes
 
-## Switch back
+`service.slot_count` is the fallback. Use `camera.slot_count`, `imu.slot_count`, and
+`imu.raw.slot_count` when the streams need different ring depths. The XREAL Ultra
+profile keeps the historical values: 8 camera frames and 2048 normalized/raw IMU packets.
 
-```bash
-CAPTURE_SERVICE_IMPL=python \
-devices/xreal_ultra/linux/scripts/capture_service/start_capture_service.sh
-```
-
-Default Linux runtime uses `CAPTURE_SERVICE_IMPL=cpp` and `PUBLISH=shm`. Switch back with `CAPTURE_SERVICE_IMPL=python` only after building the Python fallback explicitly.
+The canonical XREAL Ultra profile now uses the same `service` / `camera` / `imu` schema as
+external devices. Legacy `capture_service.xreal_linux.*` keys are accepted only for
+backward compatibility.

@@ -1,77 +1,61 @@
 #include "capture_service_cpp/camera_pipeline.hpp"
 
-#include "capture_service_cpp/platform/camera_capture.hpp"
-#include "capture_service_cpp/vendor/xreal_camera_decoder.hpp"
-#include "capture_service_cpp/vendor/xreal_camera_transform.hpp"
-
 #include <iostream>
 #include <stdexcept>
 #include <thread>
 
 namespace xr_capture_cpp {
 
-void camera_thread(const RuntimeConfig& cfg, StreamPublishers* publishers) {
-  CameraCapture cap;
-  if (!cap.open(cfg)) throw std::runtime_error("failed to open camera");
+void camera_thread(const RuntimeConfig& cfg, std::unique_ptr<ICameraSource> source, StreamPublishers* publishers) {
+  try {
+    const std::string source_name = source->name();
+    source->open();
+    std::cerr << "[capture_service_cpp] camera source started: " << source_name << std::endl;
 
-  cv::Mat frame;
-  cv::Mat raw_eye(cv::Size(kXrealEyeWidth, kXrealEyeHeight), CV_8UC1);
-  cv::Mat latest_left;
-  cv::Mat latest_right;
-  const XrealEyeTransformConfig transforms = resolve_xreal_eye_transforms(cfg);
-  bool have_left = false;
-  bool have_right = false;
-  uint64_t decoded = 0;
-  uint64_t decode_fail = 0;
-  uint64_t published_pairs = 0;
-  uint64_t last_log = steady_ns();
-  uint64_t last_frame_ns = steady_ns();
-  const int stall_exit_ms = env_int("CPP_CAPTURE_CAMERA_STALL_EXIT_MS", 2000);
-
-  while (!g_stop.load()) {
-    if (!cap.read(frame) || frame.empty()) {
-      if (stall_exit_ms > 0) {
-        const uint64_t now = steady_ns();
-        if (now - last_frame_ns >= static_cast<uint64_t>(stall_exit_ms) * 1000000ULL) {
-          std::cerr << "[capture_service_cpp][ERROR] no camera frames for " << stall_exit_ms
-                    << " ms; assuming device disconnect/stall" << std::endl;
+    uint64_t last_data_ns = steady_ns();
+    uint64_t published_pairs = 0;
+    while (!g_stop.load()) {
+      StereoFrame frame;
+      const SourceReadStatus status = source->read(frame);
+      if (status == SourceReadStatus::EndOfStream) {
+        std::cerr << "[capture_service_cpp][ERROR] camera source ended: " << source_name << std::endl;
+        request_stop_with_exit_code(kExitDeviceLost);
+        break;
+      }
+      if (status == SourceReadStatus::Data) last_data_ns = steady_ns();
+      if (status == SourceReadStatus::Timeout) {
+        if (cfg.camera.stall_exit_ms > 0 &&
+            steady_ns() - last_data_ns >= static_cast<uint64_t>(cfg.camera.stall_exit_ms) * 1000000ULL) {
+          std::cerr << "[capture_service_cpp][ERROR] no camera data for " << cfg.camera.stall_exit_ms
+                    << " ms from " << source_name << std::endl;
           request_stop_with_exit_code(kExitDeviceLost);
           break;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        continue;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      continue;
-    }
-    last_frame_ns = steady_ns();
-    bool is_right = false;
-    if (!decode_xreal_eye(frame, raw_eye, is_right)) {
-      ++decode_fail;
-      continue;
-    }
-    ++decoded;
-    if (is_right) {
-      latest_right = transform_xreal_gray_eye(raw_eye, transforms.right_rotate, transforms.right_flip);
-      have_right = true;
-    } else {
-      latest_left = transform_xreal_gray_eye(raw_eye, transforms.left_rotate, transforms.left_flip);
-      have_left = true;
-    }
-    if (have_left && have_right) {
-      const uint64_t ts = steady_ns();
-      publishers->publish("camera0", latest_left.ptr<uint8_t>(), latest_left.total(), ts, latest_left.cols, latest_left.rows, kFormatGray8, 0, "camera0");
-      publishers->publish("camera1", latest_right.ptr<uint8_t>(), latest_right.total(), ts, latest_right.cols, latest_right.rows, kFormatGray8, 0, "camera1");
+      if (!frame.complete()) continue;
+
+      const uint64_t timestamp_ns = frame.timestamp_ns ? frame.timestamp_ns : steady_ns();
+      publishers->publish(cfg.camera.left_stream_id, frame.left.ptr<uint8_t>(), frame.left.total(),
+                          timestamp_ns, static_cast<uint32_t>(frame.left.cols),
+                          static_cast<uint32_t>(frame.left.rows), kFormatGray8, 0,
+                          cfg.camera.left_frame_id);
+      publishers->publish(cfg.camera.right_stream_id, frame.right.ptr<uint8_t>(), frame.right.total(),
+                          timestamp_ns, static_cast<uint32_t>(frame.right.cols),
+                          static_cast<uint32_t>(frame.right.rows), kFormatGray8, 0,
+                          cfg.camera.right_frame_id);
       ++published_pairs;
-      have_left = false;
-      have_right = false;
+      if (published_pairs % 1000 == 0) {
+        std::cerr << "[capture_service_cpp] camera source=" << source_name
+                  << " published_pairs=" << published_pairs << std::endl;
+      }
     }
-    const uint64_t now = steady_ns();
-    if (now - last_log > 2000000000ULL) {
-      std::cerr << "[capture_service_cpp] camera decoded=" << decoded << " decode_fail=" << decode_fail
-                << " published_pairs=" << published_pairs
-                << " left_rotate=" << transforms.left_rotate << " left_flip=" << transforms.left_flip
-                << " right_rotate=" << transforms.right_rotate << " right_flip=" << transforms.right_flip << std::endl;
-      last_log = now;
-    }
+    source->close();
+  } catch (const std::exception& e) {
+    std::cerr << "[capture_service_cpp][ERROR] camera pipeline: " << e.what() << std::endl;
+    request_stop_with_exit_code(kExitRuntimeError);
+    try { source->close(); } catch (...) {}
   }
 }
 

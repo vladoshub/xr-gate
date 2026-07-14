@@ -1,0 +1,63 @@
+version: 1
+
+service:
+  namespace: external_stereo_nrf54l15
+  registry_path: /tmp/capture_service_streams.json
+  slot_count: 256
+  publish: [shm]
+
+# This profile works for a camera that is already exposed by the OS as one
+# normal horizontal side-by-side UVC/OpenCV frame. A vendor-packed Ultraleap
+# stream may require a dedicated decoder source added behind ICameraSource.
+camera:
+  enabled: true
+  driver: opencv
+  slot_count: 8
+  layout: side_by_side_horizontal
+  stereo_order: left_right
+  primary:
+    device:
+      linux: /dev/video2
+    index: 1
+    api: auto
+    width: 1280
+    height: 480
+    fps: 90
+    raw_format: false
+    convert_rgb: true
+    buffer_size: 1
+  output:
+    left_stream: camera0
+    right_stream: camera1
+    left_frame: camera0
+    right_frame: camera1
+    width: 640
+    height: 480
+  transform:
+    left:
+      rotate: none
+      flip: none
+    right:
+      rotate: none
+      flip: none
+  stall_exit_ms: 2000
+
+imu:
+  enabled: true
+  driver: serial
+  slot_count: 2048
+  output:
+    stream: imu0
+    frame: imu0
+  raw:
+    enabled: false
+  serial:
+    port:
+      linux: /dev/ttyACM0
+      windows: COM5
+    baud_rate: 921600
+    protocol: xr_imu_v1
+    timestamp_mode: device
+    read_timeout_ms: 50
+    max_packet_size: 256
+  stall_exit_ms: 2000
