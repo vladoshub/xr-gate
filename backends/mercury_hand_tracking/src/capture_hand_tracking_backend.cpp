@@ -88,6 +88,36 @@ void set_process_env(const char* name, const std::string& value) {
 #endif
 }
 
+class CameraOnlyShmCaptureTransport final : public capture_client::ICaptureTransport {
+ public:
+  CameraOnlyShmCaptureTransport(const std::string& registry_path,
+                                const std::string& cam0_stream,
+                                const std::string& cam1_stream)
+      : registry_(registry_path),
+        cam0_(std::make_unique<capture_client::ShmStreamReader>(
+            registry_.stream(cam0_stream))),
+        cam1_(std::make_unique<capture_client::ShmStreamReader>(
+            registry_.stream(cam1_stream))) {}
+
+  const std::string& type() const override {
+    static const std::string kType = "shm";
+    return kType;
+  }
+
+  capture_client::IStreamReader& cam0() override { return *cam0_; }
+  capture_client::IStreamReader& cam1() override { return *cam1_; }
+
+  capture_client::IStreamReader& imu() override {
+    throw std::logic_error(
+        "IMU is not available in Mercury camera-only SHM transport");
+  }
+
+ private:
+  capture_client::CaptureRegistry registry_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam0_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam1_;
+};
+
 std::filesystem::path default_mercury_runtime_library_path() {
   std::string env = env_or_empty("XR_MERCURY_RUNTIME_LIB");
   if (!env.empty()) return expand_user_path(env);
@@ -539,8 +569,8 @@ int main(int argc, char** argv) {
 
     std::unique_ptr<capture_client::ICaptureTransport> transport;
     if (transport_type == "shm") {
-      transport = std::make_unique<capture_client::ShmCaptureTransport>(
-          registry_path, cam0_stream, cam1_stream, imu_stream);
+      transport = std::make_unique<CameraOnlyShmCaptureTransport>(
+          registry_path, cam0_stream, cam1_stream);
     } else if (transport_type == "tcp") {
       capture_client::TcpCaptureTransportConfig cfg;
       cfg.host = tcp_host;

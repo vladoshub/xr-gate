@@ -28,6 +28,7 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/camera_pipeline.cpp
   src/imu_pipeline.cpp
   src/config/capture_config.cpp
+  src/platform/camera_controls_common.cpp
   src/platform/hidapi_input_device.cpp
   src/sources/camera_source_factory.cpp
   src/sources/xreal_camera_source.cpp
@@ -47,6 +48,7 @@ set(CAPTURE_SERVICE_CPP_SOURCES
 if(WIN32)
   list(APPEND CAPTURE_SERVICE_CPP_SOURCES
     src/platform/windows/camera_capture_windows.cpp
+    src/platform/windows/camera_controls_windows.cpp
     src/platform/windows/capabilities_windows.cpp
     src/platform/windows/process_windows.cpp
     src/platform/windows/runtime_defaults_windows.cpp
@@ -56,6 +58,7 @@ if(WIN32)
 else()
   list(APPEND CAPTURE_SERVICE_CPP_SOURCES
     src/platform/linux/camera_capture_linux.cpp
+    src/platform/linux/camera_controls_linux.cpp
     src/platform/linux/capabilities_linux.cpp
     src/platform/linux/process_linux.cpp
     src/platform/linux/runtime_defaults_linux.cpp
@@ -90,6 +93,22 @@ if(BUILD_TESTING)
   )
   target_include_directories(capture_config_legacy_smoke PRIVATE include)
   add_test(NAME capture_config_legacy_smoke COMMAND capture_config_legacy_smoke)
+
+  add_executable(camera_controls_config_smoke
+    tests/camera_controls_config_smoke.cpp
+    src/common.cpp
+    src/config/capture_config.cpp
+    ${CAPTURE_CONFIG_TEST_PLATFORM_SOURCE}
+  )
+  target_include_directories(camera_controls_config_smoke PRIVATE include)
+  add_test(NAME camera_controls_config_smoke COMMAND camera_controls_config_smoke)
+
+  add_executable(camera_control_name_smoke
+    tests/camera_control_name_smoke.cpp
+    src/platform/camera_controls_common.cpp
+  )
+  target_include_directories(camera_control_name_smoke PRIVATE include)
+  add_test(NAME camera_control_name_smoke COMMAND camera_control_name_smoke)
 
   add_executable(interleaved_columns_decoder_smoke
     tests/interleaved_columns_decoder_smoke.cpp

@@ -31,6 +31,14 @@ camera:
     raw_format: false
     convert_rgb: false
     buffer_size: 1
+
+    # Optional platform-neutral camera controls. These values are applied by
+    # the Linux V4L2 backend after mode negotiation.
+    controls_policy: strict
+    controls:
+      brightness: 10
+      gain: 32
+      exposure_time_absolute: 5000
   output:
     left_stream: camera0
     right_stream: camera1

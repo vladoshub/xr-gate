@@ -263,6 +263,21 @@ bool parse_bool_value(const std::string& value) {
   throw std::runtime_error("invalid boolean value: " + value);
 }
 
+int64_t parse_int64_value(const std::string& value) {
+  const std::string cleaned = trim(value);
+  size_t consumed = 0;
+  const long long parsed = std::stoll(cleaned, &consumed, 0);
+  if (consumed != cleaned.size()) throw std::runtime_error("invalid integer value: " + value);
+  return static_cast<int64_t>(parsed);
+}
+
+int64_t parse_camera_control_value(const std::string& value) {
+  const std::string lowered = lowercase(trim(value));
+  if (lowered == "true" || lowered == "yes" || lowered == "on") return 1;
+  if (lowered == "false" || lowered == "no" || lowered == "off") return 0;
+  return parse_int64_value(value);
+}
+
 int parse_int_value(const std::string& value) {
   size_t consumed = 0;
   const long parsed = std::stol(trim(value), &consumed, 0);
@@ -336,6 +351,47 @@ std::string platform_key(const std::string& base) {
 #endif
 }
 
+std::string current_platform_name() {
+#ifdef _WIN32
+  return "windows";
+#else
+  return "linux";
+#endif
+}
+
+void apply_camera_control_values(const FlatYaml& y,
+                                 const std::string& prefix,
+                                 CameraControlConfig& controls) {
+  const std::string controls_prefix = prefix + ".controls.";
+
+  // First collect platform-neutral values. Only direct children are controls;
+  // nested linux/windows mappings are handled in the second pass.
+  for (const auto& [key, value] : y.scalars) {
+    if (key.rfind(controls_prefix, 0) != 0) continue;
+    const std::string name = key.substr(controls_prefix.size());
+    if (name.empty() || name.find('.') != std::string::npos) continue;
+    controls.values[name] = parse_camera_control_value(value);
+  }
+
+  // Platform-specific values override generic ones without changing the public
+  // CameraDeviceConfig or the source driver. This is the extension point for a
+  // future Windows implementation.
+  const std::string platform_prefix = controls_prefix + current_platform_name() + ".";
+  for (const auto& [key, value] : y.scalars) {
+    if (key.rfind(platform_prefix, 0) != 0) continue;
+    const std::string name = key.substr(platform_prefix.size());
+    if (name.empty() || name.find('.') != std::string::npos) continue;
+    controls.values[name] = parse_camera_control_value(value);
+  }
+
+  std::string policy = controls.strict ? "strict" : "best_effort";
+  set_string(y, {prefix + ".controls_policy"}, policy);
+  policy = lowercase(trim(policy));
+  if (policy == "strict") controls.strict = true;
+  else if (policy == "best_effort" || policy == "best-effort") controls.strict = false;
+  else throw std::runtime_error(prefix + ".controls_policy must be strict or best_effort");
+}
+
 void apply_camera_device(const FlatYaml& y, const std::string& prefix, CameraDeviceConfig& device) {
   set_string(y, {platform_key(prefix + ".device"), prefix + ".device", platform_key(prefix + ".path"), prefix + ".path"}, device.device_path);
   set_int(y, {prefix + ".index"}, device.index);
@@ -346,6 +402,7 @@ void apply_camera_device(const FlatYaml& y, const std::string& prefix, CameraDev
   set_bool(y, {prefix + ".raw_format", prefix + ".raw"}, device.raw_format);
   set_bool(y, {prefix + ".convert_rgb"}, device.convert_rgb);
   set_int(y, {prefix + ".buffer_size"}, device.buffer_size);
+  apply_camera_control_values(y, prefix, device.controls);
 }
 
 void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {

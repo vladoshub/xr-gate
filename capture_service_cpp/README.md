@@ -203,6 +203,40 @@ This decoder is independently implemented as a generic byte-layout transform. XR
 
 Final left and right dimensions must match `camera.output.width` and `camera.output.height`; the service fails rather than silently resizing calibration-sensitive camera frames.
 
+### Camera controls
+
+Camera controls are part of the platform-neutral camera-device configuration:
+
+```yaml
+camera:
+  primary:
+    controls_policy: strict
+    controls:
+      brightness: 10
+      contrast: 0
+      gain: 32
+      exposure_time_absolute: 5000
+```
+
+`controls_policy` may be `strict` (default) or `best_effort`. In strict mode the camera fails to start if a requested control is unavailable, read-only, outside its native range, or rejected by the backend. In best-effort mode the service logs a warning and continues.
+
+The schema also supports platform overrides while preserving one shared profile:
+
+```yaml
+camera:
+  primary:
+    controls:
+      brightness: 10
+      linux:
+        exposure_time_absolute: 5000
+      windows:
+        exposure: -5
+```
+
+Generic values are loaded first; the active platform mapping overrides controls with the same name. Linux currently implements controls through the native V4L2 control API and accepts the same normalized names shown by `v4l2-ctl --list-ctrls` (for example `brightness`, `gain`, `exposure_time_absolute`, `contrast`, `gamma`, and `sharpness`). The Windows contract and source boundary are present, but the Windows control backend is intentionally not implemented yet. A strict Windows profile containing controls therefore reports an explicit startup error instead of silently ignoring calibration-sensitive settings.
+
+Controls are applied after width, height, FPS and pixel-format negotiation and before the first frame is read. Profiles without a `controls` section follow the previous code path unchanged.
+
 ## IMU drivers
 
 ### `xreal_hid`

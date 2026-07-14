@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -53,6 +54,18 @@ struct StreamSpec {
   std::string description;
 };
 
+struct CameraControlConfig {
+  // Backend-neutral control names. Platform implementations map these names to
+  // the native camera-control API. Values intentionally remain integer because
+  // V4L2, Media Foundation and DirectShow camera properties are integer-based.
+  std::map<std::string, int64_t> values;
+
+  // Explicitly configured controls are strict by default: startup fails when a
+  // control cannot be found or applied. Set controls_policy: best_effort to log
+  // a warning and continue instead.
+  bool strict = true;
+};
+
 struct CameraDeviceConfig {
   // Linux normally uses device_path; Windows normally uses index. Drivers may
   // use either field on either platform when the backend supports it.
@@ -65,6 +78,7 @@ struct CameraDeviceConfig {
   bool raw_format = false;
   bool convert_rgb = true;
   int buffer_size = 1;
+  CameraControlConfig controls;
 };
 
 struct ImageTransformConfig {
