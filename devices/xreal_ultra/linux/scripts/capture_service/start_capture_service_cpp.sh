@@ -11,7 +11,7 @@ export PUBLISH="${PUBLISH:-shm}"
 export REGISTRY_PATH="${REGISTRY_PATH:-$CAPTURE_REGISTRY}"
 export TCP_BIND_HOST="${TCP_BIND_HOST:-0.0.0.0}"
 export TCP_PORT="${TCP_PORT:-45660}"
-export CAPTURE_NAMESPACE="${CAPTURE_NAMESPACE:-xreal_air2ultra_linux}"
+export CAPTURE_NAMESPACE="${CAPTURE_NAMESPACE:-$CAPTURE_REGISTRY_NAMESPACE}"
 
 # Device-specific orientation/debug compatibility overrides. The generic
 # launcher does not know anything about XREAL or its coordinate convention.
