@@ -201,7 +201,9 @@ xr_imu_v1  binary fixed-size packet with sequence, device timestamp and CRC32
 csv_f32    development text protocol
 ```
 
-See [`docs/serial_imu_protocol.md`](docs/serial_imu_protocol.md).
+See [`docs/serial_imu_protocol.md`](docs/serial_imu_protocol.md). The canonical wire codec is the hardware-independent `protocols/xr_imu_v1` module; the serial driver does not duplicate packet layout or CRC logic.
+
+Only complete validated serial samples reset `imu.stall_exit_ms`. Receiving partial packets or arbitrary bytes is tracked as transport activity but does not hide a stalled/corrupt IMU source. Device timestamps are mapped into host steady time with a bounded affine clock model that estimates both offset and oscillator-rate error.
 
 For HMD VIO, firmware should send raw calibrated-unit gyro/accelerometer samples without Madgwick/Mahony orientation fusion or startup gyro-bias subtraction. Basalt continues to estimate IMU bias in the existing pipeline.
 

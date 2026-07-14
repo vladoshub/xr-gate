@@ -29,3 +29,25 @@ or with an explicit sequence:
 ```text
 timestamp_us,sequence,gx,gy,gz,ax,ay,az
 ```
+
+## Shared host protocol module
+
+The wire format is implemented in the hardware-independent module:
+
+```text
+include/capture_service_cpp/protocols/xr_imu_v1.hpp
+src/protocols/xr_imu_v1.cpp
+```
+
+It provides explicit little-endian encode/decode functions, CRC32 validation,
+finite-value validation, and the canonical constants for the 48-byte packet.
+The serial source does not reinterpret a packed C/C++ structure.
+
+Device timestamps are mapped to the host steady-clock domain with an affine
+model (`host = scale * device + offset`). The fit uses low-delay observations
+from successive time windows so ordinary USB/UART receive jitter does not get
+mistaken for oscillator drift.
+
+Only complete packets that pass magic, version, size, CRC, and finite-value
+validation count as IMU activity. Partial packets and arbitrary transport bytes
+do not reset `imu.stall_exit_ms`.

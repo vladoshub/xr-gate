@@ -32,6 +32,9 @@ constexpr const char* kTcpProtocolName = "capture_net_v1_json_payload";
 
 enum class SourceReadStatus {
   Data,
+  // Bytes were received, but no complete valid logical sample was produced.
+  // This must not reset device-stall detection.
+  TransportActivity,
   Timeout,
   EndOfStream,
 };

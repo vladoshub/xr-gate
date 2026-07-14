@@ -23,15 +23,18 @@ void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, St
         break;
       }
       if (status == SourceReadStatus::Data) last_data_ns = steady_ns();
-      if (status == SourceReadStatus::Timeout) {
+      if (status == SourceReadStatus::Timeout ||
+          status == SourceReadStatus::TransportActivity) {
         if (cfg.imu.stall_exit_ms > 0 &&
             steady_ns() - last_data_ns >= static_cast<uint64_t>(cfg.imu.stall_exit_ms) * 1000000ULL) {
-          std::cerr << "[capture_service_cpp][ERROR] no IMU data for " << cfg.imu.stall_exit_ms
-                    << " ms from " << source_name << std::endl;
+          std::cerr << "[capture_service_cpp][ERROR] no valid IMU samples for "
+                    << cfg.imu.stall_exit_ms << " ms from " << source_name << std::endl;
           request_stop_with_exit_code(kExitDeviceLost);
           break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (status == SourceReadStatus::Timeout) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         continue;
       }
 

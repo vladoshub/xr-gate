@@ -35,6 +35,8 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/sources/xreal_hid_imu_source.cpp
   src/sources/serial_imu_source.cpp
   src/sources/serial_imu_protocol.cpp
+  src/protocols/xr_imu_v1.cpp
+  src/timing/affine_device_clock_mapper.cpp
   src/vendor/xreal_camera_decoder.cpp
   src/vendor/xreal_camera_transform.cpp
   src/vendor/xreal_imu_codec.cpp
@@ -87,4 +89,30 @@ if(BUILD_TESTING)
   )
   target_include_directories(capture_config_legacy_smoke PRIVATE include)
   add_test(NAME capture_config_legacy_smoke COMMAND capture_config_legacy_smoke)
+
+  add_executable(xr_imu_v1_smoke
+    tests/xr_imu_v1_smoke.cpp
+    src/protocols/xr_imu_v1.cpp
+  )
+  target_include_directories(xr_imu_v1_smoke PRIVATE include)
+  add_test(NAME xr_imu_v1_smoke COMMAND xr_imu_v1_smoke)
+
+  add_executable(affine_device_clock_mapper_smoke
+    tests/affine_device_clock_mapper_smoke.cpp
+    src/timing/affine_device_clock_mapper.cpp
+  )
+  target_include_directories(affine_device_clock_mapper_smoke PRIVATE include)
+  add_test(NAME affine_device_clock_mapper_smoke COMMAND affine_device_clock_mapper_smoke)
+
+  if(NOT WIN32)
+    add_executable(serial_imu_transport_activity_linux
+      tests/serial_imu_transport_activity_linux.cpp
+      src/sources/serial_imu_source.cpp
+      src/platform/linux/serial_port_linux.cpp
+      src/protocols/xr_imu_v1.cpp
+      src/timing/affine_device_clock_mapper.cpp
+    )
+    target_include_directories(serial_imu_transport_activity_linux PRIVATE include)
+    add_test(NAME serial_imu_transport_activity_linux COMMAND serial_imu_transport_activity_linux)
+  endif()
 endif()
