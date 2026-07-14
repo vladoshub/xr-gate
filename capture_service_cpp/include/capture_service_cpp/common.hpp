@@ -78,6 +78,7 @@ struct CameraSourceConfig {
 
   // xreal_packed: one vendor-packed XREAL stream.
   // side_by_side_horizontal / side_by_side_vertical: one normal OpenCV frame.
+  // interleaved_columns: one raw GRAY8 stereo frame arranged L0,R0,L1,R1,...
   // dual: two independent OpenCV camera devices.
   std::string layout = "xreal_packed";
   std::string stereo_order = "left_right";

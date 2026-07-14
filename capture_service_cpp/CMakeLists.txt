@@ -22,6 +22,7 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/common.cpp
   src/main.cpp
   src/image_transform.cpp
+  src/interleaved_columns_decoder.cpp
   src/stream_publishers.cpp
   src/tcp_fanout.cpp
   src/camera_pipeline.cpp
@@ -89,6 +90,13 @@ if(BUILD_TESTING)
   )
   target_include_directories(capture_config_legacy_smoke PRIVATE include)
   add_test(NAME capture_config_legacy_smoke COMMAND capture_config_legacy_smoke)
+
+  add_executable(interleaved_columns_decoder_smoke
+    tests/interleaved_columns_decoder_smoke.cpp
+    src/interleaved_columns_decoder.cpp
+  )
+  target_include_directories(interleaved_columns_decoder_smoke PRIVATE include)
+  add_test(NAME interleaved_columns_decoder_smoke COMMAND interleaved_columns_decoder_smoke)
 
   add_executable(xr_imu_v1_smoke
     tests/xr_imu_v1_smoke.cpp

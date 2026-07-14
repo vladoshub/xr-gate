@@ -102,7 +102,7 @@ void usage(const char* argv0) {
             << " [--registry PATH] [--namespace NAME] [--publish shm|tcp|shm,tcp]"
             << " [--tcp-bind HOST] [--tcp-port PORT]"
             << " [--camera-driver xreal_ultra|opencv]"
-            << " [--camera-layout side_by_side_horizontal|side_by_side_vertical|dual]";
+            << " [--camera-layout side_by_side_horizontal|side_by_side_vertical|interleaved_columns|dual]";
   print_platform_camera_usage(std::cerr);
   std::cerr << " [--secondary-video-device PATH] [--secondary-camera-index N]"
             << " [--imu-driver xreal_hid|serial] [--serial-port PORT] [--serial-baud RATE]"

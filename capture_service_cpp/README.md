@@ -162,10 +162,44 @@ Uses normal OpenCV/V4L2/Media Foundation/DirectShow inputs. Supported layouts:
 ```text
 side_by_side_horizontal
 side_by_side_vertical
+interleaved_columns
 dual
 ```
 
-`dual` opens `camera.primary` and `camera.secondary` as separate devices. This provides the generic cross-platform seam for future cameras. A vendor-packed Ultraleap stream can be added later as another `ICameraSource` without changing publishers or the downstream pipeline.
+`dual` opens `camera.primary` and `camera.secondary` as separate devices.
+
+`interleaved_columns` accepts a raw 8-bit UVC frame whose bytes on every row are arranged as:
+
+```text
+L0 R0 L1 R1 L2 R2 ...
+```
+
+The captured OpenCV frame may be exposed as `height x width` `CV_8UC2`, `height x (2*width)` `CV_8UC1`, or as one continuous raw buffer with the same byte count. `camera.output.width` and `camera.output.height` describe one eye. Use `convert_rgb: false`; normally leave `raw_format: false` so OpenCV preserves the native UVC sample layout without requesting an opaque encoded packet buffer.
+
+Example:
+
+```yaml
+camera:
+  driver: opencv
+  layout: interleaved_columns
+  stereo_order: left_right
+  primary:
+    device:
+      linux: /dev/video2
+    index: 0
+    api: auto
+    width: 640
+    height: 480
+    fps: 90
+    raw_format: false
+    convert_rgb: false
+    buffer_size: 1
+  output:
+    width: 640
+    height: 480
+```
+
+This decoder is independently implemented as a generic byte-layout transform. XR Gate does not include or redistribute LeapUVC source code, SDK components, calibration extraction code, firmware, or unlock utilities. A user must enable UVC access separately and comply with the device vendor's terms. The XR Gate project license and `THIRD_PARTY_NOTICES.md` are unchanged.
 
 Final left and right dimensions must match `camera.output.width` and `camera.output.height`; the service fails rather than silently resizing calibration-sensitive camera frames.
 
@@ -220,7 +254,7 @@ For HMD VIO, firmware should send raw calibrated-unit gyro/accelerometer samples
 --tcp-bind HOST
 --tcp-port PORT
 --camera-driver xreal_ultra|opencv
---camera-layout side_by_side_horizontal|side_by_side_vertical|dual
+--camera-layout side_by_side_horizontal|side_by_side_vertical|interleaved_columns|dual
 --video-device PATH
 --camera-index N
 --camera-api v4l2|gstreamer|msmf|dshow|any
@@ -271,6 +305,7 @@ configs/xreal_ultra.yaml
 configs/opencv_sbs_nrf54l15.yaml
 configs/opencv_sbs_xreal_imu.yaml
 configs/opencv_dual_serial_imu.yaml
+configs/opencv_interleaved_columns_xreal_imu.yaml
 ```
 
 ## Build on Linux

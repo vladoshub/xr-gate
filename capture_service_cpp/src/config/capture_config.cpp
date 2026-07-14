@@ -522,8 +522,10 @@ void validate_runtime_config(RuntimeConfig& cfg) {
       throw std::runtime_error("camera.output width and height must be positive");
     }
     if (cfg.camera.driver == "opencv" && cfg.camera.layout != "side_by_side_horizontal" &&
-        cfg.camera.layout != "side_by_side_vertical" && cfg.camera.layout != "dual") {
-      throw std::runtime_error("opencv camera.layout must be side_by_side_horizontal, side_by_side_vertical, or dual");
+        cfg.camera.layout != "side_by_side_vertical" && cfg.camera.layout != "interleaved_columns" &&
+        cfg.camera.layout != "dual") {
+      throw std::runtime_error(
+          "opencv camera.layout must be side_by_side_horizontal, side_by_side_vertical, interleaved_columns, or dual");
     }
   }
   if (cfg.camera.enabled && cfg.camera.left_stream_id == cfg.camera.right_stream_id) {

@@ -1,14 +1,62 @@
 #include "capture_service_cpp/sources/camera_source.hpp"
 
 #include "capture_service_cpp/image_transform.hpp"
+#include "capture_service_cpp/interleaved_columns_decoder.hpp"
 #include "capture_service_cpp/platform/camera_capture.hpp"
 
 #include <iostream>
+#include <sstream>
 #include <memory>
 #include <stdexcept>
 
 namespace xr_capture_cpp {
 namespace {
+
+void decode_interleaved_columns_frame(const cv::Mat& frame,
+                                      int eye_width,
+                                      int eye_height,
+                                      cv::Mat& first_eye,
+                                      cv::Mat& second_eye) {
+  if (frame.empty()) throw std::runtime_error("interleaved-columns frame is empty");
+  if (frame.depth() != CV_8U) {
+    throw std::runtime_error("interleaved-columns frame must have 8-bit elements");
+  }
+
+  const size_t eye_row_bytes = static_cast<size_t>(eye_width);
+  const size_t source_row_bytes = eye_row_bytes * 2U;
+  const size_t expected_bytes = source_row_bytes * static_cast<size_t>(eye_height);
+  const size_t actual_bytes = frame.total() * frame.elemSize();
+
+  const uint8_t* source = nullptr;
+  size_t source_stride = 0;
+  size_t source_size = 0;
+
+  // OpenCV backends normally expose this UVC layout as either HxW CV_8UC2
+  // or Hx(2W) CV_8UC1. Some raw backends return one continuous flat buffer.
+  if (frame.rows == eye_height && frame.step[0] >= source_row_bytes && actual_bytes == expected_bytes) {
+    source = frame.ptr<uint8_t>(0);
+    source_stride = frame.step[0];
+    source_size = source_stride * static_cast<size_t>(eye_height - 1) + source_row_bytes;
+  } else if (frame.isContinuous() && actual_bytes == expected_bytes) {
+    source = frame.ptr<uint8_t>(0);
+    source_stride = source_row_bytes;
+    source_size = expected_bytes;
+  } else {
+    std::ostringstream message;
+    message << "interleaved-columns frame byte layout mismatch: got rows=" << frame.rows
+            << " cols=" << frame.cols << " channels=" << frame.channels()
+            << " elem_size=" << frame.elemSize() << " bytes=" << actual_bytes
+            << ", expected " << eye_height << " rows and " << source_row_bytes
+            << " bytes per row (" << expected_bytes << " bytes total)";
+    throw std::runtime_error(message.str());
+  }
+
+  first_eye.create(eye_height, eye_width, CV_8UC1);
+  second_eye.create(eye_height, eye_width, CV_8UC1);
+  deinterleave_gray8_columns(source, source_size, source_stride, eye_width, eye_height,
+                             first_eye.ptr<uint8_t>(0), first_eye.step[0],
+                             second_eye.ptr<uint8_t>(0), second_eye.step[0]);
+}
 
 class OpenCvStereoCameraSource final : public ICameraSource {
  public:
@@ -55,6 +103,17 @@ class OpenCvStereoCameraSource final : public ICameraSource {
       } else {
         left_raw = to_gray8(first);
         right_raw = to_gray8(second);
+      }
+    } else if (cfg_.camera.layout == "interleaved_columns") {
+      cv::Mat a;
+      cv::Mat b;
+      decode_interleaved_columns_frame(first, cfg_.camera.output_width, cfg_.camera.output_height, a, b);
+      if (cfg_.camera.stereo_order == "right_left") {
+        right_raw = a;
+        left_raw = b;
+      } else {
+        left_raw = a;
+        right_raw = b;
       }
     } else {
       const cv::Mat gray = to_gray8(first);
