@@ -413,7 +413,7 @@ XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 XR_TRACKING_MONADO_XCB_RATE_HZ=90 \
-./devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
+./devices/common/linux/scripts/monado_driver/double_display_fix.sh
 ```
 
 After stopping Monado driver with `Ctrl+C`, the main display should be restored.
@@ -447,7 +447,7 @@ cd ~/xr-gate-release/xreal_ultra
 
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 XR_TRACKING_MAIN_OUTPUT=DP-6 \
-devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
+devices/common/linux/scripts/monado_driver/main_display_control.sh off-main
 ```
 
 Run Monado driver:
@@ -459,7 +459,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
 
@@ -485,7 +485,7 @@ XR_MONADO_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-./devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
 ## D. Monado without main monitor in system
@@ -497,7 +497,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
 ## Start OpenXR demo
