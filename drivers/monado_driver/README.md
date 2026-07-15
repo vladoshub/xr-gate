@@ -49,67 +49,87 @@ For backward compatibility it also creates the historical manifest and helper
 under `devices/<target>/linux/scripts/monado_driver/`. The generated
 `bin/drivers/monado_driver/env.sh` points at the canonical manifest.
 
-## Runtime display profiles
+## Display and optics config
 
-Resolution, FOV, IPD, and refresh rate are runtime environment settings. They do
-not require rebuilding Monado.
-
-Installed profiles live at:
+Monado loads the display geometry at runtime from:
 
 ```text
-bin/drivers/monado_driver/profiles/<profile>.env
+drivers/monado_driver/configs/display/default.yaml
 ```
 
-Run a named profile:
+The installed copy is:
 
-```bash
-XR_MONADO_DISPLAY_PROFILE=my_glasses \
-bin/drivers/monado_driver/start.sh
+```text
+bin/drivers/monado_driver/configs/display/default.yaml
 ```
 
-Or use an explicit file:
+Select another config without rebuilding Monado:
 
 ```bash
-XR_MONADO_DISPLAY_PROFILE_FILE=/path/my_glasses.env \
-bin/drivers/monado_driver/start.sh
+XR_MONADO_DISPLAY_CONFIG=/path/cardboard.yaml \
+  bin/drivers/monado_driver/start.sh
 ```
 
-One-off settings can be supplied directly:
+The schema is shared with the OpenVR build scripts:
+
+```yaml
+display:
+  width_px: 3840
+  height_px: 1080
+  layout: side_by_side_horizontal
+  eye_width_px: 1920
+  eye_height_px: 1080
+  refresh_hz: 90
+  rotation_deg: 0
+
+optics:
+  ipd_m: 0.064
+  inter_lens_distance_m: 0.064
+  screen_to_lens_distance_m: 0.0
+  eye_to_lens_distance_m: 0.0
+
+  left_eye:
+    lens_center_uv: [0.5, 0.5]
+    fov_deg:
+      left: 57.29577951308232
+      right: 57.29577951308232
+      up: 57.29577951308232
+      down: 57.29577951308232
+
+  right_eye:
+    lens_center_uv: [0.5, 0.5]
+    fov_deg:
+      left: 57.29577951308232
+      right: 57.29577951308232
+      up: 57.29577951308232
+      down: 57.29577951308232
+```
+
+The checked-in default reproduces the previous hardcoded Monado values. Config
+loading does not require a rebuild. Explicit `XR_MONADO_*` environment values
+remain highest priority, followed by the YAML config, legacy `.env` profile,
+and finally compiled defaults.
+
+`width_px`, `height_px`, per-eye render size, layout, rotation, refresh rate,
+IPD, and per-eye FOV are applied by the runtime driver. Lens centers,
+inter-lens distance, and screen/eye-to-lens distances are loaded and validated
+now; while identity distortion is active they are retained as optics metadata
+for the future distortion implementation.
+
+
+## Legacy runtime overrides
+
+Legacy named `.env` profiles and one-off `XR_MONADO_*` overrides remain supported.
+For example:
 
 ```bash
-XR_MONADO_DEVICE=generic \
 XR_MONADO_EYE_WIDTH=1600 \
 XR_MONADO_EYE_HEIGHT=900 \
-XR_MONADO_FOV_HORIZONTAL_DEG=52 \
-XR_MONADO_FOV_VERTICAL_DEG=30 \
-XR_MONADO_REFRESH_HZ=60 \
-bin/drivers/monado_driver/start.sh
+XR_MONADO_REFRESH_HZ=72 \
+  bin/drivers/monado_driver/start.sh
 ```
 
-The degree-based horizontal and vertical values are complete per-eye FOVs.
-Directional half-angles are also supported:
-
-```text
-XR_MONADO_FOV_LEFT_DEG
-XR_MONADO_FOV_RIGHT_DEG
-XR_MONADO_FOV_UP_DEG
-XR_MONADO_FOV_DOWN_DEG
-```
-
-Existing `XR_MONADO_FOV_LEFT/RIGHT/UP/DOWN` variables remain raw radians and
-have higher precedence. Explicit `_RAD` aliases have the highest precedence.
-
-Useful geometry variables:
-
-```text
-XR_MONADO_EYE_WIDTH / XR_MONADO_EYE_HEIGHT
-XR_MONADO_RENDER_WIDTH / XR_MONADO_RENDER_HEIGHT
-XR_MONADO_WINDOW_WIDTH / XR_MONADO_WINDOW_HEIGHT
-XR_MONADO_DISPLAY_WIDTH_M / XR_MONADO_DISPLAY_HEIGHT_M
-XR_MONADO_IPD_M
-XR_MONADO_LENS_VERTICAL_POSITION_M
-XR_MONADO_REFRESH_HZ
-```
+Raw-radian FOV variables remain compatibility overrides.
 
 ## Package output
 

@@ -143,6 +143,20 @@ if [[ ! -f "${DRIVER_DIR}/driver.vrdrivermanifest" ]]; then
   exit 1
 fi
 
+PACKAGED_DISPLAY_CONFIG="$DRIVER_DIR/resources/settings/display_config.yaml"
+if [[ -f "$PACKAGED_DISPLAY_CONFIG" ]]; then
+  echo "display config: $PACKAGED_DISPLAY_CONFIG"
+  if [[ -n "${XR_OPENVR_DISPLAY_CONFIG:-}" ]]; then
+    requested_config="$(openvr_expand_tilde "$XR_OPENVR_DISPLAY_CONFIG")"
+    if [[ -f "$requested_config" ]] && ! cmp -s "$requested_config" "$PACKAGED_DISPLAY_CONFIG"; then
+      echo "[register_driver][WARN] requested display config differs from the one embedded in the built package" >&2
+      echo "[register_driver][WARN] rebuild the OpenVR package to apply: $requested_config" >&2
+    fi
+  fi
+else
+  echo "[register_driver][WARN] packaged display config is absent; using rendered default.vrsettings only" >&2
+fi
+
 # Registration backend:
 #   manual    - edit openvrpaths.vrpath directly; does not execute vrpathreg and
 #               therefore does not wake Steam/SteamVR on systems where vrpathreg
@@ -262,6 +276,14 @@ xr_display_keys = (
     "renderWidth", "renderHeight", "displayFrequency",
     "secondsFromVsyncToPhotons", "displayDebugMode",
     "isDisplayOnDesktop", "isDisplayRealDisplay",
+    "displayLayout", "displayRotationDeg",
+    "ipdMeters", "interLensDistanceMeters",
+    "screenToLensDistanceMeters", "eyeToLensDistanceMeters",
+    "leftLensCenterU", "leftLensCenterV",
+    "rightLensCenterU", "rightLensCenterV",
+    "projectionLeft", "projectionRight", "projectionTop", "projectionBottom",
+    "leftProjectionLeft", "leftProjectionRight", "leftProjectionTop", "leftProjectionBottom",
+    "rightProjectionLeft", "rightProjectionRight", "rightProjectionTop", "rightProjectionBottom",
 )
 xr_controller_keys = (
     # Avoid stale per-user settings keeping the visible Vive Wand render model

@@ -709,6 +709,18 @@ install_runtime_binaries() {
   if [[ -f "$SCRIPT_DIR/start.sh" ]]; then
     install -m 0755 "$SCRIPT_DIR/start.sh" "$BIN_DIR/start.sh"
   fi
+  if [[ -f "$DRIVER_DIR/scripts/display_optics_config.py" ]]; then
+    install -m 0755 "$DRIVER_DIR/scripts/display_optics_config.py" "$BIN_DIR/display_optics_config.py"
+  fi
+
+  if [[ -d "$DRIVER_DIR/configs" ]]; then
+    rm -rf "$BIN_DIR/configs.tmp"
+    mkdir -p "$BIN_DIR/configs.tmp"
+    cp -a "$DRIVER_DIR/configs/." "$BIN_DIR/configs.tmp/"
+    rm -rf "$BIN_DIR/configs"
+    mv "$BIN_DIR/configs.tmp" "$BIN_DIR/configs"
+    log "installed Monado display/optics configs: $BIN_DIR/configs"
+  fi
 
   if [[ -d "$DRIVER_DIR/profiles" ]]; then
     rm -rf "$BIN_DIR/profiles.tmp"
@@ -726,7 +738,8 @@ install_runtime_binaries() {
 export XR_TRACKING_ROOT="$ROOT_PROJECT"
 export XR_TRACKING_RUNTIME_ENABLE=1
 export XR_MONADO_DEVICE="$XR_MONADO_DEVICE"
-export XR_MONADO_DISPLAY_PROFILE="${XR_MONADO_DISPLAY_PROFILE:-$XR_MONADO_DEVICE}"
+export XR_MONADO_DISPLAY_PROFILE="\${XR_MONADO_DISPLAY_PROFILE:-$XR_MONADO_DEVICE}"
+export XR_MONADO_DISPLAY_CONFIG="\${XR_MONADO_DISPLAY_CONFIG:-$BIN_DIR/configs/display/default.yaml}"
 export XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-$XR_MONADO_DEVICE}"
 export XR_DEVICE_TARGET="${XR_DEVICE_TARGET:-$XR_MONADO_DEVICE}"
 export XR_MONADO_SERVICE_BIN="$BIN_DIR/monado-service"

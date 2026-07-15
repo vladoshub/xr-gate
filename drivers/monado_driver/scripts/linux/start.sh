@@ -224,6 +224,80 @@ MONADO_DIR="$(expand_path "${MONADO_DIR:-$THIRD_PARTY_DIR/monado_driver}")"
 BUILD_DIR="$(expand_path "${BUILD_DIR:-$MONADO_DIR/build/xr_tracking_relwithdebinfo}")"
 BIN_DIR="$(expand_path "${BIN_DIR:-${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/drivers/monado_driver}")"
 
+resolve_display_config() {
+  local explicit="${XR_MONADO_DISPLAY_CONFIG:-${XR_DISPLAY_CONFIG:-}}"
+  if [[ -n "$explicit" ]]; then
+    explicit="$(expand_path "$explicit")"
+    [[ -f "$explicit" ]] || fail "XR_MONADO_DISPLAY_CONFIG not found: $explicit"
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+
+  local candidates=(
+    "$BIN_DIR/configs/display/default.yaml"
+    "$SCRIPT_DIR/../../configs/display/default.yaml"
+    "$ROOT_PROJECT/drivers/monado_driver/configs/display/default.yaml"
+  )
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_display_config_parser() {
+  local candidates=(
+    "$BIN_DIR/display_optics_config.py"
+    "$SCRIPT_DIR/../display_optics_config.py"
+    "$ROOT_PROJECT/drivers/monado_driver/scripts/display_optics_config.py"
+  )
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+load_display_config() {
+  local config=""
+  config="$(resolve_display_config || true)"
+  if [[ -z "$config" ]]; then
+    log "display config not found; using legacy .env profile and driver defaults"
+    return 0
+  fi
+
+  local parser=""
+  parser="$(resolve_display_config_parser || true)"
+  [[ -n "$parser" ]] || fail "display config parser not found for: $config"
+
+  local parsed_env=""
+  if ! parsed_env="$(python3 "$parser" --config "$config" --monado-env)"; then
+    fail "failed to load display config: $config"
+  fi
+
+  local key=""
+  local value=""
+  while IFS='=' read -r key value; do
+    [[ -n "$key" ]] || continue
+    [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || fail "invalid environment key from display config: $key"
+    # Explicit caller environment values have the highest priority. The config
+    # fills only values that were not already supplied by the caller.
+    if [[ ! -v $key ]]; then
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done <<<"$parsed_env"
+
+  export XR_MONADO_DISPLAY_CONFIG="$config"
+  log "loaded display/optics config: $config"
+}
+
 load_display_profile() {
   local explicit_file="${XR_MONADO_DISPLAY_PROFILE_FILE:-}"
   local profile_was_explicit=0
@@ -271,6 +345,7 @@ load_display_profile() {
   fi
 }
 
+load_display_config
 load_display_profile
 
 # Prefer explicit binary override, then installed binary, then build tree binary.
@@ -358,6 +433,7 @@ log "SERVICE_BIN=$SERVICE_BIN"
 log "XR_MONADO_DEVICE=$XR_MONADO_DEVICE"
 log "XR_MONADO_DISPLAY_PROFILE=${XR_MONADO_DISPLAY_PROFILE:-<none>}"
 log "XR_MONADO_DISPLAY_PROFILE_FILE=${XR_MONADO_DISPLAY_PROFILE_FILE:-<none>}"
+log "XR_MONADO_DISPLAY_CONFIG=${XR_MONADO_DISPLAY_CONFIG:-<none>}"
 log "XR_TRACKING_RUNTIME_ENABLE=$XR_TRACKING_RUNTIME_ENABLE"
 log "XR_TRACKING_MONADO_COMPOSITOR_MODE=$XR_TRACKING_MONADO_COMPOSITOR_MODE"
 if [[ -n "${XRT_COMPOSITOR_FORCE_XCB:-}" ]]; then

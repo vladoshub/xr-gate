@@ -49,6 +49,23 @@ constexpr const char* kDisplayFrequencyKey = "displayFrequency";
 constexpr float kDefaultDisplayFrequencyHz = 60.0f;  // direct acquire AMD/iGPU test
 constexpr const char* kSecondsFromVsyncToPhotonsKey = "secondsFromVsyncToPhotons";
 constexpr const char* kIpdMetersKey = "ipdMeters";
+constexpr const char* kInterLensDistanceMetersKey = "interLensDistanceMeters";
+constexpr const char* kScreenToLensDistanceMetersKey = "screenToLensDistanceMeters";
+constexpr const char* kEyeToLensDistanceMetersKey = "eyeToLensDistanceMeters";
+constexpr const char* kDisplayLayoutKey = "displayLayout";
+constexpr const char* kDisplayRotationDegKey = "displayRotationDeg";
+constexpr const char* kLeftLensCenterUKey = "leftLensCenterU";
+constexpr const char* kLeftLensCenterVKey = "leftLensCenterV";
+constexpr const char* kRightLensCenterUKey = "rightLensCenterU";
+constexpr const char* kRightLensCenterVKey = "rightLensCenterV";
+constexpr const char* kLeftProjectionLeftKey = "leftProjectionLeft";
+constexpr const char* kLeftProjectionRightKey = "leftProjectionRight";
+constexpr const char* kLeftProjectionTopKey = "leftProjectionTop";
+constexpr const char* kLeftProjectionBottomKey = "leftProjectionBottom";
+constexpr const char* kRightProjectionLeftKey = "rightProjectionLeft";
+constexpr const char* kRightProjectionRightKey = "rightProjectionRight";
+constexpr const char* kRightProjectionTopKey = "rightProjectionTop";
+constexpr const char* kRightProjectionBottomKey = "rightProjectionBottom";
 constexpr const char* kDisplayDebugModeKey = "displayDebugMode";
 constexpr const char* kIsDisplayOnDesktopKey = "isDisplayOnDesktop";
 constexpr const char* kIsDisplayRealDisplayKey = "isDisplayRealDisplay";
@@ -485,27 +502,50 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
   }
 
   void GetEyeOutputViewport(vr::EVREye eye, uint32_t* x, uint32_t* y, uint32_t* width, uint32_t* height) override {
+    if (display_layout_ == "top_bottom_vertical") {
+      *x = 0;
+      *width = static_cast<uint32_t>(window_width_);
+      *height = static_cast<uint32_t>(window_height_ / 2);
+      *y = eye == vr::Eye_Left ? 0u : static_cast<uint32_t>(window_height_ / 2);
+      return;
+    }
+
     *y = 0;
     *width = static_cast<uint32_t>(window_width_ / 2);
     *height = static_cast<uint32_t>(window_height_);
     *x = eye == vr::Eye_Left ? 0u : static_cast<uint32_t>(window_width_ / 2);
   }
 
-  void GetProjectionRaw(vr::EVREye, float* left, float* right, float* top, float* bottom) override {
-    *left = projection_left_;
-    *right = projection_right_;
-    *top = projection_top_;
-    *bottom = projection_bottom_;
+  void GetProjectionRaw(vr::EVREye eye, float* left, float* right, float* top, float* bottom) override {
+    const std::array<float, 4>& projection = eye == vr::Eye_Left ? left_projection_ : right_projection_;
+    *left = projection[0];
+    *right = projection[1];
+    *top = projection[2];
+    *bottom = projection[3];
+  }
+
+  std::array<float, 2> rotate_uv(float u, float v, bool inverse) const {
+    int rotation = display_rotation_deg_;
+    if (inverse) {
+      rotation = (360 - rotation) % 360;
+    }
+    switch (rotation) {
+      case 90: return {v, 1.0f - u};
+      case 180: return {1.0f - u, 1.0f - v};
+      case 270: return {1.0f - v, u};
+      default: return {u, v};
+    }
   }
 
   vr::DistortionCoordinates_t ComputeDistortion(vr::EVREye, float u, float v) override {
+    const std::array<float, 2> uv = rotate_uv(u, v, false);
     vr::DistortionCoordinates_t coordinates{};
-    coordinates.rfRed[0] = u;
-    coordinates.rfRed[1] = v;
-    coordinates.rfGreen[0] = u;
-    coordinates.rfGreen[1] = v;
-    coordinates.rfBlue[0] = u;
-    coordinates.rfBlue[1] = v;
+    coordinates.rfRed[0] = uv[0];
+    coordinates.rfRed[1] = uv[1];
+    coordinates.rfGreen[0] = uv[0];
+    coordinates.rfGreen[1] = uv[1];
+    coordinates.rfBlue[0] = uv[0];
+    coordinates.rfBlue[1] = uv[1];
     return coordinates;
   }
 
@@ -518,8 +558,9 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
       return false;
     }
 
-    result->v[0] = u;
-    result->v[1] = v;
+    const std::array<float, 2> uv = rotate_uv(u, v, true);
+    result->v[0] = uv[0];
+    result->v[1] = uv[1];
     return true;
   }
 
@@ -553,29 +594,76 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
     display_frequency_ = get_float_setting(kDisplayFrequencyKey, kDefaultDisplayFrequencyHz);
     seconds_from_vsync_to_photons_ = get_float_setting(kSecondsFromVsyncToPhotonsKey, 0.011f);
     ipd_meters_ = get_float_setting(kIpdMetersKey, 0.064f);
+    inter_lens_distance_meters_ = get_float_setting(kInterLensDistanceMetersKey, ipd_meters_);
+    screen_to_lens_distance_meters_ = get_float_setting(kScreenToLensDistanceMetersKey, 0.0f);
+    eye_to_lens_distance_meters_ = get_float_setting(kEyeToLensDistanceMetersKey, 0.0f);
+    display_layout_ = lower_ascii(get_string_setting(kDisplayLayoutKey, "side_by_side_horizontal"));
+    if (display_layout_ != "side_by_side_horizontal" && display_layout_ != "top_bottom_vertical") {
+      log_line("[xr_tracking_openvr] unsupported displayLayout=" + display_layout_ +
+               "; using side_by_side_horizontal");
+      display_layout_ = "side_by_side_horizontal";
+    }
+    display_rotation_deg_ = get_int_setting(kDisplayRotationDegKey, 0);
+    if (display_rotation_deg_ != 0 && display_rotation_deg_ != 90 &&
+        display_rotation_deg_ != 180 && display_rotation_deg_ != 270) {
+      log_line("[xr_tracking_openvr] unsupported displayRotationDeg=" +
+               std::to_string(display_rotation_deg_) + "; using 0");
+      display_rotation_deg_ = 0;
+    }
+    left_lens_center_u_ = get_float_setting(kLeftLensCenterUKey, 0.5f);
+    left_lens_center_v_ = get_float_setting(kLeftLensCenterVKey, 0.5f);
+    right_lens_center_u_ = get_float_setting(kRightLensCenterUKey, 0.5f);
+    right_lens_center_v_ = get_float_setting(kRightLensCenterVKey, 0.5f);
     display_debug_mode_ = get_bool_setting(kDisplayDebugModeKey, false);
     is_display_on_desktop_ = get_bool_setting(kIsDisplayOnDesktopKey, false);
     is_display_real_display_ = get_bool_setting(kIsDisplayRealDisplayKey, true);
-    projection_left_ = get_float_setting(kProjectionLeftKey, -1.0f);
-    projection_right_ = get_float_setting(kProjectionRightKey, 1.0f);
-    projection_top_ = get_float_setting(kProjectionTopKey, -1.0f);
-    projection_bottom_ = get_float_setting(kProjectionBottomKey, 1.0f);
+    const float legacy_projection_left = get_float_setting(kProjectionLeftKey, -1.0f);
+    const float legacy_projection_right = get_float_setting(kProjectionRightKey, 1.0f);
+    const float legacy_projection_top = get_float_setting(kProjectionTopKey, -1.0f);
+    const float legacy_projection_bottom = get_float_setting(kProjectionBottomKey, 1.0f);
+    left_projection_ = {
+        get_float_setting(kLeftProjectionLeftKey, legacy_projection_left),
+        get_float_setting(kLeftProjectionRightKey, legacy_projection_right),
+        get_float_setting(kLeftProjectionTopKey, legacy_projection_top),
+        get_float_setting(kLeftProjectionBottomKey, legacy_projection_bottom)};
+    right_projection_ = {
+        get_float_setting(kRightProjectionLeftKey, legacy_projection_left),
+        get_float_setting(kRightProjectionRightKey, legacy_projection_right),
+        get_float_setting(kRightProjectionTopKey, legacy_projection_top),
+        get_float_setting(kRightProjectionBottomKey, legacy_projection_bottom)};
     pose_smoothing_alpha_ = std::clamp(get_float_setting(kPoseSmoothingAlphaKey, 0.55f), 0.0f, 1.0f);
     coordinate_mode_ = parse_coordinate_mode(get_string_setting(kCoordinateModeKey, "runtime_ready"));
     log_line(std::string("[xr_tracking_openvr] coordinateMode=") + coordinate_mode_name(coordinate_mode_));
     constexpr float kRadToDeg = 57.295779513082320876f;
-    const float fov_left_deg = std::atan(std::fabs(projection_left_)) * kRadToDeg;
-    const float fov_right_deg = std::atan(std::fabs(projection_right_)) * kRadToDeg;
-    const float fov_up_deg = std::atan(std::fabs(projection_top_)) * kRadToDeg;
-    const float fov_down_deg = std::atan(std::fabs(projection_bottom_)) * kRadToDeg;
-    log_line(std::string("[xr_tracking_openvr] display settings: window=") + std::to_string(window_x_) + "," +
-             std::to_string(window_y_) + " " + std::to_string(window_width_) + "x" +
-             std::to_string(window_height_) + " render=" + std::to_string(render_width_) + "x" +
-             std::to_string(render_height_) + " frequency=" + std::to_string(display_frequency_) +
-             " fov_deg=(left=" + std::to_string(fov_left_deg) +
-             " right=" + std::to_string(fov_right_deg) +
-             " up=" + std::to_string(fov_up_deg) +
-             " down=" + std::to_string(fov_down_deg) + ")" +
+    const auto projection_degrees = [kRadToDeg](const std::array<float, 4>& projection) {
+      return std::array<float, 4>{
+          std::atan(std::fabs(projection[0])) * kRadToDeg,
+          std::atan(std::fabs(projection[1])) * kRadToDeg,
+          std::atan(std::fabs(projection[2])) * kRadToDeg,
+          std::atan(std::fabs(projection[3])) * kRadToDeg};
+    };
+    const auto left_fov_deg = projection_degrees(left_projection_);
+    const auto right_fov_deg = projection_degrees(right_projection_);
+    log_line(std::string("[xr_tracking_openvr] display settings: layout=") + display_layout_ +
+             " rotation=" + std::to_string(display_rotation_deg_) +
+             " window=" + std::to_string(window_x_) + "," + std::to_string(window_y_) + " " +
+             std::to_string(window_width_) + "x" + std::to_string(window_height_) +
+             " render=" + std::to_string(render_width_) + "x" + std::to_string(render_height_) +
+             " frequency=" + std::to_string(display_frequency_) +
+             " ipd=" + std::to_string(ipd_meters_) +
+             " inter_lens=" + std::to_string(inter_lens_distance_meters_) +
+             " screen_to_lens=" + std::to_string(screen_to_lens_distance_meters_) +
+             " eye_to_lens=" + std::to_string(eye_to_lens_distance_meters_) +
+             " left_center=(" + std::to_string(left_lens_center_u_) + "," +
+             std::to_string(left_lens_center_v_) + ")" +
+             " right_center=(" + std::to_string(right_lens_center_u_) + "," +
+             std::to_string(right_lens_center_v_) + ")" +
+             " left_fov_deg=(" + std::to_string(left_fov_deg[0]) + "," +
+             std::to_string(left_fov_deg[1]) + "," + std::to_string(left_fov_deg[2]) + "," +
+             std::to_string(left_fov_deg[3]) + ")" +
+             " right_fov_deg=(" + std::to_string(right_fov_deg[0]) + "," +
+             std::to_string(right_fov_deg[1]) + "," + std::to_string(right_fov_deg[2]) + "," +
+             std::to_string(right_fov_deg[3]) + ")" +
              " on_desktop=" + std::to_string(is_display_on_desktop_ ? 1 : 0) +
              " real_display=" + std::to_string(is_display_real_display_ ? 1 : 0) +
              " debug=" + std::to_string(display_debug_mode_ ? 1 : 0));
@@ -613,13 +701,20 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
   float display_frequency_ = kDefaultDisplayFrequencyHz;
   float seconds_from_vsync_to_photons_ = 0.011f;
   float ipd_meters_ = 0.064f;
+  float inter_lens_distance_meters_ = 0.064f;
+  float screen_to_lens_distance_meters_ = 0.0f;
+  float eye_to_lens_distance_meters_ = 0.0f;
+  std::string display_layout_ = "side_by_side_horizontal";
+  int display_rotation_deg_ = 0;
+  float left_lens_center_u_ = 0.5f;
+  float left_lens_center_v_ = 0.5f;
+  float right_lens_center_u_ = 0.5f;
+  float right_lens_center_v_ = 0.5f;
   bool display_debug_mode_ = false;
   bool is_display_on_desktop_ = false;
   bool is_display_real_display_ = true;
-  float projection_left_ = -1.0f;
-  float projection_right_ = 1.0f;
-  float projection_top_ = -1.0f;
-  float projection_bottom_ = 1.0f;
+  std::array<float, 4> left_projection_{-1.0f, 1.0f, -1.0f, 1.0f};
+  std::array<float, 4> right_projection_{-1.0f, 1.0f, -1.0f, 1.0f};
 };
 
 

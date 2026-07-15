@@ -139,3 +139,37 @@ openvr_resolve_device_settings() {
   fi
   printf '%s\n' "$candidate"
 }
+
+openvr_resolve_display_config() {
+  local driver_root="$1"
+  local explicit="${2:-}"
+
+  if [[ -n "$explicit" ]]; then
+    explicit="$(openvr_expand_tilde "$explicit")"
+    if [[ ! -f "$explicit" ]]; then
+      echo "[ERROR] OpenVR display config not found: $explicit" >&2
+      return 2
+    fi
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+
+  local candidate="$driver_root/configs/display/default.yaml"
+  if [[ ! -f "$candidate" ]]; then
+    echo "[ERROR] OpenVR default display config not found: $candidate" >&2
+    return 2
+  fi
+  printf '%s\n' "$candidate"
+}
+
+openvr_display_config_get() {
+  local driver_root="$1"
+  local config="$2"
+  local dotted_path="$3"
+  local parser="$driver_root/scripts/display_optics_config.py"
+  if [[ ! -f "$parser" ]]; then
+    echo "[ERROR] OpenVR display config parser not found: $parser" >&2
+    return 2
+  fi
+  python3 "$parser" --config "$config" --get "$dotted_path"
+}

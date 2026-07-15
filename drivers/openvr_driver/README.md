@@ -28,81 +28,96 @@ out/my_glasses/bin/drivers/openvr_driver_my_glasses_72HZ/xr_tracking/
 
 The final `xr_tracking/` directory is the SteamVR driver package registered manually or with `vrpathreg`.
 
-## Generic display profiles
+## Display and optics config
 
-The driver binary is hardware-neutral. Resolution, per-eye render size, FOV,
-refresh rate, model identity, and display mode are written into the assembled
-SteamVR package settings.
+OpenVR build and registration use:
 
-A named profile is a normal settings overlay:
+```text
+drivers/openvr_driver/configs/display/default.yaml
+```
+
+Build with another config:
+
+```bash
+XR_OPENVR_DISPLAY_CONFIG=/path/cardboard.yaml \
+drivers/openvr_driver/scripts/build_and_register_driver.sh
+```
+
+The schema is:
+
+```yaml
+display:
+  width_px: 3840
+  height_px: 1080
+  layout: side_by_side_horizontal
+  eye_width_px: 1920
+  eye_height_px: 1080
+  refresh_hz: 60
+  rotation_deg: 0
+
+optics:
+  ipd_m: 0.064
+  inter_lens_distance_m: 0.064
+  screen_to_lens_distance_m: 0.0
+  eye_to_lens_distance_m: 0.0
+
+  left_eye:
+    lens_center_uv: [0.5, 0.5]
+    fov_deg:
+      left: 45.0
+      right: 45.0
+      up: 45.0
+      down: 45.0
+
+  right_eye:
+    lens_center_uv: [0.5, 0.5]
+    fov_deg:
+      left: 45.0
+      right: 45.0
+      up: 45.0
+      down: 45.0
+```
+
+The checked-in default reproduces the previous hardcoded OpenVR package values.
+The normalized config is rendered into `default.vrsettings`, and a copy is
+stored in the assembled driver package at:
+
+```text
+xr_tracking/resources/settings/display_config.yaml
+```
+
+Registration uses the rendered settings from that package. Changing the YAML
+therefore requires rebuilding the OpenVR package, but not changing driver source.
+
+An explicit frequency override remains supported and has priority over
+`display.refresh_hz`:
+
+```bash
+XR_OPENVR_DISPLAY_CONFIG=/path/cardboard.yaml \
+XR_OPENVR_DISPLAY_FREQUENCY_HZ=72 \
+drivers/openvr_driver/scripts/build_and_register_driver.sh
+```
+
+Display geometry, layout, rotation, IPD, and asymmetric per-eye FOV are applied
+to the OpenVR package. Lens centers, inter-lens distance, and screen/eye-to-lens
+distances are loaded into the driver settings; while identity distortion is
+active they are optics metadata for the future distortion implementation.
+
+
+## Device identity overlays
+
+Model/serial and other device-specific settings can still be supplied by:
 
 ```text
 drivers/openvr_driver/devices/<profile>/settings/default.vrsettings
 ```
 
-Build and register it with:
+The display/optics YAML is applied after this overlay, so display geometry comes
+from the selected YAML config. Existing environment overrides remain available
+for one-off tests and have higher priority.
 
-```bash
-XR_OPENVR_DEVICE=my_glasses \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=72 \
-drivers/openvr_driver/scripts/build_and_register_driver.sh
-```
+## Package naming
 
-Profile names are normalized to lowercase with `-` replaced by `_`. Arbitrary
-names matching `[a-z0-9][a-z0-9_.]*` are accepted. `xreal_air2ultra` remains an
-alias for `xreal_ultra`.
-
-For one-off builds, use `generic` and override geometry without creating a file:
-
-```bash
-XR_OPENVR_DEVICE=generic \
-XR_OPENVR_EYE_WIDTH=1600 \
-XR_OPENVR_EYE_HEIGHT=900 \
-XR_OPENVR_FOV_HORIZONTAL_DEG=52 \
-XR_OPENVR_FOV_VERTICAL_DEG=30 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
-drivers/openvr_driver/scripts/build_and_register_driver.sh
-```
-
-`XR_OPENVR_FOV_HORIZONTAL_DEG` and `XR_OPENVR_FOV_VERTICAL_DEG` are complete
-per-eye FOV values. Asymmetric directional half-angles are supported with:
-
-```text
-XR_OPENVR_FOV_LEFT_DEG
-XR_OPENVR_FOV_RIGHT_DEG
-XR_OPENVR_FOV_UP_DEG
-XR_OPENVR_FOV_DOWN_DEG
-```
-
-Raw OpenVR projection tangents remain available and have highest precedence:
-
-```text
-XR_OPENVR_PROJECTION_LEFT
-XR_OPENVR_PROJECTION_RIGHT
-XR_OPENVR_PROJECTION_TOP
-XR_OPENVR_PROJECTION_BOTTOM
-```
-
-Other useful overrides:
-
-```text
-XR_OPENVR_WINDOW_X / XR_OPENVR_WINDOW_Y
-XR_OPENVR_WINDOW_WIDTH / XR_OPENVR_WINDOW_HEIGHT
-XR_OPENVR_RENDER_WIDTH / XR_OPENVR_RENDER_HEIGHT
-XR_OPENVR_MODEL_NUMBER / XR_OPENVR_SERIAL_NUMBER
-XR_OPENVR_IPD_M
-XR_OPENVR_PACKAGE_TAG
-```
-
-`XR_OPENVR_PACKAGE_TAG` distinguishes two packages for the same profile, mode,
-and frequency, for example different FOV experiments. Existing XREAL package
-names such as `openvr_driver_60HZ` are preserved for compatibility. Custom
-profiles are namespaced automatically, for example:
-
-```text
-openvr_driver_my_glasses_72HZ
-```
-
-Display frequency accepts finite values from 1 to 1000 Hz, including fractional
-values such as `59.94`. The physical display/adapter must still expose the
-selected mode.
+`XR_OPENVR_PACKAGE_TAG` can distinguish packages for the same profile, mode,
+and frequency. Existing XREAL package names such as `openvr_driver_60HZ` remain
+unchanged.

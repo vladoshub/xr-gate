@@ -38,8 +38,10 @@ OPENVR_THIRD_PARTY_DIR="$(openvr_expand_tilde "$OPENVR_THIRD_PARTY_DIR")"
 XR_OPENVR_DEVICE="$(openvr_normalize_profile_name "${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}")"
 XR_OPENVR_PACKAGE_TAG="$(openvr_normalize_package_tag "${XR_OPENVR_PACKAGE_TAG:-}")"
 XR_OPENVR_DEVICE_SETTINGS="$(openvr_resolve_device_settings "$DRIVER_ROOT" "$XR_OPENVR_DEVICE" "${XR_OPENVR_DEVICE_SETTINGS:-}")"
+XR_OPENVR_DISPLAY_CONFIG="$(openvr_resolve_display_config "$DRIVER_ROOT" "${XR_OPENVR_DISPLAY_CONFIG:-${XR_DISPLAY_CONFIG:-}}")"
+CONFIG_DISPLAY_FREQUENCY_HZ="$(openvr_display_config_get "$DRIVER_ROOT" "$XR_OPENVR_DISPLAY_CONFIG" display.refresh_hz)"
 
-XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_DISPLAY_FREQUENCY_HZ:-${DISPLAY_FREQUENCY_HZ:-60}}}"
+XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_DISPLAY_FREQUENCY_HZ:-${DISPLAY_FREQUENCY_HZ:-$CONFIG_DISPLAY_FREQUENCY_HZ}}}"
 XR_OPENVR_DISPLAY_FREQUENCY_HZ="$(openvr_normalize_display_frequency_hz "$XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW")"
 XR_OPENVR_DISPLAY_MODE="$(openvr_normalize_display_mode "${XR_OPENVR_DISPLAY_MODE:-${XR_STEAMVR_DISPLAY_MODE:-direct}}")"
 XR_OPENVR_DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-$(openvr_driver_dir_name "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")}"
@@ -214,6 +216,7 @@ printf '[build_driver] DISPLAY_FREQUENCY_HZ=%s\n' "$XR_OPENVR_DISPLAY_FREQUENCY_
 printf '[build_driver] DISPLAY_MODE=%s\n' "$XR_OPENVR_DISPLAY_MODE"
 printf '[build_driver] DEVICE=%s\n' "$XR_OPENVR_DEVICE"
 printf '[build_driver] DEVICE_SETTINGS=%s\n' "${XR_OPENVR_DEVICE_SETTINGS:-<none>}"
+printf '[build_driver] DISPLAY_CONFIG=%s\n' "$XR_OPENVR_DISPLAY_CONFIG"
 printf '[build_driver] PACKAGE_TAG=%s\n' "${XR_OPENVR_PACKAGE_TAG:-<none>}"
 
 cmake -S "$DRIVER_ROOT" -B "$BUILD_DIR" -DXR_OPENVR_SDK_ROOT="$SDK_ROOT"
@@ -229,6 +232,7 @@ fi
 render_settings_args=(
   --settings "$PACKAGE_SETTINGS"
   --device-profile "$XR_OPENVR_DEVICE"
+  --display-config "$XR_OPENVR_DISPLAY_CONFIG"
   --display-frequency "$XR_OPENVR_DISPLAY_FREQUENCY_HZ"
   --display-mode "$XR_OPENVR_DISPLAY_MODE"
 )
@@ -236,8 +240,9 @@ if [[ -n "$XR_OPENVR_DEVICE_SETTINGS" ]]; then
   render_settings_args+=(--device-settings "$XR_OPENVR_DEVICE_SETTINGS")
 fi
 "$SCRIPT_DIR/render_display_settings.py" "${render_settings_args[@]}"
+install -m 0644 "$XR_OPENVR_DISPLAY_CONFIG" "$(dirname "$PACKAGE_SETTINGS")/display_config.yaml"
 
-echo "[build_driver] Patched package device=$XR_OPENVR_DEVICE displayFrequency=$XR_OPENVR_DISPLAY_FREQUENCY_HZ displayMode=$XR_OPENVR_DISPLAY_MODE in $PACKAGE_SETTINGS"
+echo "[build_driver] Patched package device=$XR_OPENVR_DEVICE displayFrequency=$XR_OPENVR_DISPLAY_FREQUENCY_HZ displayMode=$XR_OPENVR_DISPLAY_MODE displayConfig=$XR_OPENVR_DISPLAY_CONFIG in $PACKAGE_SETTINGS"
 
 BUILD_DRIVER_PACKAGE="$BUILD_DIR/xr_tracking"
 BUILD_DRIVER_SO="$BUILD_DRIVER_PACKAGE/bin/linux64/driver_xr_tracking.so"
