@@ -217,6 +217,22 @@ jobs:
         run: |
           bash backends/common/tests/capture_profile_smoke.sh
 
+      - name: Validate xr_spatial SHM/TCP launchers
+        if: ${{ matrix.name == 'spatial' }}
+        run: |
+          set -euo pipefail
+          test -x out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend
+          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
+          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend --help | grep -q -- '--capture-transport'
+          out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend --help | grep -q -- '--capture-tcp-host'
+
+
       - name: Archive partial package
         run: |
           tar -C out -czf xreal_ultra_${{ matrix.name }}.tar.gz xreal_ultra

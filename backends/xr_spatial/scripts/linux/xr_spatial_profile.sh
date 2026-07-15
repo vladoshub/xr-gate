@@ -142,7 +142,10 @@ load_xr_spatial_profile() {
   else
     set_default BIN_DIR "$ROOT_PROJECT/bin/backends/xr_spatial"
   fi
+  set_default CAPTURE_TRANSPORT "${INPUT_TRANSPORT:-shm}"
   set_default CAPTURE_REGISTRY "/tmp/capture_service_streams.json"
+  set_default CAPTURE_TCP_HOST "127.0.0.1"
+  set_default CAPTURE_TCP_PORT "45660"
   set_default CAMERA0_STREAM "camera0"
   set_default CAMERA1_STREAM "camera1"
   set_default IMU_STREAM "imu0"

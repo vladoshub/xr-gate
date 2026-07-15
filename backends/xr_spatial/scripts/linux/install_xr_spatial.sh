@@ -68,6 +68,7 @@ Main commands:
   scripts/linux/start_xr_spatial_scan.sh
   scripts/linux/start_xr_spatial.sh
   scripts/linux/start_xr_spatial_shm.sh
+  scripts/linux/start_xr_spatial_tcp.sh
 
 The launcher detects this bin layout and uses this directory as ROOT_PROJECT,
 so bundled configs can reference paths like:

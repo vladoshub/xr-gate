@@ -52,3 +52,25 @@ X_cam1 = T_cam1_cam0 * X_cam0
 
 It must still contain two entries in `value0.intrinsics` and
 `value0.resolution`.
+
+## Capture transport
+
+SHM remains the default and keeps the existing local pipeline unchanged:
+
+```bash
+./scripts/linux/start_xr_spatial_shm.sh
+```
+
+For direct `capture_service_cpp` TCP input, use the thin wrapper:
+
+```bash
+CAPTURE_TCP_HOST=192.168.1.20 \
+CAPTURE_TCP_PORT=45660 \
+./scripts/linux/start_xr_spatial_tcp.sh
+```
+
+The TCP transport subscribes only to `camera0` and `camera1`; `imu0` is not
+requested. Pose input remains independent: `SPATIAL_POSE_INPUT=shm` can still
+consume a local `hmd_pose`, while `SPATIAL_POSE_INPUT=none` keeps output in
+camera coordinates. Automatic TCP profile probing remains disabled unless
+`CAPTURE_PROFILE_PROBE_ENABLED=1` is explicitly set.

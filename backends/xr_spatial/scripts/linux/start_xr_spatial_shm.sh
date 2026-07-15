@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Live SHM launcher for xr_spatial_backend.
+# Live launcher for xr_spatial_backend. SHM remains the default; the thin
+# start_xr_spatial_tcp.sh wrapper selects capture_service TCP input.
 # Intended for the SteamVR spatial overlay pipeline:
-#   capture_service SHM + optional hmd_pose SHM
+#   capture_service SHM/TCP + optional hmd_pose SHM
 #     -> xr_spatial_backend
 #     -> spatial_proxy_mesh SHM / runtime_spatial_summary SHM
 #     -> xr_runtime_adapter / overlay tooling
@@ -28,8 +29,11 @@ XR_SPATIAL_MODE="${XR_SPATIAL_MODE:-${SPATIAL_MAPPER_MODE:-runtime}}"
 SPATIAL_MAPPER_MODE="$XR_SPATIAL_MODE"
 MAPPER_BACKEND="${MAPPER_BACKEND:-live_depth_grid}"
 
-# SHM input/output defaults.
+# Capture input defaults. Existing behavior remains SHM unless explicitly overridden.
+CAPTURE_TRANSPORT="${CAPTURE_TRANSPORT:-${INPUT_TRANSPORT:-shm}}"
 CAPTURE_REGISTRY="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
+CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
+CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 # SPATIAL_POSE_INPUT is profile-owned. Do not assign a launcher default before
 # loading configs/profiles/<capture profile>.env; the profile loader supplies
 # the legacy shm default when the selected profile does not set it.
@@ -100,6 +104,14 @@ if [[ ! -x "$SPATIAL_MAPPER_BIN" ]]; then
   exit 1
 fi
 
+if [[ "$CAPTURE_TRANSPORT" == "tcp" ]]; then
+  CAPTURE_TRANSPORT="capture_tcp"
+fi
+if [[ "$CAPTURE_TRANSPORT" != "shm" && "$CAPTURE_TRANSPORT" != "capture_tcp" ]]; then
+  echo "[start_xr_spatial_shm][ERROR] CAPTURE_TRANSPORT must be shm or capture_tcp, got: $CAPTURE_TRANSPORT" >&2
+  exit 2
+fi
+
 if [[ "$SPATIAL_MAPPER_MODE" != "runtime" && "$SPATIAL_MAPPER_MODE" != "scan" ]]; then
   echo "[start_xr_spatial_shm][ERROR] SPATIAL_MAPPER_MODE must be runtime or scan, got: $SPATIAL_MAPPER_MODE" >&2
   exit 2
@@ -109,14 +121,18 @@ if [[ "$SPATIAL_MAPPER_MODE" == "scan" ]]; then
   mkdir -p "$SCAN_OUTPUT_DIR"
 fi
 
-echo "== xr_spatial_backend / SHM =="
+echo "== xr_spatial_backend / ${CAPTURE_TRANSPORT} =="
 echo "root: $ROOT_PROJECT"
 echo "profile: ${SPATIAL_MAPPER_PROFILE_NAME:-$SPATIAL_MAPPER_PROFILE}"
 echo "config: $SPATIAL_MAPPER_CONFIG"
 echo "binary: $SPATIAL_MAPPER_BIN"
 echo "mode: $SPATIAL_MAPPER_MODE"
 echo "calib: $CALIB_JSON"
-echo "capture: $CAPTURE_REGISTRY streams=$CAMERA0_STREAM,$CAMERA1_STREAM,$IMU_STREAM"
+if [[ "$CAPTURE_TRANSPORT" == "shm" ]]; then
+  echo "capture: transport=shm registry=$CAPTURE_REGISTRY streams=$CAMERA0_STREAM,$CAMERA1_STREAM"
+else
+  echo "capture: transport=capture_tcp endpoint=$CAPTURE_TCP_HOST:$CAPTURE_TCP_PORT streams=$CAMERA0_STREAM,$CAMERA1_STREAM imu_subscribed=0"
+fi
 echo "pose: input=$SPATIAL_POSE_INPUT registry=$POSE_REGISTRY stream=$POSE_STREAM wait=${POSE_WAIT_TIMEOUT_SEC}s retry=${POSE_RETRY_INTERVAL_MS}ms max_age=${MAX_POSE_AGE_MS}ms reattach_stale=${POSE_REATTACH_ON_STALE_MS}ms"
 echo "runtime_registry: $RUNTIME_REGISTRY"
 echo "summary_shm: enabled=$PUBLISH_RUNTIME_SPATIAL_SHM stream=$SPATIAL_STREAM shm=$SPATIAL_SHM_NAME"
@@ -126,7 +142,10 @@ echo "quality: enabled=$QUALITY_GATE_ENABLED min_raw=$QUALITY_MIN_RAW_POINTS min
 
 args=(
   --mode "$SPATIAL_MAPPER_MODE"
+  --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-tcp-host "$CAPTURE_TCP_HOST"
+  --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"
   --camera1-stream "$CAMERA1_STREAM"
   --imu-stream "$IMU_STREAM"

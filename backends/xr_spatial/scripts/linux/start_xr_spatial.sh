@@ -13,7 +13,7 @@ echo "[start_xr_spatial] CONFIG=$SPATIAL_MAPPER_CONFIG"
 echo "[start_xr_spatial] PROFILE=${SPATIAL_MAPPER_PROFILE_NAME:-${SPATIAL_MAPPER_PROFILE:-reference}}"
 echo "[start_xr_spatial] CALIB_JSON=$CALIB_JSON"
 echo "[start_xr_spatial] CALIB_PROFILE_NAME=$CALIB_PROFILE_NAME"
-echo "[start_xr_spatial] CAPTURE=$CAPTURE_REGISTRY streams=$CAMERA0_STREAM,$CAMERA1_STREAM,$IMU_STREAM"
+echo "[start_xr_spatial] CAPTURE transport=$CAPTURE_TRANSPORT registry=$CAPTURE_REGISTRY tcp=$CAPTURE_TCP_HOST:$CAPTURE_TCP_PORT streams=$CAMERA0_STREAM,$CAMERA1_STREAM"
 echo "[start_xr_spatial] POSE input=$SPATIAL_POSE_INPUT registry=$POSE_REGISTRY stream=$POSE_STREAM wait=${POSE_WAIT_TIMEOUT_SEC:-0}s retry=${POSE_RETRY_INTERVAL_MS:-500}ms reattach_stale=$POSE_REATTACH_ON_STALE_MS"
 echo "[start_xr_spatial] FRAMES depth=$DEPTH_FRAME_ID pose=$POSE_FRAME_ID map=$MAP_FRAME_ID"
 echo "[start_xr_spatial] DEPTH rate=$DEPTH_RATE_HZ disparities=$NUM_DISPARITIES block=$BLOCK_SIZE range=$MIN_DEPTH_M-$MAX_DEPTH_M map_frame=$SPATIAL_MAP_FRAME"
@@ -23,7 +23,10 @@ echo "[start_xr_spatial] PROXY_MESH enabled=$SPATIAL_PROXY_MESH_ENABLED stream=$
 
 args=(
   --mode runtime
+  --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-tcp-host "$CAPTURE_TCP_HOST"
+  --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"
   --camera1-stream "$CAMERA1_STREAM"
   --imu-stream "$IMU_STREAM"

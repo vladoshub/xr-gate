@@ -271,6 +271,9 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/backends/xr_spatial/scripts/linux/start_xr_spatial_shm.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/xr_spatial/start_xr_spatial_shm.sh"
   copy_runtime_file \
+    "$XR_ROOT_PROJECT/backends/xr_spatial/scripts/linux/start_xr_spatial_tcp.sh" \
+    "$XR_OUT_BIN_ROOT/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh"
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/backends/xr_spatial/scripts/linux/start_xr_spatial_scan.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/xr_spatial/start_xr_spatial_scan.sh"
   copy_runtime_file \
