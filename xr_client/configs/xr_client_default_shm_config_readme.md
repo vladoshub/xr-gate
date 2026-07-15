@@ -387,7 +387,7 @@ Example:
 In package mode this should resolve to something like:
 
 ```text
-/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service.sh
+/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
 ```
 
 Recommended rule:
@@ -415,7 +415,7 @@ Most service entries follow this shape:
   "start_on_launch": false,
   "optional": true,
   "command": [
-    "{scripts}/service/start_service.sh"
+    "{common_scripts}/service/start_service.sh"
   ],
   "env": {
     "KEY": "VALUE"
@@ -1998,6 +1998,7 @@ In package mode, the important roots are:
 ```text
 out/xreal_ultra/
   bin/
+  devices/common/
   devices/xreal_ultra/
   run_xr_client.sh
 ```
@@ -2005,10 +2006,14 @@ out/xreal_ultra/
 `default_shm.json` should use:
 
 ```text
-{scripts}/...
-{configs}/...
-{bin}/...
+{common_scripts}/...   hardware-neutral launchers
+{device_scripts}/...   XREAL-only helpers
+{configs}/...          XREAL configs and calibration
+{bin}/...              runtime binaries
 ```
+
+`{scripts}` remains an alias for `{device_scripts}` only for old configs. New
+backend/service entries should use `{common_scripts}`.
 
 and avoid direct source paths such as:
 
@@ -2279,7 +2284,8 @@ PY
 Expected package-mode commands should resolve to:
 
 ```text
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/...
+out/xreal_ultra/devices/common/linux/scripts/...
+out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/...
 out/xreal_ultra/bin/...
 ```
 

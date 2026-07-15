@@ -165,10 +165,10 @@ jobs:
         run: |
           set -euo pipefail
           test -x out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
           test -x out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
           bash -n out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
-          bash -n out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          bash -n out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
           out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
 
           READY_FILE="$(mktemp)"
@@ -217,6 +217,19 @@ jobs:
         run: |
           bash backends/common/tests/capture_profile_smoke.sh
 
+      - name: Validate common/device script separation
+        if: ${{ matrix.name == 'runtime' }}
+        run: |
+          set -euo pipefail
+          test -x out/xreal_ultra/devices/common/linux/scripts/basalt_vio/start_basalt.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/mercury_hand_tracking/start_hand_tracking.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/basalt_vio
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_video
+
       - name: Validate xr_spatial SHM/TCP launchers
         if: ${{ matrix.name == 'spatial' }}
         run: |
@@ -224,11 +237,11 @@ jobs:
           test -x out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend
           test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
           test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
           bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
-          bash -n out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend --help | grep -q -- '--capture-transport'
           out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend --help | grep -q -- '--capture-tcp-host'
 
@@ -356,6 +369,11 @@ jobs:
           test -d merged/xreal_ultra/bin
           test -x merged/xreal_ultra/run_xr_client.sh
           test -x merged/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
+          test -x merged/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
+          test -x merged/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
           du -sh merged/xreal_ultra
           find merged/xreal_ultra -maxdepth 4 -type f | sort | head -300
           tar -C merged -czf xreal_ultra_linux_x64.tar.gz xreal_ultra
@@ -417,6 +435,11 @@ jobs:
           test -d verify/runtime/xreal_ultra/bin
           test -x verify/runtime/xreal_ultra/run_xr_client.sh
           test -x verify/runtime/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
+          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
+          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
 
       - name: Create or update GitHub Release
         env:

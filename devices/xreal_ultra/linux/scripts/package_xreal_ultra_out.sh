@@ -419,7 +419,7 @@ else
   mkdir -p "$XR_OUT_BIN_ROOT"
 fi
 
-# Common launch wrappers plus device-specific env/config/calibration.
+# Hardware-neutral launchers plus XREAL-specific env/config/display helpers.
 copy_common_device_bundle
 copy_device_bundle
 write_monado_openxr_runtime_manifest
@@ -519,8 +519,8 @@ Key variables:
 - XR_DEVICE_CONFIGS_ROOT: device configs/calibration root.
 
 The package intentionally does not include C++ source trees, CMake projects or
-build scripts. It includes only runtime binaries/libraries/assets, device launch
-scripts/configs, and Python modules that are executed at runtime.
+build scripts. It includes only runtime binaries/libraries/assets, common launch
+scripts, XREAL-specific helpers/configs, and executed Python modules.
 
 Mercury hand-tracking ONNX models are optional and are not downloaded during the
 default build. To install them into \`bin/hand-tracking-models/mercury\`, run:

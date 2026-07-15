@@ -17,6 +17,9 @@ set -Eeuo pipefail
 #
 # Optional custom command:
 #   double_display_fix.sh -- /path/to/start_monado_driver.sh
+#
+# The default Monado launcher is hardware-neutral and lives under
+# devices/common. This helper supplies the XREAL device environment.
 
 log() {
   echo "[double_display_fix] $*"
@@ -29,25 +32,14 @@ fatal() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Resolve the root from either:
-#   <repo>/devices/xreal_ultra/linux/scripts/monado_driver
-# or:
-#   <repo>/out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver
+# Resolve the root from either the source tree or the packaged runtime:
+#   <root>/devices/xreal_ultra/linux/scripts/monado_driver
 ROOT_PROJECT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
-ADJACENT_START_SCRIPT="$SCRIPT_DIR/start_monado_driver.sh"
-PACKAGED_START_SCRIPT="$ROOT_PROJECT/out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh"
-
-# When this helper is launched from the source tree, prefer the packaged
-# out/xreal_ultra wrapper if it exists. The source wrapper may point at
-# <repo>/bin/scripts/... and fail when only the device package was installed.
-# When this helper is already launched from out/xreal_ultra, the packaged path
-# above intentionally does not exist, so the adjacent script is used.
-DEFAULT_START_SCRIPT="$ADJACENT_START_SCRIPT"
-if [ -x "$PACKAGED_START_SCRIPT" ]; then
-  DEFAULT_START_SCRIPT="$PACKAGED_START_SCRIPT"
-fi
+DEFAULT_START_SCRIPT="$ROOT_PROJECT/devices/common/linux/scripts/monado_driver/start_monado_driver.sh"
+export XR_DEVICE_ENV="${XR_DEVICE_ENV:-$ROOT_PROJECT/devices/xreal_ultra/xreal_ultra.env}"
 
 log "ROOT_PROJECT=$ROOT_PROJECT"
+log "XR_DEVICE_ENV=$XR_DEVICE_ENV"
 log "DEFAULT_START_SCRIPT=$DEFAULT_START_SCRIPT"
 
 XR_MODE="${XR_TRACKING_MONADO_XCB_MODE:-${XR_MODE:-3840x1080}}"
@@ -161,7 +153,7 @@ log "running: ${CMD[*]}"
 
 # XR_TRACKING_MONADO_XCB_OUTPUT is consumed by this wrapper to select and
 # prepare the exclusive XREAL xrandr output. Do not forward it to
-# start_monado_driver.sh in xcb_fullscreen mode: that script uses the same env
+# the common Monado launcher in xcb_fullscreen mode: that script uses the same env
 # for windowed xcb placement and intentionally rejects it unless
 # XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb.
 if [ "${XR_TRACKING_MONADO_COMPOSITOR_MODE:-xcb_fullscreen}" != "xcb" ]; then
