@@ -1,6 +1,7 @@
 version: 1
 
 service:
+  profile: leap_motion_uvc_nrf54l15
   namespace: leap_uvc_test
   registry_path: /tmp/capture_service_streams.json
   publish: [shm]

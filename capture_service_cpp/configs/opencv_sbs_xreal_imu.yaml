@@ -1,6 +1,7 @@
 version: 1
 
 service:
+  profile: opencv_sbs_xreal_imu
   namespace: external_stereo_xreal_imu
   registry_path: /tmp/capture_service_streams.json
   publish: [shm]

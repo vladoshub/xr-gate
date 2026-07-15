@@ -99,7 +99,7 @@ std::string expand_user_path(const std::string& value) {
 void usage(const char* argv0) {
   std::cerr << "Usage: " << argv0
             << " [--config PATH | --config-path PATH | --config-dir DIR --config-name NAME]"
-            << " [--registry PATH] [--namespace NAME] [--publish shm|tcp|shm,tcp]"
+            << " [--registry PATH] [--namespace NAME] [--profile NAME] [--publish shm|tcp|shm,tcp]"
             << " [--tcp-bind HOST] [--tcp-port PORT]"
             << " [--camera-driver xreal_ultra|opencv]"
             << " [--camera-layout side_by_side_horizontal|side_by_side_vertical|interleaved_columns|dual]";
@@ -120,14 +120,20 @@ RuntimeConfig parse_args(int argc, char** argv) {
   cfg.config_dir = selection.directory.empty() ? "~/.config/xr_tracking/capture_service_cpp" : selection.directory;
   cfg.config_name = selection.name;
   cfg.config_explicit = selection.explicit_selection;
-  if (!load_runtime_config_file(config_path, cfg) && selection.explicit_selection) {
+  const bool config_loaded = load_runtime_config_file(config_path, cfg);
+  if (!config_loaded && selection.explicit_selection) {
     throw std::runtime_error("config file does not exist: " + config_path);
+  }
+  if (!config_loaded && cfg.profile_name.empty()) {
+    // The no-config fallback is the built-in XREAL Ultra profile.
+    cfg.profile_name = "xreal_air2ultra_unified_480";
   }
 
   // Environment variables override YAML while preserving the original runtime
   // environment contract used by the XREAL launch scripts.
   cfg.registry_path = env_or("REGISTRY_PATH", cfg.registry_path);
   cfg.namespace_name = env_or("NAMESPACE", cfg.namespace_name);
+  cfg.profile_name = env_or("CAPTURE_PROFILE", env_or("CPP_CAPTURE_PROFILE", cfg.profile_name));
   const std::string publish_env = env_or("PUBLISH", "");
   if (!publish_env.empty()) cfg.publish_modes = split_publish_modes(publish_env);
   const char* global_slots_env = std::getenv("CPP_CAPTURE_SLOT_COUNT");
@@ -199,6 +205,7 @@ RuntimeConfig parse_args(int argc, char** argv) {
     else if (a == "--config" || a == "--config-path" || a == "--config-dir" || a == "--config-directory" || a == "--config-name") { (void)need(a.c_str()); }
     else if (a == "--registry") cfg.registry_path = need("--registry");
     else if (a == "--namespace") cfg.namespace_name = need("--namespace");
+    else if (a == "--profile") cfg.profile_name = need("--profile");
     else if (a == "--publish") cfg.publish_modes = split_publish_modes(need("--publish"));
     else if (a == "--tcp-bind") cfg.tcp_bind_host = need("--tcp-bind");
     else if (a == "--tcp-port") cfg.tcp_port = std::stoi(need("--tcp-port"));

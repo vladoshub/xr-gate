@@ -22,7 +22,7 @@ ROOT_PROJECT="${ROOT_PROJECT:-${XR:-$HOME/src/xr_tracking}}"
 ROOT_PROJECT="$(expand_tilde_local "$ROOT_PROJECT")"
 
 # Runtime/live mode defaults. Override any of these from the environment.
-XR_SPATIAL_PROFILE="${XR_SPATIAL_PROFILE:-${SPATIAL_MAPPER_PROFILE:-xreal_air2ultra_unified_480}}"
+XR_SPATIAL_PROFILE="${XR_SPATIAL_PROFILE:-${SPATIAL_MAPPER_PROFILE:-}}"
 SPATIAL_MAPPER_PROFILE="$XR_SPATIAL_PROFILE"
 XR_SPATIAL_MODE="${XR_SPATIAL_MODE:-${SPATIAL_MAPPER_MODE:-runtime}}"
 SPATIAL_MAPPER_MODE="$XR_SPATIAL_MODE"
@@ -30,7 +30,9 @@ MAPPER_BACKEND="${MAPPER_BACKEND:-live_depth_grid}"
 
 # SHM input/output defaults.
 CAPTURE_REGISTRY="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
-SPATIAL_POSE_INPUT="${SPATIAL_POSE_INPUT:-${POSE_INPUT:-shm}}"
+# SPATIAL_POSE_INPUT is profile-owned. Do not assign a launcher default before
+# loading configs/profiles/<capture profile>.env; the profile loader supplies
+# the legacy shm default when the selected profile does not set it.
 POSE_REGISTRY="${POSE_REGISTRY:-/tmp/tracking_streams.json}"
 POSE_STREAM="${POSE_STREAM:-hmd_pose}"
 POSE_WAIT_TIMEOUT_SEC="${POSE_WAIT_TIMEOUT_SEC:-0}"

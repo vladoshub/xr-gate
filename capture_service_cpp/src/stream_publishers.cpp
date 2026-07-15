@@ -43,6 +43,7 @@ void StreamPublishers::write_registry() {
      << "  \"config_path\": \"" << json_escape(cfg_.config_path) << "\",\n"
      << "  \"created_unix_ns\": " << wall_ns() << ",\n"
      << "  \"namespace\": \"" << json_escape(cfg_.namespace_name) << "\",\n"
+     << "  \"profile\": \"" << json_escape(cfg_.profile_name) << "\",\n"
      << "  \"pid\": " << current_process_id() << ",\n"
      << "  \"publish\": [";
   bool first_mode = true;

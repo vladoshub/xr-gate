@@ -147,6 +147,9 @@ struct ImuSourceConfig {
 struct RuntimeConfig {
   std::string registry_path = "/tmp/capture_service_streams.json";
   std::string namespace_name = "xreal_air2ultra_linux";
+  // Logical capture/profile identifier used by downstream backend launchers.
+  // This is independent from namespace_name, which remains transport/SHM metadata.
+  std::string profile_name;
   std::string config_path = "<built-in:xreal_ultra>";
   std::string config_dir;
   std::string config_name = "config.yaml";

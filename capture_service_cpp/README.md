@@ -409,3 +409,30 @@ Common launcher variables:
 - `TCP_BIND_HOST`, `TCP_PORT`
 - `NO_CAMERA`, `NO_IMU`, `DURATION`
 - `STOP_EXISTING`
+
+## Capture profile metadata
+
+A configuration can identify the complete camera/IMU/mounting mode independently
+from the SHM namespace:
+
+```yaml
+service:
+  namespace: xr_tracking
+  profile: leap_motion_uvc_nrf54l15
+```
+
+The service publishes this value at the top level of the stream registry:
+
+```json
+{
+  "namespace": "xr_tracking",
+  "profile": "leap_motion_uvc_nrf54l15",
+  "streams": {}
+}
+```
+
+Backend launchers load an exact `<profile>.env` from their own
+`configs/profiles/` directory. `--profile`, `CAPTURE_PROFILE`, and
+`CPP_CAPTURE_PROFILE` can override the YAML value. Namespace and profile remain
+separate: namespace identifies the stream set, while profile selects compatible
+calibration and backend settings.

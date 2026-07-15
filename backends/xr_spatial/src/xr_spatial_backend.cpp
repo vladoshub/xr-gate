@@ -38,6 +38,32 @@ std::atomic_bool g_stop{false};
 
 void handle_signal(int) { g_stop = true; }
 
+class CameraOnlyShmCaptureTransport final : public capture_client::ICaptureTransport {
+ public:
+  CameraOnlyShmCaptureTransport(const std::string& registry_path,
+                                const std::string& cam0_stream,
+                                const std::string& cam1_stream)
+      : registry_(registry_path),
+        cam0_(std::make_unique<capture_client::ShmStreamReader>(registry_.stream(cam0_stream))),
+        cam1_(std::make_unique<capture_client::ShmStreamReader>(registry_.stream(cam1_stream))) {}
+
+  const std::string& type() const override {
+    static const std::string kType = "shm";
+    return kType;
+  }
+
+  capture_client::IStreamReader& cam0() override { return *cam0_; }
+  capture_client::IStreamReader& cam1() override { return *cam1_; }
+  capture_client::IStreamReader& imu() override {
+    throw std::logic_error("IMU is not available in xr_spatial camera-only SHM transport");
+  }
+
+ private:
+  capture_client::CaptureRegistry registry_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam0_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam1_;
+};
+
 int64_t now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -696,7 +722,7 @@ int main(int argc, char** argv) {
   app.add_option("--capture-registry", cfg.capture_registry, "capture_service SHM registry path");
   app.add_option("--camera0-stream", cfg.camera0_stream, "Left/cam0 stream id");
   app.add_option("--camera1-stream", cfg.camera1_stream, "Right/cam1 stream id");
-  app.add_option("--imu-stream", cfg.imu_stream, "IMU stream id required by current capture SHM transport");
+  app.add_option("--imu-stream", cfg.imu_stream, "Compatibility option; xr_spatial does not consume capture IMU samples");
 
   app.add_option("--pose-input", cfg.pose_input, "Pose input mode: shm or none")->check(CLI::IsMember({"shm", "none"}));
   app.add_option("--pose-registry", cfg.pose_registry, "Tracking pose SHM registry path when --pose-input=shm");
@@ -820,10 +846,9 @@ int main(int argc, char** argv) {
               << calib.cam0.width << "x" << calib.cam0.height
               << " baseline_m=" << calib.baseline_m << "\n";
 
-    capture_client::ShmCaptureTransport capture(cfg.capture_registry,
-                                                cfg.camera0_stream,
-                                                cfg.camera1_stream,
-                                                cfg.imu_stream);
+    CameraOnlyShmCaptureTransport capture(cfg.capture_registry,
+                                            cfg.camera0_stream,
+                                            cfg.camera1_stream);
     // When pose_input=shm, integrate stereo frames near the pose timestamp instead of
     // blindly taking the newest camera frame. Pose often lags camera capture by one or
     // two 30 Hz frames, so selecting the newest frame can make every frame look stale.

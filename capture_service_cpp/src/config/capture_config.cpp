@@ -408,6 +408,8 @@ void apply_camera_device(const FlatYaml& y, const std::string& prefix, CameraDev
 void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_string(y, {platform_key("service.registry_path"), "service.registry_path", platform_key("registry_path"), "registry_path"}, cfg.registry_path);
   set_string(y, {platform_key("service.namespace"), "service.namespace", platform_key("namespace"), "namespace"}, cfg.namespace_name);
+  set_string(y, {platform_key("service.profile"), "service.profile", "service.capture_profile",
+                 platform_key("profile"), "profile"}, cfg.profile_name);
   set_int(y, {"service.slot_count", "slot_count"}, cfg.slot_count);
   cfg.publish_modes = sequence_or_csv(y, {"service.publish", "publish"}, cfg.publish_modes);
   set_string(y, {"service.tcp.bind_host", "service.tcp_bind_host", "tcp.bind_host", "tcp_bind_host"}, cfg.tcp_bind_host);
@@ -562,6 +564,15 @@ void validate_runtime_config(RuntimeConfig& cfg) {
   cfg.imu.driver = lowercase(trim(cfg.imu.driver));
   cfg.imu.serial.protocol = lowercase(trim(cfg.imu.serial.protocol));
   cfg.imu.serial.timestamp_mode = lowercase(trim(cfg.imu.serial.timestamp_mode));
+  cfg.profile_name = trim(cfg.profile_name);
+
+  if (!cfg.profile_name.empty()) {
+    for (const unsigned char c : cfg.profile_name) {
+      if (!(std::isalnum(c) || c == '_' || c == '-' || c == '.')) {
+        throw std::runtime_error("service.profile contains an invalid character: " + cfg.profile_name);
+      }
+    }
+  }
 
   if (cfg.slot_count <= 0) throw std::runtime_error("service.slot_count must be positive");
   if (cfg.camera.slot_count <= 0) cfg.camera.slot_count = cfg.slot_count;

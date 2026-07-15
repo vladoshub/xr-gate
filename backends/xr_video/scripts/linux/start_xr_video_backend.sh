@@ -10,7 +10,9 @@ expand_tilde() {
   esac
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
+ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 BIN_DIR="${BIN_DIR:-$ROOT_PROJECT/bin/backends/xr_video}"
 XR_VIDEO_BACKEND_BIN="${XR_VIDEO_BACKEND_BIN:-$BIN_DIR/xr_video_backend}"
 
@@ -22,6 +24,29 @@ CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
 IMU_STREAM="${IMU_STREAM:-imu0}"
+
+PROFILE_HELPER=""
+for candidate in \
+  "$SCRIPT_DIR/capture_profile.sh" \
+  "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh" \
+  "$ROOT_PROJECT/bin/backends/xr_video/scripts/linux/capture_profile.sh"
+do
+  if [[ -f "$candidate" ]]; then PROFILE_HELPER="$candidate"; break; fi
+done
+[[ -n "$PROFILE_HELPER" ]] || {
+  echo "[start_xr_video_backend][ERROR] capture_profile.sh not found" >&2
+  exit 2
+}
+# shellcheck source=/dev/null
+source "$PROFILE_HELPER"
+capture_profile_load_backend \
+  "xr_video" \
+  "${XR_VIDEO_PROFILE:-${CAPTURE_PROFILE:-}}" \
+  "$REGISTRY" \
+  "xreal_air2ultra_unified_480" \
+  "$ROOT_PROJECT" \
+  "$SCRIPT_DIR" \
+  "${XR_VIDEO_PROFILE_DIR:-}"
 
 #VIDEO_OUTPUT="${VIDEO_OUTPUT:-tcp}"
 VIDEO_OUTPUT="${VIDEO_OUTPUT:-shm}"
@@ -38,7 +63,6 @@ PRINT_EVERY="${PRINT_EVERY:-30}"
 MAX_STEREO_DELTA_MS="${MAX_STEREO_DELTA_MS:-1.0}"
 ROTATE_DEGREES="${ROTATE_DEGREES:-0}"
 
-ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 BIN_DIR="$(expand_tilde "$BIN_DIR")"
 XR_VIDEO_BACKEND_BIN="$(expand_tilde "$XR_VIDEO_BACKEND_BIN")"
 
@@ -48,6 +72,9 @@ if [[ ! -x "$XR_VIDEO_BACKEND_BIN" ]]; then
   echo "  $ROOT_PROJECT/backends/xr_video/scripts/linux/install_xr_video.sh" >&2
   exit 1
 fi
+
+echo "[start_xr_video_backend] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_xr_video_backend] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 exec "$XR_VIDEO_BACKEND_BIN" \
   --input-transport "$INPUT_TRANSPORT" \

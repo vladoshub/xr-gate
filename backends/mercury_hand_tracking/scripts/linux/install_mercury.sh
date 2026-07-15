@@ -295,6 +295,11 @@ cp "$BACKEND_BIN" "$INSTALL_BIN_DIR/capture_hand_tracking_backend"
 cp "$RUNTIME_SO" "$INSTALL_BIN_DIR/libxr_mercury_runtime.so"
 cp "$DATASET_PROBE" "$INSTALL_BIN_DIR/xr_mercury_dataset_probe"
 chmod +x "$INSTALL_BIN_DIR/capture_hand_tracking_backend" "$INSTALL_BIN_DIR/xr_mercury_dataset_probe"
+rm -rf "$INSTALL_BIN_DIR/configs" "$INSTALL_BIN_DIR/scripts"
+cp -a "$BACKEND_DIR/configs" "$INSTALL_BIN_DIR/configs"
+cp -a "$BACKEND_DIR/scripts" "$INSTALL_BIN_DIR/scripts"
+cp "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh"   "$INSTALL_BIN_DIR/scripts/linux/capture_profile.sh"
+chmod +x "$INSTALL_BIN_DIR/scripts/linux/"*.sh
 ls -lh "$INSTALL_BIN_DIR"
 
 if [[ "$INSTALL_MERCURY_MODELS" == "1" ]]; then

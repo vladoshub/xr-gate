@@ -1,6 +1,7 @@
 version: 1
 
 service:
+  profile: leap_motion_uvc_xreal_imu
   namespace: interleaved_uvc_xreal_imu
   registry_path: /tmp/capture_service_streams.json
   publish: [shm]

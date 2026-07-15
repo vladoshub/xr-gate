@@ -10,6 +10,7 @@ expand_tilde() {
   esac
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
@@ -21,6 +22,34 @@ CAPTURE_REGISTRY="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
 IMU_STREAM="${IMU_STREAM:-imu0}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
+
+PROFILE_HELPER=""
+for candidate in \
+  "$SCRIPT_DIR/capture_profile.sh" \
+  "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh" \
+  "$ROOT_PROJECT/bin/backends/imu_3dof/scripts/linux/capture_profile.sh"
+do
+  if [[ -f "$candidate" ]]; then PROFILE_HELPER="$candidate"; break; fi
+done
+[[ -n "$PROFILE_HELPER" ]] || {
+  echo "[start_imu_3dof_backend][ERROR] capture_profile.sh not found" >&2
+  exit 2
+}
+# shellcheck source=/dev/null
+source "$PROFILE_HELPER"
+capture_profile_load_backend \
+  "imu_3dof" \
+  "${IMU_3DOF_PROFILE:-${CAPTURE_PROFILE:-}}" \
+  "$CAPTURE_REGISTRY" \
+  "xreal_air2ultra_unified_480" \
+  "$ROOT_PROJECT" \
+  "$SCRIPT_DIR" \
+  "${IMU_3DOF_PROFILE_DIR:-}"
+
+if [[ "${IMU_3DOF_PROFILE_SUPPORTED:-1}" != "1" ]]; then
+  echo "[start_imu_3dof_backend][ERROR] capture profile '$CAPTURE_PROFILE_RESOLVED' is not supported: ${IMU_3DOF_PROFILE_UNSUPPORTED_REASON:-IMU stream is required}" >&2
+  exit 2
+fi
 CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
 CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 
@@ -92,6 +121,9 @@ args=(
   --print-every "$PRINT_EVERY"
   --duration "$DURATION"
 )
+
+echo "[start_imu_3dof_backend] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_imu_3dof_backend] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 cat <<EOF2
 ROOT_PROJECT=$ROOT_PROJECT

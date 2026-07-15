@@ -10,11 +10,41 @@ expand_tilde() {
   esac
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
+TRANSPORT="${TRANSPORT:-shm}"
+REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
+CAM0_STREAM="${CAM0_STREAM:-camera0}"
+CAM1_STREAM="${CAM1_STREAM:-camera1}"
+
 XR_CALIB_DIR="${XR_CALIB_DIR:-$ROOT_PROJECT/calibration_dataset}"
 XR_CALIB_DIR="$(expand_tilde "$XR_CALIB_DIR")"
+
+PROFILE_HELPER=""
+for candidate in \
+  "$SCRIPT_DIR/capture_profile.sh" \
+  "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh" \
+  "$ROOT_PROJECT/bin/backends/mercury_hand_tracking/scripts/linux/capture_profile.sh"
+do
+  if [[ -f "$candidate" ]]; then PROFILE_HELPER="$candidate"; break; fi
+done
+[[ -n "$PROFILE_HELPER" ]] || {
+  echo "[start_hand_tracking][ERROR] capture_profile.sh not found" >&2
+  exit 2
+}
+# shellcheck source=/dev/null
+source "$PROFILE_HELPER"
+capture_profile_load_backend \
+  "mercury_hand_tracking" \
+  "${MERCURY_PROFILE:-${CAPTURE_PROFILE:-}}" \
+  "$REGISTRY" \
+  "xreal_air2ultra_unified_480" \
+  "$ROOT_PROJECT" \
+  "$SCRIPT_DIR" \
+  "${MERCURY_PROFILE_DIR:-}"
+
 XR_DEVICE_NAME="${XR_DEVICE_NAME:-xreal_air2ultra}"
 XR_SERIAL="${XR_SERIAL:-ZBBM5DZFMP}"
 CALIB_PROFILE_NAME="${CALIB_PROFILE_NAME:-unified_480_ccw90}"
@@ -36,10 +66,6 @@ MERCURY_LIB="$(expand_tilde "$MERCURY_LIB")"
 BACKEND_BIN="$(expand_tilde "$BACKEND_BIN")"
 MERCURY_MODELS="$(expand_tilde "$MERCURY_MODELS")"
 
-TRANSPORT="${TRANSPORT:-shm}"
-REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
-CAM0_STREAM="${CAM0_STREAM:-camera0}"
-CAM1_STREAM="${CAM1_STREAM:-camera1}"
 DURATION="${DURATION:-0}"
 PRINT_EVERY="${PRINT_EVERY:-30}"
 MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.3}"
@@ -49,6 +75,9 @@ MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.3}"
 #export MERCURY_XR_DEBUG_DUMP_DIR="${MERCURY_XR_DEBUG_DUMP_DIR:-/tmp/xr_mercury_debug}"
 export MERCURY_XR_DEBUG_DUMP_LATEST_ONLY="${MERCURY_XR_DEBUG_DUMP_LATEST_ONLY:-1}"
 export MERCURY_XR_DEBUG_DUMP_EVERY_N="${MERCURY_XR_DEBUG_DUMP_EVERY_N:-1}"
+
+echo "[start_hand_tracking] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_hand_tracking] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 ls -lh \
   "$BACKEND_BIN" \

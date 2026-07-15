@@ -26,6 +26,7 @@ int main() {
     std::ofstream out(path);
     out << R"YAML(version: 1
 service:
+  profile: leap_motion_uvc
   publish: [shm]
 camera:
   enabled: true
@@ -63,6 +64,7 @@ imu:
   const xr_capture_cpp::RuntimeConfig cfg =
       xr_capture_cpp::parse_args(static_cast<int>(args.size()), args.data());
 
+  require(cfg.profile_name == "leap_motion_uvc", "capture profile");
   require(!cfg.camera.primary.controls.strict, "controls policy");
   require(cfg.camera.primary.controls.values.at("gain") == 32, "gain control");
   require(cfg.camera.primary.controls.values.at("exposure_time_absolute") == 5000,

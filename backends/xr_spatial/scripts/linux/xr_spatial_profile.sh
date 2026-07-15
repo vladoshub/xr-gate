@@ -44,8 +44,36 @@ resolve_xr_spatial_config() {
     return 0
   fi
 
-  local profile="${XR_SPATIAL_PROFILE:-${SPATIAL_MAPPER_PROFILE:-reference}}"
-  printf '%s\n' "$root_project/backends/xr_spatial/configs/profiles/$profile.env"
+  local helper=""
+  local candidate
+  for candidate in \
+    "$_XR_SPATIAL_PROFILE_SCRIPT_DIR/capture_profile.sh" \
+    "$root_project/backends/common/scripts/linux/capture_profile.sh" \
+    "$root_project/bin/backends/xr_spatial/scripts/linux/capture_profile.sh"
+  do
+    if [[ -f "$candidate" ]]; then helper="$candidate"; break; fi
+  done
+  [[ -n "$helper" ]] || {
+    echo "[xr_spatial_profile][ERROR] capture_profile.sh not found" >&2
+    return 2
+  }
+  # shellcheck source=/dev/null
+  source "$helper"
+
+  local registry="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
+  local explicit_profile="${XR_SPATIAL_PROFILE:-${SPATIAL_MAPPER_PROFILE:-${CAPTURE_PROFILE:-}}}"
+  CAPTURE_PROFILE_RESOLVED="$(capture_profile_resolve_name \
+    "$explicit_profile" "$registry" "xreal_air2ultra_unified_480")"
+  XR_SPATIAL_PROFILE="$CAPTURE_PROFILE_RESOLVED"
+  SPATIAL_MAPPER_PROFILE="$CAPTURE_PROFILE_RESOLVED"
+
+  if ! capture_profile_find_file \
+      "xr_spatial" "$CAPTURE_PROFILE_RESOLVED" \
+      "$root_project" "$_XR_SPATIAL_PROFILE_SCRIPT_DIR" \
+      "${XR_SPATIAL_PROFILE_DIR:-}"; then
+    echo "[xr_spatial_profile][ERROR] profile file not found: ${CAPTURE_PROFILE_RESOLVED}.env" >&2
+    return 2
+  fi
 }
 
 load_xr_spatial_profile() {
@@ -65,6 +93,11 @@ load_xr_spatial_profile() {
 
   XR_SPATIAL_CONFIG_RESOLVED="$(resolve_xr_spatial_config "$ROOT_PROJECT")"
   XR_SPATIAL_CONFIG_RESOLVED="$(expand_tilde "$XR_SPATIAL_CONFIG_RESOLVED")"
+  if [[ -z "${CAPTURE_PROFILE_RESOLVED:-}" ]]; then
+    CAPTURE_PROFILE_RESOLVED="$(basename "$XR_SPATIAL_CONFIG_RESOLVED" .env)"
+  fi
+  XR_SPATIAL_PROFILE="${XR_SPATIAL_PROFILE:-$CAPTURE_PROFILE_RESOLVED}"
+  SPATIAL_MAPPER_PROFILE="${SPATIAL_MAPPER_PROFILE:-$CAPTURE_PROFILE_RESOLVED}"
   # Legacy variable exported for old wrappers and existing diagnostics.
   SPATIAL_MAPPER_CONFIG="$XR_SPATIAL_CONFIG_RESOLVED"
   if [[ ! -f "$XR_SPATIAL_CONFIG_RESOLVED" ]]; then
@@ -86,6 +119,7 @@ load_xr_spatial_profile() {
   set_default CAMERA0_STREAM "camera0"
   set_default CAMERA1_STREAM "camera1"
   set_default IMU_STREAM "imu0"
+  set_default CAPTURE_IMU_REQUIRED "0"
 
   set_default SPATIAL_POSE_INPUT "${POSE_INPUT:-shm}"
   set_default POSE_REGISTRY "/tmp/tracking_streams.json"
