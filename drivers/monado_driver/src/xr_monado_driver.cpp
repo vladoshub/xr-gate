@@ -822,10 +822,14 @@ void setup_hmd_display(struct xrt_device* xdev) {
   info.display.h_meters = profile.display_height_m;
   info.lens_horizontal_separation_meters = profile.ipd_m;
   info.lens_vertical_position_meters = profile.lens_vertical_position_m;
-  info.fov[0] = profile.left_eye.fov_left;
-  info.fov[1] = profile.left_eye.fov_right;
-  info.fov[2] = profile.left_eye.fov_up;
-  info.fov[3] = profile.left_eye.fov_down;
+  // u_device_simple_info::fov contains one scalar FOV value per view.
+  // XRT_MAX_VIEWS is 2 in Monado, so writing directional values to indices
+  // 2 and 3 corrupts adjacent stack data. Use one conservative horizontal
+  // bootstrap FOV per eye; the exact asymmetric directional FOV is applied to
+  // xdev->hmd->distortion.fov after u_device_setup_split_side_by_side().
+  static_assert(XRT_MAX_VIEWS >= 2, "XR tracking HMD requires two Monado views");
+  info.fov[0] = std::max(profile.left_eye.fov_left, profile.left_eye.fov_right);
+  info.fov[1] = std::max(profile.right_eye.fov_left, profile.right_eye.fov_right);
 
   std::fprintf(stderr,
                "[xr_tracking_monado] display layout=%s rotation=%u window=%ux%u "
@@ -876,6 +880,13 @@ void setup_hmd_display(struct xrt_device* xdev) {
     xdev->hmd->views[0].display.h_pixels = profile.render_height;
     xdev->hmd->views[1].display.w_pixels = profile.render_width;
     xdev->hmd->views[1].display.h_pixels = profile.render_height;
+
+    std::fprintf(stderr,
+                 "[xr_tracking_monado] configured views left=%ux%u right=%ux%u\n",
+                 xdev->hmd->views[0].display.w_pixels,
+                 xdev->hmd->views[0].display.h_pixels,
+                 xdev->hmd->views[1].display.w_pixels,
+                 xdev->hmd->views[1].display.h_pixels);
 
     if (profile.layout == "top_bottom_vertical") {
       xdev->hmd->views[0].viewport.x_pixels = 0;
