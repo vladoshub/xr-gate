@@ -21,6 +21,13 @@ INPUT_TRANSPORT="${INPUT_TRANSPORT:-shm}"
 REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
 CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
 CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
+
+# Optional TCP metadata probe for automatic profile selection. Disabled by
+# default so the existing local-registry/XREAL path is unchanged.
+CAPTURE_PROFILE_PROBE_ENABLED="${CAPTURE_PROFILE_PROBE_ENABLED:-0}"
+CAPTURE_PROFILE_PROBE_HOST="${CAPTURE_PROFILE_PROBE_HOST:-$CAPTURE_TCP_HOST}"
+CAPTURE_PROFILE_PROBE_PORT="${CAPTURE_PROFILE_PROBE_PORT:-$CAPTURE_TCP_PORT}"
+CAPTURE_PROFILE_PROBE_TIMEOUT_MS="${CAPTURE_PROFILE_PROBE_TIMEOUT_MS:-1500}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
 IMU_STREAM="${IMU_STREAM:-imu0}"
@@ -39,9 +46,11 @@ done
 }
 # shellcheck source=/dev/null
 source "$PROFILE_HELPER"
+capture_profile_parse_cli "$@"
+set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
 capture_profile_load_backend \
   "xr_video" \
-  "${XR_VIDEO_PROFILE:-${CAPTURE_PROFILE:-}}" \
+  "${CAPTURE_PROFILE_CLI_OVERRIDE:-${XR_VIDEO_PROFILE:-${CAPTURE_PROFILE:-}}}" \
   "$REGISTRY" \
   "xreal_air2ultra_unified_480" \
   "$ROOT_PROJECT" \
@@ -74,11 +83,14 @@ if [[ ! -x "$XR_VIDEO_BACKEND_BIN" ]]; then
 fi
 
 echo "[start_xr_video_backend] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_xr_video_backend] capture_profile_source=$CAPTURE_PROFILE_SOURCE_RESOLVED"
 echo "[start_xr_video_backend] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 exec "$XR_VIDEO_BACKEND_BIN" \
   --input-transport "$INPUT_TRANSPORT" \
   --registry "$REGISTRY" \
+  --tcp-host "$CAPTURE_TCP_HOST" \
+  --tcp-port "$CAPTURE_TCP_PORT" \
   --cam0-stream "$CAM0_STREAM" \
   --cam1-stream "$CAM1_STREAM" \
   --imu-stream "$IMU_STREAM" \
@@ -93,9 +105,3 @@ exec "$XR_VIDEO_BACKEND_BIN" \
   --max-stereo-delta-ms "$MAX_STEREO_DELTA_MS" \
   --rotate-degrees "$ROTATE_DEGREES" \
   "$@"
-  
-  
-  #--video-tcp-bind "$VIDEO_TCP_BIND" \
-  #--video-tcp-port "$VIDEO_TCP_PORT" \
-  #--tcp-host "$CAPTURE_TCP_HOST" \
-  #--tcp-port "$CAPTURE_TCP_PORT" \  

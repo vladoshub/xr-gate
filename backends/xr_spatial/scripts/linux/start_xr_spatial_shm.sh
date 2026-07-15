@@ -83,6 +83,8 @@ fi
 
 # shellcheck source=/dev/null
 source "$PROFILE_LOADER"
+parse_xr_spatial_profile_cli "$@"
+set -- "${XR_SPATIAL_FORWARD_ARGS[@]}"
 
 load_xr_spatial_profile "start_xr_spatial_shm"
 require_xr_spatial_calibration "start_xr_spatial_shm"

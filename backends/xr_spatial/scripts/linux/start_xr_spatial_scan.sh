@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=xr_spatial_profile.sh
 source "$SCRIPT_DIR/xr_spatial_profile.sh"
+parse_xr_spatial_profile_cli "$@"
+set -- "${XR_SPATIAL_FORWARD_ARGS[@]}"
 
 load_xr_spatial_profile "start_xr_spatial_scan"
 require_xr_spatial_calibration "start_xr_spatial_scan"

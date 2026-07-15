@@ -19,6 +19,7 @@ class TcpFanoutPublisher {
                      std::string bind_host,
                      int port,
                      std::string namespace_name,
+                     std::string profile_name,
                      int client_queue_size);
   ~TcpFanoutPublisher();
 

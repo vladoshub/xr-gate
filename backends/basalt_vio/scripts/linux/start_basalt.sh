@@ -23,10 +23,20 @@ if [[ -d "$BASALT_LIB_DIR" ]]; then
   export LD_LIBRARY_PATH="$BASALT_LIB_DIR:${LD_LIBRARY_PATH:-}"
 fi
 
+TRANSPORT="${BASALT_TRANSPORT:-${TRANSPORT:-shm}}"
 CAPTURE_REGISTRY="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
+CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
+CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
 IMU_STREAM="${IMU_STREAM:-imu0}"
+
+# Optional TCP metadata probe for automatic profile selection. Disabled by
+# default so the existing local-registry/XREAL path is unchanged.
+CAPTURE_PROFILE_PROBE_ENABLED="${CAPTURE_PROFILE_PROBE_ENABLED:-0}"
+CAPTURE_PROFILE_PROBE_HOST="${CAPTURE_PROFILE_PROBE_HOST:-$CAPTURE_TCP_HOST}"
+CAPTURE_PROFILE_PROBE_PORT="${CAPTURE_PROFILE_PROBE_PORT:-$CAPTURE_TCP_PORT}"
+CAPTURE_PROFILE_PROBE_TIMEOUT_MS="${CAPTURE_PROFILE_PROBE_TIMEOUT_MS:-1500}"
 
 XR_CALIB_DIR="${XR_CALIB_DIR:-$ROOT_PROJECT/calibration_dataset}"
 XR_CALIB_DIR="$(expand_tilde "$XR_CALIB_DIR")"
@@ -45,9 +55,11 @@ done
 }
 # shellcheck source=/dev/null
 source "$PROFILE_HELPER"
+capture_profile_parse_cli "$@"
+set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
 capture_profile_load_backend \
   "basalt_vio" \
-  "${BASALT_PROFILE:-${CAPTURE_PROFILE:-}}" \
+  "${CAPTURE_PROFILE_CLI_OVERRIDE:-${BASALT_PROFILE:-${CAPTURE_PROFILE:-}}}" \
   "$CAPTURE_REGISTRY" \
   "xreal_air2ultra_unified_480" \
   "$ROOT_PROJECT" \
@@ -100,6 +112,8 @@ mkdir -p "$OUT_DIR"
 
 echo "[start_basalt] ROOT_PROJECT=$ROOT_PROJECT"
 echo "[start_basalt] CAPTURE_PROFILE=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_basalt] CAPTURE_PROFILE_SOURCE=$CAPTURE_PROFILE_SOURCE_RESOLVED"
+echo "[start_basalt] TRANSPORT=$TRANSPORT"
 echo "[start_basalt] PROFILE_FILE=$CAPTURE_PROFILE_FILE_RESOLVED"
 echo "[start_basalt] BASALT_BIN_DIR=$BASALT_BIN_DIR"
 echo "[start_basalt] BASALT_LIB_DIR=$BASALT_LIB_DIR"
@@ -112,6 +126,10 @@ echo "[start_basalt] STARTUP_GATE_SCRIPT=$STARTUP_GATE_SCRIPT"
 echo "[start_basalt] LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
 
 if [[ "$STARTUP_GATE" == "1" ]]; then
+  if [[ "$TRANSPORT" != "shm" ]]; then
+    echo "[start_basalt][ERROR] STARTUP_GATE currently supports only TRANSPORT=shm" >&2
+    exit 2
+  fi
   gate_args=(
     --transport shm
     --registry "$CAPTURE_REGISTRY"
@@ -155,8 +173,10 @@ if [[ "$STARTUP_GATE" == "1" ]]; then
 fi
 
 exec "$BASALT_BIN_DIR/capture_basalt_backend" \
-  --transport shm \
+  --transport "$TRANSPORT" \
   --registry "$CAPTURE_REGISTRY" \
+  --tcp-host "$CAPTURE_TCP_HOST" \
+  --tcp-port "$CAPTURE_TCP_PORT" \
   --cam0-stream "$CAM0_STREAM" \
   --cam1-stream "$CAM1_STREAM" \
   --imu-stream "$IMU_STREAM" \

@@ -16,8 +16,17 @@ ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
 TRANSPORT="${TRANSPORT:-shm}"
 REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
+CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
+CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
+
+# Optional TCP metadata probe for automatic profile selection. Disabled by
+# default so the existing local-registry/XREAL path is unchanged.
+CAPTURE_PROFILE_PROBE_ENABLED="${CAPTURE_PROFILE_PROBE_ENABLED:-0}"
+CAPTURE_PROFILE_PROBE_HOST="${CAPTURE_PROFILE_PROBE_HOST:-$CAPTURE_TCP_HOST}"
+CAPTURE_PROFILE_PROBE_PORT="${CAPTURE_PROFILE_PROBE_PORT:-$CAPTURE_TCP_PORT}"
+CAPTURE_PROFILE_PROBE_TIMEOUT_MS="${CAPTURE_PROFILE_PROBE_TIMEOUT_MS:-1500}"
 
 XR_CALIB_DIR="${XR_CALIB_DIR:-$ROOT_PROJECT/calibration_dataset}"
 XR_CALIB_DIR="$(expand_tilde "$XR_CALIB_DIR")"
@@ -36,9 +45,11 @@ done
 }
 # shellcheck source=/dev/null
 source "$PROFILE_HELPER"
+capture_profile_parse_cli "$@"
+set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
 capture_profile_load_backend \
   "mercury_hand_tracking" \
-  "${MERCURY_PROFILE:-${CAPTURE_PROFILE:-}}" \
+  "${CAPTURE_PROFILE_CLI_OVERRIDE:-${MERCURY_PROFILE:-${CAPTURE_PROFILE:-}}}" \
   "$REGISTRY" \
   "xreal_air2ultra_unified_480" \
   "$ROOT_PROJECT" \
@@ -77,6 +88,7 @@ export MERCURY_XR_DEBUG_DUMP_LATEST_ONLY="${MERCURY_XR_DEBUG_DUMP_LATEST_ONLY:-1
 export MERCURY_XR_DEBUG_DUMP_EVERY_N="${MERCURY_XR_DEBUG_DUMP_EVERY_N:-1}"
 
 echo "[start_hand_tracking] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_hand_tracking] capture_profile_source=$CAPTURE_PROFILE_SOURCE_RESOLVED"
 echo "[start_hand_tracking] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 ls -lh \
@@ -89,6 +101,8 @@ ls -lh \
 args=(
   --transport "$TRANSPORT"
   --registry "$REGISTRY"
+  --tcp-host "$CAPTURE_TCP_HOST"
+  --tcp-port "$CAPTURE_TCP_PORT"
   --cam0-stream "$CAM0_STREAM"
   --cam1-stream "$CAM1_STREAM"
   --duration "$DURATION"
@@ -102,4 +116,4 @@ args=(
 )
 
 
-exec "$BACKEND_BIN" "${args[@]}"
+exec "$BACKEND_BIN" "${args[@]}" "$@"

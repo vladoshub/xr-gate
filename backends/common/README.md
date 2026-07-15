@@ -11,9 +11,31 @@ backend profile:   configs/profiles/leap_motion_uvc.env
 Resolution order is:
 
 ```text
-backend-specific override / CAPTURE_PROFILE
--> capture registry .profile
+--capture-profile / backend-specific environment override / CAPTURE_PROFILE
+-> optional capture_tcp_probe result
+-> local capture registry .profile
 -> xreal_air2ultra_unified_480 compatibility fallback
+```
+
+The TCP metadata probe is deliberately disabled by default. Enable it for a
+launcher with:
+
+```bash
+CAPTURE_PROFILE_PROBE_ENABLED=1 \
+CAPTURE_PROFILE_PROBE_HOST=192.168.1.20 \
+CAPTURE_PROFILE_PROBE_PORT=45660 \
+./start_backend.sh
+```
+
+Optional settings are `CAPTURE_PROFILE_PROBE_BIN` and
+`CAPTURE_PROFILE_PROBE_TIMEOUT_MS`. Probe failure is non-fatal: the resolver
+continues with the local registry and then the compatibility fallback.
+
+A launcher CLI override is consumed before starting the backend and is not
+forwarded to the backend executable:
+
+```bash
+./start_backend.sh --capture-profile leap_motion_uvc_nrf54l15
 ```
 
 Profile names are restricted to letters, digits, `_`, `-`, and `.`. A missing

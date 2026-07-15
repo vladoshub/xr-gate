@@ -263,6 +263,9 @@ copy_runtime_scripts() {
   copy_runtime_file \
     "$XR_ROOT_PROJECT/backends/xr_video/scripts/linux/start_xr_video_backend.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/xr_video/start_xr_video_backend.sh"
+  copy_runtime_file \
+    "$XR_ROOT_PROJECT/backends/xr_video/scripts/linux/start_xr_video_backend_tcp.sh" \
+    "$XR_OUT_BIN_ROOT/scripts/backends/xr_video/start_xr_video_backend_tcp.sh"
 
   copy_runtime_file \
     "$XR_ROOT_PROJECT/backends/xr_spatial/scripts/linux/start_xr_spatial_shm.sh" \
@@ -568,6 +571,7 @@ required=(
   "$XR_OUT_DEVICE_HOME/xreal_ultra.env"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_service_cpp"
+  "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_tcp_probe"
   "$XR_OUT_BIN_ROOT/scripts/capture_service_cpp/start_capture_service_cpp.sh"
   "$XR_OUT_BIN_ROOT/python/capture_client/client.py"
   "$XR_OUT_BIN_ROOT/python-runtime/env.sh"

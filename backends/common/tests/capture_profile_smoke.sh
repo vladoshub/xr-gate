@@ -23,9 +23,10 @@ backends=(
   xr_spatial
 )
 
+unset CAPTURE_PROFILE_PROBE_ENABLED CAPTURE_PROFILE_PROBE_BIN
 for profile in "${profiles[@]}"; do
   printf '{"profile":"%s"}\n' "$profile" > "$REGISTRY"
-  resolved="$(capture_profile_resolve_name '' "$REGISTRY" xreal_air2ultra_unified_480)"
+  resolved="$(capture_profile_resolve_name '' "$REGISTRY" xreal_air2ultra_unified_480 "$ROOT_PROJECT")"
   [[ "$resolved" == "$profile" ]]
 
   for backend in "${backends[@]}"; do
@@ -37,9 +38,45 @@ for profile in "${profiles[@]}"; do
   done
 done
 
-printf '{"namespace":"legacy-xreal"}\n' > "$REGISTRY"
-[[ "$(capture_profile_resolve_name '' "$REGISTRY" xreal_air2ultra_unified_480)" == \
-   "xreal_air2ultra_unified_480" ]]
+cat > "$TMP_DIR/fake_capture_tcp_probe" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ " $* " == *" --print-profile "* ]]
+printf '%s\n' "${FAKE_CAPTURE_PROFILE:-leap_motion_uvc_nrf54l15}"
+PROBE
+chmod +x "$TMP_DIR/fake_capture_tcp_probe"
+
+printf '{"profile":"leap_motion_uvc"}\n' > "$REGISTRY"
+export CAPTURE_PROFILE_PROBE_ENABLED=1
+export CAPTURE_PROFILE_PROBE_BIN="$TMP_DIR/fake_capture_tcp_probe"
+export FAKE_CAPTURE_PROFILE=leap_motion_uvc_nrf54l15
+
+# Launcher CLI option is stripped, validated and kept above env/probe/registry.
+capture_profile_parse_cli --backend-flag 7 --capture-profile=xreal_air2ultra_unified_480 --tail
+[[ "$CAPTURE_PROFILE_CLI_OVERRIDE" == "xreal_air2ultra_unified_480" ]]
+[[ "${CAPTURE_PROFILE_FORWARD_ARGS[*]}" == "--backend-flag 7 --tail" ]]
+
+# Explicit override wins over probe and registry.
+capture_profile_resolve "$CAPTURE_PROFILE_CLI_OVERRIDE" "$REGISTRY" fallback "$ROOT_PROJECT"
+[[ "$CAPTURE_PROFILE_RESOLVED" == "xreal_air2ultra_unified_480" ]]
+[[ "$CAPTURE_PROFILE_SOURCE_RESOLVED" == "explicit" ]]
+
+# Probe wins over local registry when explicitly enabled.
+capture_profile_resolve '' "$REGISTRY" fallback "$ROOT_PROJECT"
+[[ "$CAPTURE_PROFILE_RESOLVED" == "leap_motion_uvc_nrf54l15" ]]
+[[ "$CAPTURE_PROFILE_SOURCE_RESOLVED" == "tcp_probe" ]]
+
+# With probing disabled, local registry wins.
+export CAPTURE_PROFILE_PROBE_ENABLED=0
+capture_profile_resolve '' "$REGISTRY" fallback "$ROOT_PROJECT"
+[[ "$CAPTURE_PROFILE_RESOLVED" == "leap_motion_uvc" ]]
+[[ "$CAPTURE_PROFILE_SOURCE_RESOLVED" == "registry" ]]
+
+# Missing registry falls back to the legacy XREAL profile.
+rm -f "$REGISTRY"
+capture_profile_resolve '' "$REGISTRY" xreal_air2ultra_unified_480 "$ROOT_PROJECT"
+[[ "$CAPTURE_PROFILE_RESOLVED" == "xreal_air2ultra_unified_480" ]]
+[[ "$CAPTURE_PROFILE_SOURCE_RESOLVED" == "fallback" ]]
 
 if capture_profile_validate_name '../invalid' >/dev/null 2>&1; then
   echo "invalid profile name was accepted" >&2

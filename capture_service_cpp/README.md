@@ -25,6 +25,36 @@ xreal_raw_hid: BYTES
 
 The XREAL raw camera decoder, eye transforms, HID start command, IMU normalization, stream IDs, SHM/TCP publishers and registry format remain unchanged.
 
+## Capture profile metadata
+
+Set a stable runtime profile name independently from the stream namespace:
+
+```yaml
+service:
+  namespace: xr_tracking
+  profile: leap_motion_uvc_nrf54l15
+  publish: [shm, tcp]
+```
+
+The value is written to the local registry and to the TCP `CAPHELLO` metadata.
+It selects matching backend files such as
+`configs/profiles/leap_motion_uvc_nrf54l15.env`; it does not alter stream IDs or
+payload formats.
+
+The build also installs a small metadata-only client:
+
+```bash
+capture_tcp_probe \
+  --host 192.168.1.20 \
+  --port 45660 \
+  --timeout-ms 1500 \
+  --print-profile
+```
+
+It reads only `CAPHELLO`, prints the profile, sends `CLOSE`, and exits. It can
+also print `--print-namespace` or the complete `--print-json` metadata. Profile
+names are restricted to letters, digits, `_`, `-`, and `.`.
+
 ## Configuration
 
 Default location:

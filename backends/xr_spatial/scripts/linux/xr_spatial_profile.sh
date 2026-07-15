@@ -33,6 +33,33 @@ set_default() {
   fi
 }
 
+
+parse_xr_spatial_profile_cli() {
+  local root_project="${ROOT_PROJECT:-${XR:-$HOME/src/xr_tracking}}"
+  local helper=""
+  local candidate
+  for candidate in \
+    "$_XR_SPATIAL_PROFILE_SCRIPT_DIR/capture_profile.sh" \
+    "$_XR_SPATIAL_PROFILE_SCRIPT_DIR/../../../common/scripts/linux/capture_profile.sh" \
+    "$root_project/backends/common/scripts/linux/capture_profile.sh" \
+    "$root_project/bin/backends/xr_spatial/scripts/linux/capture_profile.sh"
+  do
+    if [[ -f "$candidate" ]]; then helper="$candidate"; break; fi
+  done
+  [[ -n "$helper" ]] || {
+    echo "[xr_spatial_profile][ERROR] capture_profile.sh not found" >&2
+    return 2
+  }
+  # shellcheck source=/dev/null
+  source "$helper"
+  capture_profile_parse_cli "$@"
+  XR_SPATIAL_FORWARD_ARGS=("${CAPTURE_PROFILE_FORWARD_ARGS[@]}")
+  if [[ -n "$CAPTURE_PROFILE_CLI_OVERRIDE" ]]; then
+    XR_SPATIAL_PROFILE="$CAPTURE_PROFILE_CLI_OVERRIDE"
+    SPATIAL_MAPPER_PROFILE="$CAPTURE_PROFILE_CLI_OVERRIDE"
+  fi
+}
+
 resolve_xr_spatial_config() {
   local root_project="$1"
   if [[ -n "${XR_SPATIAL_CONFIG:-}" ]]; then
@@ -62,8 +89,8 @@ resolve_xr_spatial_config() {
 
   local registry="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
   local explicit_profile="${XR_SPATIAL_PROFILE:-${SPATIAL_MAPPER_PROFILE:-${CAPTURE_PROFILE:-}}}"
-  CAPTURE_PROFILE_RESOLVED="$(capture_profile_resolve_name \
-    "$explicit_profile" "$registry" "xreal_air2ultra_unified_480")"
+  capture_profile_resolve \
+    "$explicit_profile" "$registry" "xreal_air2ultra_unified_480" "$root_project"
   XR_SPATIAL_PROFILE="$CAPTURE_PROFILE_RESOLVED"
   SPATIAL_MAPPER_PROFILE="$CAPTURE_PROFILE_RESOLVED"
 

@@ -70,11 +70,17 @@ endif()
 add_executable(capture_service_cpp ${CAPTURE_SERVICE_CPP_SOURCES})
 target_include_directories(capture_service_cpp PRIVATE include ${HIDAPI_INCLUDE_DIR})
 target_link_libraries(capture_service_cpp PRIVATE ${OpenCV_LIBS} ${HIDAPI_LIBRARY} Threads::Threads)
+
+# Small metadata-only client used by backend launchers before the main capture
+# transport is opened. It intentionally has no OpenCV or HID dependency.
+add_executable(capture_tcp_probe tools/capture_tcp_probe.cpp)
+
 if(WIN32)
   target_link_libraries(capture_service_cpp PRIVATE ws2_32)
+  target_link_libraries(capture_tcp_probe PRIVATE ws2_32)
 endif()
 
-install(TARGETS capture_service_cpp RUNTIME DESTINATION .)
+install(TARGETS capture_service_cpp capture_tcp_probe RUNTIME DESTINATION .)
 install(DIRECTORY configs/ DESTINATION configs OPTIONAL)
 
 include(CTest)

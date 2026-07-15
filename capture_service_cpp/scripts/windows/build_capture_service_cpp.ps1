@@ -41,8 +41,14 @@ if (-not $exe) {
   throw "capture_service_cpp.exe was not produced"
 }
 Copy-Item $exe.FullName (Join-Path $InstallBinDir "capture_service_cpp.exe") -Force
+$probeExe = Get-ChildItem -Path $BuildDir -Filter capture_tcp_probe.exe -Recurse | Select-Object -First 1
+if (-not $probeExe) {
+  throw "capture_tcp_probe.exe was not produced"
+}
+Copy-Item $probeExe.FullName (Join-Path $InstallBinDir "capture_tcp_probe.exe") -Force
 $ConfigsDir = Join-Path $BackendDir "configs"
 if (Test-Path $ConfigsDir) {
   Copy-Item $ConfigsDir (Join-Path $InstallBinDir "configs") -Recurse -Force
 }
 Write-Host "[build_capture_service_cpp_windows] installed: $InstallBinDir\capture_service_cpp.exe"
+Write-Host "[build_capture_service_cpp_windows] installed: $InstallBinDir\capture_tcp_probe.exe"

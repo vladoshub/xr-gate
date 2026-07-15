@@ -160,13 +160,62 @@ jobs:
           du -sh out/xreal_ultra || true
           find out/xreal_ultra -maxdepth 4 -type f | sort | head -200
 
-      - name: Validate capture launchers
+      - name: Validate capture launchers and TCP metadata probe
         if: ${{ matrix.name == 'capture' }}
         run: |
+          set -euo pipefail
           test -x out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
           test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          test -x out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
           bash -n out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
           bash -n out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+
+          READY_FILE="$(mktemp)"
+          rm -f "$READY_FILE"
+          export READY_FILE
+          python3 - <<'PY' &
+          import json
+          import os
+          import socket
+
+          hello = json.dumps({
+              "protocol": "capture_net_v1_json_payload",
+              "namespace": "ci_capture",
+              "profile": "leap_motion_uvc_nrf54l15",
+              "streams": {},
+          }, separators=(",", ":")).encode("utf-8")
+
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+              server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              server.bind(("127.0.0.1", 45679))
+              server.listen(1)
+              open(os.environ["READY_FILE"], "w", encoding="utf-8").close()
+              connection, _ = server.accept()
+              with connection:
+                  connection.sendall(f"CAPHELLO {len(hello)}\n".encode("ascii"))
+                  connection.sendall(hello)
+                  connection.recv(64)
+          PY
+          SERVER_PID=$!
+          for _ in $(seq 1 50); do
+            [[ -f "$READY_FILE" ]] && break
+            sleep 0.1
+          done
+          test -f "$READY_FILE"
+          PROFILE="$(out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe \
+            --host 127.0.0.1 \
+            --port 45679 \
+            --timeout-ms 2000 \
+            --print-profile)"
+          wait "$SERVER_PID"
+          rm -f "$READY_FILE"
+          test "$PROFILE" = "leap_motion_uvc_nrf54l15"
+
+      - name: Validate capture profile resolver
+        if: ${{ matrix.name == 'runtime' }}
+        run: |
+          bash backends/common/tests/capture_profile_smoke.sh
 
       - name: Archive partial package
         run: |
@@ -290,6 +339,7 @@ jobs:
           done
           test -d merged/xreal_ultra/bin
           test -x merged/xreal_ultra/run_xr_client.sh
+          test -x merged/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
           du -sh merged/xreal_ultra
           find merged/xreal_ultra -maxdepth 4 -type f | sort | head -300
           tar -C merged -czf xreal_ultra_linux_x64.tar.gz xreal_ultra
@@ -350,6 +400,7 @@ jobs:
 
           test -d verify/runtime/xreal_ultra/bin
           test -x verify/runtime/xreal_ultra/run_xr_client.sh
+          test -x verify/runtime/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
 
       - name: Create or update GitHub Release
         env:
