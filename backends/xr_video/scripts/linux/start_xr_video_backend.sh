@@ -10,7 +10,9 @@ expand_tilde() {
   esac
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
+ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 BIN_DIR="${BIN_DIR:-$ROOT_PROJECT/bin/backends/xr_video}"
 XR_VIDEO_BACKEND_BIN="${XR_VIDEO_BACKEND_BIN:-$BIN_DIR/xr_video_backend}"
 
@@ -19,9 +21,41 @@ INPUT_TRANSPORT="${INPUT_TRANSPORT:-shm}"
 REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
 CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
 CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
+
+# Optional TCP metadata probe for automatic profile selection. Disabled by
+# default so the existing local-registry/XREAL path is unchanged.
+CAPTURE_PROFILE_PROBE_ENABLED="${CAPTURE_PROFILE_PROBE_ENABLED:-0}"
+CAPTURE_PROFILE_PROBE_HOST="${CAPTURE_PROFILE_PROBE_HOST:-$CAPTURE_TCP_HOST}"
+CAPTURE_PROFILE_PROBE_PORT="${CAPTURE_PROFILE_PROBE_PORT:-$CAPTURE_TCP_PORT}"
+CAPTURE_PROFILE_PROBE_TIMEOUT_MS="${CAPTURE_PROFILE_PROBE_TIMEOUT_MS:-1500}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
 IMU_STREAM="${IMU_STREAM:-imu0}"
+
+PROFILE_HELPER=""
+for candidate in \
+  "$SCRIPT_DIR/capture_profile.sh" \
+  "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh" \
+  "$ROOT_PROJECT/bin/backends/xr_video/scripts/linux/capture_profile.sh"
+do
+  if [[ -f "$candidate" ]]; then PROFILE_HELPER="$candidate"; break; fi
+done
+[[ -n "$PROFILE_HELPER" ]] || {
+  echo "[start_xr_video_backend][ERROR] capture_profile.sh not found" >&2
+  exit 2
+}
+# shellcheck source=/dev/null
+source "$PROFILE_HELPER"
+capture_profile_parse_cli "$@"
+set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
+capture_profile_load_backend \
+  "xr_video" \
+  "${CAPTURE_PROFILE_CLI_OVERRIDE:-${XR_VIDEO_PROFILE:-${CAPTURE_PROFILE:-}}}" \
+  "$REGISTRY" \
+  "xreal_air2ultra_unified_480" \
+  "$ROOT_PROJECT" \
+  "$SCRIPT_DIR" \
+  "${XR_VIDEO_PROFILE_DIR:-}"
 
 #VIDEO_OUTPUT="${VIDEO_OUTPUT:-tcp}"
 VIDEO_OUTPUT="${VIDEO_OUTPUT:-shm}"
@@ -38,7 +72,6 @@ PRINT_EVERY="${PRINT_EVERY:-30}"
 MAX_STEREO_DELTA_MS="${MAX_STEREO_DELTA_MS:-1.0}"
 ROTATE_DEGREES="${ROTATE_DEGREES:-0}"
 
-ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 BIN_DIR="$(expand_tilde "$BIN_DIR")"
 XR_VIDEO_BACKEND_BIN="$(expand_tilde "$XR_VIDEO_BACKEND_BIN")"
 
@@ -49,9 +82,15 @@ if [[ ! -x "$XR_VIDEO_BACKEND_BIN" ]]; then
   exit 1
 fi
 
+echo "[start_xr_video_backend] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_xr_video_backend] capture_profile_source=$CAPTURE_PROFILE_SOURCE_RESOLVED"
+echo "[start_xr_video_backend] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
+
 exec "$XR_VIDEO_BACKEND_BIN" \
   --input-transport "$INPUT_TRANSPORT" \
   --registry "$REGISTRY" \
+  --tcp-host "$CAPTURE_TCP_HOST" \
+  --tcp-port "$CAPTURE_TCP_PORT" \
   --cam0-stream "$CAM0_STREAM" \
   --cam1-stream "$CAM1_STREAM" \
   --imu-stream "$IMU_STREAM" \
@@ -66,9 +105,3 @@ exec "$XR_VIDEO_BACKEND_BIN" \
   --max-stereo-delta-ms "$MAX_STEREO_DELTA_MS" \
   --rotate-degrees "$ROTATE_DEGREES" \
   "$@"
-  
-  
-  #--video-tcp-bind "$VIDEO_TCP_BIND" \
-  #--video-tcp-port "$VIDEO_TCP_PORT" \
-  #--tcp-host "$CAPTURE_TCP_HOST" \
-  #--tcp-port "$CAPTURE_TCP_PORT" \  

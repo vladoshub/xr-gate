@@ -118,5 +118,11 @@ for target in $BUILD_TARGETS; do
   chmod +x "$INSTALL_BIN_DIR/$target"
 done
 
+rm -rf "$INSTALL_BIN_DIR/configs" "$INSTALL_BIN_DIR/scripts"
+cp -a "$BACKEND_DIR/configs" "$INSTALL_BIN_DIR/configs"
+cp -a "$BACKEND_DIR/scripts" "$INSTALL_BIN_DIR/scripts"
+cp "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh"   "$INSTALL_BIN_DIR/scripts/linux/capture_profile.sh"
+chmod +x "$INSTALL_BIN_DIR/scripts/linux/"*.sh
+
 log "Installed binaries:"
 ls -lh "$INSTALL_BIN_DIR" >&2

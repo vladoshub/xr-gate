@@ -25,3 +25,52 @@ out/xreal_ultra/bin/backends/xr_spatial/
 ```
 
 `xr_spatial` is optional and must not sit between tracking backends and `xr_runtime_adapter`.
+
+## Automatic capture profiles and camera-only mode
+
+The launcher reads the top-level `profile` value from
+`/tmp/capture_service_streams.json` and loads the exact matching file from
+`configs/profiles/<profile>.env`. Explicit `XR_SPATIAL_PROFILE` or
+`CAPTURE_PROFILE` remains higher priority. When the field is absent, the
+existing `xreal_air2ultra_unified_480` profile is used.
+
+`xr_spatial` consumes stereo frames and an optional HMD pose stream; it does not
+consume raw `imu0`. For camera-coordinate live depth, a profile can set:
+
+```bash
+SPATIAL_POSE_INPUT=none
+SPATIAL_MAP_FRAME=camera
+```
+
+The existing Basalt-style calibration JSON with `value0.T_imu_cam` remains
+supported unchanged. A stereo-only JSON may instead contain
+`value0.T_cam1_cam0`, using the convention:
+
+```text
+X_cam1 = T_cam1_cam0 * X_cam0
+```
+
+It must still contain two entries in `value0.intrinsics` and
+`value0.resolution`.
+
+## Capture transport
+
+SHM remains the default and keeps the existing local pipeline unchanged:
+
+```bash
+./scripts/linux/start_xr_spatial_shm.sh
+```
+
+For direct `capture_service_cpp` TCP input, use the thin wrapper:
+
+```bash
+CAPTURE_TCP_HOST=192.168.1.20 \
+CAPTURE_TCP_PORT=45660 \
+./scripts/linux/start_xr_spatial_tcp.sh
+```
+
+The TCP transport subscribes only to `camera0` and `camera1`; `imu0` is not
+requested. Pose input remains independent: `SPATIAL_POSE_INPUT=shm` can still
+consume a local `hmd_pose`, while `SPATIAL_POSE_INPUT=none` keeps output in
+camera coordinates. Automatic TCP profile probing remains disabled unless
+`CAPTURE_PROFILE_PROBE_ENABLED=1` is explicitly set.

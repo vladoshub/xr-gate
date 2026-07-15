@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Helper for toggling/restoring the main desktop monitor when using XREAL + Monado XCB fullscreen.
-# Defaults match the current XREAL output seen on this machine.
+# Helper for toggling/restoring the main desktop monitor when using an XR SBS display with Monado XCB.
+# Defaults preserve the historical XREAL setup but every value is configurable.
 
 XR_OUT="${XR_TRACKING_MONADO_XCB_OUTPUT:-${XR_OUT:-DisplayPort-1-1}}"
 XR_MODE="${XR_TRACKING_MONADO_XCB_MODE:-${XR_MODE:-3840x1080}}"
@@ -16,20 +16,20 @@ Usage:
   $0 status
   $0 off-main
   $0 on-main
-  $0 exclusive-xr
+  $0 exclusive-xr        # alias: exclusive-hmd
   $0 restore
 
 Environment:
-  XR_TRACKING_MONADO_XCB_OUTPUT      XREAL output, default: DisplayPort-1-1
-  XR_TRACKING_MONADO_XCB_MODE        XREAL mode, default: 3840x1080
-  XR_TRACKING_MONADO_XCB_RATE_HZ     XREAL refresh rate, default: 60
-  XR_TRACKING_MAIN_OUTPUT            Main monitor output. If empty, auto-detected as first connected output != XREAL.
+  XR_TRACKING_MONADO_XCB_OUTPUT      XR output, default: DisplayPort-1-1
+  XR_TRACKING_MONADO_XCB_MODE        XR mode, default: 3840x1080
+  XR_TRACKING_MONADO_XCB_RATE_HZ     XR refresh rate, default: 60
+  XR_TRACKING_MAIN_OUTPUT            Main monitor output. If empty, auto-detected as first connected output != XR output.
   XR_TRACKING_DISPLAY_LAYOUT         main-left or xr-left, default: main-left
 
 Examples:
   XR_TRACKING_MAIN_OUTPUT=DP-6 $0 off-main
   XR_TRACKING_MAIN_OUTPUT=DP-6 $0 on-main
-  XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 XR_TRACKING_MONADO_XCB_RATE_HZ=90 $0 exclusive-xr
+  XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 XR_TRACKING_MONADO_XCB_RATE_HZ=90 $0 exclusive-xr        # alias: exclusive-hmd
 USAGE
 }
 
@@ -61,7 +61,7 @@ require_output() {
 }
 
 set_xr_mode() {
-  require_output "${XR_OUT}" "XREAL"
+  require_output "${XR_OUT}" "XR display"
   xrandr --output "${XR_OUT}" --set non-desktop 0 || true
   xrandr --output "${XR_OUT}" --mode "${XR_MODE}" --rate "${XR_RATE}"
 }
@@ -89,10 +89,10 @@ on_main() {
   local main
   main="$(auto_main_out)"
   require_output "${main}" "main monitor"
-  require_output "${XR_OUT}" "XREAL"
+  require_output "${XR_OUT}" "XR display"
 
   echo "[main_display_control] enabling main monitor: ${main}"
-  echo "[main_display_control] keeping XREAL output: ${XR_OUT} ${XR_MODE}@${XR_RATE}"
+  echo "[main_display_control] keeping XR output: ${XR_OUT} ${XR_MODE}@${XR_RATE}"
 
   if [[ "${LAYOUT}" == "xr-left" ]]; then
     xrandr --output "${XR_OUT}" --set non-desktop 0 || true
@@ -108,13 +108,13 @@ on_main() {
 exclusive_xr() {
   local main
   main="$(auto_main_out || true)"
-  echo "[main_display_control] switching to exclusive XREAL framebuffer"
+  echo "[main_display_control] switching to exclusive XR framebuffer"
   echo "[main_display_control] XR_OUT=${XR_OUT} XR_MODE=${XR_MODE} XR_RATE=${XR_RATE} MAIN_OUT=${main:-none}"
 
   if [[ -n "${main}" ]]; then
     xrandr --output "${main}" --off || true
   fi
-  require_output "${XR_OUT}" "XREAL"
+  require_output "${XR_OUT}" "XR display"
   xrandr --output "${XR_OUT}" --set non-desktop 0 || true
   xrandr --output "${XR_OUT}" --mode "${XR_MODE}" --rate "${XR_RATE}" --primary --pos 0x0 --fb "${XR_MODE}"
 }
@@ -124,7 +124,7 @@ case "${cmd}" in
   status) status ;;
   off-main|off) off_main ;;
   on-main|on|restore) on_main ;;
-  exclusive-xr|xr-only) exclusive_xr ;;
+  exclusive-xr|xr-only|exclusive-hmd|hmd-only) exclusive_xr ;;
   -h|--help|help|'') usage ;;
   *)
     echo "[main_display_control][ERROR] unknown command: ${cmd}" >&2

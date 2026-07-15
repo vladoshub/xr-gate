@@ -1,6 +1,7 @@
 version: 1
 
 service:
+  profile: opencv_dual_serial_imu
   namespace: generic_dual_serial_imu
   registry_path: /tmp/capture_service_streams.json
   publish:

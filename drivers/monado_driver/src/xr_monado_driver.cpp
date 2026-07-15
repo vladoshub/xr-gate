@@ -138,38 +138,162 @@ float env_float(const char* name, float fallback, float min_value, float max_val
   return parsed;
 }
 
+bool env_has_value(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0';
+}
+
+float degrees_to_radians(float degrees) {
+  constexpr float kPi = 3.14159265358979323846f;
+  return degrees * (kPi / 180.0f);
+}
+
+struct EyeOpticsProfile {
+  float lens_center_u = 0.5f;
+  float lens_center_v = 0.5f;
+  float fov_left = kDefaultFov;
+  float fov_right = kDefaultFov;
+  float fov_up = kDefaultFov;
+  float fov_down = kDefaultFov;
+};
+
 struct HmdDisplayProfile {
   uint32_t render_width = kDefaultRenderWidth;
   uint32_t render_height = kDefaultRenderHeight;
   uint32_t window_width = kDefaultWindowWidth;
   uint32_t window_height = kDefaultWindowHeight;
+  uint32_t rotation_deg = 0;
+  std::string layout = "side_by_side_horizontal";
   float display_width_m = kDefaultDisplayWidthM;
   float display_height_m = kDefaultDisplayHeightM;
   float ipd_m = kDefaultIpdM;
+  float inter_lens_distance_m = kDefaultIpdM;
+  float screen_to_lens_distance_m = 0.0f;
+  float eye_to_lens_distance_m = 0.0f;
   float lens_vertical_position_m = kDefaultLensVerticalPositionM;
-  float fov_left = kDefaultFov;
-  float fov_right = kDefaultFov;
-  float fov_up = kDefaultFov;
-  float fov_down = kDefaultFov;
+  EyeOpticsProfile left_eye{};
+  EyeOpticsProfile right_eye{};
   float refresh_hz = kDefaultRefreshHz;
 };
+
+std::string env_string(const char* name, const char* fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') return fallback;
+  return value;
+}
+
+float load_eye_fov_deg(const char* name, float fallback_rad) {
+  if (!env_has_value(name)) return fallback_rad;
+  return degrees_to_radians(env_float(name, 0.0f, 0.01f, 89.9f));
+}
 
 HmdDisplayProfile load_hmd_display_profile_from_env() {
   HmdDisplayProfile profile{};
 
-  profile.render_width = env_u32("XR_MONADO_RENDER_WIDTH", kDefaultRenderWidth, 64, 16384);
-  profile.render_height = env_u32("XR_MONADO_RENDER_HEIGHT", kDefaultRenderHeight, 64, 16384);
-  profile.window_width = env_u32("XR_MONADO_WINDOW_WIDTH", kDefaultWindowWidth, 64, 32768);
-  profile.window_height = env_u32("XR_MONADO_WINDOW_HEIGHT", kDefaultWindowHeight, 64, 32768);
+  // Side-by-side shorthand. Explicit render/window values below retain higher
+  // precedence and preserve compatibility with existing launchers.
+  uint32_t render_width_default = kDefaultRenderWidth;
+  uint32_t render_height_default = kDefaultRenderHeight;
+  uint32_t window_width_default = kDefaultWindowWidth;
+  uint32_t window_height_default = kDefaultWindowHeight;
+  if (env_has_value("XR_MONADO_EYE_WIDTH")) {
+    render_width_default = env_u32("XR_MONADO_EYE_WIDTH", kDefaultRenderWidth, 64, 16384);
+    window_width_default = render_width_default * 2u;
+  }
+  if (env_has_value("XR_MONADO_EYE_HEIGHT")) {
+    render_height_default = env_u32("XR_MONADO_EYE_HEIGHT", kDefaultRenderHeight, 64, 16384);
+    window_height_default = render_height_default;
+  }
+
+  profile.render_width = env_u32("XR_MONADO_RENDER_WIDTH", render_width_default, 64, 16384);
+  profile.render_height = env_u32("XR_MONADO_RENDER_HEIGHT", render_height_default, 64, 16384);
+  profile.window_width = env_u32("XR_MONADO_WINDOW_WIDTH", window_width_default, 64, 32768);
+  profile.window_height = env_u32("XR_MONADO_WINDOW_HEIGHT", window_height_default, 64, 32768);
+  profile.rotation_deg = env_u32("XR_MONADO_DISPLAY_ROTATION_DEG", 0, 0, 270);
+  profile.layout = env_string("XR_MONADO_DISPLAY_LAYOUT", "side_by_side_horizontal");
   profile.display_width_m = env_float("XR_MONADO_DISPLAY_WIDTH_M", kDefaultDisplayWidthM, 0.001f, 10.0f);
   profile.display_height_m = env_float("XR_MONADO_DISPLAY_HEIGHT_M", kDefaultDisplayHeightM, 0.001f, 10.0f);
   profile.ipd_m = env_float("XR_MONADO_IPD_M", kDefaultIpdM, 0.001f, 1.0f);
-  profile.lens_vertical_position_m =
-      env_float("XR_MONADO_LENS_VERTICAL_POSITION_M", kDefaultLensVerticalPositionM, -10.0f, 10.0f);
-  profile.fov_left = env_float("XR_MONADO_FOV_LEFT", kDefaultFov, 0.01f, 10.0f);
-  profile.fov_right = env_float("XR_MONADO_FOV_RIGHT", kDefaultFov, 0.01f, 10.0f);
-  profile.fov_up = env_float("XR_MONADO_FOV_UP", kDefaultFov, 0.01f, 10.0f);
-  profile.fov_down = env_float("XR_MONADO_FOV_DOWN", kDefaultFov, 0.01f, 10.0f);
+  profile.inter_lens_distance_m =
+      env_float("XR_MONADO_INTER_LENS_DISTANCE_M", profile.ipd_m, 0.001f, 1.0f);
+  profile.screen_to_lens_distance_m =
+      env_float("XR_MONADO_SCREEN_TO_LENS_DISTANCE_M", 0.0f, 0.0f, 10.0f);
+  profile.eye_to_lens_distance_m =
+      env_float("XR_MONADO_EYE_TO_LENS_DISTANCE_M", 0.0f, 0.0f, 10.0f);
+
+  profile.left_eye.lens_center_u = env_float("XR_MONADO_LEFT_LENS_CENTER_U", 0.5f, 0.0f, 1.0f);
+  profile.left_eye.lens_center_v = env_float("XR_MONADO_LEFT_LENS_CENTER_V", 0.5f, 0.0f, 1.0f);
+  profile.right_eye.lens_center_u = env_float("XR_MONADO_RIGHT_LENS_CENTER_U", 0.5f, 0.0f, 1.0f);
+  profile.right_eye.lens_center_v = env_float("XR_MONADO_RIGHT_LENS_CENTER_V", 0.5f, 0.0f, 1.0f);
+
+  // Legacy shared FOV controls remain supported and form the fallback for both
+  // eyes. New per-eye degree values from display/optics YAML override them.
+  float fov_left_default = kDefaultFov;
+  float fov_right_default = kDefaultFov;
+  float fov_up_default = kDefaultFov;
+  float fov_down_default = kDefaultFov;
+
+  if (env_has_value("XR_MONADO_FOV_HORIZONTAL_DEG")) {
+    const float full = env_float("XR_MONADO_FOV_HORIZONTAL_DEG", 0.0f, 0.02f, 179.8f);
+    const float half_rad = degrees_to_radians(full * 0.5f);
+    fov_left_default = half_rad;
+    fov_right_default = half_rad;
+  }
+  if (env_has_value("XR_MONADO_FOV_VERTICAL_DEG")) {
+    const float full = env_float("XR_MONADO_FOV_VERTICAL_DEG", 0.0f, 0.02f, 179.8f);
+    const float half_rad = degrees_to_radians(full * 0.5f);
+    fov_up_default = half_rad;
+    fov_down_default = half_rad;
+  }
+  if (env_has_value("XR_MONADO_FOV_LEFT_DEG")) {
+    fov_left_default = degrees_to_radians(env_float("XR_MONADO_FOV_LEFT_DEG", 0.0f, 0.01f, 89.9f));
+  }
+  if (env_has_value("XR_MONADO_FOV_RIGHT_DEG")) {
+    fov_right_default = degrees_to_radians(env_float("XR_MONADO_FOV_RIGHT_DEG", 0.0f, 0.01f, 89.9f));
+  }
+  if (env_has_value("XR_MONADO_FOV_UP_DEG")) {
+    fov_up_default = degrees_to_radians(env_float("XR_MONADO_FOV_UP_DEG", 0.0f, 0.01f, 89.9f));
+  }
+  if (env_has_value("XR_MONADO_FOV_DOWN_DEG")) {
+    fov_down_default = degrees_to_radians(env_float("XR_MONADO_FOV_DOWN_DEG", 0.0f, 0.01f, 89.9f));
+  }
+
+  fov_left_default = env_float(
+      "XR_MONADO_FOV_LEFT_RAD",
+      env_float("XR_MONADO_FOV_LEFT", fov_left_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+  fov_right_default = env_float(
+      "XR_MONADO_FOV_RIGHT_RAD",
+      env_float("XR_MONADO_FOV_RIGHT", fov_right_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+  fov_up_default = env_float(
+      "XR_MONADO_FOV_UP_RAD",
+      env_float("XR_MONADO_FOV_UP", fov_up_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+  fov_down_default = env_float(
+      "XR_MONADO_FOV_DOWN_RAD",
+      env_float("XR_MONADO_FOV_DOWN", fov_down_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+
+  profile.left_eye.fov_left = load_eye_fov_deg("XR_MONADO_LEFT_EYE_FOV_LEFT_DEG", fov_left_default);
+  profile.left_eye.fov_right = load_eye_fov_deg("XR_MONADO_LEFT_EYE_FOV_RIGHT_DEG", fov_right_default);
+  profile.left_eye.fov_up = load_eye_fov_deg("XR_MONADO_LEFT_EYE_FOV_UP_DEG", fov_up_default);
+  profile.left_eye.fov_down = load_eye_fov_deg("XR_MONADO_LEFT_EYE_FOV_DOWN_DEG", fov_down_default);
+  profile.right_eye.fov_left = load_eye_fov_deg("XR_MONADO_RIGHT_EYE_FOV_LEFT_DEG", fov_left_default);
+  profile.right_eye.fov_right = load_eye_fov_deg("XR_MONADO_RIGHT_EYE_FOV_RIGHT_DEG", fov_right_default);
+  profile.right_eye.fov_up = load_eye_fov_deg("XR_MONADO_RIGHT_EYE_FOV_UP_DEG", fov_up_default);
+  profile.right_eye.fov_down = load_eye_fov_deg("XR_MONADO_RIGHT_EYE_FOV_DOWN_DEG", fov_down_default);
+
+  const float lens_center_v = 0.5f * (profile.left_eye.lens_center_v + profile.right_eye.lens_center_v);
+  profile.lens_vertical_position_m = env_float(
+      "XR_MONADO_LENS_VERTICAL_POSITION_M",
+      profile.display_height_m * lens_center_v,
+      -10.0f,
+      10.0f);
   profile.refresh_hz = env_float("XR_MONADO_REFRESH_HZ", kDefaultRefreshHz, 1.0f, 1000.0f);
 
   return profile;
@@ -698,10 +822,47 @@ void setup_hmd_display(struct xrt_device* xdev) {
   info.display.h_meters = profile.display_height_m;
   info.lens_horizontal_separation_meters = profile.ipd_m;
   info.lens_vertical_position_meters = profile.lens_vertical_position_m;
-  info.fov[0] = profile.fov_left;
-  info.fov[1] = profile.fov_right;
-  info.fov[2] = profile.fov_up;
-  info.fov[3] = profile.fov_down;
+  // u_device_simple_info::fov contains one scalar FOV value per view.
+  // XRT_MAX_VIEWS is 2 in Monado, so writing directional values to indices
+  // 2 and 3 corrupts adjacent stack data. Use one conservative horizontal
+  // bootstrap FOV per eye; the exact asymmetric directional FOV is applied to
+  // xdev->hmd->distortion.fov after u_device_setup_split_side_by_side().
+  static_assert(XRT_MAX_VIEWS >= 2, "XR tracking HMD requires two Monado views");
+  info.fov[0] = std::max(profile.left_eye.fov_left, profile.left_eye.fov_right);
+  info.fov[1] = std::max(profile.right_eye.fov_left, profile.right_eye.fov_right);
+
+  std::fprintf(stderr,
+               "[xr_tracking_monado] display layout=%s rotation=%u window=%ux%u "
+               "render_per_eye=%ux%u refresh=%.3fHz ipd=%.6fm inter_lens=%.6fm "
+               "screen_to_lens=%.6fm eye_to_lens=%.6fm\n",
+               profile.layout.c_str(),
+               profile.rotation_deg,
+               profile.window_width,
+               profile.window_height,
+               profile.render_width,
+               profile.render_height,
+               static_cast<double>(profile.refresh_hz),
+               static_cast<double>(profile.ipd_m),
+               static_cast<double>(profile.inter_lens_distance_m),
+               static_cast<double>(profile.screen_to_lens_distance_m),
+               static_cast<double>(profile.eye_to_lens_distance_m));
+  std::fprintf(stderr,
+               "[xr_tracking_monado] left_eye center=(%.6f,%.6f) "
+               "fov_rad=(left=%.6f right=%.6f up=%.6f down=%.6f) "
+               "right_eye center=(%.6f,%.6f) "
+               "fov_rad=(left=%.6f right=%.6f up=%.6f down=%.6f)\n",
+               static_cast<double>(profile.left_eye.lens_center_u),
+               static_cast<double>(profile.left_eye.lens_center_v),
+               static_cast<double>(profile.left_eye.fov_left),
+               static_cast<double>(profile.left_eye.fov_right),
+               static_cast<double>(profile.left_eye.fov_up),
+               static_cast<double>(profile.left_eye.fov_down),
+               static_cast<double>(profile.right_eye.lens_center_u),
+               static_cast<double>(profile.right_eye.lens_center_v),
+               static_cast<double>(profile.right_eye.fov_left),
+               static_cast<double>(profile.right_eye.fov_right),
+               static_cast<double>(profile.right_eye.fov_up),
+               static_cast<double>(profile.right_eye.fov_down));
 
   u_device_setup_split_side_by_side(xdev, &info);
 
@@ -719,6 +880,61 @@ void setup_hmd_display(struct xrt_device* xdev) {
     xdev->hmd->views[0].display.h_pixels = profile.render_height;
     xdev->hmd->views[1].display.w_pixels = profile.render_width;
     xdev->hmd->views[1].display.h_pixels = profile.render_height;
+
+    std::fprintf(stderr,
+                 "[xr_tracking_monado] configured views left=%ux%u right=%ux%u\n",
+                 xdev->hmd->views[0].display.w_pixels,
+                 xdev->hmd->views[0].display.h_pixels,
+                 xdev->hmd->views[1].display.w_pixels,
+                 xdev->hmd->views[1].display.h_pixels);
+
+    if (profile.layout == "top_bottom_vertical") {
+      xdev->hmd->views[0].viewport.x_pixels = 0;
+      xdev->hmd->views[0].viewport.y_pixels = 0;
+      xdev->hmd->views[0].viewport.w_pixels = profile.window_width;
+      xdev->hmd->views[0].viewport.h_pixels = profile.window_height / 2u;
+      xdev->hmd->views[1].viewport.x_pixels = 0;
+      xdev->hmd->views[1].viewport.y_pixels = profile.window_height / 2u;
+      xdev->hmd->views[1].viewport.w_pixels = profile.window_width;
+      xdev->hmd->views[1].viewport.h_pixels = profile.window_height / 2u;
+    }
+
+    // Rotation is represented in the Monado per-view output matrix. The
+    // default profile is 0 degrees, preserving the historical identity matrix.
+    const auto set_view_rotation = [](struct xrt_view* view, uint32_t degrees) {
+      if (view == nullptr) return;
+      switch (degrees) {
+        case 90:
+          view->rot.v[0] = 0.0f;  view->rot.v[1] = -1.0f;
+          view->rot.v[2] = 1.0f;  view->rot.v[3] = 0.0f;
+          break;
+        case 180:
+          view->rot.v[0] = -1.0f; view->rot.v[1] = 0.0f;
+          view->rot.v[2] = 0.0f;  view->rot.v[3] = -1.0f;
+          break;
+        case 270:
+          view->rot.v[0] = 0.0f;  view->rot.v[1] = 1.0f;
+          view->rot.v[2] = -1.0f; view->rot.v[3] = 0.0f;
+          break;
+        default:
+          view->rot.v[0] = 1.0f;  view->rot.v[1] = 0.0f;
+          view->rot.v[2] = 0.0f;  view->rot.v[3] = 1.0f;
+          break;
+      }
+    };
+    set_view_rotation(&xdev->hmd->views[0], profile.rotation_deg);
+    set_view_rotation(&xdev->hmd->views[1], profile.rotation_deg);
+
+    // xrt_fov follows the OpenXR sign convention: left/down are negative,
+    // right/up are positive. This permits asymmetric per-eye optics profiles.
+    xdev->hmd->distortion.fov[0].angle_left = -profile.left_eye.fov_left;
+    xdev->hmd->distortion.fov[0].angle_right = profile.left_eye.fov_right;
+    xdev->hmd->distortion.fov[0].angle_up = profile.left_eye.fov_up;
+    xdev->hmd->distortion.fov[0].angle_down = -profile.left_eye.fov_down;
+    xdev->hmd->distortion.fov[1].angle_left = -profile.right_eye.fov_left;
+    xdev->hmd->distortion.fov[1].angle_right = profile.right_eye.fov_right;
+    xdev->hmd->distortion.fov[1].angle_up = profile.right_eye.fov_up;
+    xdev->hmd->distortion.fov[1].angle_down = -profile.right_eye.fov_down;
   }
 }
 

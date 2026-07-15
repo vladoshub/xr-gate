@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
     publishers.write_registry();
 
     std::cerr << "[capture_service_cpp] config=" << cfg.config_path
+              << " profile=" << (cfg.profile_name.empty() ? "<none>" : cfg.profile_name)
               << " camera=" << (cfg.camera.enabled ? cfg.camera.driver : "disabled")
               << " imu=" << (cfg.imu.enabled ? cfg.imu.driver : "disabled") << std::endl;
 

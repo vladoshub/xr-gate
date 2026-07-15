@@ -68,6 +68,13 @@ set -x
   -pthread $LDFLAGS_EXTRA
 set +x
 
+set -x
+"$CXX" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+  "$BACKEND_DIR/tools/capture_tcp_probe.cpp" \
+  -o "$INSTALL_BIN_DIR/capture_tcp_probe" \
+  $CXXFLAGS_EXTRA $LDFLAGS_EXTRA
+set +x
+
 if [[ -d "$BACKEND_DIR/configs" ]]; then
   rm -rf "$INSTALL_BIN_DIR/configs"
   cp -a "$BACKEND_DIR/configs" "$INSTALL_BIN_DIR/configs"
@@ -87,3 +94,4 @@ An exact path can be selected with `--config`, or a directory/name pair with
 README
 
 echo "[build_capture_service_cpp] installed: $INSTALL_BIN_DIR/capture_service_cpp"
+echo "[build_capture_service_cpp] installed: $INSTALL_BIN_DIR/capture_tcp_probe"

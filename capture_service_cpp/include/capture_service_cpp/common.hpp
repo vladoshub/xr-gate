@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -53,6 +54,18 @@ struct StreamSpec {
   std::string description;
 };
 
+struct CameraControlConfig {
+  // Backend-neutral control names. Platform implementations map these names to
+  // the native camera-control API. Values intentionally remain integer because
+  // V4L2, Media Foundation and DirectShow camera properties are integer-based.
+  std::map<std::string, int64_t> values;
+
+  // Explicitly configured controls are strict by default: startup fails when a
+  // control cannot be found or applied. Set controls_policy: best_effort to log
+  // a warning and continue instead.
+  bool strict = true;
+};
+
 struct CameraDeviceConfig {
   // Linux normally uses device_path; Windows normally uses index. Drivers may
   // use either field on either platform when the backend supports it.
@@ -65,6 +78,7 @@ struct CameraDeviceConfig {
   bool raw_format = false;
   bool convert_rgb = true;
   int buffer_size = 1;
+  CameraControlConfig controls;
 };
 
 struct ImageTransformConfig {
@@ -78,6 +92,7 @@ struct CameraSourceConfig {
 
   // xreal_packed: one vendor-packed XREAL stream.
   // side_by_side_horizontal / side_by_side_vertical: one normal OpenCV frame.
+  // interleaved_columns: one raw GRAY8 stereo frame arranged L0,R0,L1,R1,...
   // dual: two independent OpenCV camera devices.
   std::string layout = "xreal_packed";
   std::string stereo_order = "left_right";
@@ -132,6 +147,9 @@ struct ImuSourceConfig {
 struct RuntimeConfig {
   std::string registry_path = "/tmp/capture_service_streams.json";
   std::string namespace_name = "xreal_air2ultra_linux";
+  // Logical capture/profile identifier used by downstream backend launchers.
+  // This is independent from namespace_name, which remains transport/SHM metadata.
+  std::string profile_name;
   std::string config_path = "<built-in:xreal_ultra>";
   std::string config_dir;
   std::string config_name = "config.yaml";

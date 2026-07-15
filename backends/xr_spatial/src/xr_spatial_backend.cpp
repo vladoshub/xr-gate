@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include <capture_client/sync/latest_stereo_reader.hpp>
+#include <capture_client/transports/capture_service_tcp_transport.hpp>
 #include <capture_client/transports/shm_transport.hpp>
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 #include <xr_tracking/publishers/hmd_pose_shm_publisher.hpp>
@@ -37,6 +38,32 @@ namespace {
 std::atomic_bool g_stop{false};
 
 void handle_signal(int) { g_stop = true; }
+
+class CameraOnlyShmCaptureTransport final : public capture_client::ICaptureTransport {
+ public:
+  CameraOnlyShmCaptureTransport(const std::string& registry_path,
+                                const std::string& cam0_stream,
+                                const std::string& cam1_stream)
+      : registry_(registry_path),
+        cam0_(std::make_unique<capture_client::ShmStreamReader>(registry_.stream(cam0_stream))),
+        cam1_(std::make_unique<capture_client::ShmStreamReader>(registry_.stream(cam1_stream))) {}
+
+  const std::string& type() const override {
+    static const std::string kType = "shm";
+    return kType;
+  }
+
+  capture_client::IStreamReader& cam0() override { return *cam0_; }
+  capture_client::IStreamReader& cam1() override { return *cam1_; }
+  capture_client::IStreamReader& imu() override {
+    throw std::logic_error("IMU is not available in xr_spatial camera-only SHM transport");
+  }
+
+ private:
+  capture_client::CaptureRegistry registry_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam0_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam1_;
+};
 
 int64_t now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -211,7 +238,10 @@ struct QualityGateConfig {
 struct AppConfig {
   std::string mode = "runtime"; // runtime|scan
 
+  std::string capture_transport = "shm"; // shm|capture_tcp
   std::string capture_registry = "/tmp/capture_service_streams.json";
+  std::string capture_tcp_host = "127.0.0.1";
+  int capture_tcp_port = 45660;
   std::string camera0_stream = "camera0";
   std::string camera1_stream = "camera1";
   std::string imu_stream = "imu0";
@@ -279,7 +309,10 @@ void save_metadata(const fs::path& path,
   nlohmann::json j;
   j["mode"] = cfg.mode;
   j["duration_sec"] = double(ended_ns - started_ns) * 1e-9;
+  j["capture_transport"] = cfg.capture_transport;
   j["capture_registry"] = cfg.capture_registry;
+  j["capture_tcp_host"] = cfg.capture_tcp_host;
+  j["capture_tcp_port"] = cfg.capture_tcp_port;
   j["camera0_stream"] = cfg.camera0_stream;
   j["camera1_stream"] = cfg.camera1_stream;
   j["pose_input"] = cfg.pose_input;
@@ -693,10 +726,15 @@ int main(int argc, char** argv) {
   CLI::App app{"XR spatial backend: stereo depth + spatial map scan/runtime publisher"};
   app.add_option("--mode", cfg.mode, "Mode: runtime or scan")->check(CLI::IsMember({"runtime", "scan"}));
 
-  app.add_option("--capture-registry", cfg.capture_registry, "capture_service SHM registry path");
+  app.add_option("--capture-transport,--input-transport", cfg.capture_transport,
+                 "Capture input transport: shm or capture_tcp (tcp is accepted as an alias for capture_tcp)")
+      ->check(CLI::IsMember({"shm", "capture_tcp", "tcp"}));
+  app.add_option("--capture-registry", cfg.capture_registry, "capture_service SHM registry path; used with --capture-transport=shm");
+  app.add_option("--capture-tcp-host,--tcp-host", cfg.capture_tcp_host, "capture_service TCP host; used with --capture-transport=capture_tcp");
+  app.add_option("--capture-tcp-port,--tcp-port", cfg.capture_tcp_port, "capture_service TCP port; used with --capture-transport=capture_tcp");
   app.add_option("--camera0-stream", cfg.camera0_stream, "Left/cam0 stream id");
   app.add_option("--camera1-stream", cfg.camera1_stream, "Right/cam1 stream id");
-  app.add_option("--imu-stream", cfg.imu_stream, "IMU stream id required by current capture SHM transport");
+  app.add_option("--imu-stream", cfg.imu_stream, "Compatibility option; xr_spatial does not consume capture IMU samples");
 
   app.add_option("--pose-input", cfg.pose_input, "Pose input mode: shm or none")->check(CLI::IsMember({"shm", "none"}));
   app.add_option("--pose-registry", cfg.pose_registry, "Tracking pose SHM registry path when --pose-input=shm");
@@ -795,7 +833,14 @@ int main(int argc, char** argv) {
 
   try {
     std::cout << "[xr_spatial_backend] mode=" << cfg.mode << "\n";
-    std::cout << "[xr_spatial_backend] capture_registry=" << cfg.capture_registry << "\n";
+    if (cfg.capture_transport == "tcp") cfg.capture_transport = "capture_tcp";
+    std::cout << "[xr_spatial_backend] capture_transport=" << cfg.capture_transport << "\n";
+    if (cfg.capture_transport == "shm") {
+      std::cout << "[xr_spatial_backend] capture_registry=" << cfg.capture_registry << "\n";
+    } else {
+      std::cout << "[xr_spatial_backend] capture_tcp=" << cfg.capture_tcp_host
+                << ":" << cfg.capture_tcp_port << "\n";
+    }
     std::cout << "[xr_spatial_backend] pose_input=" << cfg.pose_input
               << " registry=" << cfg.pose_registry
               << " stream=" << cfg.pose_stream
@@ -820,10 +865,26 @@ int main(int argc, char** argv) {
               << calib.cam0.width << "x" << calib.cam0.height
               << " baseline_m=" << calib.baseline_m << "\n";
 
-    capture_client::ShmCaptureTransport capture(cfg.capture_registry,
-                                                cfg.camera0_stream,
-                                                cfg.camera1_stream,
-                                                cfg.imu_stream);
+    std::unique_ptr<capture_client::ICaptureTransport> capture;
+    if (cfg.capture_transport == "shm") {
+      capture = std::make_unique<CameraOnlyShmCaptureTransport>(
+          cfg.capture_registry, cfg.camera0_stream, cfg.camera1_stream);
+    } else if (cfg.capture_transport == "capture_tcp") {
+      capture_client::CaptureServiceTcpTransportConfig tcp_cfg;
+      tcp_cfg.host = cfg.capture_tcp_host;
+      tcp_cfg.port = cfg.capture_tcp_port;
+      tcp_cfg.cam0_stream = cfg.camera0_stream;
+      tcp_cfg.cam1_stream = cfg.camera1_stream;
+      tcp_cfg.imu_stream = cfg.imu_stream;
+      tcp_cfg.subscribe_imu = false;
+      capture = std::make_unique<capture_client::CaptureServiceTcpTransport>(
+          std::move(tcp_cfg));
+    } else {
+      throw std::runtime_error("unknown capture transport: " + cfg.capture_transport);
+    }
+    std::cout << "[xr_spatial_backend] attached capture transport: "
+              << capture->type() << " streams=" << cfg.camera0_stream
+              << "," << cfg.camera1_stream << " imu_subscribed=0\n";
     // When pose_input=shm, integrate stereo frames near the pose timestamp instead of
     // blindly taking the newest camera frame. Pose often lags camera capture by one or
     // two 30 Hz frames, so selecting the newest frame can make every frame look stale.
@@ -965,12 +1026,12 @@ int main(int argc, char** argv) {
       std::optional<SelectedStereoPair> selected_pair;
       if (pose_enabled) {
         selected_pair = read_latest_stereo_near_timestamp(
-            capture,
+            *capture,
             static_cast<int64_t>(sampled_pose->timestamp_ns),
             cfg.stereo_pose_sync_scan_back,
             1'000'000);
       } else {
-        selected_pair = read_latest_stereo_pair(capture, 1'000'000);
+        selected_pair = read_latest_stereo_pair(*capture, 1'000'000);
       }
       if (!selected_pair) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));

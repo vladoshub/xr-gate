@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=xr_spatial_profile.sh
 source "$SCRIPT_DIR/xr_spatial_profile.sh"
+parse_xr_spatial_profile_cli "$@"
+set -- "${XR_SPATIAL_FORWARD_ARGS[@]}"
 
 load_xr_spatial_profile "start_xr_spatial_scan"
 require_xr_spatial_calibration "start_xr_spatial_scan"
@@ -27,7 +29,7 @@ echo "[start_xr_spatial_scan] PROFILE=${SPATIAL_MAPPER_PROFILE_NAME:-${SPATIAL_M
 echo "[start_xr_spatial_scan] CALIB_JSON=$CALIB_JSON"
 echo "[start_xr_spatial_scan] CALIB_PROFILE_NAME=$CALIB_PROFILE_NAME"
 echo "[start_xr_spatial_scan] SCAN_OUTPUT_DIR=$SCAN_OUTPUT_DIR"
-echo "[start_xr_spatial_scan] CAPTURE=$CAPTURE_REGISTRY streams=$CAMERA0_STREAM,$CAMERA1_STREAM,$IMU_STREAM"
+echo "[start_xr_spatial_scan] CAPTURE transport=$CAPTURE_TRANSPORT registry=$CAPTURE_REGISTRY tcp=$CAPTURE_TCP_HOST:$CAPTURE_TCP_PORT streams=$CAMERA0_STREAM,$CAMERA1_STREAM"
 echo "[start_xr_spatial_scan] POSE input=$SPATIAL_POSE_INPUT registry=$POSE_REGISTRY stream=$POSE_STREAM wait=${POSE_WAIT_TIMEOUT_SEC:-0}s retry=${POSE_RETRY_INTERVAL_MS:-500}ms reattach_stale=$POSE_REATTACH_ON_STALE_MS"
 echo "[start_xr_spatial_scan] FRAMES depth=$DEPTH_FRAME_ID pose=$POSE_FRAME_ID map=$MAP_FRAME_ID"
 echo "[start_xr_spatial_scan] DEPTH rate=$DEPTH_RATE_HZ disparities=$NUM_DISPARITIES block=$BLOCK_SIZE range=$MIN_DEPTH_M-$MAX_DEPTH_M map_frame=$SPATIAL_MAP_FRAME"
@@ -40,7 +42,10 @@ echo "[start_xr_spatial_scan] BACKEND_ONLY runtime_spatial_shm=$PUBLISH_RUNTIME_
 
 args=(
   --mode scan
+  --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-tcp-host "$CAPTURE_TCP_HOST"
+  --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"
   --camera1-stream "$CAMERA1_STREAM"
   --imu-stream "$IMU_STREAM"

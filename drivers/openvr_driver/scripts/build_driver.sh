@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expand_tilde() {
-  local value="$1"
-  case "$value" in
-    "~") printf '%s\n' "$HOME" ;;
-    "~/"*) printf '%s\n' "$HOME/${value#"~/"}" ;;
-    *) printf '%s\n' "$value" ;;
-  esac
-}
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./openvr_display_common.sh
+source "$SCRIPT_DIR/openvr_display_common.sh"
+
 BUILD_JOBS="${BUILD_JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
 # build_driver.sh is the single-package worker, but accept the plural
@@ -27,7 +21,7 @@ DRIVER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${DRIVER_ROOT}/../.." && pwd)"
 
 THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-$PROJECT_ROOT/third_party}"
-THIRD_PARTY_DIR="$(expand_tilde "$THIRD_PARTY_DIR")"
+THIRD_PARTY_DIR="$(openvr_expand_tilde "$THIRD_PARTY_DIR")"
 
 OPENVR_REPO_URL="${OPENVR_REPO_URL:-https://github.com/ValveSoftware/openvr.git}"
 # Known-good OpenVR SDK commit used by the XR OpenVR driver build.
@@ -39,108 +33,36 @@ FETCH_OPENVR="${FETCH_OPENVR:-0}"
 ALLOW_DIRTY_OPENVR="${ALLOW_DIRTY_OPENVR:-0}"
 
 OPENVR_THIRD_PARTY_DIR="${OPENVR_THIRD_PARTY_DIR:-$THIRD_PARTY_DIR/openvr}"
-OPENVR_THIRD_PARTY_DIR="$(expand_tilde "$OPENVR_THIRD_PARTY_DIR")"
+OPENVR_THIRD_PARTY_DIR="$(openvr_expand_tilde "$OPENVR_THIRD_PARTY_DIR")"
 
-# Display frequency baked into the assembled SteamVR driver package settings.
-# XREAL modes are device/adapter dependent, so allow any integer Hz in [60,120]
-# and let device profiles decide which one is physically valid.
-# The source default.vrsettings stays unchanged; this script patches the built package.
-normalize_display_frequency_hz() {
-  local value="${1:-60}"
-  python3 - "$value" <<'PY'
-import math
-import sys
-text = sys.argv[1].strip()
-try:
-    value = float(text)
-except ValueError:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-if not math.isfinite(value) or abs(value - round(value)) > 1e-6:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-hz = int(round(value))
-if hz < 60 or hz > 120:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-print(hz)
-PY
-}
+XR_OPENVR_DEVICE="$(openvr_normalize_profile_name "${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}")"
+XR_OPENVR_PACKAGE_TAG="$(openvr_normalize_package_tag "${XR_OPENVR_PACKAGE_TAG:-}")"
+XR_OPENVR_DEVICE_SETTINGS="$(openvr_resolve_device_settings "$DRIVER_ROOT" "$XR_OPENVR_DEVICE" "${XR_OPENVR_DEVICE_SETTINGS:-}")"
+XR_OPENVR_DISPLAY_CONFIG="$(openvr_resolve_display_config "$DRIVER_ROOT" "${XR_OPENVR_DISPLAY_CONFIG:-${XR_DISPLAY_CONFIG:-}}")"
+CONFIG_DISPLAY_FREQUENCY_HZ="$(openvr_display_config_get "$DRIVER_ROOT" "$XR_OPENVR_DISPLAY_CONFIG" display.refresh_hz)"
 
-normalize_display_mode() {
-  local value="${1:-direct}"
-  value="${value,,}"
-  value="${value//-/_}"
-  case "$value" in
-    direct|direct_mode|drm|drm_lease) printf 'direct\n' ;;
-    extended|extended_sbs|sbs|windowed|desktop) printf 'extended_sbs\n' ;;
-    *)
-      echo "[ERROR] Unsupported OpenVR display mode: $1" >&2
-      echo "Expected direct or extended_sbs." >&2
-      exit 2
-      ;;
-  esac
-}
-
-openvr_driver_dir_name() {
-  local hz="$1"
-  local mode="$2"
-  if [[ "$mode" == "direct" ]]; then
-    printf 'openvr_driver_%sHZ\n' "$hz"
-  else
-    printf 'openvr_driver_%sHZ_%s\n' "$hz" "$mode"
-  fi
-}
-
-XR_OPENVR_DEVICE_RAW="${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}"
-XR_OPENVR_DEVICE="${XR_OPENVR_DEVICE_RAW,,}"
-XR_OPENVR_DEVICE="${XR_OPENVR_DEVICE//-/_}"
-case "$XR_OPENVR_DEVICE" in
-  generic|none) XR_OPENVR_DEVICE="generic" ;;
-  xreal_ultra|xreal_air2ultra) XR_OPENVR_DEVICE="xreal_ultra" ;;
-  *)
-    echo "[ERROR] Unsupported OpenVR device profile: $XR_OPENVR_DEVICE_RAW" >&2
-    echo "Expected generic or xreal_ultra." >&2
-    exit 2
-    ;;
-esac
-XR_OPENVR_DEVICE_SETTINGS="${XR_OPENVR_DEVICE_SETTINGS:-}"
-if [[ -z "$XR_OPENVR_DEVICE_SETTINGS" && "$XR_OPENVR_DEVICE" != "generic" ]]; then
-  XR_OPENVR_DEVICE_SETTINGS="$DRIVER_ROOT/devices/$XR_OPENVR_DEVICE/settings/default.vrsettings"
-fi
-if [[ -n "$XR_OPENVR_DEVICE_SETTINGS" ]]; then
-  XR_OPENVR_DEVICE_SETTINGS="$(expand_tilde "$XR_OPENVR_DEVICE_SETTINGS")"
-  if [[ ! -f "$XR_OPENVR_DEVICE_SETTINGS" ]]; then
-    echo "[ERROR] OpenVR device settings overlay not found: $XR_OPENVR_DEVICE_SETTINGS" >&2
-    exit 2
-  fi
-fi
-
-XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_DISPLAY_FREQUENCY_HZ:-${DISPLAY_FREQUENCY_HZ:-60}}}"
-XR_OPENVR_DISPLAY_FREQUENCY_HZ="$(normalize_display_frequency_hz "$XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW")"
-XR_OPENVR_DISPLAY_MODE="$(normalize_display_mode "${XR_OPENVR_DISPLAY_MODE:-${XR_STEAMVR_DISPLAY_MODE:-direct}}")"
-XR_OPENVR_DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-$(openvr_driver_dir_name "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE")}"
+XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_DISPLAY_FREQUENCY_HZ:-${DISPLAY_FREQUENCY_HZ:-$CONFIG_DISPLAY_FREQUENCY_HZ}}}"
+XR_OPENVR_DISPLAY_FREQUENCY_HZ="$(openvr_normalize_display_frequency_hz "$XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW")"
+XR_OPENVR_DISPLAY_MODE="$(openvr_normalize_display_mode "${XR_OPENVR_DISPLAY_MODE:-${XR_STEAMVR_DISPLAY_MODE:-direct}}")"
+XR_OPENVR_DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-$(openvr_driver_dir_name "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")}"
 
 BUILD_DIR="${BUILD_DIR:-$PROJECT_ROOT/build/drivers/${XR_OPENVR_DRIVER_DIR_NAME}}"
-BUILD_DIR="$(expand_tilde "$BUILD_DIR")"
+BUILD_DIR="$(openvr_expand_tilde "$BUILD_DIR")"
 
 INSTALL_DRIVERS_ROOT="${INSTALL_DRIVERS_ROOT:-$PROJECT_ROOT/bin/drivers}"
-INSTALL_DRIVERS_ROOT="$(expand_tilde "$INSTALL_DRIVERS_ROOT")"
+INSTALL_DRIVERS_ROOT="$(openvr_expand_tilde "$INSTALL_DRIVERS_ROOT")"
 INSTALL_DRIVER_ROOT="${INSTALL_DRIVER_ROOT:-$INSTALL_DRIVERS_ROOT/$XR_OPENVR_DRIVER_DIR_NAME}"
-INSTALL_DRIVER_ROOT="$(expand_tilde "$INSTALL_DRIVER_ROOT")"
+INSTALL_DRIVER_ROOT="$(openvr_expand_tilde "$INSTALL_DRIVER_ROOT")"
 
 # Backward compatibility: older callers passed .../bin/drivers/openvr_driver as
 # INSTALL_DRIVER_ROOT. Convert that generic root into the frequency-specific
 # package root unless explicitly disabled.
 if [[ "${XR_OPENVR_KEEP_UNSUFFIXED_DRIVER_ROOT:-0}" != "1" && "$(basename "$INSTALL_DRIVER_ROOT")" == "openvr_driver" ]]; then
-  INSTALL_DRIVER_ROOT="${INSTALL_DRIVER_ROOT}_${XR_OPENVR_DISPLAY_FREQUENCY_HZ}HZ"
+  INSTALL_DRIVER_ROOT="$(dirname "$INSTALL_DRIVER_ROOT")/$XR_OPENVR_DRIVER_DIR_NAME"
 fi
 
 INSTALL_DRIVER_PACKAGE="${INSTALL_DRIVER_PACKAGE:-$INSTALL_DRIVER_ROOT/xr_tracking}"
-INSTALL_DRIVER_PACKAGE="$(expand_tilde "$INSTALL_DRIVER_PACKAGE")"
+INSTALL_DRIVER_PACKAGE="$(openvr_expand_tilde "$INSTALL_DRIVER_PACKAGE")"
 if [[ "${XR_OPENVR_KEEP_UNSUFFIXED_DRIVER_ROOT:-0}" != "1" && "$(basename "$(dirname "$INSTALL_DRIVER_PACKAGE")")" == "openvr_driver" ]]; then
   INSTALL_DRIVER_PACKAGE="$(dirname "$(dirname "$INSTALL_DRIVER_PACKAGE")")/${XR_OPENVR_DRIVER_DIR_NAME}/$(basename "$INSTALL_DRIVER_PACKAGE")"
 fi
@@ -196,7 +118,7 @@ fetch_openvr_ref_if_needed() {
 resolve_openvr_sdk_root() {
   local explicit="${XR_OPENVR_SDK_ROOT:-${OPENVR_SDK_ROOT:-}}"
   if [[ -n "$explicit" ]]; then
-    explicit="$(expand_tilde "$explicit")"
+    explicit="$(openvr_expand_tilde "$explicit")"
     if [[ -f "$explicit/headers/openvr_driver.h" ]]; then
       printf '%s\n' "$explicit"
       return 0
@@ -294,6 +216,8 @@ printf '[build_driver] DISPLAY_FREQUENCY_HZ=%s\n' "$XR_OPENVR_DISPLAY_FREQUENCY_
 printf '[build_driver] DISPLAY_MODE=%s\n' "$XR_OPENVR_DISPLAY_MODE"
 printf '[build_driver] DEVICE=%s\n' "$XR_OPENVR_DEVICE"
 printf '[build_driver] DEVICE_SETTINGS=%s\n' "${XR_OPENVR_DEVICE_SETTINGS:-<none>}"
+printf '[build_driver] DISPLAY_CONFIG=%s\n' "$XR_OPENVR_DISPLAY_CONFIG"
+printf '[build_driver] PACKAGE_TAG=%s\n' "${XR_OPENVR_PACKAGE_TAG:-<none>}"
 
 cmake -S "$DRIVER_ROOT" -B "$BUILD_DIR" -DXR_OPENVR_SDK_ROOT="$SDK_ROOT"
 cmake --build "$BUILD_DIR" -j"$BUILD_JOBS"
@@ -305,88 +229,20 @@ if [[ ! -f "$PACKAGE_SETTINGS" ]]; then
   exit 2
 fi
 
-python3 - "$PACKAGE_SETTINGS" "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE" "${XR_OPENVR_DEVICE_SETTINGS:-}" "$XR_OPENVR_DEVICE" <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
+render_settings_args=(
+  --settings "$PACKAGE_SETTINGS"
+  --device-profile "$XR_OPENVR_DEVICE"
+  --display-config "$XR_OPENVR_DISPLAY_CONFIG"
+  --display-frequency "$XR_OPENVR_DISPLAY_FREQUENCY_HZ"
+  --display-mode "$XR_OPENVR_DISPLAY_MODE"
+)
+if [[ -n "$XR_OPENVR_DEVICE_SETTINGS" ]]; then
+  render_settings_args+=(--device-settings "$XR_OPENVR_DEVICE_SETTINGS")
+fi
+"$SCRIPT_DIR/render_display_settings.py" "${render_settings_args[@]}"
+install -m 0644 "$XR_OPENVR_DISPLAY_CONFIG" "$(dirname "$PACKAGE_SETTINGS")/display_config.yaml"
 
-path = Path(sys.argv[1])
-freq = int(float(sys.argv[2]))
-mode = sys.argv[3]
-device_settings = Path(sys.argv[4]) if sys.argv[4].strip() else None
-device_name = sys.argv[5]
-
-def deep_merge(dst, src):
-    for key, value in src.items():
-        if isinstance(value, dict) and isinstance(dst.get(key), dict):
-            deep_merge(dst[key], value)
-        else:
-            dst[key] = value
-    return dst
-
-def getenv_int(name):
-    value = os.environ.get(name, "").strip()
-    if value == "":
-        return None
-    return int(float(value))
-
-def set_if_env(obj, key, *env_names):
-    for name in env_names:
-        value = getenv_int(name)
-        if value is not None:
-            obj[key] = value
-            return
-
-data = json.loads(path.read_text())
-if device_settings is not None:
-    overlay = json.loads(device_settings.read_text())
-    deep_merge(data, overlay)
-data.setdefault("xr_tracking", {})["deviceProfile"] = device_name
-xr = data.setdefault("xr_tracking", {})
-steamvr = data.setdefault("steamvr", {})
-for obj in (xr, steamvr):
-    obj["displayFrequency"] = freq
-
-# Optional build-time output geometry override. Useful for extended_sbs where the
-# glasses are an active desktop display at a stable xrandr position.
-for obj in (xr, steamvr):
-    set_if_env(obj, "windowX", "XR_OPENVR_WINDOW_X", "XR_STEAMVR_WINDOW_X")
-    set_if_env(obj, "windowY", "XR_OPENVR_WINDOW_Y", "XR_STEAMVR_WINDOW_Y")
-    set_if_env(obj, "windowWidth", "XR_OPENVR_WINDOW_WIDTH", "XR_STEAMVR_WINDOW_WIDTH")
-    set_if_env(obj, "windowHeight", "XR_OPENVR_WINDOW_HEIGHT", "XR_STEAMVR_WINDOW_HEIGHT")
-    set_if_env(obj, "renderWidth", "XR_OPENVR_RENDER_WIDTH", "XR_STEAMVR_RENDER_WIDTH")
-    set_if_env(obj, "renderHeight", "XR_OPENVR_RENDER_HEIGHT", "XR_STEAMVR_RENDER_HEIGHT")
-
-if mode == "extended_sbs":
-    # SteamVR extended/desktop SBS fallback: keep the glasses as a normal active
-    # desktop display and let SteamVR use IVRDisplayComponent window bounds.
-    # This is a real desktop display, not a direct-mode HMD acquire target and
-    # not a fake/debug display. Keeping IsDisplayRealDisplay=true is important:
-    # forcing DisplayDebugMode made SteamVR still enter CHmdWindowSDL direct
-    # acquire on Linux instead of the desktop/extended display path.
-    xr["isDisplayOnDesktop"] = True
-    xr["isDisplayRealDisplay"] = True
-    xr["displayDebugMode"] = False
-    steamvr["directMode"] = False
-    steamvr["displayDebugMode"] = False
-    steamvr["debugMode"] = False
-    steamvr["DebugMode"] = False
-    for key in ("windowX", "windowY", "windowWidth", "windowHeight", "renderWidth", "renderHeight"):
-        if key in xr:
-            steamvr[key] = xr[key]
-    steamvr["displayFrequency"] = xr["displayFrequency"]
-else:
-    # Direct mode baseline: SteamVR owns the HMD display through direct acquire.
-    xr["isDisplayOnDesktop"] = False
-    xr["isDisplayRealDisplay"] = True
-    xr["displayDebugMode"] = False
-    steamvr["directMode"] = True
-
-path.write_text(json.dumps(data, indent=2) + "\n")
-PY
-
-echo "[build_driver] Patched package device=$XR_OPENVR_DEVICE displayFrequency=$XR_OPENVR_DISPLAY_FREQUENCY_HZ displayMode=$XR_OPENVR_DISPLAY_MODE in $PACKAGE_SETTINGS"
+echo "[build_driver] Patched package device=$XR_OPENVR_DEVICE displayFrequency=$XR_OPENVR_DISPLAY_FREQUENCY_HZ displayMode=$XR_OPENVR_DISPLAY_MODE displayConfig=$XR_OPENVR_DISPLAY_CONFIG in $PACKAGE_SETTINGS"
 
 BUILD_DRIVER_PACKAGE="$BUILD_DIR/xr_tracking"
 BUILD_DRIVER_SO="$BUILD_DRIVER_PACKAGE/bin/linux64/driver_xr_tracking.so"

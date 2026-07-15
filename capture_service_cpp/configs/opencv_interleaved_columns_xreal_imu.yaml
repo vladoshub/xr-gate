@@ -1,0 +1,74 @@
+version: 1
+
+service:
+  profile: leap_motion_uvc_xreal_imu
+  namespace: interleaved_uvc_xreal_imu
+  registry_path: /tmp/capture_service_streams.json
+  publish: [shm]
+
+# Generic raw UVC stereo layout:
+#   byte 0 = left pixel 0, byte 1 = right pixel 0, ...
+#
+# This profile contains no vendor SDK, firmware updater, calibration reader, or
+# device-control code. Any device-side UVC enablement is performed separately.
+camera:
+  enabled: true
+  driver: opencv
+  slot_count: 8
+  layout: interleaved_columns
+  stereo_order: left_right
+  primary:
+    device:
+      linux: /dev/video2
+    index: 0
+    api:
+      linux: v4l2
+      windows: auto
+    # UVC-negotiated dimensions of one eye. Each captured row carries 2*width
+    # bytes because left/right pixels are interleaved.
+    width: 640
+    height: 480
+    fps: 90
+    raw_format: false
+    convert_rgb: false
+    buffer_size: 1
+
+    # Optional platform-neutral camera controls. These values are applied by
+    # the Linux V4L2 backend after mode negotiation.
+    controls_policy: strict
+    controls:
+      brightness: 10
+      gain: 32
+      exposure_time_absolute: 5000
+  output:
+    left_stream: camera0
+    right_stream: camera1
+    width: 640
+    height: 480
+  transform:
+    left:
+      rotate: none
+      flip: none
+    right:
+      rotate: none
+      flip: none
+
+# Camera and IMU selection remain independent. Replace this section with the
+# existing serial IMU block when using an external IMU.
+imu:
+  enabled: true
+  driver: xreal_hid
+  slot_count: 2048
+  output:
+    stream: imu0
+  raw:
+    enabled: true
+    stream: xreal_raw_hid
+    payload_size: 64
+    slot_count: 2048
+  xreal_hid:
+    vendor_id: 0x3318
+    product_id: 0x0426
+    interface: 2
+    drop_first_packets: 500
+    read_timeout_ms: 100

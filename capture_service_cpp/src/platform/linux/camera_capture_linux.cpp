@@ -1,4 +1,5 @@
 #include "capture_service_cpp/platform/camera_capture.hpp"
+#include "capture_service_cpp/platform/camera_controls.hpp"
 
 #include <iostream>
 
@@ -36,6 +37,7 @@ bool CameraCapture::open(const CameraDeviceConfig& cfg, const std::string& label
   }
   if (!ok) return false;
   apply_properties(cap_, cfg);
+  apply_camera_controls(cfg, label);
   return cap_.isOpened();
 }
 

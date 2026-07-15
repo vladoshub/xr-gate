@@ -59,6 +59,10 @@ CAPTURE_NAMESPACE_VALUE="${CAPTURE_NAMESPACE:-${NAMESPACE:-}}"
 if [[ -n "$CAPTURE_NAMESPACE_VALUE" ]]; then
   args+=(--namespace "$CAPTURE_NAMESPACE_VALUE")
 fi
+CAPTURE_PROFILE_VALUE="${CAPTURE_PROFILE:-${CPP_CAPTURE_PROFILE:-}}"
+if [[ -n "$CAPTURE_PROFILE_VALUE" ]]; then
+  args+=(--profile "$CAPTURE_PROFILE_VALUE")
+fi
 if [[ -n "${TCP_BIND_HOST:-}" ]]; then
   args+=(--tcp-bind "$TCP_BIND_HOST")
 fi

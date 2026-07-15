@@ -1,0 +1,35 @@
+# Default OpenVR display/optics profile.
+# Values preserve the historical driver_xr_tracking defaults.
+display:
+  width_px: 3840
+  height_px: 1080
+  layout: side_by_side_horizontal
+  eye_width_px: 1920
+  eye_height_px: 1080
+  refresh_hz: 60
+  rotation_deg: 0
+
+optics:
+  ipd_m: 0.064
+  inter_lens_distance_m: 0.064
+  # Not used while identity lens distortion is active. Kept in the shared
+  # schema so Cardboard profiles can be introduced without another format.
+  screen_to_lens_distance_m: 0.0
+  eye_to_lens_distance_m: 0.0
+
+  left_eye:
+    lens_center_uv: [0.5, 0.5]
+    fov_deg:
+      # Historical OpenVR raw projection was -1/+1: atan(1) = 45 degrees.
+      left: 45.0
+      right: 45.0
+      up: 45.0
+      down: 45.0
+
+  right_eye:
+    lens_center_uv: [0.5, 0.5]
+    fov_deg:
+      left: 45.0
+      right: 45.0
+      up: 45.0
+      down: 45.0

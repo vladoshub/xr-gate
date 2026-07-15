@@ -66,14 +66,14 @@ BIN_DIR="$(expand_path "${BIN_DIR:-$ROOT_PROJECT/bin/drivers/monado_driver}")"
 # consumes generic runtime streams, but the packaged launch/display helpers live
 # under devices/<target>/... and may be device-specific.
 XR_MONADO_DEVICE_RAW="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-xreal_ultra}}}}"
-case "${XR_MONADO_DEVICE_RAW}" in
-  xreal_ultra|xreal_air2ultra)
-    XR_MONADO_DEVICE="xreal_ultra"
-    ;;
-  *)
-    fail "Unsupported XR_MONADO_DEVICE=${XR_MONADO_DEVICE_RAW}; supported: xreal_ultra"
-    ;;
+XR_MONADO_DEVICE="${XR_MONADO_DEVICE_RAW,,}"
+XR_MONADO_DEVICE="${XR_MONADO_DEVICE//-/_}"
+case "$XR_MONADO_DEVICE" in
+  xreal_air2ultra) XR_MONADO_DEVICE="xreal_ultra" ;;
 esac
+if [[ ! "$XR_MONADO_DEVICE" =~ ^[a-z0-9][a-z0-9_.]*$ ]]; then
+  fail "Invalid XR_MONADO_DEVICE=${XR_MONADO_DEVICE_RAW}; expected [a-z0-9][a-z0-9_.]*"
+fi
 
 # Runtime package helper scripts are installed under the device tree inside the
 # package root, for example:
@@ -582,6 +582,11 @@ configure_and_build_monado() {
 }
 
 install_device_monado_scripts() {
+  if [[ ! -d "$DEVICE_MONADO_SCRIPT_SRC_DIR" ]]; then
+    log "no device-specific Monado helper directory; generic start path remains: $BIN_DIR/start.sh"
+    return 0
+  fi
+
   mkdir -p "$DEVICE_MONADO_SCRIPT_OUT_DIR"
 
   local script=""
@@ -597,7 +602,7 @@ install_device_monado_scripts() {
       install -m 0755 "$DEVICE_MONADO_SCRIPT_SRC_DIR/$script" "$DEVICE_MONADO_SCRIPT_OUT_DIR/$script"
       installed_any=1
     else
-      log "warning: device Monado helper script not found: $DEVICE_MONADO_SCRIPT_SRC_DIR/$script"
+      log "device helper not provided (optional): $DEVICE_MONADO_SCRIPT_SRC_DIR/$script"
     fi
   done
 
@@ -610,9 +615,17 @@ install_device_monado_scripts() {
 install_openxr_runtime_manifest() {
   local openxr_lib=""
   local lib_name="libopenxr_monado.so"
-  local manifest="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_monado_xrgate.json"
-  local env_script="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_runtime_env.sh"
-  local relative_lib="../../../../../bin/drivers/monado_driver/$lib_name"
+
+  # Canonical, device-independent runtime manifest. This is the preferred path
+  # for new packages and does not require a devices/<target> wrapper tree.
+  local canonical_manifest="$BIN_DIR/openxr_monado_xrgate.json"
+  local canonical_env_script="$BIN_DIR/openxr_runtime_env.sh"
+
+  # Keep the historical device-local paths as compatibility aliases for the
+  # existing XREAL package and for callers that already source them.
+  local device_manifest="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_monado_xrgate.json"
+  local device_env_script="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_runtime_env.sh"
+  local device_relative_lib="../../../../../bin/drivers/monado_driver/$lib_name"
 
   openxr_lib="$(find "$BUILD_DIR" -type f \( -name 'libopenxr_monado.so' -o -name 'libopenxr_monado.so.*' \) -print 2>/dev/null | sort | head -n1 || true)"
 
@@ -628,36 +641,57 @@ install_openxr_runtime_manifest() {
     ln -sfn "$(basename "$openxr_lib")" "$BIN_DIR/$lib_name"
   fi
 
-  cat > "$manifest" <<EOF
+  cat > "$canonical_manifest" <<EOF
 {
   "file_format_version": "1.0.0",
   "runtime": {
     "name": "XR Gate Monado",
-    "library_path": "$relative_lib"
+    "library_path": "./$lib_name"
   }
 }
 EOF
 
-  cat > "$env_script" <<'EOF'
+  cat > "$canonical_env_script" <<'EOF'
 #!/usr/bin/env bash
-# Source this file to force OpenXR applications to use the XR Gate packaged Monado runtime:
-#   source devices/xreal_ultra/linux/scripts/monado_driver/openxr_runtime_env.sh
+# Source this file to force OpenXR applications to use the packaged XR Gate Monado runtime.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
+  chmod 0755 "$canonical_env_script"
 
-  chmod 0755 "$env_script"
+  cat > "$device_manifest" <<EOF
+{
+  "file_format_version": "1.0.0",
+  "runtime": {
+    "name": "XR Gate Monado",
+    "library_path": "$device_relative_lib"
+  }
+}
+EOF
 
-  [[ -f "$manifest" ]] || fail "OpenXR runtime manifest was not generated: $manifest"
-  [[ -x "$env_script" ]] || fail "OpenXR runtime env helper was not generated: $env_script"
+  cat > "$device_env_script" <<'EOF'
+#!/usr/bin/env bash
+# Compatibility path for existing device packages. New callers may source:
+#   bin/drivers/monado_driver/openxr_runtime_env.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
+echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
+EOF
+  chmod 0755 "$device_env_script"
+
+  [[ -f "$canonical_manifest" ]] || fail "OpenXR runtime manifest was not generated: $canonical_manifest"
+  [[ -x "$canonical_env_script" ]] || fail "OpenXR runtime env helper was not generated: $canonical_env_script"
+  [[ -f "$device_manifest" ]] || fail "Device compatibility manifest was not generated: $device_manifest"
+  [[ -x "$device_env_script" ]] || fail "Device compatibility env helper was not generated: $device_env_script"
   [[ -e "$BIN_DIR/$lib_name" ]] || fail "OpenXR runtime library symlink/copy was not installed: $BIN_DIR/$lib_name"
 
   log "installed OpenXR runtime library: $BIN_DIR/$lib_name"
-  log "installed OpenXR runtime manifest: $manifest"
-  log "installed OpenXR env helper: $env_script"
+  log "installed canonical OpenXR runtime manifest: $canonical_manifest"
+  log "installed canonical OpenXR env helper: $canonical_env_script"
+  log "installed device compatibility manifest: $device_manifest"
+  log "installed device compatibility env helper: $device_env_script"
 }
-
 
 install_runtime_binaries() {
   mkdir -p "$BIN_DIR"
@@ -675,6 +709,27 @@ install_runtime_binaries() {
   if [[ -f "$SCRIPT_DIR/start.sh" ]]; then
     install -m 0755 "$SCRIPT_DIR/start.sh" "$BIN_DIR/start.sh"
   fi
+  if [[ -f "$DRIVER_DIR/scripts/display_optics_config.py" ]]; then
+    install -m 0755 "$DRIVER_DIR/scripts/display_optics_config.py" "$BIN_DIR/display_optics_config.py"
+  fi
+
+  if [[ -d "$DRIVER_DIR/configs" ]]; then
+    rm -rf "$BIN_DIR/configs.tmp"
+    mkdir -p "$BIN_DIR/configs.tmp"
+    cp -a "$DRIVER_DIR/configs/." "$BIN_DIR/configs.tmp/"
+    rm -rf "$BIN_DIR/configs"
+    mv "$BIN_DIR/configs.tmp" "$BIN_DIR/configs"
+    log "installed Monado display/optics configs: $BIN_DIR/configs"
+  fi
+
+  if [[ -d "$DRIVER_DIR/profiles" ]]; then
+    rm -rf "$BIN_DIR/profiles.tmp"
+    mkdir -p "$BIN_DIR/profiles.tmp"
+    cp -a "$DRIVER_DIR/profiles/." "$BIN_DIR/profiles.tmp/"
+    rm -rf "$BIN_DIR/profiles"
+    mv "$BIN_DIR/profiles.tmp" "$BIN_DIR/profiles"
+    log "installed Monado display profiles: $BIN_DIR/profiles"
+  fi
 
   install_openxr_runtime_manifest
 
@@ -683,10 +738,12 @@ install_runtime_binaries() {
 export XR_TRACKING_ROOT="$ROOT_PROJECT"
 export XR_TRACKING_RUNTIME_ENABLE=1
 export XR_MONADO_DEVICE="$XR_MONADO_DEVICE"
+export XR_MONADO_DISPLAY_PROFILE="\${XR_MONADO_DISPLAY_PROFILE:-$XR_MONADO_DEVICE}"
+export XR_MONADO_DISPLAY_CONFIG="\${XR_MONADO_DISPLAY_CONFIG:-$BIN_DIR/configs/display/default.yaml}"
 export XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-$XR_MONADO_DEVICE}"
 export XR_DEVICE_TARGET="${XR_DEVICE_TARGET:-$XR_MONADO_DEVICE}"
 export XR_MONADO_SERVICE_BIN="$BIN_DIR/monado-service"
-export XR_RUNTIME_JSON="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_monado_xrgate.json"
+export XR_RUNTIME_JSON="$BIN_DIR/openxr_monado_xrgate.json"
 EOF
 
   log "installed runtime binaries into: $BIN_DIR"
@@ -714,11 +771,9 @@ main() {
   patch_project_driver_sources
   copy_project_driver_to_monado
   apply_monado_integration_patch
-  if [[ "$XR_MONADO_DEVICE" == "xreal_ultra" ]]; then
-    patch_xreal_air_builder_guard
-  else
-    log "skipping xreal_air builder guard for XR_MONADO_DEVICE=$XR_MONADO_DEVICE"
-  fi
+  # The built-in xreal_air builder must yield whenever the project runtime
+  # driver is explicitly enabled, regardless of the package/profile name.
+  patch_xreal_air_builder_guard
   patch_rift_constellation_compile_guard
   configure_and_build_monado
   install_runtime_binaries
@@ -726,9 +781,10 @@ main() {
 
   log "done"
   log "start with: $BIN_DIR/start.sh"
-  log "device wrapper: $DEVICE_MONADO_SCRIPT_OUT_DIR/start_monado_driver.sh"
-  log "display helper: $DEVICE_MONADO_SCRIPT_OUT_DIR/double_display_fix.sh"
-  log "display control: $DEVICE_MONADO_SCRIPT_OUT_DIR/main_display_control.sh"
+  log "generic start: $BIN_DIR/start.sh"
+  if [[ -d "$DEVICE_MONADO_SCRIPT_OUT_DIR" ]]; then
+    log "device-specific files: $DEVICE_MONADO_SCRIPT_OUT_DIR"
+  fi
 }
 
 main "$@"

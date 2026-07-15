@@ -1,0 +1,72 @@
+version: 1
+
+service:
+  profile: leap_motion_uvc_nrf54l15
+  namespace: leap_uvc_test
+  registry_path: /tmp/capture_service_streams.json
+  publish: [shm]
+
+camera:
+  enabled: true
+  driver: opencv
+  slot_count: 8
+  layout: interleaved_columns
+  stereo_order: left_right
+
+  primary:
+    device:
+      linux: /dev/v4l/by-id/usb-Leap_Motion_Leap_Motion_Controller-video-index0
+    index: 0
+    api:
+      linux: v4l2
+      windows: auto
+
+    width: 640
+    height: 480
+    # Keep the device-native 57.5 FPS mode.
+    fps: 0
+    raw_format: false
+    convert_rgb: false
+    buffer_size: 1
+
+    controls_policy: strict
+    controls:
+      brightness: 10
+      gain: 32
+      exposure_time_absolute: 5000
+
+  output:
+    left_stream: camera0
+    right_stream: camera1
+    width: 640
+    height: 480
+
+  transform:
+    left:
+      rotate: 180
+      flip: none
+    right:
+      rotate: 180
+      flip: none
+
+  stall_exit_ms: 3000
+
+imu:
+  enabled: true
+  driver: serial
+  slot_count: 2048
+  output:
+    stream: imu0
+    frame: imu0
+  raw:
+    enabled: false
+  serial:
+    port:
+      linux: /dev/ttyACM0
+      windows: COM5
+    baud_rate: 921600
+    protocol: xr_imu_v1
+    timestamp_mode: device
+    read_timeout_ms: 50
+    max_packet_size: 256
+  stall_exit_ms: 2000

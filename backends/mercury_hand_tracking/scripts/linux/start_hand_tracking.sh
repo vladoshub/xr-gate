@@ -10,11 +10,52 @@ expand_tilde() {
   esac
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
+TRANSPORT="${TRANSPORT:-shm}"
+REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
+CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
+CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
+CAM0_STREAM="${CAM0_STREAM:-camera0}"
+CAM1_STREAM="${CAM1_STREAM:-camera1}"
+
+# Optional TCP metadata probe for automatic profile selection. Disabled by
+# default so the existing local-registry/XREAL path is unchanged.
+CAPTURE_PROFILE_PROBE_ENABLED="${CAPTURE_PROFILE_PROBE_ENABLED:-0}"
+CAPTURE_PROFILE_PROBE_HOST="${CAPTURE_PROFILE_PROBE_HOST:-$CAPTURE_TCP_HOST}"
+CAPTURE_PROFILE_PROBE_PORT="${CAPTURE_PROFILE_PROBE_PORT:-$CAPTURE_TCP_PORT}"
+CAPTURE_PROFILE_PROBE_TIMEOUT_MS="${CAPTURE_PROFILE_PROBE_TIMEOUT_MS:-1500}"
+
 XR_CALIB_DIR="${XR_CALIB_DIR:-$ROOT_PROJECT/calibration_dataset}"
 XR_CALIB_DIR="$(expand_tilde "$XR_CALIB_DIR")"
+
+PROFILE_HELPER=""
+for candidate in \
+  "$SCRIPT_DIR/capture_profile.sh" \
+  "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh" \
+  "$ROOT_PROJECT/bin/backends/mercury_hand_tracking/scripts/linux/capture_profile.sh"
+do
+  if [[ -f "$candidate" ]]; then PROFILE_HELPER="$candidate"; break; fi
+done
+[[ -n "$PROFILE_HELPER" ]] || {
+  echo "[start_hand_tracking][ERROR] capture_profile.sh not found" >&2
+  exit 2
+}
+# shellcheck source=/dev/null
+source "$PROFILE_HELPER"
+capture_profile_parse_cli "$@"
+set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
+capture_profile_load_backend \
+  "mercury_hand_tracking" \
+  "${CAPTURE_PROFILE_CLI_OVERRIDE:-${MERCURY_PROFILE:-${CAPTURE_PROFILE:-}}}" \
+  "$REGISTRY" \
+  "xreal_air2ultra_unified_480" \
+  "$ROOT_PROJECT" \
+  "$SCRIPT_DIR" \
+  "${MERCURY_PROFILE_DIR:-}"
+
 XR_DEVICE_NAME="${XR_DEVICE_NAME:-xreal_air2ultra}"
 XR_SERIAL="${XR_SERIAL:-ZBBM5DZFMP}"
 CALIB_PROFILE_NAME="${CALIB_PROFILE_NAME:-unified_480_ccw90}"
@@ -36,10 +77,6 @@ MERCURY_LIB="$(expand_tilde "$MERCURY_LIB")"
 BACKEND_BIN="$(expand_tilde "$BACKEND_BIN")"
 MERCURY_MODELS="$(expand_tilde "$MERCURY_MODELS")"
 
-TRANSPORT="${TRANSPORT:-shm}"
-REGISTRY="${REGISTRY:-/tmp/capture_service_streams.json}"
-CAM0_STREAM="${CAM0_STREAM:-camera0}"
-CAM1_STREAM="${CAM1_STREAM:-camera1}"
 DURATION="${DURATION:-0}"
 PRINT_EVERY="${PRINT_EVERY:-30}"
 MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.3}"
@@ -49,6 +86,10 @@ MERCURY_MIN_DETECTION_CONFIDENCE="${MERCURY_MIN_DETECTION_CONFIDENCE:-0.3}"
 #export MERCURY_XR_DEBUG_DUMP_DIR="${MERCURY_XR_DEBUG_DUMP_DIR:-/tmp/xr_mercury_debug}"
 export MERCURY_XR_DEBUG_DUMP_LATEST_ONLY="${MERCURY_XR_DEBUG_DUMP_LATEST_ONLY:-1}"
 export MERCURY_XR_DEBUG_DUMP_EVERY_N="${MERCURY_XR_DEBUG_DUMP_EVERY_N:-1}"
+
+echo "[start_hand_tracking] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_hand_tracking] capture_profile_source=$CAPTURE_PROFILE_SOURCE_RESOLVED"
+echo "[start_hand_tracking] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 ls -lh \
   "$BACKEND_BIN" \
@@ -60,6 +101,8 @@ ls -lh \
 args=(
   --transport "$TRANSPORT"
   --registry "$REGISTRY"
+  --tcp-host "$CAPTURE_TCP_HOST"
+  --tcp-port "$CAPTURE_TCP_PORT"
   --cam0-stream "$CAM0_STREAM"
   --cam1-stream "$CAM1_STREAM"
   --duration "$DURATION"
@@ -73,4 +116,4 @@ args=(
 )
 
 
-exec "$BACKEND_BIN" "${args[@]}"
+exec "$BACKEND_BIN" "${args[@]}" "$@"

@@ -1,6 +1,7 @@
 version: 1
 
 service:
+  profile: opencv_sbs_nrf54l15
   namespace: external_stereo_nrf54l15
   registry_path: /tmp/capture_service_streams.json
   slot_count: 256

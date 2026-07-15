@@ -128,7 +128,7 @@ class Client {
  private:
   void run();
   void send_hello();
-  void read_subscribe();
+  bool read_subscribe();
   bool wants(const std::string& stream_id) const;
 
   TcpFanoutPublisher::Impl* server_ = nullptr;
@@ -151,6 +151,7 @@ struct TcpFanoutPublisher::Impl {
   std::string bind_host;
   int port = 45660;
   std::string namespace_name;
+  std::string profile_name;
   int client_queue_size = 256;
   SocketRuntime socket_runtime;
   socket_t server_sock = kInvalidSocket;
@@ -160,8 +161,18 @@ struct TcpFanoutPublisher::Impl {
   std::vector<std::shared_ptr<Client>> clients;
   int next_client_id = 1;
 
-  Impl(std::unordered_map<std::string, StreamSpec> specs_, std::string bind_host_, int port_, std::string namespace_name_, int client_queue_size_)
-      : specs(std::move(specs_)), bind_host(std::move(bind_host_)), port(port_), namespace_name(std::move(namespace_name_)), client_queue_size(client_queue_size_) {}
+  Impl(std::unordered_map<std::string, StreamSpec> specs_,
+       std::string bind_host_,
+       int port_,
+       std::string namespace_name_,
+       std::string profile_name_,
+       int client_queue_size_)
+      : specs(std::move(specs_)),
+        bind_host(std::move(bind_host_)),
+        port(port_),
+        namespace_name(std::move(namespace_name_)),
+        profile_name(std::move(profile_name_)),
+        client_queue_size(client_queue_size_) {}
 
   void accept_loop() {
     while (!stop.load()) {
@@ -244,6 +255,7 @@ void Client::send_hello() {
         << "\"protocol\":\"" << kTcpProtocolName << "\","
         << "\"server_time_ns\":" << wall_ns() << ","
         << "\"namespace\":\"" << json_escape(server_->namespace_name) << "\","
+        << "\"profile\":\"" << json_escape(server_->profile_name) << "\","
         << "\"subscribe\":\"send line: SUBSCRIBE stream0,stream1 or SUBSCRIBE *\","
         << "\"streams\":{" << streams.str() << "}"
         << "}";
@@ -254,16 +266,21 @@ void Client::send_hello() {
   send_all(sock_, raw);
 }
 
-void Client::read_subscribe() {
+bool Client::read_subscribe() {
   const std::string line = try_read_line(sock_, 250);
+  if (line == "CLOSE") {
+    // Metadata-only probes read CAPHELLO, request a clean disconnect and do not
+    // create a long-lived stream subscriber.
+    return false;
+  }
   if (line.empty() || line == "SUBSCRIBE *") {
     subscribe_all_ = true;
-    return;
+    return true;
   }
   const std::string prefix = "SUBSCRIBE ";
   if (line.rfind(prefix, 0) != 0) {
     subscribe_all_ = true;
-    return;
+    return true;
   }
   subscribe_all_ = false;
   std::string value = line.substr(prefix.size());
@@ -278,12 +295,16 @@ void Client::read_subscribe() {
   }
   if (!cur.empty()) subscriptions_.insert(cur);
   if (subscriptions_.empty()) subscribe_all_ = true;
+  return true;
 }
 
 void Client::run() {
   try {
     send_hello();
-    read_subscribe();
+    if (!read_subscribe()) {
+      alive_.store(false);
+      return;
+    }
     std::cerr << "[capture_service_cpp][tcp] client " << id_ << " subscribed=" << (subscribe_all_ ? "*" : "filtered") << std::endl;
     while (alive_.load()) {
       TcpMessage msg;
@@ -312,8 +333,14 @@ TcpFanoutPublisher::TcpFanoutPublisher(std::unordered_map<std::string, StreamSpe
                                        std::string bind_host,
                                        int port,
                                        std::string namespace_name,
+                                       std::string profile_name,
                                        int client_queue_size)
-    : impl_(new Impl(std::move(specs), std::move(bind_host), port, std::move(namespace_name), client_queue_size)) {}
+    : impl_(new Impl(std::move(specs),
+                     std::move(bind_host),
+                     port,
+                     std::move(namespace_name),
+                     std::move(profile_name),
+                     client_queue_size)) {}
 
 TcpFanoutPublisher::~TcpFanoutPublisher() { stop(); }
 

@@ -11,6 +11,7 @@ metadata:
     resolution: 480x640
 
 service:
+  profile: xreal_air2ultra_unified_480
   namespace: xreal_air2ultra_linux
   registry_path: /tmp/capture_service_streams.json
   slot_count: 256

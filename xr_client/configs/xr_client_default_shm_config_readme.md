@@ -171,6 +171,8 @@ XR_PACKAGE_ROOT
 XR_ROOT_PROJECT
 XR_BIN_ROOT
 XR_DEVICE_HOME
+XR_COMMON_DEVICE_HOME
+XR_COMMON_SCRIPTS_ROOT
 XR_DEVICE_SCRIPTS_ROOT
 XR_DEVICE_CONFIGS_ROOT
 XR_CALIB_DIR
@@ -182,6 +184,8 @@ In package mode these should resolve to:
 XR_PACKAGE_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra
 XR_BIN_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/bin
 XR_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra
+XR_COMMON_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common
+XR_COMMON_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common/linux/scripts
 XR_DEVICE_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra/linux/scripts
 XR_DEVICE_CONFIGS_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra/configs
 ```
@@ -327,6 +331,9 @@ Commands use placeholders:
 {root}
 {bin}
 {device}
+{common_device}
+{common_scripts}
+{device_scripts}
 {scripts}
 {configs}
 {python}
@@ -346,9 +353,20 @@ Expected meaning:
   device profile root.
   In package mode: out/xreal_ultra/devices/xreal_ultra
 
-{scripts}
-  device runtime wrapper scripts.
+{common_device}
+  hardware-neutral device runtime root.
+  In package mode: out/xreal_ultra/devices/common
+
+{common_scripts}
+  hardware-neutral capture/backend/runtime wrappers.
+  In package mode: out/xreal_ultra/devices/common/linux/scripts
+
+{device_scripts}
+  selected hardware profile helpers.
   In package mode: out/xreal_ultra/devices/xreal_ultra/linux/scripts
+
+{scripts}
+  backward-compatible alias for {device_scripts}.
 
 {configs}
   device configs.
@@ -362,20 +380,22 @@ Example:
 
 ```json
 "command": [
-  "{scripts}/capture_service/start_capture_service.sh"
+  "{common_scripts}/capture_service/start_capture_service.sh"
 ]
 ```
 
 In package mode this should resolve to something like:
 
 ```text
-/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service.sh
+/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
 ```
 
 Recommended rule:
 
 ```text
-Use {scripts} for service start scripts.
+Use {common_scripts} for hardware-neutral service launchers.
+Use {device_scripts} for hardware-specific helpers.
+Use {scripts} only for compatibility with older configs.
 Use {configs} for device configs/calibration.
 Use {bin} for direct runtime executables or runtime Python files.
 Avoid {root}/backends/... in runtime configs.
@@ -395,7 +415,7 @@ Most service entries follow this shape:
   "start_on_launch": false,
   "optional": true,
   "command": [
-    "{scripts}/service/start_service.sh"
+    "{common_scripts}/service/start_service.sh"
   ],
   "env": {
     "KEY": "VALUE"
@@ -552,7 +572,7 @@ Do not mark core startup services as optional unless you want the pipeline to co
 
 ```json
 "command": [
-  "{scripts}/basalt_vio/start_basalt.sh"
+  "{common_scripts}/basalt_vio/start_basalt.sh"
 ]
 ```
 
@@ -867,7 +887,7 @@ Example:
   "description": "start display helper",
   "service_name": "xreal_display_helper",
   "command": [
-    "{scripts}/xreal_display_helper/start_xreal_helper_60hz.sh"
+    "{device_scripts}/xreal_display_helper/start_xreal_helper_60hz.sh"
   ],
   "wait_log_any": [
     "display mode after:  3",
@@ -1163,7 +1183,7 @@ Purpose:
 Command:
 
 ```json
-"{scripts}/basalt_vio/start_basalt.sh"
+"{common_scripts}/basalt_vio/start_basalt.sh"
 ```
 
 Ready stream:
@@ -1196,7 +1216,7 @@ Purpose:
 Command:
 
 ```json
-"{scripts}/imu_3dof/start_imu_3dof_backend.sh"
+"{common_scripts}/imu_3dof/start_imu_3dof_backend.sh"
 ```
 
 Ready stream:
@@ -1236,7 +1256,7 @@ Mercury hand tracking backend
 Command:
 
 ```json
-"{scripts}/mercury_hand_tracking/start_hand_tracking.sh"
+"{common_scripts}/mercury_hand_tracking/start_hand_tracking.sh"
 ```
 
 Ready stream:
@@ -1262,7 +1282,7 @@ Convert backend streams into runtime streams for OpenVR/Monado/debug viewers.
 Command:
 
 ```json
-"{scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"
+"{common_scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"
 ```
 
 Ready streams:
@@ -1408,7 +1428,7 @@ Manual key:
 Command:
 
 ```json
-"{scripts}/xr_spatial/start_xr_spatial_shm.sh"
+"{common_scripts}/xr_spatial/start_xr_spatial_shm.sh"
 ```
 
 Per-service env:
@@ -1978,6 +1998,7 @@ In package mode, the important roots are:
 ```text
 out/xreal_ultra/
   bin/
+  devices/common/
   devices/xreal_ultra/
   run_xr_client.sh
 ```
@@ -1985,10 +2006,14 @@ out/xreal_ultra/
 `default_shm.json` should use:
 
 ```text
-{scripts}/...
-{configs}/...
-{bin}/...
+{common_scripts}/...   hardware-neutral launchers
+{device_scripts}/...   XREAL-only helpers
+{configs}/...          XREAL configs and calibration
+{bin}/...              runtime binaries
 ```
+
+`{scripts}` remains an alias for `{device_scripts}` only for old configs. New
+backend/service entries should use `{common_scripts}`.
 
 and avoid direct source paths such as:
 
@@ -2002,7 +2027,7 @@ Correct package-style examples:
 
 ```json
 "command": [
-  "{scripts}/capture_service/start_capture_service.sh"
+  "{common_scripts}/capture_service/start_capture_service.sh"
 ]
 ```
 
@@ -2034,7 +2059,7 @@ This should be replaced with:
 
 ```json
 "command": [
-  "{scripts}/xr_spatial/start_xr_spatial_shm.sh"
+  "{common_scripts}/xr_spatial/start_xr_spatial_shm.sh"
 ]
 ```
 
@@ -2259,7 +2284,8 @@ PY
 Expected package-mode commands should resolve to:
 
 ```text
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/...
+out/xreal_ultra/devices/common/linux/scripts/...
+out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/...
 out/xreal_ultra/bin/...
 ```
 
@@ -2516,7 +2542,7 @@ python3 -m json.tool default_shm.json >/tmp/default_shm_check.json
 
 4. Keep service names stable.
 
-5. Use `{scripts}`, `{configs}`, and `{bin}` instead of hardcoded source-tree paths.
+5. Use `{common_scripts}`, `{device_scripts}`, `{configs}`, and `{bin}` instead of hardcoded source-tree paths.
 
 6. Clean only streams owned by the service being toggled.
 

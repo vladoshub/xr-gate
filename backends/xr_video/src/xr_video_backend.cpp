@@ -28,6 +28,32 @@ namespace {
 std::atomic_bool g_stop{false};
 void handle_signal(int) { g_stop = true; }
 
+class CameraOnlyShmCaptureTransport final : public capture_client::ICaptureTransport {
+ public:
+  CameraOnlyShmCaptureTransport(const std::string& registry_path,
+                                const std::string& cam0_stream,
+                                const std::string& cam1_stream)
+      : registry_(registry_path),
+        cam0_(std::make_unique<capture_client::ShmStreamReader>(registry_.stream(cam0_stream))),
+        cam1_(std::make_unique<capture_client::ShmStreamReader>(registry_.stream(cam1_stream))) {}
+
+  const std::string& type() const override {
+    static const std::string kType = "shm";
+    return kType;
+  }
+
+  capture_client::IStreamReader& cam0() override { return *cam0_; }
+  capture_client::IStreamReader& cam1() override { return *cam1_; }
+  capture_client::IStreamReader& imu() override {
+    throw std::logic_error("IMU is not available in xr_video camera-only SHM transport");
+  }
+
+ private:
+  capture_client::CaptureRegistry registry_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam0_;
+  std::unique_ptr<capture_client::ShmStreamReader> cam1_;
+};
+
 struct Stats {
   uint64_t frames = 0;
   uint64_t last_capture_seq = 0;
@@ -224,7 +250,7 @@ int main(int argc, char** argv) {
   app.add_option("--tcp-port", tcp_port, "capture input TCP port");
   app.add_option("--cam0-stream", cam0_stream, "Stream id for cam0/left runtime video image");
   app.add_option("--cam1-stream", cam1_stream, "Stream id for cam1/right runtime video image");
-  app.add_option("--imu-stream", imu_stream, "IMU stream id; required only by legacy shm/tcp capture transports");
+  app.add_option("--imu-stream", imu_stream, "IMU stream id; used only by the legacy tcp transport");
   app.add_option("--output", output, "Output mode: none, shm, tcp, or both");
   app.add_option("--video-registry", video_registry, "XR video SHM registry path");
   app.add_option("--video-stream", video_stream, "XR video stream id");
@@ -285,8 +311,8 @@ int main(int argc, char** argv) {
       cfg.imu_stream = imu_stream;
       transport = std::make_unique<capture_client::TcpCaptureTransport>(std::move(cfg));
     } else if (input_transport == "shm") {
-      transport = std::make_unique<capture_client::ShmCaptureTransport>(
-          registry_path, cam0_stream, cam1_stream, imu_stream);
+      transport = std::make_unique<CameraOnlyShmCaptureTransport>(
+          registry_path, cam0_stream, cam1_stream);
     } else {
       throw std::runtime_error("unknown --input-transport: " + input_transport);
     }

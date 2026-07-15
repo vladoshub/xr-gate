@@ -72,30 +72,49 @@ StereoCalibration load_stereo_calibration_json(const std::string& path) {
   const auto& v0 = require_obj(root, "value0");
   const auto& intr = require_obj(v0, "intrinsics");
   const auto& res = require_obj(v0, "resolution");
-  const auto& t_imu_cam = require_obj(v0, "T_imu_cam");
 
-  if (!intr.is_array() || intr.size() < 2 || !res.is_array() || res.size() < 2 ||
-      !t_imu_cam.is_array() || t_imu_cam.size() < 2) {
-    throw std::runtime_error("stereo calibration JSON must contain two cameras in value0.intrinsics/resolution/T_imu_cam");
+  if (!intr.is_array() || intr.size() < 2 || !res.is_array() || res.size() < 2) {
+    throw std::runtime_error("stereo calibration JSON must contain two cameras in value0.intrinsics/resolution");
   }
 
   StereoCalibration c;
   c.cam0 = read_intrinsics(intr.at(0), res.at(0));
   c.cam1 = read_intrinsics(intr.at(1), res.at(1));
-  c.T_imu_cam0 = read_pose(t_imu_cam.at(0));
-  c.T_imu_cam1 = read_pose(t_imu_cam.at(1));
   c.K0 = K(c.cam0);
   c.K1 = K(c.cam1);
   c.D0 = D(c.cam0);
   c.D1 = D(c.cam1);
 
-  // This calibration schema stores T_imu_cam. OpenCV stereoRectify wants transform from cam0 to cam1:
-  // X_cam1 = R_c1_c0 * X_cam0 + t_c1_c0.
-  const Mat3d R_i_c0 = c.T_imu_cam0.R;
-  const Mat3d R_i_c1 = c.T_imu_cam1.R;
-  const Mat3d R_c1_i = transpose(R_i_c1);
-  const Mat3d R_c1_c0 = multiply(R_c1_i, R_i_c0);
-  const Vec3d t_c1_c0 = multiply(R_c1_i, c.T_imu_cam0.t - c.T_imu_cam1.t);
+  Mat3d R_c1_c0;
+  Vec3d t_c1_c0;
+  if (v0.contains("T_imu_cam")) {
+    const auto& t_imu_cam = v0.at("T_imu_cam");
+    if (!t_imu_cam.is_array() || t_imu_cam.size() < 2) {
+      throw std::runtime_error("value0.T_imu_cam must contain two camera poses");
+    }
+    c.T_imu_cam0 = read_pose(t_imu_cam.at(0));
+    c.T_imu_cam1 = read_pose(t_imu_cam.at(1));
+
+    // X_cam1 = T_cam1_cam0 * X_cam0, derived from the two camera-to-IMU poses.
+    const Mat3d R_i_c0 = c.T_imu_cam0.R;
+    const Mat3d R_i_c1 = c.T_imu_cam1.R;
+    const Mat3d R_c1_i = transpose(R_i_c1);
+    R_c1_c0 = multiply(R_c1_i, R_i_c0);
+    t_c1_c0 = multiply(R_c1_i, c.T_imu_cam0.t - c.T_imu_cam1.t);
+  } else if (v0.contains("T_cam1_cam0")) {
+    // Camera-only schema: X_cam1 = T_cam1_cam0 * X_cam0.
+    const Transform3d T_cam1_cam0 = read_pose(v0.at("T_cam1_cam0"));
+    R_c1_c0 = T_cam1_cam0.R;
+    t_c1_c0 = T_cam1_cam0.t;
+
+    // Preserve the existing fields using cam0 as a virtual reference frame.
+    c.T_imu_cam0 = Transform3d{};
+    c.T_imu_cam1 = inverse(T_cam1_cam0);
+  } else {
+    throw std::runtime_error(
+        "stereo calibration JSON requires value0.T_imu_cam or camera-only value0.T_cam1_cam0");
+  }
+
   c.R_c1_c0 = mat3_to_cv(R_c1_c0);
   c.t_c1_c0 = vec3_to_cv(t_c1_c0);
   c.baseline_m = std::sqrt(t_c1_c0.x*t_c1_c0.x + t_c1_c0.y*t_c1_c0.y + t_c1_c0.z*t_c1_c0.z);

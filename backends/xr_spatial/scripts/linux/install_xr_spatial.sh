@@ -43,6 +43,8 @@ install_xr_spatial_runtime_bundle() {
   if [[ "$INSTALL_BUNDLE_SCRIPTS" == "1" ]]; then
     mkdir -p "$INSTALL_BIN_DIR/scripts"
     rsync -a --delete "$BACKEND_DIR/scripts/" "$INSTALL_BIN_DIR/scripts/"
+    cp "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh"       "$INSTALL_BIN_DIR/scripts/linux/capture_profile.sh"
+    chmod +x "$INSTALL_BIN_DIR/scripts/linux/capture_profile.sh"
   fi
 
   if [[ "$INSTALL_BUNDLE_CONFIGS" == "1" ]]; then
@@ -66,6 +68,7 @@ Main commands:
   scripts/linux/start_xr_spatial_scan.sh
   scripts/linux/start_xr_spatial.sh
   scripts/linux/start_xr_spatial_shm.sh
+  scripts/linux/start_xr_spatial_tcp.sh
 
 The launcher detects this bin layout and uses this directory as ROOT_PROJECT,
 so bundled configs can reference paths like:

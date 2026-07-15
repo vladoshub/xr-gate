@@ -67,18 +67,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Validate unpack helper
+      - name: Validate and build standalone unpack helper
         run: |
-          test -f devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          set -euo pipefail
+          test -x devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          test -x devices/common/linux/scripts/release/unpack_device_release.sh
           bash -n devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
-          chmod +x devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
-          ls -lh devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          bash -n devices/common/linux/scripts/release/unpack_device_release.sh
+
+          mkdir -p release-helper
+          {
+            printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+            printf '%s\n' \
+              'export XR_RELEASE_DEVICE_TARGET="xreal_ultra"' \
+              'export XR_RELEASE_DEVICE_DISPLAY_NAME="XREAL Ultra"' \
+              'export XR_RELEASE_DEVICE_ENV_NAME="xreal_ultra.env"'
+            tail -n +3 devices/common/linux/scripts/release/unpack_device_release.sh
+          } > release-helper/unpack_xreal_ultra.sh
+          chmod +x release-helper/unpack_xreal_ultra.sh
+          bash -n release-helper/unpack_xreal_ultra.sh
+          release-helper/unpack_xreal_ultra.sh --help | grep -F 'XREAL Ultra'
+          ls -lh release-helper/unpack_xreal_ultra.sh
 
       - name: Upload unpack helper
         uses: actions/upload-artifact@v4
         with:
           name: unpack-xreal-ultra
-          path: devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          path: release-helper/unpack_xreal_ultra.sh
           if-no-files-found: error
           retention-days: 7
 
@@ -112,6 +127,30 @@ jobs:
         with:
           submodules: recursive
           lfs: true
+
+      - name: Validate common build/package wrappers
+        run: |
+          set -euo pipefail
+          scripts=(
+            devices/common/linux/scripts/build/device_out_env.sh
+            devices/common/linux/scripts/build/install_device_out.sh
+            devices/common/linux/scripts/build/package_device_out.sh
+            devices/common/linux/scripts/ci/run_act_build.sh
+            devices/common/linux/scripts/release/unpack_device_release.sh
+            devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+            devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+            devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
+            devices/xreal_ultra/linux/scripts/run_xreal_ultra_act_build.sh
+            devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+            devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+            devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
+            devices/xreal_ultra/linux/scripts/build_xreal_ultra_components.sh
+            devices/xreal_ultra/linux/scripts/package_xreal_ultra_components.sh
+          )
+          for script in "${scripts[@]}"; do
+            test -x "$script"
+            bash -n "$script"
+          done
 
       - name: Install base build packages
         run: |
@@ -158,15 +197,107 @@ jobs:
           df -h
           ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
           du -sh out/xreal_ultra || true
-          find out/xreal_ultra -maxdepth 4 -type f | sort | head -200
+          find out/xreal_ultra -maxdepth 4 -type f | sort | sed -n '1,200p'
 
-      - name: Validate capture launchers
+      - name: Validate capture launchers and TCP metadata probe
         if: ${{ matrix.name == 'capture' }}
         run: |
+          set -euo pipefail
           test -x out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
+          test -x out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
           bash -n out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
-          bash -n out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service/start_capture_service_cpp.sh
+          bash -n out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
+          out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+
+          READY_FILE="$(mktemp)"
+          rm -f "$READY_FILE"
+          export READY_FILE
+          python3 - <<'PY' &
+          import json
+          import os
+          import socket
+
+          hello = json.dumps({
+              "protocol": "capture_net_v1_json_payload",
+              "namespace": "ci_capture",
+              "profile": "leap_motion_uvc_nrf54l15",
+              "streams": {},
+          }, separators=(",", ":")).encode("utf-8")
+
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+              server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              server.bind(("127.0.0.1", 45679))
+              server.listen(1)
+              open(os.environ["READY_FILE"], "w", encoding="utf-8").close()
+              connection, _ = server.accept()
+              with connection:
+                  connection.sendall(f"CAPHELLO {len(hello)}\n".encode("ascii"))
+                  connection.sendall(hello)
+                  connection.recv(64)
+          PY
+          SERVER_PID=$!
+          for _ in $(seq 1 50); do
+            [[ -f "$READY_FILE" ]] && break
+            sleep 0.1
+          done
+          test -f "$READY_FILE"
+          PROFILE="$(out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe \
+            --host 127.0.0.1 \
+            --port 45679 \
+            --timeout-ms 2000 \
+            --print-profile)"
+          wait "$SERVER_PID"
+          rm -f "$READY_FILE"
+          test "$PROFILE" = "leap_motion_uvc_nrf54l15"
+
+      - name: Validate capture profile resolver
+        if: ${{ matrix.name == 'runtime' }}
+        run: |
+          bash backends/common/tests/capture_profile_smoke.sh
+
+      - name: Validate common/device script separation
+        if: ${{ matrix.name == 'runtime' }}
+        run: |
+          set -euo pipefail
+          test -x out/xreal_ultra/devices/common/linux/scripts/basalt_vio/start_basalt.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/mercury_hand_tracking/start_hand_tracking.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
+          test ! -e out/xreal_ultra/devices/common/linux/scripts/build
+          test ! -e out/xreal_ultra/devices/common/linux/scripts/ci
+          test ! -e out/xreal_ultra/devices/common/linux/scripts/release
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/basalt_vio
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_video
+
+      - name: Validate xr_spatial SHM/TCP launchers
+        if: ${{ matrix.name == 'spatial' }}
+        run: |
+          set -euo pipefail
+          test -x out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend
+          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
+          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
+          bash -n out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          HELP_FILE="$(mktemp)"
+          trap 'rm -f "$HELP_FILE"' EXIT
+          out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend \
+            --help >"$HELP_FILE" 2>&1
+          grep -Fq -- '--capture-transport' "$HELP_FILE"
+          grep -Fq -- '--capture-tcp-host' "$HELP_FILE"
+
 
       - name: Archive partial package
         run: |
@@ -290,8 +421,19 @@ jobs:
           done
           test -d merged/xreal_ultra/bin
           test -x merged/xreal_ultra/run_xr_client.sh
+          test -x merged/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
+          test -x merged/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
+          test -x merged/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x merged/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
+          test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x merged/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test ! -e merged/xreal_ultra/devices/common/linux/scripts/build
+          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
           du -sh merged/xreal_ultra
-          find merged/xreal_ultra -maxdepth 4 -type f | sort | head -300
+          find merged/xreal_ultra -maxdepth 4 -type f | sort | sed -n '1,300p'
           tar -C merged -czf xreal_ultra_linux_x64.tar.gz xreal_ultra
           ls -lh xreal_ultra_linux_x64.tar.gz
 
@@ -350,6 +492,17 @@ jobs:
 
           test -d verify/runtime/xreal_ultra/bin
           test -x verify/runtime/xreal_ultra/run_xr_client.sh
+          test -x verify/runtime/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
+          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
+          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x verify/runtime/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
+          test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test ! -e verify/runtime/xreal_ultra/devices/common/linux/scripts/build
+          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
 
       - name: Create or update GitHub Release
         env:

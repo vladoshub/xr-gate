@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
   const xr_capture_cpp::RuntimeConfig cfg =
       xr_capture_cpp::parse_args(static_cast<int>(args.size()), args.data());
 
+  require(cfg.profile_name == "xreal_air2ultra_unified_480", "capture profile");
   require(cfg.camera.driver == "xreal_ultra", "camera driver");
   require(cfg.camera.primary.device_path == "/dev/video0", "camera device");
   require(cfg.camera.primary.width == 640 && cfg.camera.primary.height == 241 &&

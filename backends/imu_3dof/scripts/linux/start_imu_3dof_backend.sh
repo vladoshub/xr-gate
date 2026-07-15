@@ -10,6 +10,7 @@ expand_tilde() {
   esac
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
@@ -18,12 +19,48 @@ IMU_3DOF_BACKEND_BIN="$(expand_tilde "$IMU_3DOF_BACKEND_BIN")"
 
 TRANSPORT="${IMU_3DOF_TRANSPORT:-${TRANSPORT:-shm}}"
 CAPTURE_REGISTRY="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
+CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
+CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 IMU_STREAM="${IMU_STREAM:-imu0}"
 CAM0_STREAM="${CAM0_STREAM:-camera0}"
 CAM1_STREAM="${CAM1_STREAM:-camera1}"
-CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
-CAPTURE_TCP_PORT="${CAPTURE_TCP_PORT:-45660}"
 
+# Optional TCP metadata probe for automatic profile selection. Disabled by
+# default so the existing local-registry/XREAL path is unchanged.
+CAPTURE_PROFILE_PROBE_ENABLED="${CAPTURE_PROFILE_PROBE_ENABLED:-0}"
+CAPTURE_PROFILE_PROBE_HOST="${CAPTURE_PROFILE_PROBE_HOST:-$CAPTURE_TCP_HOST}"
+CAPTURE_PROFILE_PROBE_PORT="${CAPTURE_PROFILE_PROBE_PORT:-$CAPTURE_TCP_PORT}"
+CAPTURE_PROFILE_PROBE_TIMEOUT_MS="${CAPTURE_PROFILE_PROBE_TIMEOUT_MS:-1500}"
+
+PROFILE_HELPER=""
+for candidate in \
+  "$SCRIPT_DIR/capture_profile.sh" \
+  "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh" \
+  "$ROOT_PROJECT/bin/backends/imu_3dof/scripts/linux/capture_profile.sh"
+do
+  if [[ -f "$candidate" ]]; then PROFILE_HELPER="$candidate"; break; fi
+done
+[[ -n "$PROFILE_HELPER" ]] || {
+  echo "[start_imu_3dof_backend][ERROR] capture_profile.sh not found" >&2
+  exit 2
+}
+# shellcheck source=/dev/null
+source "$PROFILE_HELPER"
+capture_profile_parse_cli "$@"
+set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
+capture_profile_load_backend \
+  "imu_3dof" \
+  "${CAPTURE_PROFILE_CLI_OVERRIDE:-${IMU_3DOF_PROFILE:-${CAPTURE_PROFILE:-}}}" \
+  "$CAPTURE_REGISTRY" \
+  "xreal_air2ultra_unified_480" \
+  "$ROOT_PROJECT" \
+  "$SCRIPT_DIR" \
+  "${IMU_3DOF_PROFILE_DIR:-}"
+
+if [[ "${IMU_3DOF_PROFILE_SUPPORTED:-1}" != "1" ]]; then
+  echo "[start_imu_3dof_backend][ERROR] capture profile '$CAPTURE_PROFILE_RESOLVED' is not supported: ${IMU_3DOF_PROFILE_UNSUPPORTED_REASON:-IMU stream is required}" >&2
+  exit 2
+fi
 POSE_REGISTRY="${POSE_REGISTRY:-${TRACKING_REGISTRY:-/tmp/tracking_streams.json}}"
 POSE_STREAM="${POSE_STREAM:-hmd_pose_3dof}"
 POSE_SHM_NAME="${POSE_SHM_NAME:-track_hmd_pose_3dof}"
@@ -92,6 +129,10 @@ args=(
   --print-every "$PRINT_EVERY"
   --duration "$DURATION"
 )
+
+echo "[start_imu_3dof_backend] capture_profile=$CAPTURE_PROFILE_RESOLVED"
+echo "[start_imu_3dof_backend] capture_profile_source=$CAPTURE_PROFILE_SOURCE_RESOLVED"
+echo "[start_imu_3dof_backend] profile_file=$CAPTURE_PROFILE_FILE_RESOLVED"
 
 cat <<EOF2
 ROOT_PROJECT=$ROOT_PROJECT

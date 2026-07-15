@@ -28,8 +28,9 @@ def platform_name() -> str:
 def default_scripts_os() -> str:
     """Return the device scripts subdirectory for the current host OS.
 
-    Linux behavior intentionally remains unchanged: scripts still resolve to
-    devices/xreal_ultra/linux/scripts unless XR_DEVICE_SCRIPTS_ROOT overrides it.
+    The legacy {scripts} alias still resolves to the selected device script
+    directory. Hardware-neutral launchers use the separate {common_scripts}
+    placeholder.
     """
     raw = os.environ.get("XR_DEVICE_SCRIPTS_OS", "").strip().lower()
     if raw:
@@ -118,6 +119,12 @@ def _path_placeholders(root_project: Optional[str] = None) -> Dict[str, str]:
     scripts_root = os.environ.get("XR_DEVICE_SCRIPTS_ROOT")
     if not scripts_root and device_home:
         scripts_root = str(Path(device_home) / default_scripts_os() / "scripts")
+    common_device_home = os.environ.get("XR_COMMON_DEVICE_HOME")
+    if not common_device_home and root:
+        common_device_home = str(Path(root) / "devices" / "common")
+    common_scripts_root = os.environ.get("XR_COMMON_SCRIPTS_ROOT")
+    if not common_scripts_root and common_device_home:
+        common_scripts_root = str(Path(common_device_home) / default_scripts_os() / "scripts")
     configs_root = os.environ.get("XR_DEVICE_CONFIGS_ROOT")
     if not configs_root and device_home:
         configs_root = str(Path(device_home) / "configs")
@@ -129,7 +136,13 @@ def _path_placeholders(root_project: Optional[str] = None) -> Dict[str, str]:
         "python": sys.executable,
         "bin": bin_root or "",
         "device": device_home or "",
+        # Keep {scripts} as the legacy device-script alias. New configs should
+        # use {common_scripts} for hardware-neutral launchers and
+        # {device_scripts} for hardware-specific helpers.
         "scripts": scripts_root or "",
+        "device_scripts": scripts_root or "",
+        "common_device": common_device_home or "",
+        "common_scripts": common_scripts_root or "",
         "scripts_os": default_scripts_os(),
         "configs": configs_root or "",
         "calibration": calib_root or "",
