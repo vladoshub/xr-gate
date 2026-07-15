@@ -32,6 +32,6 @@ struct DecodedPacket {
 };
 
 std::optional<DecodedPacket> decode_packet(const uint8_t* data, size_t size);
-const std::array<Command, 8>& initialization_commands();
+const std::array<Command, 1>& initialization_commands();
 
 }  // namespace xr_override_controller::gearvr

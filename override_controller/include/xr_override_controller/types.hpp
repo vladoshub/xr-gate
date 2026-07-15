@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -119,6 +120,15 @@ struct ConfigDevice {
   int id = 0;
   DeviceFingerprint fingerprint;
   DeviceInputConfig input;
+
+  // Explicit IMU routing is independent from button/axis bindings. This lets
+  // an IMU-only provider (for example MPU-6050) feed one controller side
+  // without exposing any input buttons. Missing/"none" means unassigned.
+  std::optional<ControllerSide> imu_side;
+
+  // Runtime-only migration marker: old configs did not contain imu_side.
+  // Explicit "none" must remain distinct from a missing legacy field.
+  bool imu_side_explicit = false;
 };
 
 struct BindingConfig {
@@ -172,6 +182,10 @@ struct InputConfig {
 
 struct AppConfig {
   std::string name = "default";
+
+  // Runtime-only: load_config_file inferred imu_side for a legacy config and
+  // the caller may persist the migrated schema atomically.
+  bool migrated_imu_side = false;
   PublishConfig publish;
   InputConfig input;
   std::vector<ConfigDevice> devices;

@@ -12,7 +12,7 @@ Runtime launch wrappers may point `CONFIG_PATH` to the selected mapping file.
 
 ## Per-device input timing
 
-Config schema version 2 stores pulse/hold behavior inside each physical device:
+Config schema version 3 stores IMU routing and pulse/hold behavior inside each physical device:
 
 ```json
 {
@@ -20,6 +20,7 @@ Config schema version 2 stores pulse/hold behavior inside each physical device:
     {
       "id": 1,
       "name": "VR-PARK",
+      "imu_side": "none",
       "input": {
         "rel_axis_hold_ms": 0,
         "rel_button_hold_ms": 0,
@@ -40,6 +41,11 @@ Config schema version 2 stores pulse/hold behavior inside each physical device:
 }
 ```
 
-Every missing field defaults to `0`; `pulse_mode` defaults to `false`, and
-`button_pulse_startup_types` defaults to an empty list. The old timing fields
-under the top-level `input` object are not used by schema version 2.
+`imu_side` accepts `left`, `right`, or `none`. IMU routing is independent from
+button bindings, so an IMU-only provider may be assigned to a controller side.
+During Gear VR training it is filled automatically. Legacy Gear VR configs are
+migrated from their unambiguous binding side and saved as schema version 3.
+
+Every missing timing field defaults to `0`; `pulse_mode` defaults to `false`,
+and `button_pulse_startup_types` defaults to an empty list. The old timing
+fields under the top-level `input` object are not used by schema version 3.

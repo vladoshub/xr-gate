@@ -75,8 +75,17 @@ void TouchpadProcessor::process(int touch_x, int touch_y, const EmitFn& emit) {
   }
   if (options_.invert_x) x = -x;
   if (options_.invert_y) y = -y;
-  emit(codes::kEvAbs, codes::kAbsX, x);
-  emit(codes::kEvAbs, codes::kAbsY, y);
+  // Emit only axes that actually changed. In particular, a vertical swipe
+  // must not generate a leading neutral ABS_X event that the training wizard
+  // can mistake for the Y-axis binding.
+  if (x != last_x_) {
+    emit(codes::kEvAbs, codes::kAbsX, x);
+    last_x_ = x;
+  }
+  if (y != last_y_) {
+    emit(codes::kEvAbs, codes::kAbsY, y);
+    last_y_ = y;
+  }
 }
 
 void TouchpadProcessor::release(const EmitFn& emit) {
@@ -84,8 +93,8 @@ void TouchpadProcessor::release(const EmitFn& emit) {
   if (dpad_code_ != 0) {
     emit(codes::kEvKey, dpad_code_, 0);
   } else {
-    emit(codes::kEvAbs, codes::kAbsX, 0);
-    emit(codes::kEvAbs, codes::kAbsY, 0);
+    if (last_x_ != 0) emit(codes::kEvAbs, codes::kAbsX, 0);
+    if (last_y_ != 0) emit(codes::kEvAbs, codes::kAbsY, 0);
   }
   reset();
 }
@@ -94,6 +103,8 @@ void TouchpadProcessor::reset() {
   touched_ = false;
   anchor_x_ = 0;
   anchor_y_ = 0;
+  last_x_ = 0;
+  last_y_ = 0;
   dpad_code_ = 0;
 }
 

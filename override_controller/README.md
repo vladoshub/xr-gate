@@ -191,9 +191,20 @@ The native provider decodes gyroscope, accelerometer, and magnetometer values,
 performs a short stationary gyroscope-bias estimate, and computes a 6DoF
 orientation with the shared C++ `ControllerImuProcessor`. Raw magnetic field
 is published, but is intentionally not used by the AHRS until a proper
-magnetometer-calibration flow is added. Each side receives IMU state through
-`ControllerInputV3` only when that physical device is used by bindings for that
-side.
+magnetometer-calibration flow is added. IMU routing is configured explicitly in
+the top-level device entry:
+
+```json
+{
+  "id": 1,
+  "backend": "gearvr_ble",
+  "imu_side": "left"
+}
+```
+
+`imu_side` accepts `left`, `right`, or `none` and is independent from button
+bindings. Gear VR training assigns it automatically. This also allows a future
+MPU-6050 provider to publish IMU-only data without exposing any buttons.
 
 The runtime adapter still requires the matching side to use:
 

@@ -31,6 +31,8 @@ class TouchpadProcessor {
   bool touched_ = false;
   int anchor_x_ = 0;
   int anchor_y_ = 0;
+  int last_x_ = 0;
+  int last_y_ = 0;
   uint16_t dpad_code_ = 0;
 };
 

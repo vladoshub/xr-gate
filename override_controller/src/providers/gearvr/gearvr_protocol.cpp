@@ -42,14 +42,11 @@ std::optional<DecodedPacket> decode_packet(const uint8_t* data, size_t size) {
   return packet;
 }
 
-const std::array<Command, 8>& initialization_commands() {
-  // Preserve the working 0013/0014 sequence: sensor x3, low-power enable x1,
-  // low-power disable x1, VR mode x3.
-  static const std::array<Command, 8> commands{
-      kCommandSensor, kCommandSensor, kCommandSensor,
-      kCommandLpmEnable, kCommandLpmDisable,
-      kCommandVrMode, kCommandVrMode, kCommandVrMode,
-  };
+const std::array<Command, 1>& initialization_commands() {
+  // gearVRC starts the controller with one VR-mode write. Repeat it once after
+  // notification subscription to cover controllers that only begin streaming
+  // after the CCC descriptor has been enabled.
+  static const std::array<Command, 1> commands{kCommandVrMode};
   return commands;
 }
 

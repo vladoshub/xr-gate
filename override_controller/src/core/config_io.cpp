@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -200,6 +201,7 @@ nlohmann::json config_device_to_json(const ConfigDevice& d) {
   nlohmann::json j = fp_to_json(d.fingerprint);
   j["id"] = d.id;
   j["input"] = device_input_to_json(d.input);
+  j["imu_side"] = d.imu_side ? to_string(*d.imu_side) : "none";
   return j;
 }
 
@@ -208,6 +210,14 @@ ConfigDevice config_device_from_json(const nlohmann::json& j, int fallback_id) {
   d.id = j.value("id", fallback_id);
   d.fingerprint = fp_from_json(j);
   d.input = device_input_from_json(j);
+  d.imu_side_explicit = j.contains("imu_side");
+  const std::string imu_side = json_string_or(j, "imu_side", "none");
+  if (imu_side == "left" || imu_side == "right") {
+    d.imu_side = parse_side(imu_side);
+  } else if (imu_side != "none" && !imu_side.empty()) {
+    throw std::runtime_error("invalid devices[].imu_side '" + imu_side +
+                             "'; expected left, right, or none");
+  }
   return d;
 }
 
@@ -272,6 +282,31 @@ int ensure_config_device(AppConfig& cfg, const DeviceFingerprint& fp) {
   d.fingerprint = fp;
   cfg.devices.push_back(d);
   return d.id;
+}
+
+bool infer_legacy_gearvr_imu_sides(AppConfig& cfg) {
+  bool changed = false;
+  const auto collect = [&](int device_id, std::set<ControllerSide>& sides,
+                           const std::vector<BindingConfig>& bindings) {
+    for (const auto& b : bindings) {
+      if (b.device_id == device_id) sides.insert(b.side);
+    }
+  };
+
+  for (auto& device : cfg.devices) {
+    if (device.imu_side_explicit || device.fingerprint.backend != "gearvr_ble") continue;
+    std::set<ControllerSide> sides;
+    collect(device.id, sides, cfg.bindings);
+    collect(device.id, sides, cfg.hold_toggle_bindings);
+    collect(device.id, sides, cfg.alternative_bindings);
+    collect(device.id, sides, cfg.alternative_hold_toggle_bindings);
+    if (sides.size() == 1) {
+      device.imu_side = *sides.begin();
+      device.imu_side_explicit = true;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 void hydrate_binding_device(AppConfig& cfg, BindingConfig& b) {
@@ -395,12 +430,13 @@ AppConfig load_config_file(const fs::path& path) {
   for (const auto& bj : j.value("alternative_hold_toggle_bindings", nlohmann::json::array())) {
     cfg.alternative_hold_toggle_bindings.push_back(binding_from_json(bj));
   }
+  cfg.migrated_imu_side = infer_legacy_gearvr_imu_sides(cfg);
   return cfg;
 }
 
 void save_config_file(const AppConfig& cfg, const fs::path& path) {
   nlohmann::json j;
-  j["version"] = 2;
+  j["version"] = 3;
   j["name"] = cfg.name;
   j["publish"] = {
       {"transport", cfg.publish.transport},

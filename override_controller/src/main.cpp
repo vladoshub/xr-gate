@@ -377,6 +377,31 @@ int ensure_config_device(AppConfig& cfg, const DeviceFingerprint& fp) {
   return d.id;
 }
 
+void assign_imu_side_if_supported(InputProvider& provider,
+                                  const DeviceInfo& device,
+                                  AppConfig& cfg,
+                                  int config_device_id,
+                                  ControllerSide side) {
+  const auto imu = provider.imu_state(device);
+  if (!xr_runtime::controller_imu_is_present(imu)) return;
+  ConfigDevice* config_device = find_config_device(cfg, config_device_id);
+  if (!config_device) return;
+
+  if (config_device->imu_side && *config_device->imu_side != side) {
+    std::cerr << "[override_controller][WARN] device_id=" << config_device_id
+              << " IMU is already assigned to " << to_string(*config_device->imu_side)
+              << "; keeping the existing assignment instead of changing it to "
+              << to_string(side) << "\n";
+    return;
+  }
+  if (!config_device->imu_side) {
+    config_device->imu_side = side;
+    config_device->imu_side_explicit = true;
+    std::cout << "  assigned device_id=" << config_device_id
+              << " imu_side=" << to_string(side) << "\n";
+  }
+}
+
 void sync_binding_device_from_registry(AppConfig& cfg, BindingConfig& b) {
   if (b.device_id <= 0) {
     b.device_id = ensure_config_device(cfg, b.device);
@@ -728,7 +753,10 @@ bool capture_binding(InputProvider& provider,
     if (ev->type == EV_ABS) {
       InputBindingSpec tmp = provider.make_input_spec(dev, ev->type, ev->code);
       const int dir = axis_direction(tmp, ev->value);
-      if (!is_axis_action(action) && dir == 0) continue;
+      // Ignore neutral ABS events even for analog-axis actions. Providers may
+      // publish both axes for one physical sample; accepting a zero-valued
+      // first axis would bind thumbstick_y to ABS_X (or vice versa).
+      if (dir == 0) continue;
       tmp.abs_direction = dir;
       out.side = side;
       out.action = action;
@@ -757,6 +785,7 @@ bool capture_binding(InputProvider& provider,
       continue;
     }
 
+    assign_imu_side_if_supported(provider, dev, cfg, out.device_id, side);
     std::cout << "  mapped " << to_string(side) << "." << to_string(action)
               << " <= " << out.input.name << " on " << short_device_label(out.device) << "\n";
     wait_for_input_quiet(provider, devices);
@@ -1375,6 +1404,7 @@ void update_counters(uint64_t prev, uint64_t now, uint32_t press[32], uint32_t r
 }
 
 OutputState compose_state(InputProvider& provider,
+                          const AppConfig& cfg,
                           const std::vector<RuntimeBinding>& bindings,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
@@ -1393,32 +1423,69 @@ OutputState compose_state(InputProvider& provider,
       default: return 0;
     }
   };
+  const auto resolve_device = [&](const DeviceFingerprint& wanted) {
+    int best_score = -1;
+    int best_index = -1;
+    bool ambiguous = false;
+    for (size_t i = 0; i < devices.size(); ++i) {
+      if (!devices[i].readable && !devices[i].identity_known) continue;
+      const int score = fingerprint_match_score(wanted, devices[i].fingerprint);
+      if (score > best_score) {
+        best_score = score;
+        best_index = static_cast<int>(i);
+        ambiguous = false;
+      } else if (score == best_score && score > 0) {
+        ambiguous = true;
+      }
+    }
+    return best_score >= 55 && !ambiguous ? best_index : -1;
+  };
+
+  bool explicit_left_imu = false;
+  bool explicit_right_imu = false;
+  for (const auto& config_device : cfg.devices) {
+    if (!config_device.imu_side) continue;
+    SideOutputState& side = *config_device.imu_side == ControllerSide::Left ? out.left : out.right;
+    std::set<std::string>& side_devices = *config_device.imu_side == ControllerSide::Left
+                                                ? left_devices
+                                                : right_devices;
+    if (*config_device.imu_side == ControllerSide::Left) explicit_left_imu = true;
+    else explicit_right_imu = true;
+    side.configured = true;
+
+    const int device_index = resolve_device(config_device.fingerprint);
+    if (device_index < 0) continue;
+    const auto candidate_imu = provider.imu_state(devices[device_index]);
+    if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
+    if (xr_runtime::controller_imu_is_present(candidate_imu)) {
+      side_devices.insert(hex_u64(devices[device_index].fingerprint.stable_hash));
+    }
+  }
+
   auto apply_runtime_binding = [&](const RuntimeBinding& b) {
-    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() && devices[b.device_index].readable;
+    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() &&
+                          devices[b.device_index].readable;
     SideOutputState& side = b.cfg.side == ControllerSide::Left ? out.left : out.right;
     side.configured = true;
-    int imu_device_index = -1;
-    if (b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size()) {
-      imu_device_index = b.device_index;
-    } else {
-      int best_score = -1;
-      bool ambiguous = false;
-      for (size_t i = 0; i < devices.size(); ++i) {
-        const int score = fingerprint_match_score(b.cfg.device, devices[i].fingerprint);
-        if (score > best_score) {
-          best_score = score;
-          imu_device_index = static_cast<int>(i);
-          ambiguous = false;
-        } else if (score == best_score && score > 0) {
-          ambiguous = true;
-        }
+
+    // Backward compatibility for old configs: when the side has no explicit
+    // devices[].imu_side assignment, infer IMU routing from its input binding.
+    const bool explicit_imu = b.cfg.side == ControllerSide::Left ? explicit_left_imu : explicit_right_imu;
+    const ConfigDevice* binding_device = find_config_device(cfg, b.cfg.device_id);
+    const bool binding_has_explicit_imu_config = binding_device && binding_device->imu_side_explicit;
+    if (!explicit_imu && !binding_has_explicit_imu_config) {
+      int imu_device_index = -1;
+      if (b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size()) {
+        imu_device_index = b.device_index;
+      } else {
+        imu_device_index = resolve_device(b.cfg.device);
       }
-      if (best_score < 55 || ambiguous) imu_device_index = -1;
+      if (imu_device_index >= 0) {
+        const auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+        if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
+      }
     }
-    if (imu_device_index >= 0) {
-      const auto candidate_imu = provider.imu_state(devices[imu_device_index]);
-      if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
-    }
+
     if (resolved) {
       side.connected = true;
       const auto id = hex_u64(devices[b.device_index].fingerprint.stable_hash);
@@ -1428,14 +1495,11 @@ OutputState compose_state(InputProvider& provider,
     apply_action(side, b.cfg.action, resolved ? b.value : 0.0f);
   };
 
-  for (const auto& b : bindings) {
-    apply_runtime_binding(b);
-  }
+  for (const auto& b : bindings) apply_runtime_binding(b);
   // Hold-toggle bindings are applied after normal bindings so a latched
   // virtual hold has priority over a normal binding for the same action.
-  for (const auto& b : hold_toggle_bindings) {
-    apply_runtime_binding(b);
-  }
+  for (const auto& b : hold_toggle_bindings) apply_runtime_binding(b);
+
   const auto label = [](const std::set<std::string>& ids) {
     if (ids.empty()) return std::string();
     if (ids.size() == 1) return *ids.begin();
@@ -1443,7 +1507,6 @@ OutputState compose_state(InputProvider& provider,
   };
   out.left.device_id = label(left_devices);
   out.right.device_id = label(right_devices);
-
 
   if (!allow_shared_physical_device_sides) {
     bool side_device_overlap = false;
@@ -1470,6 +1533,8 @@ OutputState compose_state(InputProvider& provider,
       out.left.thumbstick_y = 0.0f;
       out.right.thumbstick_x = 0.0f;
       out.right.thumbstick_y = 0.0f;
+      out.left.imu = {};
+      out.right.imu = {};
       out.left.device_id.clear();
       out.right.device_id.clear();
     }
@@ -1554,6 +1619,11 @@ OutputState compose_neutral_state_from_config(const AppConfig& cfg, CounterState
   for (const auto& b : cfg.hold_toggle_bindings) mark_configured(b);
   for (const auto& b : cfg.alternative_bindings) mark_configured(b);
   for (const auto& b : cfg.alternative_hold_toggle_bindings) mark_configured(b);
+  for (const auto& device : cfg.devices) {
+    if (!device.imu_side) continue;
+    SideOutputState& side = *device.imu_side == ControllerSide::Left ? out.left : out.right;
+    side.configured = true;
+  }
   out.left.changed_buttons = counters.prev_left_buttons;
   out.right.changed_buttons = counters.prev_right_buttons;
   if (counters.prev_left_buttons != 0) {
@@ -1728,6 +1798,10 @@ std::string configured_device_usage(const AppConfig& cfg, int device_id) {
   if (has_switch) {
     if (!out.empty()) out += " ";
     out += "layout-switch";
+  }
+  if (const ConfigDevice* device = find_config_device(cfg, device_id); device && device->imu_side) {
+    if (!out.empty()) out += " ";
+    out += "imu=" + to_string(*device->imu_side);
   }
   return out.empty() ? "unused" : out;
 }
@@ -1910,6 +1984,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     const auto& input = device.input;
     std::cout << "[override_controller] device_input id=" << device.id
               << " device=" << short_device_label(device.fingerprint)
+              << " imu_side=" << (device.imu_side ? to_string(*device.imu_side) : "none")
               << " rel_axis_hold_ms=" << input.rel_axis_hold_ms
               << " rel_button_hold_ms=" << input.rel_button_hold_ms
               << " button_hold_ms=" << input.button_hold_ms
@@ -2170,8 +2245,8 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     decay_button_hold_bindings(active_bindings_for_decay, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(provider, active_bindings_for_decay, active_toggle_bindings_for_decay, devices, counters,
-                                     cfg.input.allow_shared_physical_device_sides);
+      const auto out = compose_state(provider, cfg, active_bindings_for_decay, active_toggle_bindings_for_decay,
+                                     devices, counters, cfg.input.allow_shared_physical_device_sides);
       publisher.publish(out);
       clear_one_frame_relative_bindings(active_bindings_for_decay);
       do {
@@ -2275,6 +2350,17 @@ int main(int argc, char** argv) {
 
     apply_publish_overrides(cfg, args);
     sync_devices_from_registry(cfg);
+    if (cfg.migrated_imu_side && !selected_path.empty()) {
+      try {
+        save_config_file(cfg, selected_path);
+        std::cout << "[override_controller] migrated legacy Gear VR config with explicit devices[].imu_side: "
+                  << selected_path << "\n";
+        cfg.migrated_imu_side = false;
+      } catch (const std::exception& e) {
+        std::cerr << "[override_controller][WARN] could not persist imu_side migration to "
+                  << selected_path << ": " << e.what() << "\n";
+      }
+    }
     if (args.connect_devices) {
       connect_config_devices(*provider, cfg, selected_path);
       return 0;
