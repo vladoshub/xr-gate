@@ -70,6 +70,20 @@ copy_device_bundle() {
     "$src/" "$dst/"
 }
 
+copy_common_device_bundle() {
+  local src="$XR_ROOT_PROJECT/devices/common"
+  local dst="$XR_OUT_ROOT/devices/common"
+  if [[ ! -d "$src" ]]; then
+    fatal "common device runtime not found: $src"
+  fi
+  mkdir -p "$dst"
+  rsync -a --delete \
+    --exclude='__pycache__/' \
+    --exclude='*.pyc' \
+    --exclude='*.pyo' \
+    "$src/" "$dst/"
+}
+
 write_monado_openxr_runtime_manifest() {
   local monado_bin_dir="$XR_OUT_BIN_ROOT/drivers/monado_driver"
   local openxr_lib="$monado_bin_dir/libopenxr_monado.so"
@@ -241,7 +255,7 @@ package_include_xrizer_helpers() {
 }
 
 copy_runtime_scripts() {
-  # Only launcher/runtime scripts that are called by devices/xreal_ultra wrappers
+  # Only underlying component launchers called by devices/common wrappers
   # are copied here. Build/install scripts, CMake files and source trees stay out
   # of the deploy package.
   copy_runtime_file \
@@ -369,10 +383,10 @@ write_app_launchers() {
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "run_openvr_restore_desktop.sh" "bin/scripts/drivers/steam_vr/restore_xreal_desktop.sh"
-  write_root_launcher "download_mercury_models.sh" "devices/xreal_ultra/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"
-  write_root_launcher "run_steamvr_video_overlay.sh" "devices/xreal_ultra/linux/scripts/steamvr_video_overlay/start_steamvr_video_overlay.sh"
-  write_root_launcher "run_steamvr_spatial_overlay.sh" "devices/xreal_ultra/linux/scripts/steamvr_spatial_overlay/start_xr_steamvr_spatial_overlay.sh"
-  write_root_launcher "run_steamvr_spatial_scene.sh" "devices/xreal_ultra/linux/scripts/steamvr_spatial_scene/start_xr_steamvr_spatial_scene.sh"
+  write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"
+  write_root_launcher "run_steamvr_video_overlay.sh" "devices/common/linux/scripts/steamvr_video_overlay/start_steamvr_video_overlay.sh"
+  write_root_launcher "run_steamvr_spatial_overlay.sh" "devices/common/linux/scripts/steamvr_spatial_overlay/start_xr_steamvr_spatial_overlay.sh"
+  write_root_launcher "run_steamvr_spatial_scene.sh" "devices/common/linux/scripts/steamvr_spatial_scene/start_xr_steamvr_spatial_scene.sh"
   if package_include_xrizer_helpers; then
     write_root_launcher "run_xrizer_register.sh" "bin/scripts/drivers/xrizer/register_xrizer_openvrpaths.sh"
     write_root_launcher "run_xrizer_openvr_app_via_monado.sh" "bin/scripts/drivers/xrizer/start_openvr_app_via_monado.sh"
@@ -405,9 +419,8 @@ else
   mkdir -p "$XR_OUT_BIN_ROOT"
 fi
 
-# Device bundle: env, launch wrappers and device-local configs/calibration.
-# Package/build entrypoints live in the source device tree, but are excluded from
-# the runtime package to keep out/xreal_ultra runtime-only.
+# Common launch wrappers plus device-specific env/config/calibration.
+copy_common_device_bundle
 copy_device_bundle
 write_monado_openxr_runtime_manifest
 
@@ -467,6 +480,7 @@ fi
 # shellcheck source=/dev/null
 source "$PY_RUNTIME_ENV"
 export XR_DEVICE_ENV="${XR_DEVICE_ENV:-$PACKAGE_ROOT/devices/xreal_ultra/xreal_ultra.env}"
+export XR_COMMON_SCRIPTS_ROOT="${XR_COMMON_SCRIPTS_ROOT:-$PACKAGE_ROOT/devices/common/linux/scripts}"
 if [[ ! -x "$PYTHON" ]]; then
   echo "[run_xr_client][ERROR] package Python not found: $PYTHON" >&2
   exit 1
@@ -500,7 +514,8 @@ Key variables:
 - XR_ROOT_PROJECT: package root, defaults to this directory.
 - XR_BIN_ROOT: runtime binary root, defaults to \$XR_ROOT_PROJECT/bin.
 - XR_DEVICE_HOME: device profile root, defaults to \$XR_ROOT_PROJECT/devices/xreal_ultra.
-- XR_DEVICE_SCRIPTS_ROOT: launch wrapper root.
+- XR_COMMON_SCRIPTS_ROOT: hardware-neutral launch wrapper root.
+- XR_DEVICE_SCRIPTS_ROOT: XREAL-specific helper root.
 - XR_DEVICE_CONFIGS_ROOT: device configs/calibration root.
 
 The package intentionally does not include C++ source trees, CMake projects or
@@ -572,6 +587,8 @@ done
 required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
   "$XR_OUT_DEVICE_HOME/xreal_ultra.env"
+  "$XR_OUT_ROOT/devices/common/common.env"
+  "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_service_cpp"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_tcp_probe"

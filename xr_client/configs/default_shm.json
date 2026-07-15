@@ -31,7 +31,7 @@
         "description": "start display helper",
         "service_name": "xreal_display_helper",
         "command": [
-          "{scripts}/xreal_display_helper/start_xreal_helper_60hz.sh"
+          "{device_scripts}/xreal_display_helper/start_xreal_helper_60hz.sh"
         ],
         "wait_log_any": [
           "display mode after:  3",
@@ -51,7 +51,7 @@
         "description": "start display helper",
         "service_name": "xreal_display_helper",
         "command": [
-          "{scripts}/xreal_display_helper/start_xreal_helper_90hz.sh"
+          "{device_scripts}/xreal_display_helper/start_xreal_helper_90hz.sh"
         ],
         "wait_log_any": [
           "display mode after:  9",
@@ -84,7 +84,7 @@
       "enable_env": "RUN_CAPTURE_SERVICE",
       "enabled": true,
       "command": [
-        "{scripts}/capture_service/start_capture_service.sh"
+        "{common_scripts}/capture_service/start_capture_service.sh"
       ],
       "wait_streams": [
         {
@@ -174,7 +174,7 @@
       "enable_env": "RUN_BASALT",
       "enabled": true,
       "command": [
-        "{scripts}/basalt_vio/start_basalt.sh"
+        "{common_scripts}/basalt_vio/start_basalt.sh"
       ],
       "wait_streams": [
         {
@@ -196,7 +196,7 @@
       "enabled": true,
       "start_on_launch": false,
       "command": [
-        "{scripts}/imu_3dof/start_imu_3dof_backend.sh"
+        "{common_scripts}/imu_3dof/start_imu_3dof_backend.sh"
       ],
       "wait_streams": [
         {
@@ -217,7 +217,7 @@
       "enable_env": "RUN_HAND_TRACKING",
       "enabled": true,
       "command": [
-        "{scripts}/mercury_hand_tracking/start_hand_tracking.sh"
+        "{common_scripts}/mercury_hand_tracking/start_hand_tracking.sh"
       ],
       "wait_streams": [
         {
@@ -238,7 +238,7 @@
       "enable_env": "RUN_XR_RUNTIME_ADAPTER",
       "enabled": true,
       "command": [
-        "{scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"
+        "{common_scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"
       ],
       "wait_streams": [
         {
@@ -264,14 +264,14 @@
       "start_on_launch": false,
       "optional": true,
       "command": [
-        "{scripts}/override_controller/start_override_controller.sh"
+        "{common_scripts}/override_controller/start_override_controller.sh"
       ],
       "env": {
         "CONFIG_PATH": "~/.config/xr_tracking/override_controller/default.json",
         "NON_INTERACTIVE": "1",
         "GRAB_DEVICES": "1",
         "REATTACH_DEVICES": "1",
-        "PROVIDERS" : "evdev",
+        "PROVIDERS": "evdev",
         "REATTACH_INTERVAL_MS": "3000"
       },
       "wait_streams": [
@@ -299,7 +299,7 @@
       "start_on_launch": false,
       "optional": true,
       "command": [
-        "{scripts}/xr_video/start_xr_video_backend.sh"
+        "{common_scripts}/xr_video/start_xr_video_backend.sh"
       ],
       "ready_message": "xr_video is running. Manual key 6 toggles it.",
       "start_delay_s": 0.2,
@@ -319,7 +319,7 @@
       "start_on_launch": false,
       "optional": true,
       "command": [
-        "{scripts}/xr_spatial/start_xr_spatial_shm.sh"
+        "{common_scripts}/xr_spatial/start_xr_spatial_shm.sh"
       ],
       "env": {
         "SPATIAL_PROXY_MESH_RATE_HZ": "10"

@@ -55,4 +55,11 @@ Windows config file:
 xr_client/configs/default_windows_tcp.json
 ```
 
-Linux still resolves `{scripts}` to `devices/xreal_ultra/linux/scripts`. Windows resolves `{scripts}` to `devices/xreal_ultra/windows/scripts` when `XR_DEVICE_SCRIPTS_OS=windows` or when running on native Windows.
+Linux runtime configs now use two explicit roots:
+
+```text
+{common_scripts} -> devices/common/linux/scripts
+{device_scripts} -> devices/xreal_ultra/linux/scripts
+```
+
+Hardware-neutral capture/backend/runtime launchers use `{common_scripts}`. XREAL display helpers and other hardware-specific actions use `{device_scripts}`. `{scripts}` remains a backward-compatible alias for `{device_scripts}`. Windows keeps its existing device-script layout for now.

@@ -324,6 +324,7 @@ def parse_prestart_control(item: Optional[Dict[str, Any]], root_project: str) ->
 
 def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_registry: str, runtime_registry: str) -> None:
     """Install the built-in manual/tap action policy into a default config dict."""
+    launcher_root = "{scripts}" if IS_WINDOWS else "{common_scripts}"
     post_gate_services = config.setdefault("post_gate_services", [])
     if not any(isinstance(x, dict) and x.get("name") == "imu_3dof_backend" for x in post_gate_services):
         insert_at = 0
@@ -336,7 +337,7 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
             "enable_env": "RUN_IMU_3DOF_BACKEND",
             "enabled": True,
             "start_on_launch": False,
-            "command": ["{scripts}/imu_3dof/start_imu_3dof_backend.sh"],
+            "command": [f"{launcher_root}/imu_3dof/start_imu_3dof_backend.sh"],
             "wait_streams": [{"registry": tracking_registry, "stream": "hmd_pose_3dof"}],
             "restart_on_exit": True,
             "restart_on_error_only": True,
@@ -547,6 +548,8 @@ def _load_config_device_env(data: Dict[str, Any], initial_root_project: str) -> 
     os.environ.setdefault("XR_DEVICE_HOME", str(Path(root_project) / "devices" / "xreal_ultra"))
     os.environ.setdefault("XR_DEVICE_SCRIPTS_OS", default_scripts_os())
     os.environ.setdefault("XR_DEVICE_SCRIPTS_ROOT", str(Path(os.environ["XR_DEVICE_HOME"]) / os.environ["XR_DEVICE_SCRIPTS_OS"] / "scripts"))
+    os.environ.setdefault("XR_COMMON_DEVICE_HOME", str(Path(root_project) / "devices" / "common"))
+    os.environ.setdefault("XR_COMMON_SCRIPTS_ROOT", str(Path(os.environ["XR_COMMON_DEVICE_HOME"]) / os.environ["XR_DEVICE_SCRIPTS_OS"] / "scripts"))
     os.environ.setdefault("XR_DEVICE_CONFIGS_ROOT", str(Path(os.environ["XR_DEVICE_HOME"]) / "configs"))
     return root_project
 
@@ -569,7 +572,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
                 "name": "capture_service",
                 "enable_env": "RUN_CAPTURE_SERVICE",
                 "enabled": True,
-                "command": ["{scripts}/capture_service/start_capture_service.sh"],
+                "command": ["{common_scripts}/capture_service/start_capture_service.sh"],
                 "wait_streams": [
                     {"registry": capture_registry, "stream": "camera0"},
                     {"registry": capture_registry, "stream": "camera1"},
@@ -659,21 +662,21 @@ def default_linux_config_dict() -> Dict[str, Any]:
                 "name": "basalt_vio",
                 "enable_env": "RUN_BASALT",
                 "enabled": True,
-                "command": ["{scripts}/basalt_vio/start_basalt.sh"],
+                "command": ["{common_scripts}/basalt_vio/start_basalt.sh"],
                 "wait_streams": [{"registry": tracking_registry, "stream": "hmd_pose"}],
             },
             {
                 "name": "mercury_hand_tracking",
                 "enable_env": "RUN_HAND_TRACKING",
                 "enabled": True,
-                "command": ["{scripts}/mercury_hand_tracking/start_hand_tracking.sh"],
+                "command": ["{common_scripts}/mercury_hand_tracking/start_hand_tracking.sh"],
                 "wait_streams": [{"registry": tracking_registry, "stream": "hand_tracking"}],
             },
             {
                 "name": "xr_runtime_adapter",
                 "enable_env": "RUN_XR_RUNTIME_ADAPTER",
                 "enabled": True,
-                "command": ["{scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"],
+                "command": ["{common_scripts}/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"],
                 "env": {
                     "HMD_3DOF_PRIORITY": "1",
                     "HMD_3DOF_STREAM": "hmd_pose_3dof",
@@ -691,7 +694,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
                 "enabled": True,
                 "start_on_launch": False,
                 "optional": True,
-                "command": ["{scripts}/override_controller/start_override_controller.sh"],
+                "command": ["{common_scripts}/override_controller/start_override_controller.sh"],
                 "env": {
                     "CONFIG_PATH": "~/.config/xr_tracking/override_controller/default.json",
                     "NON_INTERACTIVE": "1",
@@ -720,7 +723,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
                 "enabled": True,
                 "start_on_launch": False,
                 "optional": True,
-                "command": ["{scripts}/xr_video/start_xr_video_backend.sh"],
+                "command": ["{common_scripts}/xr_video/start_xr_video_backend.sh"],
                 "ready_message": "xr_video is running. Manual key 6 toggles it.",
                 "start_delay_s": 0.2,
                 "stop_timeout_s": 1.0,
@@ -738,7 +741,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
                 "enabled": True,
                 "start_on_launch": False,
                 "optional": True,
-                "command": ["{scripts}/xr_spatial/start_xr_spatial_shm.sh"],
+                "command": ["{common_scripts}/xr_spatial/start_xr_spatial_shm.sh"],
                 "env": {
                     "SPATIAL_PROXY_MESH_RATE_HZ": "10",
                 },
