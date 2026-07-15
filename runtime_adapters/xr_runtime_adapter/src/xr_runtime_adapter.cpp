@@ -2691,6 +2691,7 @@ int main(int argc, char** argv) {
   std::string runtime_controller_lost_hand_pose_fallback = "pose_invalid";
   std::string runtime_controller_left_orientation_source = "HAND_TRACKING_BACKEND";
   std::string runtime_controller_right_orientation_source = "HAND_TRACKING_BACKEND";
+  bool hand_orientation_offset_only_runtime = true;
   bool runtime_controller_left_imu_acceleration_integration = false;
   bool runtime_controller_right_imu_acceleration_integration = false;
   bool runtime_controller_left_imu_position_prediction = false;
@@ -3084,6 +3085,8 @@ int main(int argc, char** argv) {
                  "Left controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
   app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
                  "Right controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
+  app.add_option("--hand-orientation-offset-only-runtime", hand_orientation_offset_only_runtime,
+                 "Apply hand_orientation_offset only to sides present in a fresh ControllerInputV3 frame from override_controller. Enabled by default; false restores unconditional offset application.");
   app.add_option("--runtime-controller-left-imu-acceleration-integration", runtime_controller_left_imu_acceleration_integration,
                  "Enable left-controller accelerometer integration. Effective only with IMU_OVERRIDE_CONTROLLER_RUNTIME and current valid accelerometer/orientation data.");
   app.add_option("--runtime-controller-right-imu-acceleration-integration", runtime_controller_right_imu_acceleration_integration,
@@ -3890,6 +3893,8 @@ int main(int argc, char** argv) {
     std::cout << "runtime_controller_right_orientation_source: "
               << override_controller::runtime_controller_orientation_source_name(
                      runtime_controller_right_orientation_source_value) << "\n";
+    std::cout << "hand_orientation_offset_only_runtime: "
+              << (hand_orientation_offset_only_runtime ? "true" : "false") << "\n";
     std::cout << "runtime_controller_left_imu_acceleration_integration: "
               << (runtime_controller_left_imu_acceleration_integration ? "true" : "false") << "\n";
     std::cout << "runtime_controller_right_imu_acceleration_integration: "
@@ -5393,11 +5398,26 @@ int main(int argc, char** argv) {
           const StreamTransformConfig& hand_transform = skeleton26_input_used
               ? tracking_transform_config.hand_skeleton26
               : tracking_transform_config.hand_tracking_21_joint;
+          // hand_orientation_offset is intended to align visual hands with an
+          // override_controller device. By default, apply it independently per
+          // side only while a fresh ControllerInputV3 frame marks that side as
+          // present. All other coordinate/orientation transforms still apply.
+          const bool apply_left_hand_orientation_offset =
+              !hand_orientation_offset_only_runtime || controller_left_connected;
+          const bool apply_right_hand_orientation_offset =
+              !hand_orientation_offset_only_runtime || controller_right_connected;
           if (frame.hand_v2.sequence != 0) {
-            apply_hand_frame_transform(frame.hand_v2, hand_transform, hmd_position_ptr, hmd_orientation_ptr);
+            apply_hand_frame_transform(frame.hand_v2, hand_transform, hmd_position_ptr,
+                                       hmd_orientation_ptr,
+                                       apply_left_hand_orientation_offset,
+                                       apply_right_hand_orientation_offset);
           }
           if (frame.hand.sequence != 0) {
-            apply_hand_frame_transform(frame.hand, tracking_transform_config.hand_tracking_21_joint, hmd_position_ptr, hmd_orientation_ptr);
+            apply_hand_frame_transform(frame.hand,
+                                       tracking_transform_config.hand_tracking_21_joint,
+                                       hmd_position_ptr, hmd_orientation_ptr,
+                                       apply_left_hand_orientation_offset,
+                                       apply_right_hand_orientation_offset);
           }
         }
 

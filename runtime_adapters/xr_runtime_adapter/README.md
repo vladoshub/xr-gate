@@ -128,6 +128,21 @@ controller_input -> runtime_controller_state
 
 The resulting runtime controller state can be consumed by the OpenVR driver.
 
+`hand_orientation_offset` is controller-alignment data. By default it is applied
+independently per side only while a fresh `ControllerInputV3` frame marks that
+side as present:
+
+```bash
+HAND_ORIENTATION_OFFSET_ONLY_RUNTIME=1
+```
+
+Set it to `0` to restore the previous behavior and apply the configured hand
+orientation offset unconditionally, even when `override_controller` is absent.
+
+Controller input TCP uses the same packed `ControllerInputV3` payload as SHM
+(`CIV3`, protocol version 3, 1432-byte payload), including the complete per-side
+IMU state and up to four IMU samples.
+
 ## Body trackers
 
 Body tracker input can be enabled through SHM or UDP, then republished as runtime body trackers.

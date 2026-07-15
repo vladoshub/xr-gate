@@ -413,7 +413,9 @@ bool hand_orientation_offset_target_enabled(const HandOrientationOffsetConfig& c
 Qd apply_hand_orientation_offset(const StreamTransformConfig& cfg,
                                  const Qd& in,
                                  bool is_left,
-                                 HandOrientationOffsetTarget target) {
+                                 HandOrientationOffsetTarget target,
+                                 bool apply_offset) {
+  if (!apply_offset) return normalize_q(in);
   const auto& offset_cfg = cfg.hand_orientation_offset;
   if (!offset_cfg.enabled || !hand_orientation_offset_target_enabled(offset_cfg, target)) {
     return normalize_q(in);
@@ -444,7 +446,8 @@ void apply_hand_joint_transform(xr_runtime::HandJointF32V2& joint,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
                                 const Qd* hmd_orientation,
-                                bool is_left) {
+                                bool is_left,
+                                bool apply_orientation_offset) {
   const V3d p = apply_stream_position_transform(cfg, {joint.px, joint.py, joint.pz}, hmd_position, hmd_orientation);
   assign_v3(joint.px, joint.py, joint.pz, p);
 
@@ -452,7 +455,8 @@ void apply_hand_joint_transform(xr_runtime::HandJointF32V2& joint,
   if (nonzero_q(in_q)) {
     const Qd q = apply_stream_orientation_transform(cfg, in_q, hmd_orientation);
     assign_q(joint.qw, joint.qx, joint.qy, joint.qz,
-             apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Joint));
+             apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Joint,
+                                           apply_orientation_offset));
   }
 }
 
@@ -460,7 +464,8 @@ void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
                                const StreamTransformConfig& cfg,
                                const V3d* hmd_position,
                                const Qd* hmd_orientation,
-                               bool is_left) {
+                               bool is_left,
+                               bool apply_orientation_offset) {
   if ((side.flags & xr_runtime::HAND_POSE_VALID) != 0u) {
     V3d p = apply_stream_position_transform(cfg, {side.controller_px, side.controller_py, side.controller_pz}, hmd_position, hmd_orientation);
     assign_v3(side.controller_px, side.controller_py, side.controller_pz, p);
@@ -473,21 +478,24 @@ void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
     if (nonzero_q(controller_q)) {
       Qd q = apply_stream_orientation_transform(cfg, controller_q, hmd_orientation);
       assign_q(side.controller_qw, side.controller_qx, side.controller_qy, side.controller_qz,
-               apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Controller));
+               apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Controller,
+                                             apply_orientation_offset));
     }
 
     const Qd palm_q{side.palm_qw, side.palm_qx, side.palm_qy, side.palm_qz};
     if (nonzero_q(palm_q)) {
       Qd q = apply_stream_orientation_transform(cfg, palm_q, hmd_orientation);
       assign_q(side.palm_qw, side.palm_qx, side.palm_qy, side.palm_qz,
-               apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Palm));
+               apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Palm,
+                                         apply_orientation_offset));
     }
 
     const Qd wrist_q{side.wrist_qw, side.wrist_qx, side.wrist_qy, side.wrist_qz};
     if (nonzero_q(wrist_q)) {
       Qd q = apply_stream_orientation_transform(cfg, wrist_q, hmd_orientation);
       assign_q(side.wrist_qw, side.wrist_qx, side.wrist_qy, side.wrist_qz,
-               apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Wrist));
+               apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Wrist,
+                                         apply_orientation_offset));
     }
 
     V3d v = apply_stream_vector_transform(cfg, {side.vx, side.vy, side.vz});
@@ -499,7 +507,8 @@ void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
   if ((side.flags & xr_runtime::HAND_JOINTS_VALID) != 0u) {
     const uint32_t n = std::min<uint32_t>(side.joint_count, xr_runtime::HAND_JOINT_COUNT_V2);
     for (uint32_t i = 0; i < n; ++i) {
-      apply_hand_joint_transform(side.joints[i], cfg, hmd_position, hmd_orientation, is_left);
+      apply_hand_joint_transform(side.joints[i], cfg, hmd_position, hmd_orientation,
+                                 is_left, apply_orientation_offset);
     }
   }
 }
@@ -508,17 +517,20 @@ void apply_hand_side_transform(xr_runtime::HandSideF64V1& side,
                                const StreamTransformConfig& cfg,
                                const V3d* hmd_position,
                                const Qd* hmd_orientation,
-                               bool is_left) {
+                               bool is_left,
+                               bool apply_orientation_offset) {
   V3d p = apply_stream_position_transform(cfg, {side.palm_px, side.palm_py, side.palm_pz}, hmd_position, hmd_orientation);
   assign_v3(side.palm_px, side.palm_py, side.palm_pz, p);
   p = apply_stream_position_transform(cfg, {side.wrist_px, side.wrist_py, side.wrist_pz}, hmd_position, hmd_orientation);
   assign_v3(side.wrist_px, side.wrist_py, side.wrist_pz, p);
   Qd q = apply_stream_orientation_transform(cfg, {side.palm_qw, side.palm_qx, side.palm_qy, side.palm_qz}, hmd_orientation);
   assign_q(side.palm_qw, side.palm_qx, side.palm_qy, side.palm_qz,
-           apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Palm));
+           apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Palm,
+                                         apply_orientation_offset));
   q = apply_stream_orientation_transform(cfg, {side.wrist_qw, side.wrist_qx, side.wrist_qy, side.wrist_qz}, hmd_orientation);
   assign_q(side.wrist_qw, side.wrist_qx, side.wrist_qy, side.wrist_qz,
-           apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Wrist));
+           apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Wrist,
+                                         apply_orientation_offset));
   V3d v = apply_stream_vector_transform(cfg, {side.vx, side.vy, side.vz});
   assign_v3(side.vx, side.vy, side.vz, v);
   V3d w = apply_stream_vector_transform(cfg, {side.wx, side.wy, side.wz});
@@ -530,7 +542,8 @@ void apply_hand_side_transform(xr_runtime::HandSideF64V1& side,
     assign_v3(side.joints[i].px, side.joints[i].py, side.joints[i].pz, jp);
     const Qd jq = apply_stream_orientation_transform(cfg, {side.joints[i].qw, side.joints[i].qx, side.joints[i].qy, side.joints[i].qz}, hmd_orientation);
     assign_q(side.joints[i].qw, side.joints[i].qx, side.joints[i].qy, side.joints[i].qz,
-             apply_hand_orientation_offset(cfg, jq, is_left, HandOrientationOffsetTarget::Joint));
+             apply_hand_orientation_offset(cfg, jq, is_left, HandOrientationOffsetTarget::Joint,
+                                           apply_orientation_offset));
   }
 }
 
@@ -698,23 +711,31 @@ void apply_hmd_pose_transform(xr_runtime::HmdPoseF64V1& hmd,
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
-                                const Qd* hmd_orientation) {
+                                const Qd* hmd_orientation,
+                                bool apply_left_hand_orientation_offset,
+                                bool apply_right_hand_orientation_offset) {
   if ((hand.flags & xr_runtime::HAND_FLAG_LEFT_VALID) != 0u &&
       hand_side_has_transformable_payload(hand.left)) {
-    apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true);
+    apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true,
+                              apply_left_hand_orientation_offset);
   }
   if ((hand.flags & xr_runtime::HAND_FLAG_RIGHT_VALID) != 0u &&
       hand_side_has_transformable_payload(hand.right)) {
-    apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false);
+    apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false,
+                              apply_right_hand_orientation_offset);
   }
 }
 
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
-                                const Qd* hmd_orientation) {
-  apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true);
-  apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false);
+                                const Qd* hmd_orientation,
+                                bool apply_left_hand_orientation_offset,
+                                bool apply_right_hand_orientation_offset) {
+  apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true,
+                            apply_left_hand_orientation_offset);
+  apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false,
+                            apply_right_hand_orientation_offset);
 }
 
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,

@@ -7,7 +7,8 @@ param(
   [switch]$WithRuntimeHandUdp,
   [switch]$WithRuntimeControllerStateUdp,
   [switch]$WithControllerInputTcp,
-  [int]$ControllerInputTcpPort = 45672
+  [int]$ControllerInputTcpPort = 45672,
+  [bool]$HandOrientationOffsetOnlyRuntime = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,8 @@ $args = @(
   "--udp-bind-port", "$InputPort",
   "--publish-runtime-pose-udp",
   "--runtime-pose-udp-host", "127.0.0.1",
-  "--runtime-pose-udp-port", "45800"
+  "--runtime-pose-udp-port", "45800",
+  "--hand-orientation-offset-only-runtime", "$($HandOrientationOffsetOnlyRuntime.ToString().ToLowerInvariant())"
 )
 if ($WithRuntimeHandUdp) {
   $args += @("--publish-runtime-hand-udp", "--runtime-hand-udp-host", "127.0.0.1", "--runtime-hand-udp-port", "45801")

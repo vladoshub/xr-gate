@@ -141,11 +141,15 @@ void apply_hmd_pose_transform(xr_runtime::HmdPoseF64V1& hmd,
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
-                                const Qd* hmd_orientation);
+                                const Qd* hmd_orientation,
+                                bool apply_left_hand_orientation_offset = true,
+                                bool apply_right_hand_orientation_offset = true);
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
-                                const Qd* hmd_orientation);
+                                const Qd* hmd_orientation,
+                                bool apply_left_hand_orientation_offset = true,
+                                bool apply_right_hand_orientation_offset = true);
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,
                                         const StreamTransformConfig& cfg,
                                         const V3d* hmd_position = nullptr);
