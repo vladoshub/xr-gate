@@ -280,7 +280,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
 XR_OPENVR_DISPLAY_MODE=direct \
-./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
+./devices/common/linux/scripts/openvr_driver/register_driver.sh
 ```
 
 60HZ
@@ -290,7 +290,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_MODE=direct \
-./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
+./devices/common/linux/scripts/openvr_driver/register_driver.sh
 ```
 
 For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, 60 Hz is the safer default:
@@ -303,7 +303,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_MODE=direct \
-./devices/xreal_ultra/linux/scripts/openvr_driver/register_driver.sh
+./devices/common/linux/scripts/openvr_driver/register_driver.sh
 ```
 
 
