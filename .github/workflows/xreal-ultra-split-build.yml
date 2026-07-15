@@ -284,10 +284,12 @@ jobs:
           test -x out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend
           test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
           test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
           test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
           test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
           bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
           bash -n out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           HELP_FILE="$(mktemp)"
           trap 'rm -f "$HELP_FILE"' EXIT
@@ -422,6 +424,7 @@ jobs:
           test -x merged/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
           test -x merged/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
           test -x merged/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x merged/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
           test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
           test -x merged/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
           test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
@@ -492,6 +495,7 @@ jobs:
           test -x verify/runtime/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
           test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
           test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x verify/runtime/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
           test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
           test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
           test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh

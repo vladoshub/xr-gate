@@ -307,6 +307,24 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/backends/xr_spatial/scripts/linux/xr_spatial_profile.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/xr_spatial/xr_spatial_profile.sh"
 
+  # Runtime launchers live under bin/scripts/backends/<backend>, outside the
+  # source tree and outside each backend's portable install bundle. Keep the
+  # shared profile resolver next to every launcher that sources it so packaged
+  # runs do not depend on backends/common being present as source code.
+  local capture_profile_helper="$XR_ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh"
+  local profile_backend
+  for profile_backend in \
+    basalt_vio \
+    imu_3dof \
+    mercury_hand_tracking \
+    xr_video \
+    xr_spatial
+  do
+    copy_runtime_file \
+      "$capture_profile_helper" \
+      "$XR_OUT_BIN_ROOT/scripts/backends/$profile_backend/capture_profile.sh"
+  done
+
   copy_runtime_file \
     "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh" \
     "$XR_OUT_BIN_ROOT/scripts/runtime_adapters/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh"
