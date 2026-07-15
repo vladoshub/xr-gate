@@ -505,7 +505,7 @@ devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
 ```bash
 cd ~/xr-gate-release/xreal_ultra
 sudo apt install libopenxr-utils
-XR_RUNTIME_JSON=~/xr-gate-release/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/openxr_monado_xrgate.json \
+XR_RUNTIME_JSON=~/xr-gate-release/xreal_ultra/bin/drivers/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
 
