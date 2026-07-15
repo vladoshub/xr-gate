@@ -67,18 +67,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Validate unpack helper
+      - name: Validate and build standalone unpack helper
         run: |
-          test -f devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          set -euo pipefail
+          test -x devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          test -x devices/common/linux/scripts/release/unpack_device_release.sh
           bash -n devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
-          chmod +x devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
-          ls -lh devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          bash -n devices/common/linux/scripts/release/unpack_device_release.sh
+
+          mkdir -p release-helper
+          {
+            printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+            printf '%s\n' \
+              'export XR_RELEASE_DEVICE_TARGET="xreal_ultra"' \
+              'export XR_RELEASE_DEVICE_DISPLAY_NAME="XREAL Ultra"' \
+              'export XR_RELEASE_DEVICE_ENV_NAME="xreal_ultra.env"'
+            tail -n +3 devices/common/linux/scripts/release/unpack_device_release.sh
+          } > release-helper/unpack_xreal_ultra.sh
+          chmod +x release-helper/unpack_xreal_ultra.sh
+          bash -n release-helper/unpack_xreal_ultra.sh
+          release-helper/unpack_xreal_ultra.sh --help | grep -F 'XREAL Ultra'
+          ls -lh release-helper/unpack_xreal_ultra.sh
 
       - name: Upload unpack helper
         uses: actions/upload-artifact@v4
         with:
           name: unpack-xreal-ultra
-          path: devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          path: release-helper/unpack_xreal_ultra.sh
           if-no-files-found: error
           retention-days: 7
 
@@ -112,6 +127,30 @@ jobs:
         with:
           submodules: recursive
           lfs: true
+
+      - name: Validate common build/package wrappers
+        run: |
+          set -euo pipefail
+          scripts=(
+            devices/common/linux/scripts/build/device_out_env.sh
+            devices/common/linux/scripts/build/install_device_out.sh
+            devices/common/linux/scripts/build/package_device_out.sh
+            devices/common/linux/scripts/ci/run_act_build.sh
+            devices/common/linux/scripts/release/unpack_device_release.sh
+            devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+            devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+            devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
+            devices/xreal_ultra/linux/scripts/run_xreal_ultra_act_build.sh
+            devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+            devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+            devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
+            devices/xreal_ultra/linux/scripts/build_xreal_ultra_components.sh
+            devices/xreal_ultra/linux/scripts/package_xreal_ultra_components.sh
+          )
+          for script in "${scripts[@]}"; do
+            test -x "$script"
+            bash -n "$script"
+          done
 
       - name: Install base build packages
         run: |
@@ -225,6 +264,14 @@ jobs:
           test -x out/xreal_ultra/devices/common/linux/scripts/mercury_hand_tracking/start_hand_tracking.sh
           test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
           test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
+          test -x out/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
+          test ! -e out/xreal_ultra/devices/common/linux/scripts/build
+          test ! -e out/xreal_ultra/devices/common/linux/scripts/ci
+          test ! -e out/xreal_ultra/devices/common/linux/scripts/release
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
           test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/basalt_vio
           test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
           test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
@@ -372,6 +419,10 @@ jobs:
           test -x merged/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
           test -x merged/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x merged/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test ! -e merged/xreal_ultra/devices/common/linux/scripts/build
+          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
           test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
           test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
           du -sh merged/xreal_ultra
@@ -438,6 +489,10 @@ jobs:
           test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
           test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test ! -e verify/runtime/xreal_ultra/devices/common/linux/scripts/build
+          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
           test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
           test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
 

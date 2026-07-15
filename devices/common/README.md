@@ -1,6 +1,7 @@
 # Common device runtime
 
-This directory contains hardware-neutral environment defaults and launch wrappers.
+This directory contains hardware-neutral environment defaults, runtime launchers
+and shared Linux build/package tooling.
 
 A concrete device profile, such as `devices/xreal_ultra/xreal_ultra.env`, sources
 `common.env` and supplies capture configuration, calibration and display geometry.
@@ -11,5 +12,14 @@ A concrete device profile, such as `devices/xreal_ultra/xreal_ultra.env`, source
 - `{device_scripts}` for hardware-specific helpers;
 - `{scripts}` as a legacy alias for `{device_scripts}`.
 
-The compatibility wrappers under `devices/xreal_ultra/linux/scripts` remain so
-existing commands do not break, but delegate immediately to this directory.
+Shared Linux tooling is split by purpose:
+
+```text
+linux/scripts/build/    generic device build/package implementation
+linux/scripts/ci/       generic local GitHub Actions runner
+linux/scripts/release/  generic runtime archive extractor
+linux/scripts/runtime/  generic Ubuntu runtime dependency installer
+```
+
+Device folders keep thin naming/profile wrappers and optional hooks for hardware
+components, udev rules, permissions and device-only package content.
