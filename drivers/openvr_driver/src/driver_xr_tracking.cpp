@@ -563,10 +563,19 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
     pose_smoothing_alpha_ = std::clamp(get_float_setting(kPoseSmoothingAlphaKey, 0.55f), 0.0f, 1.0f);
     coordinate_mode_ = parse_coordinate_mode(get_string_setting(kCoordinateModeKey, "runtime_ready"));
     log_line(std::string("[xr_tracking_openvr] coordinateMode=") + coordinate_mode_name(coordinate_mode_));
+    constexpr float kRadToDeg = 57.295779513082320876f;
+    const float fov_left_deg = std::atan(std::fabs(projection_left_)) * kRadToDeg;
+    const float fov_right_deg = std::atan(std::fabs(projection_right_)) * kRadToDeg;
+    const float fov_up_deg = std::atan(std::fabs(projection_top_)) * kRadToDeg;
+    const float fov_down_deg = std::atan(std::fabs(projection_bottom_)) * kRadToDeg;
     log_line(std::string("[xr_tracking_openvr] display settings: window=") + std::to_string(window_x_) + "," +
              std::to_string(window_y_) + " " + std::to_string(window_width_) + "x" +
              std::to_string(window_height_) + " render=" + std::to_string(render_width_) + "x" +
              std::to_string(render_height_) + " frequency=" + std::to_string(display_frequency_) +
+             " fov_deg=(left=" + std::to_string(fov_left_deg) +
+             " right=" + std::to_string(fov_right_deg) +
+             " up=" + std::to_string(fov_up_deg) +
+             " down=" + std::to_string(fov_down_deg) + ")" +
              " on_desktop=" + std::to_string(is_display_on_desktop_ ? 1 : 0) +
              " real_display=" + std::to_string(is_display_real_display_ ? 1 : 0) +
              " debug=" + std::to_string(display_debug_mode_ ? 1 : 0));

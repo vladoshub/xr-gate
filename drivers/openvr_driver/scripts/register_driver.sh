@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expand_tilde() {
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Keep this runtime registration script self-contained: release packaging copies
+# it into each driver variant without the source-tree build helper scripts.
+openvr_expand_tilde() {
   local value="$1"
   case "$value" in
     "~") printf '%s\n' "$HOME" ;;
@@ -10,9 +14,8 @@ expand_tilde() {
   esac
 }
 
-normalize_display_frequency_hz() {
-  local value="${1:-60}"
-  python3 - "$value" <<'PY'
+openvr_normalize_display_frequency_hz() {
+  python3 - "${1:-60}" <<'PY'
 import math
 import sys
 text = sys.argv[1].strip()
@@ -20,53 +23,75 @@ try:
     value = float(text)
 except ValueError:
     print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
     sys.exit(2)
-if not math.isfinite(value) or abs(value - round(value)) > 1e-6:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
+if not math.isfinite(value) or value < 1.0 or value > 1000.0:
+    print(f"[ERROR] Display frequency must be finite and in range 1..1000: {text}", file=sys.stderr)
     sys.exit(2)
-hz = int(round(value))
-if hz < 60 or hz > 120:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-print(hz)
+print(f"{value:.6f}".rstrip("0").rstrip("."))
 PY
 }
 
-normalize_display_mode() {
+openvr_normalize_display_mode() {
   local value="${1:-direct}"
   value="${value,,}"
   value="${value//-/_}"
   case "$value" in
     direct|direct_mode|drm|drm_lease) printf 'direct\n' ;;
     extended|extended_sbs|sbs|windowed|desktop) printf 'extended_sbs\n' ;;
-    *)
-      echo "[ERROR] Unsupported OpenVR display mode: $1" >&2
-      echo "Expected direct or extended_sbs." >&2
-      exit 2
-      ;;
+    *) echo "[ERROR] Unsupported OpenVR display mode: $1" >&2; return 2 ;;
   esac
 }
 
+openvr_normalize_profile_name() {
+  local raw="${1:-generic}"
+  local value="${raw,,}"
+  value="${value//-/_}"
+  case "$value" in
+    ""|none) value="generic" ;;
+    xreal_air2ultra) value="xreal_ultra" ;;
+  esac
+  [[ "$value" =~ ^[a-z0-9][a-z0-9_.]*$ ]] || {
+    echo "[ERROR] Invalid OpenVR device profile: $raw" >&2
+    return 2
+  }
+  printf '%s\n' "$value"
+}
+
+openvr_normalize_package_tag() {
+  local value="${1:-}"
+  [[ -z "$value" ]] && { printf '\n'; return 0; }
+  value="${value,,}"
+  value="${value//-/_}"
+  value="${value// /_}"
+  [[ "$value" =~ ^[a-z0-9][a-z0-9_.]*$ ]] || {
+    echo "[ERROR] Invalid XR_OPENVR_PACKAGE_TAG: $1" >&2
+    return 2
+  }
+  printf '%s\n' "$value"
+}
+
 openvr_driver_dir_name() {
-  local hz="$1"
+  local hz="${1//./p}"
   local mode="$2"
+  local profile="${3:-generic}"
+  local tag="${4:-}"
+  local profile_part=""
+  local tag_part=""
+  [[ "$profile" != "generic" && "$profile" != "xreal_ultra" ]] && profile_part="_${profile}"
+  [[ -n "$tag" ]] && tag_part="_${tag}"
   if [[ "$mode" == "direct" ]]; then
-    printf 'openvr_driver_%sHZ\n' "$hz"
+    printf 'openvr_driver%s%s_%sHZ\n' "$profile_part" "$tag_part" "$hz"
   else
-    printf 'openvr_driver_%sHZ_%s\n' "$hz" "$mode"
+    printf 'openvr_driver%s%s_%sHZ_%s\n' "$profile_part" "$tag_part" "$hz" "$mode"
   fi
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRIVER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 resolve_runtime_root() {
   local explicit="${XR_PACKAGE_ROOT:-${XR_ROOT_PROJECT:-${ROOT_PROJECT:-}}}"
   if [[ -n "$explicit" ]]; then
-    explicit="$(expand_tilde "$explicit")"
+    explicit="$(openvr_expand_tilde "$explicit")"
     if [[ -d "$explicit" ]]; then
       printf '%s\n' "$explicit"
       return 0
@@ -80,7 +105,6 @@ resolve_runtime_root() {
   local package_candidate
   package_candidate="$(cd "$SCRIPT_DIR/../../../.." >/dev/null 2>&1 && pwd || true)"
   if [[ -n "$package_candidate" \
-        && -f "$package_candidate/devices/xreal_ultra/xreal_ultra.env" \
         && -d "$package_candidate/bin/drivers" ]]; then
     printf '%s\n' "$package_candidate"
     return 0
@@ -93,26 +117,16 @@ resolve_runtime_root() {
 
 PROJECT_ROOT="$(resolve_runtime_root)"
 XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_DISPLAY_FREQUENCY_HZ:-${DISPLAY_FREQUENCY_HZ:-60}}}"
-XR_OPENVR_DISPLAY_FREQUENCY_HZ="$(normalize_display_frequency_hz "$XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW")"
-XR_OPENVR_DISPLAY_MODE="$(normalize_display_mode "${XR_OPENVR_DISPLAY_MODE:-${XR_STEAMVR_DISPLAY_MODE:-direct}}")"
-XR_OPENVR_DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-$(openvr_driver_dir_name "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE")}"
-XR_OPENVR_DEVICE_RAW="${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}"
-XR_OPENVR_DEVICE="${XR_OPENVR_DEVICE_RAW,,}"
-XR_OPENVR_DEVICE="${XR_OPENVR_DEVICE//-/_}"
-case "$XR_OPENVR_DEVICE" in
-  generic|none) XR_OPENVR_DEVICE="generic" ;;
-  xreal_ultra|xreal_air2ultra) XR_OPENVR_DEVICE="xreal_ultra" ;;
-  *)
-    echo "[ERROR] Unsupported OpenVR device profile: $XR_OPENVR_DEVICE_RAW" >&2
-    echo "Expected generic or xreal_ultra." >&2
-    exit 2
-    ;;
-esac
+XR_OPENVR_DISPLAY_FREQUENCY_HZ="$(openvr_normalize_display_frequency_hz "$XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW")"
+XR_OPENVR_DISPLAY_MODE="$(openvr_normalize_display_mode "${XR_OPENVR_DISPLAY_MODE:-${XR_STEAMVR_DISPLAY_MODE:-direct}}")"
+XR_OPENVR_DEVICE="$(openvr_normalize_profile_name "${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}")"
+XR_OPENVR_PACKAGE_TAG="$(openvr_normalize_package_tag "${XR_OPENVR_PACKAGE_TAG:-}")"
+XR_OPENVR_DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-$(openvr_driver_dir_name "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")}"
 
 DRIVERS_ROOT="${DRIVERS_ROOT:-$PROJECT_ROOT/bin/drivers}"
-DRIVERS_ROOT="$(expand_tilde "$DRIVERS_ROOT")"
+DRIVERS_ROOT="$(openvr_expand_tilde "$DRIVERS_ROOT")"
 DRIVER_DIR="${DRIVER_PACKAGE:-$DRIVERS_ROOT/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking}"
-DRIVER_DIR="$(expand_tilde "$DRIVER_DIR")"
+DRIVER_DIR="$(openvr_expand_tilde "$DRIVER_DIR")"
 
 # Backward compatibility for callers that still pass or expect the old path.
 if [[ ! -f "${DRIVER_DIR}/driver.vrdrivermanifest" ]]; then
@@ -124,7 +138,7 @@ fi
 
 if [[ ! -f "${DRIVER_DIR}/driver.vrdrivermanifest" ]]; then
   echo "ERROR: driver package not found: ${DRIVER_DIR}" >&2
-  echo "Build first: devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh or drivers/openvr_driver/scripts/build_driver.sh" >&2
+  echo "Build first: drivers/openvr_driver/scripts/build_driver.sh (or the selected device package installer)" >&2
   echo "Expected frequency package: $DRIVERS_ROOT/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking" >&2
   exit 1
 fi
@@ -204,6 +218,7 @@ echo "driver:    ${DRIVER_DIR}"
 echo "frequency: ${XR_OPENVR_DISPLAY_FREQUENCY_HZ}Hz"
 echo "mode:      ${XR_OPENVR_DISPLAY_MODE}"
 echo "device:    ${XR_OPENVR_DEVICE}"
+echo "package:   ${XR_OPENVR_PACKAGE_TAG:-<none>}"
 if [[ "$XR_OPENVR_REGISTER_METHOD" == "manual" ]]; then
   echo "runtime:   ${XR_OPENVR_RUNTIME_MODE}"
 fi
@@ -227,7 +242,7 @@ import sys
 from pathlib import Path
 
 package_settings = Path(sys.argv[1])
-freq = int(float(sys.argv[2]))
+freq = float(sys.argv[2])
 mode = sys.argv[3]
 
 try:
@@ -340,7 +355,7 @@ register_driver_manual_openvrpaths() {
   local candidates=()
 
   if [[ -n "$explicit_openvrpaths" ]]; then
-    candidates+=("$(expand_tilde "$explicit_openvrpaths")")
+    candidates+=("$(openvr_expand_tilde "$explicit_openvrpaths")")
   fi
 
   candidates+=(

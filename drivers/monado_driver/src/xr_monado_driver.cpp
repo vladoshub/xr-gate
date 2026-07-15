@@ -138,6 +138,16 @@ float env_float(const char* name, float fallback, float min_value, float max_val
   return parsed;
 }
 
+bool env_has_value(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0';
+}
+
+float degrees_to_radians(float degrees) {
+  constexpr float kPi = 3.14159265358979323846f;
+  return degrees * (kPi / 180.0f);
+}
+
 struct HmdDisplayProfile {
   uint32_t render_width = kDefaultRenderWidth;
   uint32_t render_height = kDefaultRenderHeight;
@@ -157,19 +167,84 @@ struct HmdDisplayProfile {
 HmdDisplayProfile load_hmd_display_profile_from_env() {
   HmdDisplayProfile profile{};
 
-  profile.render_width = env_u32("XR_MONADO_RENDER_WIDTH", kDefaultRenderWidth, 64, 16384);
-  profile.render_height = env_u32("XR_MONADO_RENDER_HEIGHT", kDefaultRenderHeight, 64, 16384);
-  profile.window_width = env_u32("XR_MONADO_WINDOW_WIDTH", kDefaultWindowWidth, 64, 32768);
-  profile.window_height = env_u32("XR_MONADO_WINDOW_HEIGHT", kDefaultWindowHeight, 64, 32768);
+  // Side-by-side shorthand. Explicit render/window values below retain higher
+  // precedence and preserve compatibility with existing launchers.
+  uint32_t render_width_default = kDefaultRenderWidth;
+  uint32_t render_height_default = kDefaultRenderHeight;
+  uint32_t window_width_default = kDefaultWindowWidth;
+  uint32_t window_height_default = kDefaultWindowHeight;
+  if (env_has_value("XR_MONADO_EYE_WIDTH")) {
+    render_width_default = env_u32("XR_MONADO_EYE_WIDTH", kDefaultRenderWidth, 64, 16384);
+    window_width_default = render_width_default * 2u;
+  }
+  if (env_has_value("XR_MONADO_EYE_HEIGHT")) {
+    render_height_default = env_u32("XR_MONADO_EYE_HEIGHT", kDefaultRenderHeight, 64, 16384);
+    window_height_default = render_height_default;
+  }
+
+  profile.render_width = env_u32("XR_MONADO_RENDER_WIDTH", render_width_default, 64, 16384);
+  profile.render_height = env_u32("XR_MONADO_RENDER_HEIGHT", render_height_default, 64, 16384);
+  profile.window_width = env_u32("XR_MONADO_WINDOW_WIDTH", window_width_default, 64, 32768);
+  profile.window_height = env_u32("XR_MONADO_WINDOW_HEIGHT", window_height_default, 64, 32768);
   profile.display_width_m = env_float("XR_MONADO_DISPLAY_WIDTH_M", kDefaultDisplayWidthM, 0.001f, 10.0f);
   profile.display_height_m = env_float("XR_MONADO_DISPLAY_HEIGHT_M", kDefaultDisplayHeightM, 0.001f, 10.0f);
   profile.ipd_m = env_float("XR_MONADO_IPD_M", kDefaultIpdM, 0.001f, 1.0f);
   profile.lens_vertical_position_m =
       env_float("XR_MONADO_LENS_VERTICAL_POSITION_M", kDefaultLensVerticalPositionM, -10.0f, 10.0f);
-  profile.fov_left = env_float("XR_MONADO_FOV_LEFT", kDefaultFov, 0.01f, 10.0f);
-  profile.fov_right = env_float("XR_MONADO_FOV_RIGHT", kDefaultFov, 0.01f, 10.0f);
-  profile.fov_up = env_float("XR_MONADO_FOV_UP", kDefaultFov, 0.01f, 10.0f);
-  profile.fov_down = env_float("XR_MONADO_FOV_DOWN", kDefaultFov, 0.01f, 10.0f);
+
+  // Degree aliases describe a complete per-eye FOV. Directional values are
+  // half-angles from the optical axis. Existing XR_MONADO_FOV_* variables stay
+  // as raw radians and have highest precedence.
+  float fov_left_default = kDefaultFov;
+  float fov_right_default = kDefaultFov;
+  float fov_up_default = kDefaultFov;
+  float fov_down_default = kDefaultFov;
+
+  if (env_has_value("XR_MONADO_FOV_HORIZONTAL_DEG")) {
+    const float full = env_float("XR_MONADO_FOV_HORIZONTAL_DEG", 0.0f, 0.02f, 179.8f);
+    const float half_rad = degrees_to_radians(full * 0.5f);
+    fov_left_default = half_rad;
+    fov_right_default = half_rad;
+  }
+  if (env_has_value("XR_MONADO_FOV_VERTICAL_DEG")) {
+    const float full = env_float("XR_MONADO_FOV_VERTICAL_DEG", 0.0f, 0.02f, 179.8f);
+    const float half_rad = degrees_to_radians(full * 0.5f);
+    fov_up_default = half_rad;
+    fov_down_default = half_rad;
+  }
+  if (env_has_value("XR_MONADO_FOV_LEFT_DEG")) {
+    fov_left_default = degrees_to_radians(env_float("XR_MONADO_FOV_LEFT_DEG", 0.0f, 0.01f, 89.9f));
+  }
+  if (env_has_value("XR_MONADO_FOV_RIGHT_DEG")) {
+    fov_right_default = degrees_to_radians(env_float("XR_MONADO_FOV_RIGHT_DEG", 0.0f, 0.01f, 89.9f));
+  }
+  if (env_has_value("XR_MONADO_FOV_UP_DEG")) {
+    fov_up_default = degrees_to_radians(env_float("XR_MONADO_FOV_UP_DEG", 0.0f, 0.01f, 89.9f));
+  }
+  if (env_has_value("XR_MONADO_FOV_DOWN_DEG")) {
+    fov_down_default = degrees_to_radians(env_float("XR_MONADO_FOV_DOWN_DEG", 0.0f, 0.01f, 89.9f));
+  }
+
+  profile.fov_left = env_float(
+      "XR_MONADO_FOV_LEFT_RAD",
+      env_float("XR_MONADO_FOV_LEFT", fov_left_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+  profile.fov_right = env_float(
+      "XR_MONADO_FOV_RIGHT_RAD",
+      env_float("XR_MONADO_FOV_RIGHT", fov_right_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+  profile.fov_up = env_float(
+      "XR_MONADO_FOV_UP_RAD",
+      env_float("XR_MONADO_FOV_UP", fov_up_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
+  profile.fov_down = env_float(
+      "XR_MONADO_FOV_DOWN_RAD",
+      env_float("XR_MONADO_FOV_DOWN", fov_down_default, 0.01f, 10.0f),
+      0.01f,
+      10.0f);
   profile.refresh_hz = env_float("XR_MONADO_REFRESH_HZ", kDefaultRefreshHz, 1.0f, 1000.0f);
 
   return profile;
@@ -702,6 +777,19 @@ void setup_hmd_display(struct xrt_device* xdev) {
   info.fov[1] = profile.fov_right;
   info.fov[2] = profile.fov_up;
   info.fov[3] = profile.fov_down;
+
+  std::fprintf(stderr,
+               "[xr_tracking_monado] display window=%ux%u render_per_eye=%ux%u refresh=%.3fHz "
+               "fov_rad=(left=%.6f right=%.6f up=%.6f down=%.6f)\n",
+               profile.window_width,
+               profile.window_height,
+               profile.render_width,
+               profile.render_height,
+               static_cast<double>(profile.refresh_hz),
+               static_cast<double>(profile.fov_left),
+               static_cast<double>(profile.fov_right),
+               static_cast<double>(profile.fov_up),
+               static_cast<double>(profile.fov_down));
 
   u_device_setup_split_side_by_side(xdev, &info);
 

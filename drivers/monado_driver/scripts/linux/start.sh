@@ -9,15 +9,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-xreal_ultra}}}}"
-case "${XR_MONADO_DEVICE}" in
-  xreal_ultra|xreal_air2ultra)
-    XR_MONADO_DEVICE="xreal_ultra"
-    ;;
-  *)
-    # Do not fail here: future device packages may still use the generic runtime
-    # driver start script before this script knows their exact env filename.
-    ;;
+XR_MONADO_DEVICE="${XR_MONADO_DEVICE,,}"
+XR_MONADO_DEVICE="${XR_MONADO_DEVICE//-/_}"
+case "$XR_MONADO_DEVICE" in
+  xreal_air2ultra) XR_MONADO_DEVICE="xreal_ultra" ;;
 esac
+if [[ ! "$XR_MONADO_DEVICE" =~ ^[a-z0-9][a-z0-9_.]*$ ]]; then
+  echo "[start_monado_driver][ERROR] invalid XR_MONADO_DEVICE=$XR_MONADO_DEVICE" >&2
+  exit 2
+fi
 
 expand_path() {
   local path="$1"
@@ -169,6 +169,13 @@ find_project_root() {
   done
 
   # Runtime package fallback: <package>/bin/drivers/monado_driver/start.sh
+  local package_candidate=""
+  package_candidate="$(cd "$SCRIPT_DIR/../../.." >/dev/null 2>&1 && pwd || true)"
+  if [[ -n "$package_candidate" && -d "$package_candidate/bin/drivers/monado_driver" ]]; then
+    printf '%s\n' "$package_candidate"
+    return 0
+  fi
+
   d="$SCRIPT_DIR"
   while [[ "$d" != "/" && -n "$d" ]]; do
     if [[ -n "$XR_MONADO_DEVICE" \
@@ -216,6 +223,55 @@ THIRD_PARTY_DIR="$(expand_path "${THIRD_PARTY_DIR:-$ROOT_PROJECT/third_party}")"
 MONADO_DIR="$(expand_path "${MONADO_DIR:-$THIRD_PARTY_DIR/monado_driver}")"
 BUILD_DIR="$(expand_path "${BUILD_DIR:-$MONADO_DIR/build/xr_tracking_relwithdebinfo}")"
 BIN_DIR="$(expand_path "${BIN_DIR:-${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/drivers/monado_driver}")"
+
+load_display_profile() {
+  local explicit_file="${XR_MONADO_DISPLAY_PROFILE_FILE:-}"
+  local profile_was_explicit=0
+  [[ -n "${XR_MONADO_DISPLAY_PROFILE:-}" ]] && profile_was_explicit=1
+  local profile="${XR_MONADO_DISPLAY_PROFILE:-$XR_MONADO_DEVICE}"
+  profile="${profile,,}"
+  profile="${profile//-/_}"
+  if [[ ! "$profile" =~ ^[a-z0-9][a-z0-9_.]*$ ]]; then
+    fail "invalid XR_MONADO_DISPLAY_PROFILE=$profile"
+  fi
+  export XR_MONADO_DISPLAY_PROFILE="$profile"
+
+  local selected=""
+  if [[ -n "$explicit_file" ]]; then
+    selected="$(expand_path "$explicit_file")"
+    [[ -f "$selected" ]] || fail "XR_MONADO_DISPLAY_PROFILE_FILE not found: $selected"
+  else
+    local dirs=()
+    [[ -n "${XR_MONADO_PROFILE_DIR:-}" ]] && dirs+=("$(expand_path "$XR_MONADO_PROFILE_DIR")")
+    dirs+=(
+      "$BIN_DIR/profiles"
+      "$SCRIPT_DIR/profiles"
+      "$SCRIPT_DIR/../../profiles"
+      "$ROOT_PROJECT/drivers/monado_driver/profiles"
+    )
+    local dir=""
+    for dir in "${dirs[@]}"; do
+      if [[ -f "$dir/$profile.env" ]]; then
+        selected="$dir/$profile.env"
+        break
+      fi
+    done
+  fi
+
+  if [[ -n "$selected" ]]; then
+    # Profile files use ${VAR:-default}; explicit caller env remains authoritative.
+    # shellcheck disable=SC1090
+    source "$selected"
+    export XR_MONADO_DISPLAY_PROFILE_FILE="$selected"
+    log "loaded display profile: $selected"
+  elif [[ "$profile_was_explicit" -eq 1 ]]; then
+    fail "Monado display profile not found: $profile.env"
+  else
+    log "display profile '$profile' not found; using driver defaults and explicit env"
+  fi
+}
+
+load_display_profile
 
 # Prefer explicit binary override, then installed binary, then build tree binary.
 CANDIDATES=()
@@ -300,6 +356,8 @@ log "ROOT_PROJECT=$ROOT_PROJECT"
 log "MONADO_DIR=$MONADO_DIR"
 log "SERVICE_BIN=$SERVICE_BIN"
 log "XR_MONADO_DEVICE=$XR_MONADO_DEVICE"
+log "XR_MONADO_DISPLAY_PROFILE=${XR_MONADO_DISPLAY_PROFILE:-<none>}"
+log "XR_MONADO_DISPLAY_PROFILE_FILE=${XR_MONADO_DISPLAY_PROFILE_FILE:-<none>}"
 log "XR_TRACKING_RUNTIME_ENABLE=$XR_TRACKING_RUNTIME_ENABLE"
 log "XR_TRACKING_MONADO_COMPOSITOR_MODE=$XR_TRACKING_MONADO_COMPOSITOR_MODE"
 if [[ -n "${XRT_COMPOSITOR_FORCE_XCB:-}" ]]; then
