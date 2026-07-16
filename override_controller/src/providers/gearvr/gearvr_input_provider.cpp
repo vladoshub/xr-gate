@@ -94,6 +94,7 @@ struct GearVrInputProvider::Impl {
     TouchpadProcessor touchpad;
     uint64_t sequence = 0;
     uint64_t last_packet_ns = 0;
+    uint64_t previous_packet_ns = 0;
     uint8_t previous_buttons = 0;
 
     Session(float beta, TouchpadOptions touchpad_options)
@@ -185,6 +186,7 @@ struct GearVrInputProvider::Impl {
       session.imu.status = session.ever_connected ? xr_runtime::CONTROLLER_IMU_LOST
                                                   : xr_runtime::CONTROLLER_IMU_CONFIGURED;
       session.last_packet_ns = 0;
+      session.previous_packet_ns = 0;
     }
   }
 
@@ -251,27 +253,66 @@ struct GearVrInputProvider::Impl {
     const auto decoded = decode_packet(packet.bytes.data(), packet.bytes.size());
     if (!decoded) return;
 
-    const uint64_t now_ns = packet.timestamp_ns != 0
-                                ? packet.timestamp_ns
-                                : static_cast<uint64_t>(monotonic_now_ns());
+    const uint64_t packet_host_ns = packet.timestamp_ns != 0
+                                        ? packet.timestamp_ns
+                                        : static_cast<uint64_t>(monotonic_now_ns());
     ++session.sequence;
-    session.last_packet_ns = now_ns;
-    emit_button_changes(session, decoded->buttons, now_ns);
+    session.previous_packet_ns = session.last_packet_ns;
+    session.last_packet_ns = packet_host_ns;
+    emit_button_changes(session, decoded->buttons, packet_host_ns);
     session.touchpad.process(decoded->touch_x, decoded->touch_y,
                              [&](uint16_t type, uint16_t code, int32_t value) {
-      queue_event(session, type, code, value, now_ns);
+      queue_event(session, type, code, value, packet_host_ns);
     });
 
-    imu::RawControllerImuSample raw;
-    raw.host_timestamp_ns = now_ns;
-    raw.angular_velocity_rad_s = decoded->gyro_rad_s;
-    raw.specific_force_m_s2 = decoded->accel_m_s2;
-    raw.magnetic_field_uT = decoded->magnetic_uT;
-    raw.gyroscope_valid = true;
-    raw.accelerometer_valid = true;
-    raw.magnetometer_valid = true;
-    const imu::QuaternionXyzw orientation = session.imu_processor.process(raw);
-    const auto& corrected = session.imu_processor.corrected_sample();
+    // A single notification contains two timestamped accel/gyro records.
+    // Process both in wire order. Device timestamps are microsecond ticks.
+    // Anchor the newest record
+    // to the host receive time and reconstruct the two earlier host times.
+    const uint32_t newest_device_us = decoded->imu_samples.back().device_timestamp_us;
+    uint64_t fallback_spacing_ns = 5'000'000ull;  // 200 Hz IMU fallback.
+    if (session.previous_packet_ns != 0 && packet_host_ns > session.previous_packet_ns) {
+      const uint64_t packet_delta_ns = packet_host_ns - session.previous_packet_ns;
+      if (packet_delta_ns >= 1'000'000ull && packet_delta_ns <= 100'000'000ull) {
+        fallback_spacing_ns = packet_delta_ns / decoded->imu_samples.size();
+      }
+    }
+
+    std::array<uint64_t, 2> sample_host_ns{};
+    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
+      const uint32_t delta_us = newest_device_us - decoded->imu_samples[i].device_timestamp_us;
+      if (delta_us <= 100'000u) {
+        const uint64_t delta_ns = static_cast<uint64_t>(delta_us) * 1000ull;
+        sample_host_ns[i] = packet_host_ns > delta_ns ? packet_host_ns - delta_ns : packet_host_ns;
+      } else {
+        const uint64_t fallback_delta_ns =
+            fallback_spacing_ns * (decoded->imu_samples.size() - 1u - i);
+        sample_host_ns[i] = packet_host_ns > fallback_delta_ns
+                                ? packet_host_ns - fallback_delta_ns
+                                : packet_host_ns;
+      }
+      if (i > 0 && sample_host_ns[i] <= sample_host_ns[i - 1]) {
+        sample_host_ns[i] = sample_host_ns[i - 1] + std::max<uint64_t>(100'000ull, fallback_spacing_ns);
+      }
+      if (sample_host_ns[i] > packet_host_ns) sample_host_ns[i] = packet_host_ns;
+    }
+
+    imu::QuaternionXyzw orientation;
+    std::array<imu::RawControllerImuSample, 2> corrected_samples{};
+    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
+      const auto& decoded_sample = decoded->imu_samples[i];
+      imu::RawControllerImuSample raw;
+      raw.host_timestamp_ns = sample_host_ns[i];
+      raw.device_timestamp_ticks = decoded_sample.device_timestamp_us;
+      raw.angular_velocity_rad_s = decoded_sample.gyro_rad_s;
+      raw.specific_force_m_s2 = decoded_sample.accel_m_s2;
+      raw.magnetic_field_uT = decoded->magnetic_uT;
+      raw.gyroscope_valid = true;
+      raw.accelerometer_valid = true;
+      raw.magnetometer_valid = true;
+      orientation = session.imu_processor.process(raw);
+      corrected_samples[i] = session.imu_processor.corrected_sample();
+    }
 
     auto& state = session.imu;
     state = {};
@@ -289,29 +330,32 @@ struct GearVrInputProvider::Impl {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
     }
     state.sequence = session.sequence;
-    state.latest_sample_timestamp_ns = now_ns;
-    state.orientation_timestamp_ns = now_ns;
+    state.latest_sample_timestamp_ns = sample_host_ns.back();
+    state.orientation_timestamp_ns = sample_host_ns.back();
     state.orientation_xyzw[0] = orientation.x;
     state.orientation_xyzw[1] = orientation.y;
     state.orientation_xyzw[2] = orientation.z;
     state.orientation_xyzw[3] = orientation.w;
-    state.magnetic_field_uT[0] = raw.magnetic_field_uT.x;
-    state.magnetic_field_uT[1] = raw.magnetic_field_uT.y;
-    state.magnetic_field_uT[2] = raw.magnetic_field_uT.z;
-    state.sample_count = 1;
-    auto& sample = state.samples[0];
-    sample.timestamp_ns = now_ns;
-    sample.angular_velocity_rad_s[0] = corrected.angular_velocity_rad_s.x;
-    sample.angular_velocity_rad_s[1] = corrected.angular_velocity_rad_s.y;
-    sample.angular_velocity_rad_s[2] = corrected.angular_velocity_rad_s.z;
-    sample.specific_force_m_s2[0] = raw.specific_force_m_s2.x;
-    sample.specific_force_m_s2[1] = raw.specific_force_m_s2.y;
-    sample.specific_force_m_s2[2] = raw.specific_force_m_s2.z;
-    sample.flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                   xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                   xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
-    if (session.imu_processor.gyro_calibrated()) {
-      sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+    state.magnetic_field_uT[0] = decoded->magnetic_uT.x;
+    state.magnetic_field_uT[1] = decoded->magnetic_uT.y;
+    state.magnetic_field_uT[2] = decoded->magnetic_uT.z;
+    state.sample_count = static_cast<uint32_t>(decoded->imu_samples.size());
+    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
+      const auto& corrected = corrected_samples[i];
+      auto& sample = state.samples[i];
+      sample.timestamp_ns = sample_host_ns[i];
+      sample.angular_velocity_rad_s[0] = corrected.angular_velocity_rad_s.x;
+      sample.angular_velocity_rad_s[1] = corrected.angular_velocity_rad_s.y;
+      sample.angular_velocity_rad_s[2] = corrected.angular_velocity_rad_s.z;
+      sample.specific_force_m_s2[0] = corrected.specific_force_m_s2.x;
+      sample.specific_force_m_s2[1] = corrected.specific_force_m_s2.y;
+      sample.specific_force_m_s2[2] = corrected.specific_force_m_s2.z;
+      sample.flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
+                     xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
+                     xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
+      if (session.imu_processor.gyro_calibrated()) {
+        sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+      }
     }
   }
 

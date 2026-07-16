@@ -391,9 +391,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
     uint64_t notifications_started_ns = 0;
     uint64_t notification_watchdog_ns = 0;
     bool full_sensor_frame_logged = false;
-    int sensor_start_repeats_remaining = 0;
-    uint64_t next_sensor_start_ns = 0;
-    bool sensor_start_sequence_logged = false;
     bool connect_pending = false;
     bool seen_in_refresh = false;
     std::string error;
@@ -588,9 +585,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
       session.short_notification_count = 0;
       session.full_sensor_frame_count = 0;
       session.full_sensor_frame_logged = false;
-      session.sensor_start_repeats_remaining = 0;
-      session.next_sensor_start_ns = 0;
-      session.sensor_start_sequence_logged = false;
       session.notifications_started_ns = 0;
       session.notification_watchdog_ns = 0;
       session.next_notify_attempt_ns = 0;
@@ -840,24 +834,16 @@ class LinuxGearVrBleTransport final : public BleTransport {
                 << session.address << " source=" << source << " size=" << size << "\n";
     }
 
-    // Gear VR emits a short mode-transition response after CMD_VR_MODE. This
-    // is not controller input. The established Linux implementation follows
-    // it with repeated CMD_SENSOR writes, after which regular 60-byte sensor
-    // frames begin. Keep this handshake inside the BLE transport so the
-    // platform-independent packet decoder sees only actual sensor frames.
+    // Mode writes can be echoed as a short notification. They are not input
+    // packets. The actual stream is started by the post-subscribe CMD_SENSOR
+    // initialization command; do not answer this echo with CMD_VR_MODE again,
+    // because that stopped this controller after its first 60-byte frame.
     if (size < 59) {
       ++session.short_notification_count;
       if (session.short_notification_count == 1) {
         std::cerr << "[override_controller][gearvr_ble] short mode response "
                   << session.address << " source=" << source << " size=" << size
-                  << " bytes=[" << bytes_to_hex(bytes, size) << "]; requesting sensor stream\n";
-      }
-      if (session.full_sensor_frame_count == 0 &&
-          session.sensor_start_repeats_remaining == 0) {
-        session.sensor_start_repeats_remaining = 3;
-        session.next_sensor_start_ns = static_cast<uint64_t>(monotonic_now_ns());
-        session.sensor_start_sequence_logged = false;
-        session.notification_watchdog_ns = session.next_sensor_start_ns + 3'000'000'000ull;
+                  << " bytes=[" << bytes_to_hex(bytes, size) << "]\n";
       }
       return;
     }
@@ -1058,25 +1044,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
           }
         }
 
-        if (session.notifications_started &&
-            session.sensor_start_repeats_remaining > 0 &&
-            now_ns >= session.next_sensor_start_ns) {
-          if (write_command(session, kCommandSensor)) {
-            --session.sensor_start_repeats_remaining;
-            session.next_sensor_start_ns = now_ns + kInitCommandGapNs;
-            session.notification_watchdog_ns = now_ns + 3'000'000'000ull;
-            if (session.sensor_start_repeats_remaining == 0 &&
-                !session.sensor_start_sequence_logged) {
-              session.sensor_start_sequence_logged = true;
-              std::cerr << "[override_controller][gearvr_ble] sensor stream requested "
-                        << session.address << " (CMD_SENSOR x3)\n";
-            }
-          } else {
-            session.next_sensor_start_ns = now_ns +
-                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
-          }
-        }
-
         if (session.notifications_started && session.full_sensor_frame_count == 0 &&
             session.notification_watchdog_ns != 0 && now_ns >= session.notification_watchdog_ns) {
           const bool was_fd = session.notify_uses_fd;
@@ -1100,9 +1067,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
           session.short_notification_count = 0;
           session.full_sensor_frame_count = 0;
           session.full_sensor_frame_logged = false;
-          session.sensor_start_repeats_remaining = 0;
-          session.next_sensor_start_ns = 0;
-          session.sensor_start_sequence_logged = false;
           session.next_notify_attempt_ns = now_ns + 100'000'000ull;
           std::cerr << "[override_controller][gearvr_ble][WARN] " << session.address
                     << ": no sensor packets after notification setup; switching from "
@@ -1117,8 +1081,8 @@ class LinuxGearVrBleTransport final : public BleTransport {
             ++session.init_command_index;
             session.next_init_command_ns = now_ns + kInitCommandGapNs;
             if (session.init_command_index == commands.size()) {
-              std::cerr << "[override_controller][gearvr_ble] sensor mode initialized "
-                        << session.address << "\n";
+              std::cerr << "[override_controller][gearvr_ble] sensor stream initialized "
+                        << session.address << " (VR primed, SENSOR started)\n";
             }
           } else {
             session.next_init_command_ns = now_ns +
@@ -1151,7 +1115,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
       if (session->connected) {
         shorten(session->next_notify_attempt_ns);
         shorten(session->next_init_command_ns);
-        shorten(session->next_sensor_start_ns);
         shorten(session->notification_watchdog_ns);
         shorten(session->next_keepalive_ns);
       }

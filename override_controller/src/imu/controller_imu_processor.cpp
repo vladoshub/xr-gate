@@ -52,7 +52,12 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
   float qdot3 = 0.5f * (q0 * gz + q1 * gy - q2 * gx);
 
   const float accel_norm = std::sqrt(ax * ax + ay * ay + az * az);
-  if (accel_norm > 1.0e-6f && std::isfinite(accel_norm)) {
+  // Hand motion adds linear acceleration to gravity. Applying the full
+  // accelerometer correction during those periods makes the controller wobble.
+  // Use it only while the measured magnitude remains plausibly gravity-like;
+  // gyro integration continues at full rate outside this window.
+  if (accel_norm > 1.0e-6f && std::isfinite(accel_norm) &&
+      std::abs(accel_norm - kGravityMps2) <= 3.0f) {
     ax /= accel_norm;
     ay /= accel_norm;
     az /= accel_norm;

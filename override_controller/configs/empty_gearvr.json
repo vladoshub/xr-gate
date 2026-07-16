@@ -1,0 +1,336 @@
+{
+  "alternative_bindings": [],
+  "alternative_hold_toggle_bindings": [],
+  "bindings": [
+    {
+      "action": "trigger",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 288,
+        "kind": "key",
+        "name": "BTN_TRIGGER",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "grip",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 158,
+        "kind": "key",
+        "name": "KEY_BACK",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "menu",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 172,
+        "kind": "key",
+        "name": "KEY_HOMEPAGE",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "a",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 115,
+        "kind": "key",
+        "name": "KEY_VOLUMEUP",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "b",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 114,
+        "kind": "key",
+        "name": "KEY_VOLUMEDOWN",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "thumbstick_click",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 272,
+        "kind": "key",
+        "name": "BTN_LEFT",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
+      "action": "thumbstick_x",
+      "device_id": 1,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 2048,
+        "abs_max": 32767,
+        "abs_min": -32767,
+        "code": 0,
+        "kind": "abs_axis",
+        "name": "ABS_X",
+        "type": 3
+      },
+      "side": "left"
+    },
+    {
+      "action": "thumbstick_y",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 2048,
+        "abs_max": 32767,
+        "abs_min": -32767,
+        "code": 1,
+        "kind": "abs_axis",
+        "name": "ABS_Y",
+        "type": 3
+      },
+      "side": "left"
+    },
+    {
+      "action": "trigger",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 288,
+        "kind": "key",
+        "name": "BTN_TRIGGER",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "grip",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 158,
+        "kind": "key",
+        "name": "KEY_BACK",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "menu",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 172,
+        "kind": "key",
+        "name": "KEY_HOMEPAGE",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "a",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 115,
+        "kind": "key",
+        "name": "KEY_VOLUMEUP",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "b",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 114,
+        "kind": "key",
+        "name": "KEY_VOLUMEDOWN",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "thumbstick_click",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 272,
+        "kind": "key",
+        "name": "BTN_LEFT",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
+      "action": "thumbstick_x",
+      "device_id": 2,
+      "input": {
+        "abs_direction": -1,
+        "abs_flat": 2048,
+        "abs_max": 32767,
+        "abs_min": -32767,
+        "code": 0,
+        "kind": "abs_axis",
+        "name": "ABS_X",
+        "type": 3
+      },
+      "side": "right"
+    },
+    {
+      "action": "thumbstick_y",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 1,
+        "abs_flat": 2048,
+        "abs_max": 32767,
+        "abs_min": -32767,
+        "code": 1,
+        "kind": "abs_axis",
+        "name": "ABS_Y",
+        "type": 3
+      },
+      "side": "right"
+    }
+  ],
+  "devices": [
+    {
+      "backend": "gearvr_ble",
+      "bustype": 5,
+      "by_id_path": "",
+      "by_path": "",
+      "event_path": "",
+      "id": 1,
+      "imu_side": "left",
+      "input": {
+        "button_hold_ms": 0,
+        "button_pulse_gap_ms": 0,
+        "button_pulse_startup_ms": 0,
+        "button_pulse_startup_release_ms": 0,
+        "button_pulse_startup_types": [],
+        "button_release_grace_ms": 0,
+        "button_release_ms": 0,
+        "dpad_pulse_gap_ms": 0,
+        "dpad_release_ms": 0,
+        "hold_toggle_debounce_ms": 0,
+        "pulse_mode": false,
+        "rel_axis_hold_ms": 0,
+        "rel_button_hold_ms": 0
+      },
+      "name": "Gear VR Controller(Left)",
+      "phys": "",
+      "platform": "linux",
+      "product": 0,
+      "stable_hash": "0000000000000000",
+      "uniq": "",
+      "vendor": 0,
+      "version": 0
+    },
+    {
+      "backend": "gearvr_ble",
+      "bustype": 5,
+      "by_id_path": "",
+      "by_path": "",
+      "event_path": "",
+      "id": 2,
+      "imu_side": "right",
+      "input": {
+        "button_hold_ms": 0,
+        "button_pulse_gap_ms": 0,
+        "button_pulse_startup_ms": 0,
+        "button_pulse_startup_release_ms": 0,
+        "button_pulse_startup_types": [],
+        "button_release_grace_ms": 0,
+        "button_release_ms": 0,
+        "dpad_pulse_gap_ms": 0,
+        "dpad_release_ms": 0,
+        "hold_toggle_debounce_ms": 0,
+        "pulse_mode": false,
+        "rel_axis_hold_ms": 0,
+        "rel_button_hold_ms": 0
+      },
+      "name": "Gear VR Controller(Right)",
+      "phys": "",
+      "platform": "linux",
+      "product": 0,
+      "stable_hash": "0000000000000000",
+      "uniq": "",
+      "vendor": 0,
+      "version": 0
+    }
+  ],
+  "hold_toggle_bindings": [],
+  "input": {
+    "allow_shared_physical_device_sides": true,
+    "event_wait_max_ms": 20,
+    "grab_devices": false,
+    "reattach_devices": false,
+    "reattach_interval_ms": 1000
+  },
+  "layout_switch": {
+    "enabled": false
+  },
+  "name": "gearvr",
+  "publish": {
+    "rate_hz": 90.0,
+    "registry": "/tmp/tracking_streams.json",
+    "shm_name": "controller_input",
+    "slot_count": 32,
+    "stream": "controller_input",
+    "tcp_bind_host": "127.0.0.1",
+    "tcp_port": 45672,
+    "transport": "shm",
+    "unlink_existing": true
+  },
+  "version": 3
+}
