@@ -85,6 +85,7 @@ enum class ControllerAction {
   Y,
   System,
   ThumbstickClick,
+  ThumbstickTouch,
   DpadUp,
   DpadDown,
   DpadLeft,
@@ -116,10 +117,25 @@ struct DeviceInputConfig {
   uint32_t hold_toggle_debounce_ms = 0;
 };
 
+struct OrientationBasisRotationConfig {
+  double rx_deg = 0.0;
+  double ry_deg = 0.0;
+  double rz_deg = 0.0;
+};
+
+struct OrientationTransformConfig {
+  bool enabled = false;
+  bool invert_x = false;
+  bool invert_y = false;
+  bool invert_z = false;
+  OrientationBasisRotationConfig basis_rotation;
+};
+
 struct ConfigDevice {
   int id = 0;
   DeviceFingerprint fingerprint;
   DeviceInputConfig input;
+  OrientationTransformConfig orientation_transform;
 
   // Explicit IMU routing is independent from button/axis bindings. This lets
   // an IMU-only provider (for example MPU-6050) feed one controller side
@@ -186,6 +202,8 @@ struct AppConfig {
   // Runtime-only: load_config_file inferred imu_side for a legacy config and
   // the caller may persist the migrated schema atomically.
   bool migrated_imu_side = false;
+  bool migrated_orientation_transform = false;
+  bool migrated_gearvr_touch_bindings = false;
   PublishConfig publish;
   InputConfig input;
   std::vector<ConfigDevice> devices;

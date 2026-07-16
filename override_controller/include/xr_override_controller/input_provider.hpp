@@ -35,7 +35,7 @@ struct InputProviderOptions {
   // changing packet decoding, touchpad handling, AHRS, training, or bindings.
   uint32_t gearvr_initial_scan_ms = 1500;
   uint32_t gearvr_reconnect_ms = 1000;
-  std::string gearvr_touchpad_mode = "relative_stick";
+  std::string gearvr_touchpad_mode = "absolute_stick";
   double gearvr_touchpad_deadzone = 0.12;
   double gearvr_touchpad_radius = 90.0;
   bool gearvr_touchpad_invert_x = false;

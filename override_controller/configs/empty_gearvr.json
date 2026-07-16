@@ -93,6 +93,21 @@
       "side": "left"
     },
     {
+      "action": "thumbstick_touch",
+      "device_id": 1,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 330,
+        "kind": "key",
+        "name": "BTN_TOUCH",
+        "type": 1
+      },
+      "side": "left"
+    },
+    {
       "action": "thumbstick_x",
       "device_id": 1,
       "input": {
@@ -213,6 +228,21 @@
       "side": "right"
     },
     {
+      "action": "thumbstick_touch",
+      "device_id": 2,
+      "input": {
+        "abs_direction": 0,
+        "abs_flat": 0,
+        "abs_max": 0,
+        "abs_min": 0,
+        "code": 330,
+        "kind": "key",
+        "name": "BTN_TOUCH",
+        "type": 1
+      },
+      "side": "right"
+    },
+    {
       "action": "thumbstick_x",
       "device_id": 2,
       "input": {
@@ -274,7 +304,18 @@
       "stable_hash": "0000000000000000",
       "uniq": "",
       "vendor": 0,
-      "version": 0
+      "version": 0,
+      "orientation_transform": {
+        "enabled": true,
+        "invert_x": false,
+        "invert_y": false,
+        "invert_z": false,
+        "basis_rotation": {
+          "rx_deg": -90.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
     },
     {
       "backend": "gearvr_ble",
@@ -306,7 +347,18 @@
       "stable_hash": "0000000000000000",
       "uniq": "",
       "vendor": 0,
-      "version": 0
+      "version": 0,
+      "orientation_transform": {
+        "enabled": true,
+        "invert_x": false,
+        "invert_y": false,
+        "invert_z": false,
+        "basis_rotation": {
+          "rx_deg": -90.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
     }
   ],
   "hold_toggle_bindings": [],
@@ -332,5 +384,5 @@
     "transport": "shm",
     "unlink_existing": true
   },
-  "version": 3
+  "version": 4
 }

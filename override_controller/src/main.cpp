@@ -1,6 +1,7 @@
 #include <xr_override_controller/config_io.hpp>
 #include <xr_override_controller/controller_input_publisher.hpp>
 #include <xr_override_controller/input_provider.hpp>
+#include <xr_override_controller/imu/controller_imu_transform.hpp>
 #include <xr_override_controller/types.hpp>
 #include <xr_runtime/registry/runtime_paths.hpp>
 
@@ -77,7 +78,7 @@ struct Args {
   std::vector<std::string> providers;
   uint32_t gearvr_initial_scan_ms = 1500;
   uint32_t gearvr_reconnect_ms = 1000;
-  std::string gearvr_touchpad_mode = "relative_stick";
+  std::string gearvr_touchpad_mode = "absolute_stick";
   double gearvr_touchpad_deadzone = 0.12;
   double gearvr_touchpad_radius = 90.0;
   bool gearvr_touchpad_invert_x = false;
@@ -267,6 +268,7 @@ std::vector<ControllerAction> default_actions() {
       ControllerAction::X,
       ControllerAction::Y,
       ControllerAction::System,
+      ControllerAction::ThumbstickTouch,
       ControllerAction::ThumbstickClick,
       ControllerAction::DpadUp,
       ControllerAction::DpadDown,
@@ -1375,6 +1377,9 @@ void apply_action(SideOutputState& side, ControllerAction action, float value) {
     case ControllerAction::ThumbstickY:
       side.thumbstick_y = std::clamp(value, -1.0f, 1.0f);
       break;
+    case ControllerAction::ThumbstickTouch:
+      if (value >= 0.50f) side.touches |= kButtonThumbstick;
+      break;
     default:
       break;
   }
@@ -1455,7 +1460,8 @@ OutputState compose_state(InputProvider& provider,
 
     const int device_index = resolve_device(config_device.fingerprint);
     if (device_index < 0) continue;
-    const auto candidate_imu = provider.imu_state(devices[device_index]);
+    const auto candidate_imu = imu::apply_orientation_transform(
+        provider.imu_state(devices[device_index]), config_device.orientation_transform);
     if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
     if (xr_runtime::controller_imu_is_present(candidate_imu)) {
       side_devices.insert(hex_u64(devices[device_index].fingerprint.stable_hash));
@@ -1481,7 +1487,11 @@ OutputState compose_state(InputProvider& provider,
         imu_device_index = resolve_device(b.cfg.device);
       }
       if (imu_device_index >= 0) {
-        const auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+        auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+        if (binding_device) {
+          candidate_imu = imu::apply_orientation_transform(
+              candidate_imu, binding_device->orientation_transform);
+        }
         if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
       }
     }
@@ -1985,6 +1995,13 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     std::cout << "[override_controller] device_input id=" << device.id
               << " device=" << short_device_label(device.fingerprint)
               << " imu_side=" << (device.imu_side ? to_string(*device.imu_side) : "none")
+              << " orientation_transform=" << (device.orientation_transform.enabled ? "enabled" : "disabled")
+              << " orientation_invert=(" << (device.orientation_transform.invert_x ? 1 : 0)
+              << "," << (device.orientation_transform.invert_y ? 1 : 0)
+              << "," << (device.orientation_transform.invert_z ? 1 : 0) << ")"
+              << " orientation_basis_deg=(" << device.orientation_transform.basis_rotation.rx_deg
+              << "," << device.orientation_transform.basis_rotation.ry_deg
+              << "," << device.orientation_transform.basis_rotation.rz_deg << ")"
               << " rel_axis_hold_ms=" << input.rel_axis_hold_ms
               << " rel_button_hold_ms=" << input.rel_button_hold_ms
               << " button_hold_ms=" << input.button_hold_ms
@@ -2350,14 +2367,23 @@ int main(int argc, char** argv) {
 
     apply_publish_overrides(cfg, args);
     sync_devices_from_registry(cfg);
-    if (cfg.migrated_imu_side && !selected_path.empty()) {
+    if ((cfg.migrated_imu_side || cfg.migrated_orientation_transform ||
+         cfg.migrated_gearvr_touch_bindings) && !selected_path.empty()) {
+      const bool migrated_imu_side = cfg.migrated_imu_side;
+      const bool migrated_orientation = cfg.migrated_orientation_transform;
+      const bool migrated_touch = cfg.migrated_gearvr_touch_bindings;
       try {
         save_config_file(cfg, selected_path);
-        std::cout << "[override_controller] migrated legacy Gear VR config with explicit devices[].imu_side: "
-                  << selected_path << "\n";
+        std::cout << "[override_controller] migrated legacy Gear VR config:";
+        if (migrated_imu_side) std::cout << " devices[].imu_side";
+        if (migrated_orientation) std::cout << " devices[].orientation_transform";
+        if (migrated_touch) std::cout << " capacitive thumbstick_touch binding";
+        std::cout << " -> " << selected_path << "\n";
         cfg.migrated_imu_side = false;
+        cfg.migrated_orientation_transform = false;
+        cfg.migrated_gearvr_touch_bindings = false;
       } catch (const std::exception& e) {
-        std::cerr << "[override_controller][WARN] could not persist imu_side migration to "
+        std::cerr << "[override_controller][WARN] could not persist Gear VR config migration to "
                   << selected_path << ": " << e.what() << "\n";
       }
     }

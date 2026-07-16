@@ -26,6 +26,7 @@ std::string to_string(ControllerAction action) {
     case ControllerAction::Y: return "y";
     case ControllerAction::System: return "system";
     case ControllerAction::ThumbstickClick: return "thumbstick_click";
+    case ControllerAction::ThumbstickTouch: return "thumbstick_touch";
     case ControllerAction::DpadUp: return "dpad_up";
     case ControllerAction::DpadDown: return "dpad_down";
     case ControllerAction::DpadLeft: return "dpad_left";
@@ -53,6 +54,7 @@ ControllerAction parse_action(const std::string& s) {
   if (s == "y") return ControllerAction::Y;
   if (s == "system") return ControllerAction::System;
   if (s == "thumbstick" || s == "thumbstick_click") return ControllerAction::ThumbstickClick;
+  if (s == "thumbstick_touch" || s == "stick_touch" || s == "touchpad_touch") return ControllerAction::ThumbstickTouch;
   if (s == "dpad_up" || s == "up") return ControllerAction::DpadUp;
   if (s == "dpad_down" || s == "down") return ControllerAction::DpadDown;
   if (s == "dpad_left") return ControllerAction::DpadLeft;
@@ -74,6 +76,7 @@ uint64_t button_bit_for_action(ControllerAction action) {
     case ControllerAction::Y: return kButtonY;
     case ControllerAction::System: return kButtonSystem;
     case ControllerAction::ThumbstickClick: return kButtonThumbstick;
+    case ControllerAction::ThumbstickTouch: return 0;
     case ControllerAction::DpadUp: return kButtonDpadUp;
     case ControllerAction::DpadDown: return kButtonDpadDown;
     case ControllerAction::DpadLeft: return kButtonDpadLeft;

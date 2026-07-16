@@ -96,6 +96,7 @@ struct GearVrInputProvider::Impl {
     uint64_t last_packet_ns = 0;
     uint64_t previous_packet_ns = 0;
     uint8_t previous_buttons = 0;
+    bool previous_touch = false;
 
     Session(float beta, TouchpadOptions touchpad_options)
         : imu_processor(beta), touchpad(std::move(touchpad_options)) {}
@@ -153,9 +154,9 @@ struct GearVrInputProvider::Impl {
 
   void release_all_inputs(Session& session) {
     const uint64_t now_ns = static_cast<uint64_t>(monotonic_now_ns());
-    static const std::array<uint16_t, 6> keys{
+    static const std::array<uint16_t, 7> keys{
         codes::kBtnTrigger, codes::kKeyHomepage, codes::kKeyBack,
-        codes::kBtnLeft, codes::kKeyVolumeUp, codes::kKeyVolumeDown,
+        codes::kBtnLeft, codes::kBtnTouch, codes::kKeyVolumeUp, codes::kKeyVolumeDown,
     };
     for (uint16_t key : keys) queue_event(session, codes::kEvKey, key, 0, now_ns);
     session.touchpad.release([&](uint16_t type, uint16_t code, int32_t value) {
@@ -165,6 +166,7 @@ struct GearVrInputProvider::Impl {
     queue_event(session, codes::kEvAbs, codes::kAbsX, 0, now_ns);
     queue_event(session, codes::kEvAbs, codes::kAbsY, 0, now_ns);
     session.previous_buttons = 0;
+    session.previous_touch = false;
     session.touchpad.reset();
   }
 
@@ -260,6 +262,11 @@ struct GearVrInputProvider::Impl {
     session.previous_packet_ns = session.last_packet_ns;
     session.last_packet_ns = packet_host_ns;
     emit_button_changes(session, decoded->buttons, packet_host_ns);
+    const bool touched = !(decoded->touch_x == 0 && decoded->touch_y == 0);
+    if (touched != session.previous_touch) {
+      queue_event(session, codes::kEvKey, codes::kBtnTouch, touched ? 1 : 0, packet_host_ns);
+      session.previous_touch = touched;
+    }
     session.touchpad.process(decoded->touch_x, decoded->touch_y,
                              [&](uint16_t type, uint16_t code, int32_t value) {
       queue_event(session, type, code, value, packet_host_ns);

@@ -159,17 +159,19 @@ Gear VR protocol, touchpad modes, AHRS, configuration, or trained bindings.
 | --- | --- |
 | Trigger | `EV_KEY / BTN_TRIGGER` |
 | Touchpad physical click | `EV_KEY / BTN_LEFT` |
+| Touchpad capacitive contact | `EV_KEY / BTN_TOUCH` |
 | Back | `EV_KEY / KEY_BACK` |
 | Home | `EV_KEY / KEY_HOMEPAGE` |
 | Volume up/down | `EV_KEY / KEY_VOLUMEUP`, `KEY_VOLUMEDOWN` |
 | Touchpad movement | `EV_ABS / ABS_X`, `ABS_Y` |
 
-The touch surface defaults to `relative_stick`: the first touch point becomes
-the temporary stick center, movement is normalized to `[-32767,32767]`, and
-both axes return to zero when the finger leaves the pad. Other modes:
+The touch surface defaults to `absolute_stick`: the physical pad center is the
+virtual stick center, capacitive contact is independent from the physical click,
+and both axes return to zero when the finger leaves the pad. Other modes:
 
 ```bash
-GEARVR_TOUCHPAD_MODE=absolute_stick  # physical pad center is stick center
+GEARVR_TOUCHPAD_MODE=absolute_stick  # default; capacitive position, no physical click required
+GEARVR_TOUCHPAD_MODE=relative_stick  # first touch point becomes the temporary center
 GEARVR_TOUCHPAD_MODE=dpad            # KEY_UP/DOWN/LEFT/RIGHT
 GEARVR_TOUCHPAD_MODE=raw             # normalized absolute touch position
 ```

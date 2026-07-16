@@ -263,7 +263,7 @@ def side_label(side_name: str, side: SideState) -> str:
     imu_status = IMU_STATUS_NAMES.get(side.imu.status, str(side.imu.status))
     imu = f" imu={imu_status} imu_samples={side.imu.sample_count} imu_flags=0x{side.imu.data_flags:x}"
     dev = f" dev={side.device_id}" if side.device_id else ""
-    return f"{side_name} status={status} buttons={bits_to_names(side.buttons)} tx={side.thumbstick_x:+.2f} ty={side.thumbstick_y:+.2f}{imu}{dev}"
+    return f"{side_name} status={status} buttons={bits_to_names(side.buttons)} touches={bits_to_names(side.touches)} tx={side.thumbstick_x:+.2f} ty={side.thumbstick_y:+.2f}{imu}{dev}"
 
 
 def iter_selected_bits(mask: Optional[str]) -> Iterable[int]:

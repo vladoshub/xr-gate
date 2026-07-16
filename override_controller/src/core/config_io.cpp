@@ -197,11 +197,46 @@ nlohmann::json device_input_to_json(const DeviceInputConfig& input) {
   };
 }
 
+OrientationTransformConfig orientation_transform_from_json(const nlohmann::json& device_json) {
+  OrientationTransformConfig out;
+  if (!device_json.contains("orientation_transform") ||
+      !device_json.at("orientation_transform").is_object()) {
+    return out;
+  }
+  const auto& transform = device_json.at("orientation_transform");
+  out.enabled = transform.value("enabled", false);
+  out.invert_x = transform.value("invert_x", false);
+  out.invert_y = transform.value("invert_y", false);
+  out.invert_z = transform.value("invert_z", false);
+  if (transform.contains("basis_rotation") && transform.at("basis_rotation").is_object()) {
+    const auto& basis = transform.at("basis_rotation");
+    out.basis_rotation.rx_deg = basis.value("rx_deg", 0.0);
+    out.basis_rotation.ry_deg = basis.value("ry_deg", 0.0);
+    out.basis_rotation.rz_deg = basis.value("rz_deg", 0.0);
+  }
+  return out;
+}
+
+nlohmann::json orientation_transform_to_json(const OrientationTransformConfig& transform) {
+  return {
+      {"enabled", transform.enabled},
+      {"invert_x", transform.invert_x},
+      {"invert_y", transform.invert_y},
+      {"invert_z", transform.invert_z},
+      {"basis_rotation", {
+          {"rx_deg", transform.basis_rotation.rx_deg},
+          {"ry_deg", transform.basis_rotation.ry_deg},
+          {"rz_deg", transform.basis_rotation.rz_deg},
+      }},
+  };
+}
+
 nlohmann::json config_device_to_json(const ConfigDevice& d) {
   nlohmann::json j = fp_to_json(d.fingerprint);
   j["id"] = d.id;
   j["input"] = device_input_to_json(d.input);
   j["imu_side"] = d.imu_side ? to_string(*d.imu_side) : "none";
+  j["orientation_transform"] = orientation_transform_to_json(d.orientation_transform);
   return j;
 }
 
@@ -210,6 +245,7 @@ ConfigDevice config_device_from_json(const nlohmann::json& j, int fallback_id) {
   d.id = j.value("id", fallback_id);
   d.fingerprint = fp_from_json(j);
   d.input = device_input_from_json(j);
+  d.orientation_transform = orientation_transform_from_json(j);
   d.imu_side_explicit = j.contains("imu_side");
   const std::string imu_side = json_string_or(j, "imu_side", "none");
   if (imu_side == "left" || imu_side == "right") {
@@ -309,6 +345,61 @@ bool infer_legacy_gearvr_imu_sides(AppConfig& cfg) {
   return changed;
 }
 
+
+bool infer_legacy_gearvr_touch_bindings(AppConfig& cfg) {
+  constexpr uint16_t kEvKey = 0x01;
+  constexpr uint16_t kBtnTouch = 0x14a;
+  bool changed = false;
+
+  const auto has_touch_binding = [&](int device_id) {
+    const auto contains = [&](const std::vector<BindingConfig>& bindings) {
+      return std::any_of(bindings.begin(), bindings.end(), [&](const BindingConfig& binding) {
+        return binding.device_id == device_id &&
+               binding.action == ControllerAction::ThumbstickTouch;
+      });
+    };
+    return contains(cfg.bindings) || contains(cfg.hold_toggle_bindings) ||
+           contains(cfg.alternative_bindings) ||
+           contains(cfg.alternative_hold_toggle_bindings);
+  };
+
+  const auto binding_side_for_device = [&](const ConfigDevice& device)
+      -> std::optional<ControllerSide> {
+    if (device.imu_side) return device.imu_side;
+    std::set<ControllerSide> sides;
+    const auto collect = [&](const std::vector<BindingConfig>& bindings) {
+      for (const auto& binding : bindings) {
+        if (binding.device_id == device.id) sides.insert(binding.side);
+      }
+    };
+    collect(cfg.bindings);
+    collect(cfg.hold_toggle_bindings);
+    collect(cfg.alternative_bindings);
+    collect(cfg.alternative_hold_toggle_bindings);
+    if (sides.size() == 1) return *sides.begin();
+    return std::nullopt;
+  };
+
+  for (const auto& device : cfg.devices) {
+    if (device.fingerprint.backend != "gearvr_ble" || has_touch_binding(device.id)) continue;
+    const auto side = binding_side_for_device(device);
+    if (!side) continue;
+
+    BindingConfig binding;
+    binding.side = *side;
+    binding.action = ControllerAction::ThumbstickTouch;
+    binding.device_id = device.id;
+    binding.device = device.fingerprint;
+    binding.input.kind = InputKind::Key;
+    binding.input.type = kEvKey;
+    binding.input.code = kBtnTouch;
+    binding.input.name = "BTN_TOUCH";
+    cfg.bindings.push_back(std::move(binding));
+    changed = true;
+  }
+  return changed;
+}
+
 void hydrate_binding_device(AppConfig& cfg, BindingConfig& b) {
   if (b.device_id > 0) {
     if (DeviceFingerprint* fp = find_config_device(cfg, b.device_id)) {
@@ -389,6 +480,10 @@ AppConfig load_config_file(const fs::path& path) {
 
   int fallback_device_id = 1;
   for (const auto& dj : j.value("devices", nlohmann::json::array())) {
+    if (!dj.contains("orientation_transform") ||
+        !dj.at("orientation_transform").is_object()) {
+      cfg.migrated_orientation_transform = true;
+    }
     ConfigDevice d = config_device_from_json(dj, fallback_device_id++);
     if (d.id > 0) cfg.devices.push_back(std::move(d));
   }
@@ -431,12 +526,13 @@ AppConfig load_config_file(const fs::path& path) {
     cfg.alternative_hold_toggle_bindings.push_back(binding_from_json(bj));
   }
   cfg.migrated_imu_side = infer_legacy_gearvr_imu_sides(cfg);
+  cfg.migrated_gearvr_touch_bindings = infer_legacy_gearvr_touch_bindings(cfg);
   return cfg;
 }
 
 void save_config_file(const AppConfig& cfg, const fs::path& path) {
   nlohmann::json j;
-  j["version"] = 3;
+  j["version"] = 4;
   j["name"] = cfg.name;
   j["publish"] = {
       {"transport", cfg.publish.transport},

@@ -7,7 +7,7 @@
 namespace xr_override_controller::gearvr {
 
 struct TouchpadOptions {
-  std::string mode = "relative_stick";
+  std::string mode = "absolute_stick";
   double deadzone = 0.12;
   double radius = 90.0;
   bool invert_x = false;
