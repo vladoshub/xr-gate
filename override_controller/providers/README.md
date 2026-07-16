@@ -3,6 +3,25 @@
 Provider transports are compiled into `override_controller`; no helper process
 or newline-delimited JSON IPC is used.
 
+
+## Common provider boundary
+
+The core accepts only an ordered provider list and generic string options:
+
+```text
+--provider-option provider.key=value
+```
+
+Each provider parses and validates its own options, performs its own legacy
+configuration migrations, names its own input codes, and publishes only the
+common `InputEvent`, `InputBindingSpec`, `DeviceInfo`, and
+`ControllerImuStateV1` contracts. `CompositeInputProvider` routes operations by
+`DeviceInfo::provider_slot`; it does not interpret provider-specific codes.
+
+Adding another provider therefore requires a factory registration and build
+source entry, but does not require new provider fields or `if/else` branches in
+`main.cpp`, `config_io.cpp`, or the launcher.
+
 The shared C++ IMU pipeline lives in:
 
 - `include/xr_override_controller/imu/controller_imu_processor.hpp`

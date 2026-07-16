@@ -22,16 +22,23 @@ inline constexpr Command kCommandLpmEnable{0x06, 0x00};
 inline constexpr Command kCommandLpmDisable{0x07, 0x00};
 inline constexpr Command kCommandVrMode{0x08, 0x00};
 
+struct DecodedImuSample {
+  // The first 32 bytes contain two timestamped accel/gyro samples.
+  // Timestamps are unsigned 32-bit microsecond ticks and may wrap.
+  uint32_t device_timestamp_us = 0;
+  imu::Vec3f accel_m_s2;
+  imu::Vec3f gyro_rad_s;
+};
+
 struct DecodedPacket {
   int touch_x = 0;
   int touch_y = 0;
   uint8_t buttons = 0;
-  imu::Vec3f accel_m_s2;
-  imu::Vec3f gyro_rad_s;
+  std::array<DecodedImuSample, 2> imu_samples{};
   imu::Vec3f magnetic_uT;
 };
 
 std::optional<DecodedPacket> decode_packet(const uint8_t* data, size_t size);
-const std::array<Command, 8>& initialization_commands();
+const std::array<Command, 1>& initialization_commands();
 
 }  // namespace xr_override_controller::gearvr

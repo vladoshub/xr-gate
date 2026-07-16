@@ -591,7 +591,8 @@ std::optional<InputEvent> WindowsInputProvider::wait_event(std::vector<DeviceInf
   return std::nullopt;
 }
 
-std::string WindowsInputProvider::input_name(uint16_t type, uint16_t code) const {
+std::string WindowsInputProvider::input_name(const DeviceInfo& device, uint16_t type, uint16_t code) const {
+  (void)device;
   if (type == kWinKeyType) {
     if (code >= kXInputButtonCodeBase && code < static_cast<uint16_t>(kXInputButtonCodeBase + 0x0100)) {
       return xinput_button_name_for_code(code);
@@ -607,11 +608,11 @@ std::string WindowsInputProvider::input_name(uint16_t type, uint16_t code) const
   return "unknown";
 }
 
-InputBindingSpec WindowsInputProvider::make_input_spec(const DeviceInfo&, uint16_t type, uint16_t code) const {
+InputBindingSpec WindowsInputProvider::make_input_spec(const DeviceInfo& device, uint16_t type, uint16_t code) const {
   InputBindingSpec spec;
   spec.type = type;
   spec.code = code;
-  spec.name = input_name(type, code);
+  spec.name = input_name(device, type, code);
   if (type == kWinAbsType) {
     spec.kind = InputKind::AbsAxis;
     if (code == kXInputLeftTrigger || code == kXInputRightTrigger) {

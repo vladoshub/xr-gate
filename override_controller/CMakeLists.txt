@@ -22,7 +22,10 @@ add_executable(override_controller
   src/core/config_io.cpp
   src/core/controller_input_publisher.cpp
   src/imu/controller_imu_processor.cpp
+  src/imu/controller_imu_transform.cpp
   src/providers/gearvr/gearvr_input_provider.cpp
+  src/providers/gearvr/gearvr_config_migration.cpp
+  src/providers/gearvr/gearvr_options.cpp
   src/providers/gearvr/gearvr_protocol.cpp
   src/providers/gearvr/gearvr_touchpad.cpp
   src/platform/input_provider.cpp

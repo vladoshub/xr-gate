@@ -8,7 +8,7 @@ namespace xr_override_controller::gearvr {
 
 class GearVrInputProvider final : public InputProvider {
  public:
-  explicit GearVrInputProvider(InputProviderOptions options);
+  explicit GearVrInputProvider(ProviderOptionValues options);
   ~GearVrInputProvider() override;
 
   std::string provider_name() const override { return "gearvr_ble"; }
@@ -18,10 +18,13 @@ class GearVrInputProvider final : public InputProvider {
   std::optional<InputEvent> wait_event(std::vector<DeviceInfo>& devices,
                                        int timeout_ms,
                                        bool include_stdin) override;
-  std::string input_name(uint16_t type, uint16_t code) const override;
+  std::string input_name(const DeviceInfo& device,
+                         uint16_t type,
+                         uint16_t code) const override;
   InputBindingSpec make_input_spec(const DeviceInfo& device,
                                    uint16_t type,
                                    uint16_t code) const override;
+  ConfigMigrationResult migrate_config(AppConfig& cfg) const override;
   xr_runtime::ControllerImuStateV1 imu_state(const DeviceInfo& device) const override;
   void close_devices(std::vector<DeviceInfo>& devices) override;
   bool set_device_grab(std::vector<DeviceInfo>& devices,

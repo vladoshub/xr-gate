@@ -6,7 +6,9 @@
 // access is isolated behind BleTransport.
 
 #include "gearvr_ble_transport.hpp"
+#include "gearvr_config_migration.hpp"
 #include "gearvr_input_codes.hpp"
+#include "gearvr_options.hpp"
 #include "gearvr_protocol.hpp"
 #include "gearvr_touchpad.hpp"
 
@@ -94,24 +96,26 @@ struct GearVrInputProvider::Impl {
     TouchpadProcessor touchpad;
     uint64_t sequence = 0;
     uint64_t last_packet_ns = 0;
+    uint64_t previous_packet_ns = 0;
     uint8_t previous_buttons = 0;
+    bool previous_touch = false;
 
     Session(float beta, TouchpadOptions touchpad_options)
         : imu_processor(beta), touchpad(std::move(touchpad_options)) {}
   };
 
-  explicit Impl(InputProviderOptions input_options)
-      : options(std::move(input_options)), transport(make_platform_ble_transport(options)) {
+  explicit Impl(ProviderOptionValues input_options)
+      : options(load_gearvr_options(input_options)), transport(make_platform_ble_transport(options)) {
     if (!transport) throw std::runtime_error("Gear VR BLE transport is unavailable on this platform");
   }
 
   TouchpadOptions touchpad_options() const {
     TouchpadOptions out;
-    out.mode = options.gearvr_touchpad_mode;
-    out.deadzone = options.gearvr_touchpad_deadzone;
-    out.radius = options.gearvr_touchpad_radius;
-    out.invert_x = options.gearvr_touchpad_invert_x;
-    out.invert_y = options.gearvr_touchpad_invert_y;
+    out.mode = options.touchpad_mode;
+    out.deadzone = options.touchpad_deadzone;
+    out.radius = options.touchpad_radius;
+    out.invert_x = options.touchpad_invert_x;
+    out.invert_y = options.touchpad_invert_y;
     return out;
   }
 
@@ -152,9 +156,9 @@ struct GearVrInputProvider::Impl {
 
   void release_all_inputs(Session& session) {
     const uint64_t now_ns = static_cast<uint64_t>(monotonic_now_ns());
-    static const std::array<uint16_t, 6> keys{
+    static const std::array<uint16_t, 7> keys{
         codes::kBtnTrigger, codes::kKeyHomepage, codes::kKeyBack,
-        codes::kBtnLeft, codes::kKeyVolumeUp, codes::kKeyVolumeDown,
+        codes::kBtnLeft, codes::kBtnTouch, codes::kKeyVolumeUp, codes::kKeyVolumeDown,
     };
     for (uint16_t key : keys) queue_event(session, codes::kEvKey, key, 0, now_ns);
     session.touchpad.release([&](uint16_t type, uint16_t code, int32_t value) {
@@ -164,6 +168,7 @@ struct GearVrInputProvider::Impl {
     queue_event(session, codes::kEvAbs, codes::kAbsX, 0, now_ns);
     queue_event(session, codes::kEvAbs, codes::kAbsY, 0, now_ns);
     session.previous_buttons = 0;
+    session.previous_touch = false;
     session.touchpad.reset();
   }
 
@@ -185,6 +190,7 @@ struct GearVrInputProvider::Impl {
       session.imu.status = session.ever_connected ? xr_runtime::CONTROLLER_IMU_LOST
                                                   : xr_runtime::CONTROLLER_IMU_CONFIGURED;
       session.last_packet_ns = 0;
+      session.previous_packet_ns = 0;
     }
   }
 
@@ -196,7 +202,7 @@ struct GearVrInputProvider::Impl {
       auto& session_ptr = sessions[snapshot.stable_id];
       if (!session_ptr) {
         session_ptr = std::make_unique<Session>(
-            static_cast<float>(options.gearvr_madgwick_beta), touchpad_options());
+            static_cast<float>(options.madgwick_beta), touchpad_options());
         session_ptr->stable_id = snapshot.stable_id;
       }
       Session& session = *session_ptr;
@@ -251,27 +257,71 @@ struct GearVrInputProvider::Impl {
     const auto decoded = decode_packet(packet.bytes.data(), packet.bytes.size());
     if (!decoded) return;
 
-    const uint64_t now_ns = packet.timestamp_ns != 0
-                                ? packet.timestamp_ns
-                                : static_cast<uint64_t>(monotonic_now_ns());
+    const uint64_t packet_host_ns = packet.timestamp_ns != 0
+                                        ? packet.timestamp_ns
+                                        : static_cast<uint64_t>(monotonic_now_ns());
     ++session.sequence;
-    session.last_packet_ns = now_ns;
-    emit_button_changes(session, decoded->buttons, now_ns);
+    session.previous_packet_ns = session.last_packet_ns;
+    session.last_packet_ns = packet_host_ns;
+    emit_button_changes(session, decoded->buttons, packet_host_ns);
+    const bool touched = !(decoded->touch_x == 0 && decoded->touch_y == 0);
+    if (touched != session.previous_touch) {
+      queue_event(session, codes::kEvKey, codes::kBtnTouch, touched ? 1 : 0, packet_host_ns);
+      session.previous_touch = touched;
+    }
     session.touchpad.process(decoded->touch_x, decoded->touch_y,
                              [&](uint16_t type, uint16_t code, int32_t value) {
-      queue_event(session, type, code, value, now_ns);
+      queue_event(session, type, code, value, packet_host_ns);
     });
 
-    imu::RawControllerImuSample raw;
-    raw.host_timestamp_ns = now_ns;
-    raw.angular_velocity_rad_s = decoded->gyro_rad_s;
-    raw.specific_force_m_s2 = decoded->accel_m_s2;
-    raw.magnetic_field_uT = decoded->magnetic_uT;
-    raw.gyroscope_valid = true;
-    raw.accelerometer_valid = true;
-    raw.magnetometer_valid = true;
-    const imu::QuaternionXyzw orientation = session.imu_processor.process(raw);
-    const auto& corrected = session.imu_processor.corrected_sample();
+    // A single notification contains two timestamped accel/gyro records.
+    // Process both in wire order. Device timestamps are microsecond ticks.
+    // Anchor the newest record
+    // to the host receive time and reconstruct the two earlier host times.
+    const uint32_t newest_device_us = decoded->imu_samples.back().device_timestamp_us;
+    uint64_t fallback_spacing_ns = 5'000'000ull;  // 200 Hz IMU fallback.
+    if (session.previous_packet_ns != 0 && packet_host_ns > session.previous_packet_ns) {
+      const uint64_t packet_delta_ns = packet_host_ns - session.previous_packet_ns;
+      if (packet_delta_ns >= 1'000'000ull && packet_delta_ns <= 100'000'000ull) {
+        fallback_spacing_ns = packet_delta_ns / decoded->imu_samples.size();
+      }
+    }
+
+    std::array<uint64_t, 2> sample_host_ns{};
+    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
+      const uint32_t delta_us = newest_device_us - decoded->imu_samples[i].device_timestamp_us;
+      if (delta_us <= 100'000u) {
+        const uint64_t delta_ns = static_cast<uint64_t>(delta_us) * 1000ull;
+        sample_host_ns[i] = packet_host_ns > delta_ns ? packet_host_ns - delta_ns : packet_host_ns;
+      } else {
+        const uint64_t fallback_delta_ns =
+            fallback_spacing_ns * (decoded->imu_samples.size() - 1u - i);
+        sample_host_ns[i] = packet_host_ns > fallback_delta_ns
+                                ? packet_host_ns - fallback_delta_ns
+                                : packet_host_ns;
+      }
+      if (i > 0 && sample_host_ns[i] <= sample_host_ns[i - 1]) {
+        sample_host_ns[i] = sample_host_ns[i - 1] + std::max<uint64_t>(100'000ull, fallback_spacing_ns);
+      }
+      if (sample_host_ns[i] > packet_host_ns) sample_host_ns[i] = packet_host_ns;
+    }
+
+    imu::QuaternionXyzw orientation;
+    std::array<imu::RawControllerImuSample, 2> corrected_samples{};
+    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
+      const auto& decoded_sample = decoded->imu_samples[i];
+      imu::RawControllerImuSample raw;
+      raw.host_timestamp_ns = sample_host_ns[i];
+      raw.device_timestamp_ticks = decoded_sample.device_timestamp_us;
+      raw.angular_velocity_rad_s = decoded_sample.gyro_rad_s;
+      raw.specific_force_m_s2 = decoded_sample.accel_m_s2;
+      raw.magnetic_field_uT = decoded->magnetic_uT;
+      raw.gyroscope_valid = true;
+      raw.accelerometer_valid = true;
+      raw.magnetometer_valid = true;
+      orientation = session.imu_processor.process(raw);
+      corrected_samples[i] = session.imu_processor.corrected_sample();
+    }
 
     auto& state = session.imu;
     state = {};
@@ -289,29 +339,32 @@ struct GearVrInputProvider::Impl {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
     }
     state.sequence = session.sequence;
-    state.latest_sample_timestamp_ns = now_ns;
-    state.orientation_timestamp_ns = now_ns;
+    state.latest_sample_timestamp_ns = sample_host_ns.back();
+    state.orientation_timestamp_ns = sample_host_ns.back();
     state.orientation_xyzw[0] = orientation.x;
     state.orientation_xyzw[1] = orientation.y;
     state.orientation_xyzw[2] = orientation.z;
     state.orientation_xyzw[3] = orientation.w;
-    state.magnetic_field_uT[0] = raw.magnetic_field_uT.x;
-    state.magnetic_field_uT[1] = raw.magnetic_field_uT.y;
-    state.magnetic_field_uT[2] = raw.magnetic_field_uT.z;
-    state.sample_count = 1;
-    auto& sample = state.samples[0];
-    sample.timestamp_ns = now_ns;
-    sample.angular_velocity_rad_s[0] = corrected.angular_velocity_rad_s.x;
-    sample.angular_velocity_rad_s[1] = corrected.angular_velocity_rad_s.y;
-    sample.angular_velocity_rad_s[2] = corrected.angular_velocity_rad_s.z;
-    sample.specific_force_m_s2[0] = raw.specific_force_m_s2.x;
-    sample.specific_force_m_s2[1] = raw.specific_force_m_s2.y;
-    sample.specific_force_m_s2[2] = raw.specific_force_m_s2.z;
-    sample.flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                   xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                   xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
-    if (session.imu_processor.gyro_calibrated()) {
-      sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+    state.magnetic_field_uT[0] = decoded->magnetic_uT.x;
+    state.magnetic_field_uT[1] = decoded->magnetic_uT.y;
+    state.magnetic_field_uT[2] = decoded->magnetic_uT.z;
+    state.sample_count = static_cast<uint32_t>(decoded->imu_samples.size());
+    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
+      const auto& corrected = corrected_samples[i];
+      auto& sample = state.samples[i];
+      sample.timestamp_ns = sample_host_ns[i];
+      sample.angular_velocity_rad_s[0] = corrected.angular_velocity_rad_s.x;
+      sample.angular_velocity_rad_s[1] = corrected.angular_velocity_rad_s.y;
+      sample.angular_velocity_rad_s[2] = corrected.angular_velocity_rad_s.z;
+      sample.specific_force_m_s2[0] = corrected.specific_force_m_s2.x;
+      sample.specific_force_m_s2[1] = corrected.specific_force_m_s2.y;
+      sample.specific_force_m_s2[2] = corrected.specific_force_m_s2.z;
+      sample.flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
+                     xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
+                     xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
+      if (session.imu_processor.gyro_calibrated()) {
+        sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+      }
     }
   }
 
@@ -388,13 +441,13 @@ struct GearVrInputProvider::Impl {
     }
   }
 
-  InputProviderOptions options;
+  GearVrOptions options;
   std::unique_ptr<BleTransport> transport;
   std::map<std::string, std::unique_ptr<Session>> sessions;
   std::deque<PendingEvent> pending_events;
 };
 
-GearVrInputProvider::GearVrInputProvider(InputProviderOptions options)
+GearVrInputProvider::GearVrInputProvider(ProviderOptionValues options)
     : impl_(std::make_unique<Impl>(std::move(options))) {}
 
 GearVrInputProvider::~GearVrInputProvider() = default;
@@ -402,7 +455,7 @@ GearVrInputProvider::~GearVrInputProvider() = default;
 std::vector<DeviceInfo> GearVrInputProvider::scan_devices(bool open_readable) {
   (void)open_readable;
   const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(impl_->options.gearvr_initial_scan_ms);
+                        std::chrono::milliseconds(impl_->options.initial_scan_ms);
   do {
     impl_->pump(50, false);
   } while (impl_->sessions.empty() && std::chrono::steady_clock::now() < deadline);
@@ -447,7 +500,10 @@ std::optional<InputEvent> GearVrInputProvider::wait_event(std::vector<DeviceInfo
   }
 }
 
-std::string GearVrInputProvider::input_name(uint16_t type, uint16_t code) const {
+std::string GearVrInputProvider::input_name(const DeviceInfo& device,
+                                                uint16_t type,
+                                                uint16_t code) const {
+  (void)device;
   if (type == codes::kEvKey) return key_name(code);
   if (type == codes::kEvAbs) return abs_name(code);
   return "EV" + std::to_string(type) + ":" + std::to_string(code);
@@ -460,7 +516,7 @@ InputBindingSpec GearVrInputProvider::make_input_spec(const DeviceInfo& device,
   InputBindingSpec spec;
   spec.type = type;
   spec.code = code;
-  spec.name = input_name(type, code);
+  spec.name = input_name(device, type, code);
   if (type == codes::kEvAbs) {
     spec.kind = InputKind::AbsAxis;
     spec.abs_min = -32767;
@@ -470,6 +526,10 @@ InputBindingSpec GearVrInputProvider::make_input_spec(const DeviceInfo& device,
     spec.kind = InputKind::Key;
   }
   return spec;
+}
+
+ConfigMigrationResult GearVrInputProvider::migrate_config(AppConfig& cfg) const {
+  return migrate_legacy_config(cfg);
 }
 
 xr_runtime::ControllerImuStateV1 GearVrInputProvider::imu_state(const DeviceInfo& device) const {

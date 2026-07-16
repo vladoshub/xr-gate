@@ -47,6 +47,12 @@ Third-party source code, upstream patches, downloaded model files, generated bin
 - Use: OpenVR/XREAL behavior and configuration reference.
 - Packaging note: this project should not copy upstream code unless the copied file's license is explicitly preserved.
 
+### gearVRC
+
+- Upstream: https://github.com/uutzinger/gearVRC
+- Use: GearVR provider in override_controller
+- Packaging note: preserve upstream notices when adapted code is used.
+
 ## Optional components
 
 ### mercury_steamvr_driver / Mercury ONNX models

@@ -4,7 +4,6 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
-#include <iostream>
 #include <stdexcept>
 #include <utility>
 
@@ -196,10 +195,46 @@ nlohmann::json device_input_to_json(const DeviceInputConfig& input) {
   };
 }
 
+OrientationTransformConfig orientation_transform_from_json(const nlohmann::json& device_json) {
+  OrientationTransformConfig out;
+  if (!device_json.contains("orientation_transform") ||
+      !device_json.at("orientation_transform").is_object()) {
+    return out;
+  }
+  const auto& transform = device_json.at("orientation_transform");
+  out.enabled = transform.value("enabled", false);
+  out.invert_x = transform.value("invert_x", false);
+  out.invert_y = transform.value("invert_y", false);
+  out.invert_z = transform.value("invert_z", false);
+  if (transform.contains("basis_rotation") && transform.at("basis_rotation").is_object()) {
+    const auto& basis = transform.at("basis_rotation");
+    out.basis_rotation.rx_deg = basis.value("rx_deg", 0.0);
+    out.basis_rotation.ry_deg = basis.value("ry_deg", 0.0);
+    out.basis_rotation.rz_deg = basis.value("rz_deg", 0.0);
+  }
+  return out;
+}
+
+nlohmann::json orientation_transform_to_json(const OrientationTransformConfig& transform) {
+  return {
+      {"enabled", transform.enabled},
+      {"invert_x", transform.invert_x},
+      {"invert_y", transform.invert_y},
+      {"invert_z", transform.invert_z},
+      {"basis_rotation", {
+          {"rx_deg", transform.basis_rotation.rx_deg},
+          {"ry_deg", transform.basis_rotation.ry_deg},
+          {"rz_deg", transform.basis_rotation.rz_deg},
+      }},
+  };
+}
+
 nlohmann::json config_device_to_json(const ConfigDevice& d) {
   nlohmann::json j = fp_to_json(d.fingerprint);
   j["id"] = d.id;
   j["input"] = device_input_to_json(d.input);
+  j["imu_side"] = d.imu_side ? to_string(*d.imu_side) : "none";
+  j["orientation_transform"] = orientation_transform_to_json(d.orientation_transform);
   return j;
 }
 
@@ -208,6 +243,15 @@ ConfigDevice config_device_from_json(const nlohmann::json& j, int fallback_id) {
   d.id = j.value("id", fallback_id);
   d.fingerprint = fp_from_json(j);
   d.input = device_input_from_json(j);
+  d.orientation_transform = orientation_transform_from_json(j);
+  d.imu_side_explicit = j.contains("imu_side");
+  const std::string imu_side = json_string_or(j, "imu_side", "none");
+  if (imu_side == "left" || imu_side == "right") {
+    d.imu_side = parse_side(imu_side);
+  } else if (imu_side != "none" && !imu_side.empty()) {
+    throw std::runtime_error("invalid devices[].imu_side '" + imu_side +
+                             "'; expected left, right, or none");
+  }
   return d;
 }
 
@@ -352,10 +396,18 @@ AppConfig load_config_file(const fs::path& path) {
   cfg.input.reattach_interval_ms = input.value("reattach_interval_ms", 1000u);
   cfg.input.event_wait_max_ms = input.value("event_wait_max_ms", 20u);
 
+  bool missing_orientation_transform = false;
   int fallback_device_id = 1;
   for (const auto& dj : j.value("devices", nlohmann::json::array())) {
+    if (!dj.contains("orientation_transform") ||
+        !dj.at("orientation_transform").is_object()) {
+      missing_orientation_transform = true;
+    }
     ConfigDevice d = config_device_from_json(dj, fallback_device_id++);
     if (d.id > 0) cfg.devices.push_back(std::move(d));
+  }
+  if (missing_orientation_transform) {
+    cfg.pending_migrations.push_back("devices[].orientation_transform");
   }
 
   const auto binding_from_json = [&](const nlohmann::json& bj) {
@@ -400,7 +452,7 @@ AppConfig load_config_file(const fs::path& path) {
 
 void save_config_file(const AppConfig& cfg, const fs::path& path) {
   nlohmann::json j;
-  j["version"] = 2;
+  j["version"] = 4;
   j["name"] = cfg.name;
   j["publish"] = {
       {"transport", cfg.publish.transport},

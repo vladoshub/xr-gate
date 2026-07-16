@@ -1,6 +1,7 @@
 #include <xr_override_controller/config_io.hpp>
 #include <xr_override_controller/controller_input_publisher.hpp>
 #include <xr_override_controller/input_provider.hpp>
+#include <xr_override_controller/imu/controller_imu_transform.hpp>
 #include <xr_override_controller/types.hpp>
 #include <xr_runtime/registry/runtime_paths.hpp>
 
@@ -75,14 +76,7 @@ struct Args {
   bool verbose = false;
 
   std::vector<std::string> providers;
-  uint32_t gearvr_initial_scan_ms = 1500;
-  uint32_t gearvr_reconnect_ms = 1000;
-  std::string gearvr_touchpad_mode = "relative_stick";
-  double gearvr_touchpad_deadzone = 0.12;
-  double gearvr_touchpad_radius = 90.0;
-  bool gearvr_touchpad_invert_x = false;
-  bool gearvr_touchpad_invert_y = true;
-  double gearvr_madgwick_beta = 0.04;
+  std::map<std::string, ProviderOptionValues> provider_options;
 };
 
 void usage() {
@@ -109,16 +103,9 @@ void usage() {
       "  --no-reattach-devices    Disable device reattach/rescan\n"
       "  --reattach-interval-ms <n> Rescan interval. Default: 1000\n"
       "  --event-wait-max-ms <n>  Max event select wait. Higher reduces idle CPU\n"
-      "  --provider <name>        Enable input provider; repeatable. Linux: evdev, gearvr_ble\n"
+      "  --provider <name>        Enable input provider; repeatable\n"
       "  --providers <csv>        Comma-separated provider list\n"
-      "  --gearvr-initial-scan-ms <n> Initial paired-controller discovery wait\n"
-      "  --gearvr-reconnect-ms <n> BLE reconnect delay\n"
-      "  --gearvr-touchpad-mode <relative_stick|absolute_stick|dpad|raw>\n"
-      "  --gearvr-touchpad-deadzone <0..1>\n"
-      "  --gearvr-touchpad-radius <pixels>\n"
-      "  --gearvr-touchpad-invert-x <bool>\n"
-      "  --gearvr-touchpad-invert-y <bool>\n"
-      "  --gearvr-madgwick-beta <value>\n"
+      "  --provider-option <provider.key=value> Provider-owned option; repeatable\n"
       "  --non-interactive        Do not prompt; fail if config is missing/ambiguous\n"
       "  --verbose                Print more runtime diagnostics\n"
       "  --help\n";
@@ -150,6 +137,27 @@ void append_csv_values(std::vector<std::string>& out, const std::string& raw) {
     if (comma == std::string::npos) break;
     start = comma + 1;
   }
+}
+
+void append_provider_option(std::map<std::string, ProviderOptionValues>& out,
+                            const std::string& raw) {
+  const size_t equals = raw.find('=');
+  const size_t dot = raw.find('.');
+  if (equals == std::string::npos || dot == std::string::npos || dot == 0 || dot > equals) {
+    throw std::runtime_error(
+        "--provider-option expects provider.key=value, got: " + raw);
+  }
+  std::string provider = trim_copy(raw.substr(0, dot));
+  std::string key = trim_copy(raw.substr(dot + 1, equals - dot - 1));
+  const std::string value = trim_copy(raw.substr(equals + 1));
+  std::transform(provider.begin(), provider.end(), provider.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  if (provider.empty() || key.empty()) {
+    throw std::runtime_error(
+        "--provider-option expects non-empty provider and key: " + raw);
+  }
+  out[provider][key] = value;
 }
 
 std::string action_list_to_string(const std::vector<ControllerAction>& actions) {
@@ -216,43 +224,14 @@ Args parse_args(int argc, char** argv) {
       a.providers.push_back(need(v.c_str()));
     } else if (v == "--providers") {
       append_csv_values(a.providers, need(v.c_str()));
-    } else if (v == "--gearvr-initial-scan-ms") {
-      a.gearvr_initial_scan_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--gearvr-reconnect-ms") {
-      a.gearvr_reconnect_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
-    } else if (v == "--gearvr-touchpad-mode") {
-      a.gearvr_touchpad_mode = need(v.c_str());
-    } else if (v == "--gearvr-touchpad-deadzone") {
-      a.gearvr_touchpad_deadzone = std::stod(need(v.c_str()));
-    } else if (v == "--gearvr-touchpad-radius") {
-      a.gearvr_touchpad_radius = std::stod(need(v.c_str()));
-    } else if (v == "--gearvr-touchpad-invert-x") {
-      a.gearvr_touchpad_invert_x = parse_bool_arg(need(v.c_str()), v.c_str());
-    } else if (v == "--gearvr-touchpad-invert-y") {
-      a.gearvr_touchpad_invert_y = parse_bool_arg(need(v.c_str()), v.c_str());
-    } else if (v == "--gearvr-madgwick-beta") {
-      a.gearvr_madgwick_beta = std::stod(need(v.c_str()));
+    } else if (v == "--provider-option") {
+      append_provider_option(a.provider_options, need(v.c_str()));
     } else if (v == "--train") a.train = true;
     else if (v == "--list-devices") a.list_devices = true;
     else if (v == "--connect-devices" || v == "connect-devices") a.connect_devices = true;
     else if (v == "--non-interactive") a.non_interactive = true;
     else if (v == "--verbose") a.verbose = true;
     else throw std::runtime_error("unknown argument: " + v);
-  }
-  if (a.gearvr_touchpad_mode != "relative_stick" &&
-      a.gearvr_touchpad_mode != "absolute_stick" &&
-      a.gearvr_touchpad_mode != "dpad" &&
-      a.gearvr_touchpad_mode != "raw") {
-    throw std::runtime_error("--gearvr-touchpad-mode expects relative_stick, absolute_stick, dpad, or raw");
-  }
-  if (!(a.gearvr_touchpad_deadzone >= 0.0 && a.gearvr_touchpad_deadzone < 1.0)) {
-    throw std::runtime_error("--gearvr-touchpad-deadzone must be in [0,1)");
-  }
-  if (!(a.gearvr_touchpad_radius > 0.0)) {
-    throw std::runtime_error("--gearvr-touchpad-radius must be > 0");
-  }
-  if (!(a.gearvr_madgwick_beta >= 0.0)) {
-    throw std::runtime_error("--gearvr-madgwick-beta must be >= 0");
   }
   return a;
 }
@@ -267,6 +246,7 @@ std::vector<ControllerAction> default_actions() {
       ControllerAction::X,
       ControllerAction::Y,
       ControllerAction::System,
+      ControllerAction::ThumbstickTouch,
       ControllerAction::ThumbstickClick,
       ControllerAction::DpadUp,
       ControllerAction::DpadDown,
@@ -377,6 +357,31 @@ int ensure_config_device(AppConfig& cfg, const DeviceFingerprint& fp) {
   return d.id;
 }
 
+void assign_imu_side_if_supported(InputProvider& provider,
+                                  const DeviceInfo& device,
+                                  AppConfig& cfg,
+                                  int config_device_id,
+                                  ControllerSide side) {
+  const auto imu = provider.imu_state(device);
+  if (!xr_runtime::controller_imu_is_present(imu)) return;
+  ConfigDevice* config_device = find_config_device(cfg, config_device_id);
+  if (!config_device) return;
+
+  if (config_device->imu_side && *config_device->imu_side != side) {
+    std::cerr << "[override_controller][WARN] device_id=" << config_device_id
+              << " IMU is already assigned to " << to_string(*config_device->imu_side)
+              << "; keeping the existing assignment instead of changing it to "
+              << to_string(side) << "\n";
+    return;
+  }
+  if (!config_device->imu_side) {
+    config_device->imu_side = side;
+    config_device->imu_side_explicit = true;
+    std::cout << "  assigned device_id=" << config_device_id
+              << " imu_side=" << to_string(side) << "\n";
+  }
+}
+
 void sync_binding_device_from_registry(AppConfig& cfg, BindingConfig& b) {
   if (b.device_id <= 0) {
     b.device_id = ensure_config_device(cfg, b.device);
@@ -476,11 +481,14 @@ TrainingInputFilter prompt_training_input_filter(const std::vector<DeviceInfo>& 
   return filter;
 }
 
-bool is_default_blacklisted_training_input(const InputProvider& provider, const InputEvent& ev) {
+bool is_default_blacklisted_training_input(const InputProvider& provider,
+                                            const std::vector<DeviceInfo>& devices,
+                                            const InputEvent& ev) {
 #if defined(__linux__)
   if (ev.type == EV_KEY && (ev.code == KEY_ENTER || ev.code == KEY_KPENTER)) return true;
 #endif
-  const std::string name = provider.input_name(ev.type, ev.code);
+  if (ev.device_index >= devices.size()) return false;
+  const std::string name = provider.input_name(devices[ev.device_index], ev.type, ev.code);
   return name == "KEY_ENTER" || name == "KEY_KPENTER";
 }
 
@@ -491,7 +499,7 @@ bool training_filter_accepts(const TrainingInputFilter& filter,
   if (ev.device_index == std::numeric_limits<size_t>::max()) return true;  // stdin skip sentinel.
   if (ev.device_index >= devices.size()) return false;
   if (filter.has_allow_devices && filter.allow_devices.count(ev.device_index) == 0) return false;
-  if (filter.block_enter_keys && is_default_blacklisted_training_input(provider, ev)) return false;
+  if (filter.block_enter_keys && is_default_blacklisted_training_input(provider, devices, ev)) return false;
   return true;
 }
 
@@ -728,7 +736,10 @@ bool capture_binding(InputProvider& provider,
     if (ev->type == EV_ABS) {
       InputBindingSpec tmp = provider.make_input_spec(dev, ev->type, ev->code);
       const int dir = axis_direction(tmp, ev->value);
-      if (!is_axis_action(action) && dir == 0) continue;
+      // Ignore neutral ABS events even for analog-axis actions. Providers may
+      // publish both axes for one physical sample; accepting a zero-valued
+      // first axis would bind thumbstick_y to ABS_X (or vice versa).
+      if (dir == 0) continue;
       tmp.abs_direction = dir;
       out.side = side;
       out.action = action;
@@ -757,6 +768,7 @@ bool capture_binding(InputProvider& provider,
       continue;
     }
 
+    assign_imu_side_if_supported(provider, dev, cfg, out.device_id, side);
     std::cout << "  mapped " << to_string(side) << "." << to_string(action)
               << " <= " << out.input.name << " on " << short_device_label(out.device) << "\n";
     wait_for_input_quiet(provider, devices);
@@ -841,8 +853,8 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
 #else
     throw std::runtime_error(
         "no readable input devices. For evdev, add the current user to the input group and re-login: "
-        "sudo usermod -aG input $USER. For Gear VR, pair/trust the controller in BlueZ, enable "
-        "the gearvr_ble provider, and wake the controller by pressing a button.");
+        "sudo usermod -aG input $USER. For external providers, verify pairing/permissions, enable "
+        "the provider, and wake or reconnect the device.");
 #endif
   }
 
@@ -1346,6 +1358,9 @@ void apply_action(SideOutputState& side, ControllerAction action, float value) {
     case ControllerAction::ThumbstickY:
       side.thumbstick_y = std::clamp(value, -1.0f, 1.0f);
       break;
+    case ControllerAction::ThumbstickTouch:
+      if (value >= 0.50f) side.touches |= kButtonThumbstick;
+      break;
     default:
       break;
   }
@@ -1375,6 +1390,7 @@ void update_counters(uint64_t prev, uint64_t now, uint32_t press[32], uint32_t r
 }
 
 OutputState compose_state(InputProvider& provider,
+                          const AppConfig& cfg,
                           const std::vector<RuntimeBinding>& bindings,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
@@ -1393,32 +1409,74 @@ OutputState compose_state(InputProvider& provider,
       default: return 0;
     }
   };
+  const auto resolve_device = [&](const DeviceFingerprint& wanted) {
+    int best_score = -1;
+    int best_index = -1;
+    bool ambiguous = false;
+    for (size_t i = 0; i < devices.size(); ++i) {
+      if (!devices[i].readable && !devices[i].identity_known) continue;
+      const int score = fingerprint_match_score(wanted, devices[i].fingerprint);
+      if (score > best_score) {
+        best_score = score;
+        best_index = static_cast<int>(i);
+        ambiguous = false;
+      } else if (score == best_score && score > 0) {
+        ambiguous = true;
+      }
+    }
+    return best_score >= 55 && !ambiguous ? best_index : -1;
+  };
+
+  bool explicit_left_imu = false;
+  bool explicit_right_imu = false;
+  for (const auto& config_device : cfg.devices) {
+    if (!config_device.imu_side) continue;
+    SideOutputState& side = *config_device.imu_side == ControllerSide::Left ? out.left : out.right;
+    std::set<std::string>& side_devices = *config_device.imu_side == ControllerSide::Left
+                                                ? left_devices
+                                                : right_devices;
+    if (*config_device.imu_side == ControllerSide::Left) explicit_left_imu = true;
+    else explicit_right_imu = true;
+    side.configured = true;
+
+    const int device_index = resolve_device(config_device.fingerprint);
+    if (device_index < 0) continue;
+    const auto candidate_imu = imu::apply_orientation_transform(
+        provider.imu_state(devices[device_index]), config_device.orientation_transform);
+    if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
+    if (xr_runtime::controller_imu_is_present(candidate_imu)) {
+      side_devices.insert(hex_u64(devices[device_index].fingerprint.stable_hash));
+    }
+  }
+
   auto apply_runtime_binding = [&](const RuntimeBinding& b) {
-    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() && devices[b.device_index].readable;
+    const bool resolved = b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size() &&
+                          devices[b.device_index].readable;
     SideOutputState& side = b.cfg.side == ControllerSide::Left ? out.left : out.right;
     side.configured = true;
-    int imu_device_index = -1;
-    if (b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size()) {
-      imu_device_index = b.device_index;
-    } else {
-      int best_score = -1;
-      bool ambiguous = false;
-      for (size_t i = 0; i < devices.size(); ++i) {
-        const int score = fingerprint_match_score(b.cfg.device, devices[i].fingerprint);
-        if (score > best_score) {
-          best_score = score;
-          imu_device_index = static_cast<int>(i);
-          ambiguous = false;
-        } else if (score == best_score && score > 0) {
-          ambiguous = true;
-        }
+
+    // Backward compatibility for old configs: when the side has no explicit
+    // devices[].imu_side assignment, infer IMU routing from its input binding.
+    const bool explicit_imu = b.cfg.side == ControllerSide::Left ? explicit_left_imu : explicit_right_imu;
+    const ConfigDevice* binding_device = find_config_device(cfg, b.cfg.device_id);
+    const bool binding_has_explicit_imu_config = binding_device && binding_device->imu_side_explicit;
+    if (!explicit_imu && !binding_has_explicit_imu_config) {
+      int imu_device_index = -1;
+      if (b.device_index >= 0 && static_cast<size_t>(b.device_index) < devices.size()) {
+        imu_device_index = b.device_index;
+      } else {
+        imu_device_index = resolve_device(b.cfg.device);
       }
-      if (best_score < 55 || ambiguous) imu_device_index = -1;
+      if (imu_device_index >= 0) {
+        auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+        if (binding_device) {
+          candidate_imu = imu::apply_orientation_transform(
+              candidate_imu, binding_device->orientation_transform);
+        }
+        if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
+      }
     }
-    if (imu_device_index >= 0) {
-      const auto candidate_imu = provider.imu_state(devices[imu_device_index]);
-      if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
-    }
+
     if (resolved) {
       side.connected = true;
       const auto id = hex_u64(devices[b.device_index].fingerprint.stable_hash);
@@ -1428,14 +1486,11 @@ OutputState compose_state(InputProvider& provider,
     apply_action(side, b.cfg.action, resolved ? b.value : 0.0f);
   };
 
-  for (const auto& b : bindings) {
-    apply_runtime_binding(b);
-  }
+  for (const auto& b : bindings) apply_runtime_binding(b);
   // Hold-toggle bindings are applied after normal bindings so a latched
   // virtual hold has priority over a normal binding for the same action.
-  for (const auto& b : hold_toggle_bindings) {
-    apply_runtime_binding(b);
-  }
+  for (const auto& b : hold_toggle_bindings) apply_runtime_binding(b);
+
   const auto label = [](const std::set<std::string>& ids) {
     if (ids.empty()) return std::string();
     if (ids.size() == 1) return *ids.begin();
@@ -1443,7 +1498,6 @@ OutputState compose_state(InputProvider& provider,
   };
   out.left.device_id = label(left_devices);
   out.right.device_id = label(right_devices);
-
 
   if (!allow_shared_physical_device_sides) {
     bool side_device_overlap = false;
@@ -1470,6 +1524,8 @@ OutputState compose_state(InputProvider& provider,
       out.left.thumbstick_y = 0.0f;
       out.right.thumbstick_x = 0.0f;
       out.right.thumbstick_y = 0.0f;
+      out.left.imu = {};
+      out.right.imu = {};
       out.left.device_id.clear();
       out.right.device_id.clear();
     }
@@ -1554,6 +1610,11 @@ OutputState compose_neutral_state_from_config(const AppConfig& cfg, CounterState
   for (const auto& b : cfg.hold_toggle_bindings) mark_configured(b);
   for (const auto& b : cfg.alternative_bindings) mark_configured(b);
   for (const auto& b : cfg.alternative_hold_toggle_bindings) mark_configured(b);
+  for (const auto& device : cfg.devices) {
+    if (!device.imu_side) continue;
+    SideOutputState& side = *device.imu_side == ControllerSide::Left ? out.left : out.right;
+    side.configured = true;
+  }
   out.left.changed_buttons = counters.prev_left_buttons;
   out.right.changed_buttons = counters.prev_right_buttons;
   if (counters.prev_left_buttons != 0) {
@@ -1729,6 +1790,10 @@ std::string configured_device_usage(const AppConfig& cfg, int device_id) {
     if (!out.empty()) out += " ";
     out += "layout-switch";
   }
+  if (const ConfigDevice* device = find_config_device(cfg, device_id); device && device->imu_side) {
+    if (!out.empty()) out += " ";
+    out += "imu=" + to_string(*device->imu_side);
+  }
   return out.empty() ? "unused" : out;
 }
 
@@ -1762,7 +1827,7 @@ bool capture_device_fingerprint(InputProvider& provider,
 
     out = dev.fingerprint;
     std::cout << "  captured [" << ev->device_index << "] " << short_device_label(out)
-              << " via " << provider.input_name(ev->type, ev->code) << "\n";
+              << " via " << provider.input_name(dev, ev->type, ev->code) << "\n";
     wait_for_input_quiet(provider, devices);
     return true;
   }
@@ -1910,6 +1975,14 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     const auto& input = device.input;
     std::cout << "[override_controller] device_input id=" << device.id
               << " device=" << short_device_label(device.fingerprint)
+              << " imu_side=" << (device.imu_side ? to_string(*device.imu_side) : "none")
+              << " orientation_transform=" << (device.orientation_transform.enabled ? "enabled" : "disabled")
+              << " orientation_invert=(" << (device.orientation_transform.invert_x ? 1 : 0)
+              << "," << (device.orientation_transform.invert_y ? 1 : 0)
+              << "," << (device.orientation_transform.invert_z ? 1 : 0) << ")"
+              << " orientation_basis_deg=(" << device.orientation_transform.basis_rotation.rx_deg
+              << "," << device.orientation_transform.basis_rotation.ry_deg
+              << "," << device.orientation_transform.basis_rotation.rz_deg << ")"
               << " rel_axis_hold_ms=" << input.rel_axis_hold_ms
               << " rel_button_hold_ms=" << input.rel_button_hold_ms
               << " button_hold_ms=" << input.button_hold_ms
@@ -1955,7 +2028,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
       if (ev->device_index < devices.size()) {
         std::cout << "[override_controller] emergency stop requested from input device ["
                   << ev->device_index << "] " << short_device_label(devices[ev->device_index].fingerprint)
-                  << " via " << provider.input_name(ev->type, ev->code) << "\n";
+                  << " via " << provider.input_name(devices[ev->device_index], ev->type, ev->code) << "\n";
       } else {
         std::cout << "[override_controller] emergency stop requested from input device\n";
       }
@@ -2170,8 +2243,8 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     decay_button_hold_bindings(active_bindings_for_decay, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(provider, active_bindings_for_decay, active_toggle_bindings_for_decay, devices, counters,
-                                     cfg.input.allow_shared_physical_device_sides);
+      const auto out = compose_state(provider, cfg, active_bindings_for_decay, active_toggle_bindings_for_decay,
+                                     devices, counters, cfg.input.allow_shared_physical_device_sides);
       publisher.publish(out);
       clear_one_frame_relative_bindings(active_bindings_for_decay);
       do {
@@ -2203,14 +2276,7 @@ int main(int argc, char** argv) {
     const fs::path executable_dir = current_executable_dir(argc > 0 ? argv[0] : nullptr);
     InputProviderOptions provider_options;
     provider_options.providers = args.providers;
-    provider_options.gearvr_initial_scan_ms = args.gearvr_initial_scan_ms;
-    provider_options.gearvr_reconnect_ms = args.gearvr_reconnect_ms;
-    provider_options.gearvr_touchpad_mode = args.gearvr_touchpad_mode;
-    provider_options.gearvr_touchpad_deadzone = args.gearvr_touchpad_deadzone;
-    provider_options.gearvr_touchpad_radius = args.gearvr_touchpad_radius;
-    provider_options.gearvr_touchpad_invert_x = args.gearvr_touchpad_invert_x;
-    provider_options.gearvr_touchpad_invert_y = args.gearvr_touchpad_invert_y;
-    provider_options.gearvr_madgwick_beta = args.gearvr_madgwick_beta;
+    provider_options.provider_options = args.provider_options;
     auto provider = make_input_provider(provider_options);
     if (!provider) throw std::runtime_error("no input provider for this platform yet");
 
@@ -2273,8 +2339,31 @@ int main(int argc, char** argv) {
       }
     }
 
+    const ConfigMigrationResult provider_migration = provider->migrate_config(cfg);
+    if (provider_migration.changed) {
+      for (const auto& note : provider_migration.notes) {
+        if (std::find(cfg.pending_migrations.begin(), cfg.pending_migrations.end(), note) ==
+            cfg.pending_migrations.end()) {
+          cfg.pending_migrations.push_back(note);
+        }
+      }
+    }
+
     apply_publish_overrides(cfg, args);
     sync_devices_from_registry(cfg);
+    if (!cfg.pending_migrations.empty() && !selected_path.empty()) {
+      const auto migration_notes = cfg.pending_migrations;
+      try {
+        save_config_file(cfg, selected_path);
+        std::cout << "[override_controller] migrated legacy config:";
+        for (const auto& note : migration_notes) std::cout << " " << note;
+        std::cout << " -> " << selected_path << "\n";
+        cfg.pending_migrations.clear();
+      } catch (const std::exception& e) {
+        std::cerr << "[override_controller][WARN] could not persist config migration to "
+                  << selected_path << ": " << e.what() << "\n";
+      }
+    }
     if (args.connect_devices) {
       connect_config_devices(*provider, cfg, selected_path);
       return 0;

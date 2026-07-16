@@ -47,18 +47,11 @@ REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INT
 
 EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum provider event wait before publishing current state
 
-# Input providers. Gear VR remains opt-in, but its implementation is native C++
-# and talks directly to BlueZ over the system D-Bus. Example: PROVIDERS=evdev,gearvr_ble
+# Input providers. Provider-specific settings are parsed by each provider.
+# Generic overrides use semicolon-separated provider.key=value entries, e.g.
+# PROVIDER_OPTIONS='gearvr_ble.touchpad.mode=absolute_stick;gearvr_ble.reconnect_ms=1000'
 PROVIDERS="${PROVIDERS:-${OVERRIDE_CONTROLLER_PROVIDERS:-evdev}}"
-GEARVR_INITIAL_SCAN_MS="${GEARVR_INITIAL_SCAN_MS:-${OVERRIDE_CONTROLLER_GEARVR_INITIAL_SCAN_MS:-1500}}"
-GEARVR_RECONNECT_MS="${GEARVR_RECONNECT_MS:-${OVERRIDE_CONTROLLER_GEARVR_RECONNECT_MS:-1000}}"
-GEARVR_TOUCHPAD_MODE="${GEARVR_TOUCHPAD_MODE:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_MODE:-relative_stick}}"
-GEARVR_TOUCHPAD_DEADZONE="${GEARVR_TOUCHPAD_DEADZONE:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_DEADZONE:-0.12}}"
-GEARVR_TOUCHPAD_RADIUS="${GEARVR_TOUCHPAD_RADIUS:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_RADIUS:-90}}"
-GEARVR_TOUCHPAD_INVERT_X="${GEARVR_TOUCHPAD_INVERT_X:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_INVERT_X:-0}}"
-GEARVR_TOUCHPAD_INVERT_Y="${GEARVR_TOUCHPAD_INVERT_Y:-${OVERRIDE_CONTROLLER_GEARVR_TOUCHPAD_INVERT_Y:-1}}"
-GEARVR_MADGWICK_BETA="${GEARVR_MADGWICK_BETA:-${OVERRIDE_CONTROLLER_GEARVR_MADGWICK_BETA:-0.04}}"
-
+PROVIDER_OPTIONS="${PROVIDER_OPTIONS:-${OVERRIDE_CONTROLLER_PROVIDER_OPTIONS:-}}"
 
 # ControllerInput publisher settings. These must match xr_runtime_adapter
 # --controller-input-* settings. Keep /tmp/tracking_streams.json as the default
@@ -165,19 +158,12 @@ args+=("--reattach-devices" "$REATTACH_DEVICES")
 args+=("--reattach-interval-ms" "$REATTACH_INTERVAL_MS")
 args+=("--event-wait-max-ms" "$EVENT_WAIT_MAX_MS")
 args+=("--providers" "$PROVIDERS")
-if [[ ",$PROVIDERS," == *,gearvr_ble,* || ",$PROVIDERS," == *,gearvr,* ]]; then
-  if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" && ! -S /run/dbus/system_bus_socket ]]; then
-    fatal "system D-Bus is unavailable (no DBUS_SYSTEM_BUS_ADDRESS and no /run/dbus/system_bus_socket)"
-  fi
-  command -v bluetoothctl >/dev/null 2>&1 || log "bluetoothctl not found; pairing must already be complete, but native provider can still use BlueZ D-Bus"
-  args+=("--gearvr-initial-scan-ms" "$GEARVR_INITIAL_SCAN_MS")
-  args+=("--gearvr-reconnect-ms" "$GEARVR_RECONNECT_MS")
-  args+=("--gearvr-touchpad-mode" "$GEARVR_TOUCHPAD_MODE")
-  args+=("--gearvr-touchpad-deadzone" "$GEARVR_TOUCHPAD_DEADZONE")
-  args+=("--gearvr-touchpad-radius" "$GEARVR_TOUCHPAD_RADIUS")
-  args+=("--gearvr-touchpad-invert-x" "$GEARVR_TOUCHPAD_INVERT_X")
-  args+=("--gearvr-touchpad-invert-y" "$GEARVR_TOUCHPAD_INVERT_Y")
-  args+=("--gearvr-madgwick-beta" "$GEARVR_MADGWICK_BETA")
+if [[ -n "$PROVIDER_OPTIONS" ]]; then
+  IFS=';' read -r -a provider_option_items <<< "$PROVIDER_OPTIONS"
+  for provider_option in "${provider_option_items[@]}"; do
+    [[ -n "$provider_option" ]] || continue
+    args+=("--provider-option" "$provider_option")
+  done
 fi
 
 if [[ -n "$CONFIG_PATH" ]]; then
@@ -212,8 +198,8 @@ log "CONTROLLER_INPUT_STREAM=$CONTROLLER_INPUT_STREAM"
 log "CONTROLLER_INPUT_SHM_NAME=$CONTROLLER_INPUT_SHM_NAME"
 log "CONTROLLER_INPUT_RATE_HZ=$CONTROLLER_INPUT_RATE_HZ CONTROLLER_INPUT_SLOTS=$CONTROLLER_INPUT_SLOTS"
 log "PROVIDERS=$PROVIDERS"
-if [[ ",$PROVIDERS," == *,gearvr_ble,* || ",$PROVIDERS," == *,gearvr,* ]]; then
-  log "GEARVR_NATIVE_BLUEZ=1 TOUCHPAD_MODE=$GEARVR_TOUCHPAD_MODE DEADZONE=$GEARVR_TOUCHPAD_DEADZONE RADIUS=$GEARVR_TOUCHPAD_RADIUS INVERT=($GEARVR_TOUCHPAD_INVERT_X,$GEARVR_TOUCHPAD_INVERT_Y)"
+if [[ -n "$PROVIDER_OPTIONS" ]]; then
+  log "PROVIDER_OPTIONS=$PROVIDER_OPTIONS"
 fi
 log "GRAB_DEVICES=$GRAB_DEVICES ALLOW_SHARED_PHYSICAL_DEVICE_SIDES=$ALLOW_SHARED_PHYSICAL_DEVICE_SIDES REATTACH_DEVICES=$REATTACH_DEVICES REATTACH_INTERVAL_MS=$REATTACH_INTERVAL_MS"
 log "TRAIN=$TRAIN LIST_DEVICES=$LIST_DEVICES NON_INTERACTIVE=$NON_INTERACTIVE VERBOSE=$VERBOSE USE_SUDO=$USE_SUDO"

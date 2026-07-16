@@ -162,6 +162,7 @@ devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
 
+
 **Or if you have VR-PARK controllers you can use this config:**
 
 
@@ -189,6 +190,91 @@ CFG="$HOME/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
+**Or if you have Samsung Gear VR controllers you can use this config:**
+
+1. Copy config:
+
+```bash
+mkdir -p "$HOME/.config/xr_tracking/override_controller"
+
+cp "$HOME/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_gearvr.json" \
+   "$HOME/.config/xr_tracking/override_controller/gearvr.json"
+```
+
+
+2. Connect controllers to PC
+
+Enable only first controller.
+
+```bash
+sudo systemctl enable --now bluetooth
+bluetoothctl
+```
+
+Next (separate commands):
+
+```bash
+power on
+```
+
+```bash
+agent NoInputNoOutput
+```
+
+```bash
+default-agent
+```
+
+```bash
+scan le
+```
+
+Wait line:
+
+```bash
+Device AA:BB:CC:DD:EE:FF Gear VR Controller(17DB)
+```
+
+Next:
+
+
+```bash
+pair AA:BB:CC:DD:EE:FF
+```
+
+```bash
+trust AA:BB:CC:DD:EE:FF
+```
+
+```bash
+info AA:BB:CC:DD:EE:FF
+```
+
+```bash
+exit
+```
+Repeat for second controller
+
+3. Register your controllers:
+
+```bash
+PROVIDERS=gearvr_ble GEARVR_INITIAL_SCAN_MS=10000 CONFIG_PATH="$HOME/.config/xr_tracking/override_controller/gearvr.json" VERBOSE=1 ~/xr-gate-release/xreal_ultra/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
+```
+
+4. Enable auto-start override_controller and gearvr in client:
+
+```bash
+CFG="$HOME/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json"
+sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
+```
+
+
+```bash
+sed -i \
+  -e 's|"CONFIG_PATH": "~/.config/xr_tracking/override_controller/default\.json"|"CONFIG_PATH": "~/.config/xr_tracking/override_controller/gearvr.json"|' \
+  -e 's|"PROVIDERS": "evdev"|"PROVIDERS": "evdev,gearvr_ble"|' \
+  ~/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json
+```
 
 
 If you want to retrain, you can delete default.json for new train
@@ -628,5 +714,6 @@ The project uses or can build against these third-party components:
 - nrealAirLinuxDriver — MIT-licensed XREAL/NREAL Linux driver reference used for XREAL capture/display work.
 - ar-drivers-rs — MIT-licensed AR glasses tooling reference used for XREAL display helper work.
 - OpenVR-xrealAirGlassesHMD — reference for OpenVR/XREAL driver behavior and configuration ideas.
+- gearVRC — reference for GearVR provider behavior and configuration ideas in override_controller.
 - mercury_steamvr_driver — optional source for Mercury hand-tracking ONNX models; not included in the core repository/release.
 - xrizer — optional GPL-3.0-or-later OpenVR-to-OpenXR compatibility tool; not built by default.

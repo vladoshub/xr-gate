@@ -525,7 +525,8 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
   }
 }
 
-std::string LinuxEvdevInputProvider::input_name(uint16_t type, uint16_t code) const {
+std::string LinuxEvdevInputProvider::input_name(const DeviceInfo& device, uint16_t type, uint16_t code) const {
+  (void)device;
   if (type == EV_KEY) return ev_key_name(code);
   if (type == EV_ABS) return ev_abs_name(code);
   if (type == EV_REL) return ev_rel_name(code);
@@ -538,7 +539,7 @@ InputBindingSpec LinuxEvdevInputProvider::make_input_spec(const DeviceInfo& devi
   InputBindingSpec spec;
   spec.type = type;
   spec.code = code;
-  spec.name = input_name(type, code);
+  spec.name = input_name(device, type, code);
   if (type == EV_ABS) spec.kind = InputKind::AbsAxis;
   else if (type == EV_REL) spec.kind = InputKind::RelAxis;
   else spec.kind = InputKind::Key;

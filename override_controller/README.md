@@ -159,31 +159,27 @@ Gear VR protocol, touchpad modes, AHRS, configuration, or trained bindings.
 | --- | --- |
 | Trigger | `EV_KEY / BTN_TRIGGER` |
 | Touchpad physical click | `EV_KEY / BTN_LEFT` |
+| Touchpad capacitive contact | `EV_KEY / BTN_TOUCH` |
 | Back | `EV_KEY / KEY_BACK` |
 | Home | `EV_KEY / KEY_HOMEPAGE` |
 | Volume up/down | `EV_KEY / KEY_VOLUMEUP`, `KEY_VOLUMEDOWN` |
 | Touchpad movement | `EV_ABS / ABS_X`, `ABS_Y` |
 
-The touch surface defaults to `relative_stick`: the first touch point becomes
-the temporary stick center, movement is normalized to `[-32767,32767]`, and
-both axes return to zero when the finger leaves the pad. Other modes:
+The touch surface defaults to `absolute_stick`: the physical pad center is the
+virtual stick center, capacitive contact is independent from the physical click,
+and both axes return to zero when the finger leaves the pad. Provider-specific
+settings use the common `provider.key=value` interface:
 
 ```bash
-GEARVR_TOUCHPAD_MODE=absolute_stick  # physical pad center is stick center
-GEARVR_TOUCHPAD_MODE=dpad            # KEY_UP/DOWN/LEFT/RIGHT
-GEARVR_TOUCHPAD_MODE=raw             # normalized absolute touch position
+PROVIDER_OPTIONS='gearvr_ble.touchpad.mode=absolute_stick;gearvr_ble.touchpad.deadzone=0.12;gearvr_ble.touchpad.radius=90;gearvr_ble.touchpad.invert_x=0;gearvr_ble.touchpad.invert_y=1;gearvr_ble.madgwick_beta=0.04;gearvr_ble.reconnect_ms=1000' \
+PROVIDERS=evdev,gearvr_ble \
+  override_controller/scripts/linux/start_override_controller.sh
 ```
 
-Relevant tuning variables:
-
-```bash
-GEARVR_TOUCHPAD_DEADZONE=0.12
-GEARVR_TOUCHPAD_RADIUS=90
-GEARVR_TOUCHPAD_INVERT_X=0
-GEARVR_TOUCHPAD_INVERT_Y=1
-GEARVR_MADGWICK_BETA=0.04
-GEARVR_RECONNECT_MS=1000
-```
+`touchpad.mode` accepts `absolute_stick`, `relative_stick`, `dpad`, or `raw`.
+The legacy `GEARVR_*` and `OVERRIDE_CONTROLLER_GEARVR_*` environment variables
+remain supported, but they are parsed inside `GearVrInputProvider`; the common
+launcher and argument parser do not contain Gear VR-specific option handling.
 
 ### IMU output
 
@@ -191,9 +187,20 @@ The native provider decodes gyroscope, accelerometer, and magnetometer values,
 performs a short stationary gyroscope-bias estimate, and computes a 6DoF
 orientation with the shared C++ `ControllerImuProcessor`. Raw magnetic field
 is published, but is intentionally not used by the AHRS until a proper
-magnetometer-calibration flow is added. Each side receives IMU state through
-`ControllerInputV3` only when that physical device is used by bindings for that
-side.
+magnetometer-calibration flow is added. IMU routing is configured explicitly in
+the top-level device entry:
+
+```json
+{
+  "id": 1,
+  "backend": "gearvr_ble",
+  "imu_side": "left"
+}
+```
+
+`imu_side` accepts `left`, `right`, or `none` and is independent from button
+bindings. Gear VR training assigns it automatically. This also allows a future
+MPU-6050 provider to publish IMU-only data without exposing any buttons.
 
 The runtime adapter still requires the matching side to use:
 

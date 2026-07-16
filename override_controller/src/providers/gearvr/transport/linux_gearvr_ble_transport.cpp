@@ -11,6 +11,7 @@
 #include <cstring>
 #include <deque>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -47,7 +48,11 @@ class SdBusApi {
   using MessageUnrefFn = sd_bus_message* (*)(sd_bus_message*);
   using AddMatchFn = int (*)(sd_bus*, sd_bus_slot**, const char*, sd_bus_message_handler_t, void*);
   using CallMethodFn = int (*)(sd_bus*, const char*, const char*, const char*, const char*, sd_bus_error*, sd_bus_message**, const char*, ...);
-  using CallMethodAsyncFn = int (*)(sd_bus*, sd_bus_slot**, const char*, const char*, const char*, const char*, sd_bus_message_handler_t, void*, uint64_t, const char*, ...);
+  // sd_bus_call_method_async() does not take a timeout argument. Method-call
+  // timeout is configured on the bus with sd_bus_set_method_call_timeout().
+  using CallMethodAsyncFn = int (*)(sd_bus*, sd_bus_slot**, const char*, const char*,
+                                    const char*, const char*, sd_bus_message_handler_t,
+                                    void*, const char*, ...);
   using ProcessFn = int (*)(sd_bus*, sd_bus_message**);
   using GetFdFn = int (*)(sd_bus*);
   using GetEventsFn = int (*)(sd_bus*);
@@ -200,6 +205,18 @@ std::string uppercase_copy(std::string value) {
   return value;
 }
 
+std::string bytes_to_hex(const uint8_t* data, size_t size) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(size * 3);
+  for (size_t i = 0; i < size; ++i) {
+    if (i != 0) out.push_back(' ');
+    out.push_back(kHex[(data[i] >> 4) & 0x0f]);
+    out.push_back(kHex[data[i] & 0x0f]);
+  }
+  return out;
+}
+
 bool is_gearvr_name(const std::string& name) {
   const std::string lower = lower_copy(name);
   return lower.rfind("gear vr controller", 0) == 0;
@@ -207,7 +224,7 @@ bool is_gearvr_name(const std::string& name) {
 
 class LinuxGearVrBleTransport final : public BleTransport {
  public:
-  explicit LinuxGearVrBleTransport(InputProviderOptions options)
+  explicit LinuxGearVrBleTransport(GearVrOptions options)
       : options_(std::move(options)), api_(std::make_unique<SdBusApi>()) {
     const int rc = api_->open_system(&bus_);
     if (rc < 0 || !bus_) {
@@ -221,7 +238,10 @@ class LinuxGearVrBleTransport final : public BleTransport {
   ~LinuxGearVrBleTransport() override {
     for (auto& [id, session_ptr] : sessions_) {
       Session& session = *session_ptr;
-      if (session.notifications_started && !session.notify_path.empty()) {
+      const bool stop_dbus_notifications =
+          session.notifications_started && !session.notify_uses_fd;
+      close_notify_channel(session);
+      if (stop_dbus_notifications && !session.notify_path.empty()) {
         MessageGuard reply{api_.get(), nullptr};
         (void)api_->call_method(bus_, kBluezService, session.notify_path.c_str(),
                                 kGattCharacteristicInterface, "StopNotify", nullptr,
@@ -248,30 +268,68 @@ class LinuxGearVrBleTransport final : public BleTransport {
     advance_sessions(now_ns);
     process_bus_messages();
 
+    std::vector<pollfd> fds;
+    std::vector<Session*> notify_sessions;
+    int bus_index = -1;
+    int stdin_index = -1;
+
     const int bus_fd = api_->get_fd(bus_);
     const int bus_events = api_->get_events(bus_);
-    std::array<pollfd, 2> fds{};
-    nfds_t count = 0;
     if (bus_fd >= 0) {
-      fds[count].fd = bus_fd;
-      fds[count].events = static_cast<short>(bus_events);
-      ++count;
+      bus_index = static_cast<int>(fds.size());
+      fds.push_back(pollfd{bus_fd, static_cast<short>(bus_events), 0});
+    }
+    for (auto& [id, session_ptr] : sessions_) {
+      Session& session = *session_ptr;
+      if (session.notify_fd < 0) continue;
+      notify_sessions.push_back(&session);
+      fds.push_back(pollfd{session.notify_fd,
+                           static_cast<short>(POLLIN | POLLHUP | POLLERR), 0});
     }
     if (include_stdin) {
-      fds[count].fd = STDIN_FILENO;
-      fds[count].events = POLLIN;
-      ++count;
+      stdin_index = static_cast<int>(fds.size());
+      fds.push_back(pollfd{STDIN_FILENO, POLLIN, 0});
     }
 
     const int poll_timeout = compute_poll_timeout_ms(timeout_ms, now_ns);
-    const int rc = poll(fds.data(), count, poll_timeout);
+    const int rc = poll(fds.data(), static_cast<nfds_t>(fds.size()), poll_timeout);
     if (rc < 0 && errno != EINTR) {
       throw std::runtime_error(std::string("Gear VR BlueZ poll failed: ") + std::strerror(errno));
     }
-    if (include_stdin && count > 0) {
-      const size_t index = bus_fd >= 0 ? 1 : 0;
-      if (stdin_ready) *stdin_ready = index < count && (fds[index].revents & POLLIN) != 0;
+
+    // Process BlueZ state changes first. A notify fd may receive HUP in the
+    // same poll cycle in which Device1 reports Connected=false.
+    if (bus_index >= 0 && fds[static_cast<size_t>(bus_index)].revents != 0) {
+      process_bus_messages();
     }
+
+    const size_t notify_base = bus_index >= 0 ? 1u : 0u;
+    for (size_t i = 0; i < notify_sessions.size(); ++i) {
+      Session& session = *notify_sessions[i];
+      const short revents = fds[notify_base + i].revents;
+      if (revents == 0) continue;
+      if ((revents & POLLIN) != 0) read_notify_channel(session);
+      if ((revents & (POLLHUP | POLLERR | POLLNVAL)) != 0 && session.notify_fd >= 0) {
+        const bool still_connected = session.connected;
+        close_notify_channel(session);
+        session.notifications_started = false;
+        session.next_notify_attempt_ns = static_cast<uint64_t>(monotonic_now_ns()) +
+            100'000'000ull;
+        if (still_connected) {
+          // Some BlueZ/controller combinations expose AcquireNotify but close
+          // the socket immediately. Fall back to StartNotify/Value signals for
+          // this connection rather than reconnecting forever.
+          session.force_dbus_notify = true;
+          std::cerr << "[override_controller][gearvr_ble][WARN] " << session.address
+                    << ": notification fd closed; falling back to D-Bus Value notifications\n";
+        }
+      }
+    }
+
+    if (stdin_index >= 0 && stdin_ready) {
+      *stdin_ready = (fds[static_cast<size_t>(stdin_index)].revents & POLLIN) != 0;
+    }
+
     process_bus_messages();
     now_ns = static_cast<uint64_t>(monotonic_now_ns());
     advance_sessions(now_ns);
@@ -313,11 +371,26 @@ class LinuxGearVrBleTransport final : public BleTransport {
     std::string name = "Gear VR Controller";
     std::string notify_path;
     std::string command_path;
+    std::set<std::string> notify_flags;
+    std::set<std::string> command_flags;
     bool paired = false;
     bool trusted = false;
     bool connected = false;
     bool services_resolved = false;
     bool notifications_started = false;
+    bool notify_uses_fd = false;
+    bool force_dbus_notify = false;
+    bool force_fd_notify = false;
+    bool pre_notify_mode_sent = false;
+    bool write_mode_logged = false;
+    int notify_fd = -1;
+    uint16_t notify_mtu = 0;
+    uint64_t notification_count = 0;
+    uint64_t short_notification_count = 0;
+    uint64_t full_sensor_frame_count = 0;
+    uint64_t notifications_started_ns = 0;
+    uint64_t notification_watchdog_ns = 0;
+    bool full_sensor_frame_logged = false;
     bool connect_pending = false;
     bool seen_in_refresh = false;
     std::string error;
@@ -350,6 +423,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     std::string path;
     std::string uuid;
     std::string service_path;
+    std::set<std::string> flags;
   };
 
   void add_matches() {
@@ -397,7 +471,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
         message_errno != EALREADY && message_errno != EINPROGRESS) {
       session->error = "BlueZ Connect failed: errno=" + std::to_string(message_errno);
       session->next_connect_ns = static_cast<uint64_t>(monotonic_now_ns()) +
-                                 static_cast<uint64_t>(self.options_.gearvr_reconnect_ms) * 1'000'000ull;
+                                 static_cast<uint64_t>(self.options_.reconnect_ms) * 1'000'000ull;
       std::cerr << "[override_controller][gearvr_ble][WARN] " << session->address
                 << ": " << session->error << "\n";
     } else {
@@ -433,12 +507,8 @@ class LinuxGearVrBleTransport final : public BleTransport {
         size_t size = 0;
         if (api_->message_read_array(message, 'y', &bytes, &size) > 0 && bytes) {
           if (Session* session = session_for_notify_path(path)) {
-            BlePacket packet;
-            packet.stable_id = session->stable_id;
-            packet.timestamp_ns = static_cast<uint64_t>(monotonic_now_ns());
-            const auto* begin = static_cast<const uint8_t*>(bytes);
-            packet.bytes.assign(begin, begin + size);
-            pending_packets_.push_back(std::move(packet));
+            queue_notification_packet(*session, static_cast<const uint8_t*>(bytes), size,
+                                      "dbus");
           }
         }
       } else if (std::strcmp(interface, kDeviceInterface) == 0) {
@@ -498,14 +568,28 @@ class LinuxGearVrBleTransport final : public BleTransport {
       std::cerr << "[override_controller][gearvr_ble] connected " << session.name
                 << " [" << session.address << "]\n";
     } else {
+      close_notify_channel(session);
       session.notifications_started = false;
+      session.notify_uses_fd = false;
+      session.force_dbus_notify = false;
+      session.force_fd_notify = false;
+      session.pre_notify_mode_sent = false;
+      session.write_mode_logged = false;
       session.services_resolved = false;
       session.notify_path.clear();
       session.command_path.clear();
+      session.notify_flags.clear();
+      session.command_flags.clear();
       session.init_command_index = 0;
+      session.notification_count = 0;
+      session.short_notification_count = 0;
+      session.full_sensor_frame_count = 0;
+      session.full_sensor_frame_logged = false;
+      session.notifications_started_ns = 0;
+      session.notification_watchdog_ns = 0;
       session.next_notify_attempt_ns = 0;
       session.next_connect_ns = static_cast<uint64_t>(monotonic_now_ns()) +
-                                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
       std::cerr << "[override_controller][gearvr_ble] disconnected " << session.address
                 << "; reconnect scheduled\n";
     }
@@ -634,6 +718,8 @@ class LinuxGearVrBleTransport final : public BleTransport {
             if (name == "UUID" && type == "s") read_string(value, characteristic.uuid);
             else if (name == "Service" && type == "o") {
               read_string(value, characteristic.service_path, 'o');
+            } else if (name == "Flags" && type == "as") {
+              read_string_array(value, characteristic.flags);
             } else {
               (void)api_->message_skip(value, type.c_str());
             }
@@ -680,12 +766,19 @@ class LinuxGearVrBleTransport final : public BleTransport {
 
       session.notify_path.clear();
       session.command_path.clear();
+      session.notify_flags.clear();
+      session.command_flags.clear();
       for (const auto& [service_path, service] : services) {
         if (service.device_path != managed.path || service.uuid != kServiceUuid) continue;
         for (const auto& [characteristic_path, characteristic] : characteristics) {
           if (characteristic.service_path != service_path) continue;
-          if (characteristic.uuid == kNotifyUuid) session.notify_path = characteristic_path;
-          else if (characteristic.uuid == kCommandUuid) session.command_path = characteristic_path;
+          if (characteristic.uuid == kNotifyUuid) {
+            session.notify_path = characteristic_path;
+            session.notify_flags = characteristic.flags;
+          } else if (characteristic.uuid == kCommandUuid) {
+            session.command_path = characteristic_path;
+            session.command_flags = characteristic.flags;
+          }
         }
       }
     }
@@ -708,21 +801,129 @@ class LinuxGearVrBleTransport final : public BleTransport {
     const int rc = api_->call_method_async(bus_, &session.connect_slot, kBluezService,
                                            session.device_path.c_str(), kDeviceInterface,
                                            "Connect", &LinuxGearVrBleTransport::on_connect_reply,
-                                           &session, 10'000'000ull, nullptr);
+                                           &session, nullptr);
     if (rc < 0) {
       session.connect_pending = false;
       session.connect_slot = nullptr;
       session.error = "cannot queue BlueZ Connect: " + std::to_string(rc);
       session.next_connect_ns = now_ns +
-          static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+          static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
     } else {
       std::cerr << "[override_controller][gearvr_ble] connecting " << session.address
                 << (session.trusted ? "" : " (paired but not trusted)") << "\n";
     }
   }
 
-  bool start_notifications(Session& session) {
-    if (session.notify_path.empty()) return false;
+  void close_notify_channel(Session& session) {
+    if (session.notify_fd >= 0) {
+      close(session.notify_fd);
+      session.notify_fd = -1;
+    }
+    session.notify_mtu = 0;
+    session.notify_uses_fd = false;
+  }
+
+  void queue_notification_packet(Session& session,
+                                 const uint8_t* bytes,
+                                 size_t size,
+                                 const char* source) {
+    if (!bytes || size == 0) return;
+    ++session.notification_count;
+    if (session.notification_count == 1) {
+      std::cerr << "[override_controller][gearvr_ble] first notification "
+                << session.address << " source=" << source << " size=" << size << "\n";
+    }
+
+    // Mode writes can be echoed as a short notification. They are not input
+    // packets. The actual stream is started by the post-subscribe CMD_SENSOR
+    // initialization command; do not answer this echo with CMD_VR_MODE again,
+    // because that stopped this controller after its first 60-byte frame.
+    if (size < 59) {
+      ++session.short_notification_count;
+      if (session.short_notification_count == 1) {
+        std::cerr << "[override_controller][gearvr_ble] short mode response "
+                  << session.address << " source=" << source << " size=" << size
+                  << " bytes=[" << bytes_to_hex(bytes, size) << "]\n";
+      }
+      return;
+    }
+
+    ++session.full_sensor_frame_count;
+    if (!session.full_sensor_frame_logged) {
+      session.full_sensor_frame_logged = true;
+      std::cerr << "[override_controller][gearvr_ble] first sensor frame "
+                << session.address << " source=" << source << " size=" << size << "\n";
+    }
+    BlePacket packet;
+    packet.stable_id = session.stable_id;
+    packet.timestamp_ns = static_cast<uint64_t>(monotonic_now_ns());
+    packet.bytes.assign(bytes, bytes + size);
+    pending_packets_.push_back(std::move(packet));
+  }
+
+  void read_notify_channel(Session& session) {
+    std::array<uint8_t, 512> buffer{};
+    while (session.notify_fd >= 0) {
+      const ssize_t size = read(session.notify_fd, buffer.data(), buffer.size());
+      if (size > 0) {
+        queue_notification_packet(session, buffer.data(), static_cast<size_t>(size), "fd");
+        continue;
+      }
+      if (size == 0) return;
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return;
+      session.error = std::string("notification fd read failed: ") + std::strerror(errno);
+      std::cerr << "[override_controller][gearvr_ble][WARN] " << session.address
+                << ": " << session.error << "\n";
+      return;
+    }
+  }
+
+  bool acquire_notifications(Session& session, std::string& failure) {
+    MessageGuard call{api_.get(), nullptr};
+    MessageGuard reply{api_.get(), nullptr};
+    ErrorGuard error{api_.get()};
+    int rc = api_->message_new_method_call(bus_, &call.value, kBluezService,
+                                           session.notify_path.c_str(),
+                                           kGattCharacteristicInterface, "AcquireNotify");
+    if (rc >= 0) rc = api_->message_open_container(call.value, 'a', "{sv}");
+    if (rc >= 0) rc = api_->message_close_container(call.value);
+    if (rc >= 0) {
+      rc = api_->bus_call(bus_, call.value, kDbusCallTimeoutUsec,
+                          &error.value, &reply.value);
+    }
+    if (rc < 0 || !reply.value) {
+      failure = error.value.message ? error.value.message : std::to_string(rc);
+      return false;
+    }
+
+    int received_fd = -1;
+    uint16_t mtu = 0;
+    if (api_->message_read(reply.value, "hq", &received_fd, &mtu) <= 0 || received_fd < 0) {
+      failure = "AcquireNotify returned no file descriptor";
+      return false;
+    }
+    const int duplicated_fd = fcntl(received_fd, F_DUPFD_CLOEXEC, 3);
+    if (duplicated_fd < 0) {
+      failure = std::string("cannot duplicate AcquireNotify fd: ") + std::strerror(errno);
+      return false;
+    }
+    const int flags = fcntl(duplicated_fd, F_GETFL, 0);
+    if (flags >= 0) (void)fcntl(duplicated_fd, F_SETFL, flags | O_NONBLOCK);
+    close_notify_channel(session);
+    session.notify_fd = duplicated_fd;
+    session.notify_mtu = mtu;
+    session.notify_uses_fd = true;
+    session.notifications_started = true;
+    session.notifications_started_ns = static_cast<uint64_t>(monotonic_now_ns());
+    session.notification_watchdog_ns = session.notifications_started_ns + 2'000'000'000ull;
+    session.init_command_index = 0;
+    session.next_init_command_ns = static_cast<uint64_t>(monotonic_now_ns());
+    std::cerr << "[override_controller][gearvr_ble] notifications acquired "
+              << session.address << " mtu=" << mtu << "\n";
+    return true;
+  }
+
+  bool start_dbus_notifications(Session& session) {
     MessageGuard reply{api_.get(), nullptr};
     ErrorGuard error{api_.get()};
     const int rc = api_->call_method(bus_, kBluezService, session.notify_path.c_str(),
@@ -733,10 +934,36 @@ class LinuxGearVrBleTransport final : public BleTransport {
                       (error.value.message ? error.value.message : std::to_string(rc));
       return false;
     }
+    session.notify_uses_fd = false;
     session.notifications_started = true;
+    session.notifications_started_ns = static_cast<uint64_t>(monotonic_now_ns());
+    session.notification_watchdog_ns = session.notifications_started_ns + 2'000'000'000ull;
     session.init_command_index = 0;
     session.next_init_command_ns = static_cast<uint64_t>(monotonic_now_ns());
+    std::cerr << "[override_controller][gearvr_ble] D-Bus notifications started "
+              << session.address << "\n";
     return true;
+  }
+
+  bool start_notifications(Session& session) {
+    if (session.notify_path.empty()) return false;
+
+    // Bleak/gearVRC uses the regular GATT notification path. Prefer StartNotify
+    // because it is the most widely tested client path for this controller.
+    // AcquireNotify remains a fallback for BlueZ/controller combinations where
+    // high-rate Value delivery is unavailable.
+    if (!session.force_fd_notify) {
+      if (start_dbus_notifications(session)) return true;
+      std::cerr << "[override_controller][gearvr_ble] " << session.address
+                << ": StartNotify unavailable; trying AcquireNotify\n";
+    }
+
+    std::string failure;
+    if (acquire_notifications(session, failure)) return true;
+    session.error = "AcquireNotify failed: " + failure;
+    std::cerr << "[override_controller][gearvr_ble][WARN] " << session.address
+              << ": " << session.error << "\n";
+    return false;
   }
 
   bool write_command(Session& session, const Command& command, bool log_error = true) {
@@ -750,15 +977,30 @@ class LinuxGearVrBleTransport final : public BleTransport {
     if (rc < 0) return false;
     rc = api_->message_append_array(call.value, 'y', command.data(), command.size());
     if (rc >= 0) rc = api_->message_open_container(call.value, 'a', "{sv}");
-    if (rc >= 0) rc = api_->message_open_container(call.value, 'e', "sv");
-    if (rc >= 0) rc = api_->message_append(call.value, "s", "type");
-    if (rc >= 0) rc = api_->message_open_container(call.value, 'v', "s");
-    if (rc >= 0) rc = api_->message_append(call.value, "s", "command");
-    if (rc >= 0) rc = api_->message_close_container(call.value);
-    if (rc >= 0) rc = api_->message_close_container(call.value);
+
+    // The Gear VR command characteristic advertises a normal GATT write on
+    // known firmwares. Match Bleak's behaviour: prefer a write request when
+    // available and use a write command only for write-without-response-only
+    // characteristics.
+    const char* write_type = nullptr;
+    if (session.command_flags.count("write") != 0) write_type = "request";
+    else if (session.command_flags.count("write-without-response") != 0) write_type = "command";
+    if (rc >= 0 && write_type) {
+      rc = api_->message_open_container(call.value, 'e', "sv");
+      if (rc >= 0) rc = api_->message_append(call.value, "s", "type");
+      if (rc >= 0) rc = api_->message_open_container(call.value, 'v', "s");
+      if (rc >= 0) rc = api_->message_append(call.value, "s", write_type);
+      if (rc >= 0) rc = api_->message_close_container(call.value);
+      if (rc >= 0) rc = api_->message_close_container(call.value);
+    }
     if (rc >= 0) rc = api_->message_close_container(call.value);
     if (rc >= 0) {
       rc = api_->bus_call(bus_, call.value, kDbusCallTimeoutUsec, &error.value, &reply.value);
+    }
+    if (rc >= 0 && !session.write_mode_logged) {
+      session.write_mode_logged = true;
+      std::cerr << "[override_controller][gearvr_ble] command write mode "
+                << session.address << " type=" << (write_type ? write_type : "auto") << "\n";
     }
     if (rc < 0 && log_error) {
       session.error = std::string("WriteValue failed: ") +
@@ -779,14 +1021,59 @@ class LinuxGearVrBleTransport final : public BleTransport {
       }
       if (session.services_resolved && !session.notify_path.empty() &&
           !session.command_path.empty()) {
+        // gearVRC's proven connection flow enables sensor/VR mode before it
+        // subscribes. Keep the post-subscribe initialization sequence too, but
+        // send one early VR-mode command so controllers that gate CCCD traffic
+        // until the sensor is running start producing packets reliably.
+        if (!session.pre_notify_mode_sent) {
+          if (write_command(session, kCommandVrMode)) {
+            session.pre_notify_mode_sent = true;
+            session.next_notify_attempt_ns = now_ns + kInitCommandGapNs;
+          } else {
+            session.next_notify_attempt_ns = now_ns +
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
+          }
+          continue;
+        }
         if (!session.notifications_started) {
           if (now_ns < session.next_notify_attempt_ns) continue;
           if (!start_notifications(session)) {
             session.next_notify_attempt_ns = now_ns +
-                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
             continue;
           }
         }
+
+        if (session.notifications_started && session.full_sensor_frame_count == 0 &&
+            session.notification_watchdog_ns != 0 && now_ns >= session.notification_watchdog_ns) {
+          const bool was_fd = session.notify_uses_fd;
+          if (was_fd) {
+            close_notify_channel(session);
+            session.force_dbus_notify = true;
+            session.force_fd_notify = false;
+          } else {
+            MessageGuard stop_reply{api_.get(), nullptr};
+            (void)api_->call_method(bus_, kBluezService, session.notify_path.c_str(),
+                                    kGattCharacteristicInterface, "StopNotify", nullptr,
+                                    &stop_reply.value, nullptr);
+            session.force_fd_notify = true;
+          }
+          session.notifications_started = false;
+          session.notifications_started_ns = 0;
+          session.notification_watchdog_ns = 0;
+          session.pre_notify_mode_sent = false;
+          session.init_command_index = 0;
+          session.notification_count = 0;
+          session.short_notification_count = 0;
+          session.full_sensor_frame_count = 0;
+          session.full_sensor_frame_logged = false;
+          session.next_notify_attempt_ns = now_ns + 100'000'000ull;
+          std::cerr << "[override_controller][gearvr_ble][WARN] " << session.address
+                    << ": no sensor packets after notification setup; switching from "
+                    << (was_fd ? "AcquireNotify" : "StartNotify") << " path\n";
+          continue;
+        }
+
         const auto& commands = initialization_commands();
         if (session.init_command_index < commands.size() &&
             now_ns >= session.next_init_command_ns) {
@@ -794,12 +1081,12 @@ class LinuxGearVrBleTransport final : public BleTransport {
             ++session.init_command_index;
             session.next_init_command_ns = now_ns + kInitCommandGapNs;
             if (session.init_command_index == commands.size()) {
-              std::cerr << "[override_controller][gearvr_ble] sensor mode initialized "
-                        << session.address << "\n";
+              std::cerr << "[override_controller][gearvr_ble] sensor stream initialized "
+                        << session.address << " (VR primed, SENSOR started)\n";
             }
           } else {
             session.next_init_command_ns = now_ns +
-                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
           }
         }
         if (session.init_command_index == commands.size() &&
@@ -828,6 +1115,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
       if (session->connected) {
         shorten(session->next_notify_attempt_ns);
         shorten(session->next_init_command_ns);
+        shorten(session->notification_watchdog_ns);
         shorten(session->next_keepalive_ns);
       }
     }
@@ -849,7 +1137,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     }
   }
 
-  InputProviderOptions options_;
+  GearVrOptions options_;
   std::unique_ptr<SdBusApi> api_;
   sd_bus* bus_ = nullptr;
   sd_bus_slot* properties_slot_ = nullptr;
@@ -863,7 +1151,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
 
 }  // namespace
 
-std::unique_ptr<BleTransport> make_platform_ble_transport(const InputProviderOptions& options) {
+std::unique_ptr<BleTransport> make_platform_ble_transport(const GearVrOptions& options) {
   return std::make_unique<LinuxGearVrBleTransport>(options);
 }
 

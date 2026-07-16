@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -84,6 +85,7 @@ enum class ControllerAction {
   Y,
   System,
   ThumbstickClick,
+  ThumbstickTouch,
   DpadUp,
   DpadDown,
   DpadLeft,
@@ -115,10 +117,34 @@ struct DeviceInputConfig {
   uint32_t hold_toggle_debounce_ms = 0;
 };
 
+struct OrientationBasisRotationConfig {
+  double rx_deg = 0.0;
+  double ry_deg = 0.0;
+  double rz_deg = 0.0;
+};
+
+struct OrientationTransformConfig {
+  bool enabled = false;
+  bool invert_x = false;
+  bool invert_y = false;
+  bool invert_z = false;
+  OrientationBasisRotationConfig basis_rotation;
+};
+
 struct ConfigDevice {
   int id = 0;
   DeviceFingerprint fingerprint;
   DeviceInputConfig input;
+  OrientationTransformConfig orientation_transform;
+
+  // Explicit IMU routing is independent from button/axis bindings. This lets
+  // an IMU-only provider (for example MPU-6050) feed one controller side
+  // without exposing any input buttons. Missing/"none" means unassigned.
+  std::optional<ControllerSide> imu_side;
+
+  // Runtime-only migration marker: old configs did not contain imu_side.
+  // Explicit "none" must remain distinct from a missing legacy field.
+  bool imu_side_explicit = false;
 };
 
 struct BindingConfig {
@@ -172,6 +198,11 @@ struct InputConfig {
 
 struct AppConfig {
   std::string name = "default";
+
+  // Runtime-only migration notes. The generic config loader records schema
+  // migrations, while enabled providers append provider-owned migrations.
+  // The caller persists the updated config atomically and then clears this list.
+  std::vector<std::string> pending_migrations;
   PublishConfig publish;
   InputConfig input;
   std::vector<ConfigDevice> devices;
