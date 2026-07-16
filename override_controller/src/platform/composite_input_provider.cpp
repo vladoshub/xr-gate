@@ -103,13 +103,49 @@ std::optional<InputEvent> CompositeInputProvider::poll_children(std::vector<Devi
 std::optional<InputEvent> CompositeInputProvider::wait_event(std::vector<DeviceInfo>& devices,
                                                               int timeout_ms,
                                                               bool include_stdin) {
+  // First consume events that child providers have already queued without
+  // blocking. Do not use non-blocking polling for the entire wait interval:
+  // transport-backed providers such as gearvr_ble need wait_event() with a
+  // positive timeout so their native event loop is actually pumped.
+  if (auto event = poll_children(devices, include_stdin)) return event;
+  if (timeout_ms == 0) return std::nullopt;
+
   const auto deadline = timeout_ms < 0
       ? std::chrono::steady_clock::time_point::max()
       : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+  // Child providers own different native wait primitives (select, D-Bus,
+  // RawInput, etc.), so there is no single fd set to block on here. Wait in
+  // short round-robin slices instead. This keeps every provider serviced,
+  // bounds cross-provider input latency, and avoids the previous 2 ms
+  // allocation-heavy busy-poll loop.
+  constexpr int kChildWaitSliceMs = 2;
   while (true) {
-    if (auto event = poll_children(devices, include_stdin)) return event;
-    if (timeout_ms == 0 || std::chrono::steady_clock::now() >= deadline) return std::nullopt;
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    const auto now = std::chrono::steady_clock::now();
+    if (timeout_ms >= 0 && now >= deadline) return std::nullopt;
+
+    const size_t provider_slot = next_wait_provider_ % providers_.size();
+    next_wait_provider_ = (provider_slot + 1) % providers_.size();
+
+    int child_timeout_ms = kChildWaitSliceMs;
+    if (timeout_ms >= 0) {
+      const auto remaining_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+      const int remaining_ms = static_cast<int>(std::max<int64_t>(1, (remaining_us + 999) / 1000));
+      child_timeout_ms = std::min(kChildWaitSliceMs, remaining_ms);
+    }
+
+    auto view = make_local_view(devices, provider_slot);
+    auto event = providers_[provider_slot]->wait_event(
+        view.devices, child_timeout_ms, include_stdin && provider_slot == 0);
+    sync_local_view(devices, view);
+
+    if (!event) continue;
+    if (event->device_index != std::numeric_limits<size_t>::max()) {
+      if (event->device_index >= view.local_to_global.size()) continue;
+      event->device_index = view.local_to_global[event->device_index];
+    }
+    return event;
   }
 }
 

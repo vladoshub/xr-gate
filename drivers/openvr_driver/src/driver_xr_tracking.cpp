@@ -1198,6 +1198,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
 
   void update_inputs_from_runtime_controller(const xr_runtime::RuntimeControllerSideStateV1* side) {
     const uint64_t buttons = side != nullptr ? side->buttons : 0ull;
+    const uint64_t touches = side != nullptr ? side->touches : 0ull;
     const float trigger = side != nullptr ? std::clamp(side->trigger, 0.0f, 1.0f) : 0.0f;
     const float grip = side != nullptr ? std::clamp(side->grip, 0.0f, 1.0f) : 0.0f;
     float stick_x = side != nullptr ? std::clamp(side->thumbstick_x, -1.0f, 1.0f) : 0.0f;
@@ -1223,11 +1224,17 @@ if (std::abs(stick_y) < 0.05f) {
                     xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN)) != 0ull;
     const bool thumbstick_click = (buttons & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull ||
         (buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_CENTER) != 0ull;
-    // Vive Wand locomotion bindings commonly expect a trackpad click at the
-    // touched direction, not only a touch/axis value. Physical D-pad directions
-    // are discrete presses, so expose them as directional trackpad clicks while
-    // keeping analog stick movement as touch-only.
-    const bool trackpad_click = thumbstick_click || dpad_direction_pressed;
+    const bool thumbstick_touch =
+        (touches & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull;
+    const bool trackpad_axis_active =
+        std::abs(stick_x) >= 0.05f || std::abs(stick_y) >= 0.05f;
+    // Vive Wand bindings commonly require /input/trackpad/click together with
+    // the trackpad coordinates. Gear VR reports capacitive motion without the
+    // physical touchpad switch, so expose either the touch bit or active sensor
+    // coordinates as a Vive-compatible trackpad click. Keep /input/joystick/click
+    // bound only to the physical switch above.
+    const bool trackpad_click = thumbstick_click || dpad_direction_pressed ||
+        thumbstick_touch || trackpad_axis_active;
     const bool menu_click = (buttons & xr_runtime::CONTROLLER_BUTTON_MENU) != 0ull;
     const bool a_click = (buttons & xr_runtime::CONTROLLER_BUTTON_A) != 0ull;
     const bool b_click = (buttons & xr_runtime::CONTROLLER_BUTTON_B) != 0ull;
@@ -1258,7 +1265,8 @@ if (std::abs(stick_y) < 0.05f) {
       vr::VRDriverInput()->UpdateBooleanComponent(thumbstick_click_component_, thumbstick_click, 0.0);
     }
 
-    const bool trackpad_touch = std::abs(stick_x) >= 0.05f || std::abs(stick_y) >= 0.05f || trackpad_click;
+    const bool trackpad_touch =
+        thumbstick_touch || trackpad_axis_active || trackpad_click;
     if (trackpad_x_component_ != 0) {
       vr::VRDriverInput()->UpdateScalarComponent(trackpad_x_component_, stick_x, 0.0);
     }

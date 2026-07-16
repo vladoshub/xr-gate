@@ -44,6 +44,7 @@ class CompositeInputProvider final : public InputProvider {
                                           bool include_stdin);
 
   std::vector<std::unique_ptr<InputProvider>> providers_;
+  size_t next_wait_provider_ = 0;
 };
 
 }  // namespace xr_override_controller
