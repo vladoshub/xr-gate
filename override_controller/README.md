@@ -167,25 +167,19 @@ Gear VR protocol, touchpad modes, AHRS, configuration, or trained bindings.
 
 The touch surface defaults to `absolute_stick`: the physical pad center is the
 virtual stick center, capacitive contact is independent from the physical click,
-and both axes return to zero when the finger leaves the pad. Other modes:
+and both axes return to zero when the finger leaves the pad. Provider-specific
+settings use the common `provider.key=value` interface:
 
 ```bash
-GEARVR_TOUCHPAD_MODE=absolute_stick  # default; capacitive position, no physical click required
-GEARVR_TOUCHPAD_MODE=relative_stick  # first touch point becomes the temporary center
-GEARVR_TOUCHPAD_MODE=dpad            # KEY_UP/DOWN/LEFT/RIGHT
-GEARVR_TOUCHPAD_MODE=raw             # normalized absolute touch position
+PROVIDER_OPTIONS='gearvr_ble.touchpad.mode=absolute_stick;gearvr_ble.touchpad.deadzone=0.12;gearvr_ble.touchpad.radius=90;gearvr_ble.touchpad.invert_x=0;gearvr_ble.touchpad.invert_y=1;gearvr_ble.madgwick_beta=0.04;gearvr_ble.reconnect_ms=1000' \
+PROVIDERS=evdev,gearvr_ble \
+  override_controller/scripts/linux/start_override_controller.sh
 ```
 
-Relevant tuning variables:
-
-```bash
-GEARVR_TOUCHPAD_DEADZONE=0.12
-GEARVR_TOUCHPAD_RADIUS=90
-GEARVR_TOUCHPAD_INVERT_X=0
-GEARVR_TOUCHPAD_INVERT_Y=1
-GEARVR_MADGWICK_BETA=0.04
-GEARVR_RECONNECT_MS=1000
-```
+`touchpad.mode` accepts `absolute_stick`, `relative_stick`, `dpad`, or `raw`.
+The legacy `GEARVR_*` and `OVERRIDE_CONTROLLER_GEARVR_*` environment variables
+remain supported, but they are parsed inside `GearVrInputProvider`; the common
+launcher and argument parser do not contain Gear VR-specific option handling.
 
 ### IMU output
 

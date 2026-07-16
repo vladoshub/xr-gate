@@ -224,7 +224,7 @@ bool is_gearvr_name(const std::string& name) {
 
 class LinuxGearVrBleTransport final : public BleTransport {
  public:
-  explicit LinuxGearVrBleTransport(InputProviderOptions options)
+  explicit LinuxGearVrBleTransport(GearVrOptions options)
       : options_(std::move(options)), api_(std::make_unique<SdBusApi>()) {
     const int rc = api_->open_system(&bus_);
     if (rc < 0 || !bus_) {
@@ -471,7 +471,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
         message_errno != EALREADY && message_errno != EINPROGRESS) {
       session->error = "BlueZ Connect failed: errno=" + std::to_string(message_errno);
       session->next_connect_ns = static_cast<uint64_t>(monotonic_now_ns()) +
-                                 static_cast<uint64_t>(self.options_.gearvr_reconnect_ms) * 1'000'000ull;
+                                 static_cast<uint64_t>(self.options_.reconnect_ms) * 1'000'000ull;
       std::cerr << "[override_controller][gearvr_ble][WARN] " << session->address
                 << ": " << session->error << "\n";
     } else {
@@ -589,7 +589,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
       session.notification_watchdog_ns = 0;
       session.next_notify_attempt_ns = 0;
       session.next_connect_ns = static_cast<uint64_t>(monotonic_now_ns()) +
-                                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
       std::cerr << "[override_controller][gearvr_ble] disconnected " << session.address
                 << "; reconnect scheduled\n";
     }
@@ -807,7 +807,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
       session.connect_slot = nullptr;
       session.error = "cannot queue BlueZ Connect: " + std::to_string(rc);
       session.next_connect_ns = now_ns +
-          static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+          static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
     } else {
       std::cerr << "[override_controller][gearvr_ble] connecting " << session.address
                 << (session.trusted ? "" : " (paired but not trusted)") << "\n";
@@ -1031,7 +1031,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
             session.next_notify_attempt_ns = now_ns + kInitCommandGapNs;
           } else {
             session.next_notify_attempt_ns = now_ns +
-                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
           }
           continue;
         }
@@ -1039,7 +1039,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
           if (now_ns < session.next_notify_attempt_ns) continue;
           if (!start_notifications(session)) {
             session.next_notify_attempt_ns = now_ns +
-                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
             continue;
           }
         }
@@ -1086,7 +1086,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
             }
           } else {
             session.next_init_command_ns = now_ns +
-                static_cast<uint64_t>(options_.gearvr_reconnect_ms) * 1'000'000ull;
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
           }
         }
         if (session.init_command_index == commands.size() &&
@@ -1137,7 +1137,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     }
   }
 
-  InputProviderOptions options_;
+  GearVrOptions options_;
   std::unique_ptr<SdBusApi> api_;
   sd_bus* bus_ = nullptr;
   sd_bus_slot* properties_slot_ = nullptr;
@@ -1151,7 +1151,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
 
 }  // namespace
 
-std::unique_ptr<BleTransport> make_platform_ble_transport(const InputProviderOptions& options) {
+std::unique_ptr<BleTransport> make_platform_ble_transport(const GearVrOptions& options) {
   return std::make_unique<LinuxGearVrBleTransport>(options);
 }
 

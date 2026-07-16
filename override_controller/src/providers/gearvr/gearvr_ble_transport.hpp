@@ -1,6 +1,6 @@
 #pragma once
 
-#include <xr_override_controller/input_provider.hpp>
+#include "gearvr_options.hpp"
 
 #include <cstdint>
 #include <deque>
@@ -40,6 +40,6 @@ class BleTransport {
 
 // Exactly one platform translation unit defines this factory. Adding Windows
 // support only requires a Windows transport implementing BleTransport.
-std::unique_ptr<BleTransport> make_platform_ble_transport(const InputProviderOptions& options);
+std::unique_ptr<BleTransport> make_platform_ble_transport(const GearVrOptions& options);
 
 }  // namespace xr_override_controller::gearvr

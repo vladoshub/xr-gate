@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -24,23 +25,24 @@ struct InputEvent {
   bool stop_requested = false;
 };
 
+using ProviderOptionValues = std::map<std::string, std::string>;
+
 struct InputProviderOptions {
   // Ordered list of enabled providers. Unknown names are rejected instead of
   // silently falling back to platform input, so release launchers cannot appear
   // to enable a provider that is actually inactive.
   std::vector<std::string> providers;
 
-  // Native Gear VR provider settings shared by all OS transports. Linux uses
-  // BlueZ/system D-Bus; a future Windows backend can use C++/WinRT without
-  // changing packet decoding, touchpad handling, AHRS, training, or bindings.
-  uint32_t gearvr_initial_scan_ms = 1500;
-  uint32_t gearvr_reconnect_ms = 1000;
-  std::string gearvr_touchpad_mode = "absolute_stick";
-  double gearvr_touchpad_deadzone = 0.12;
-  double gearvr_touchpad_radius = 90.0;
-  bool gearvr_touchpad_invert_x = false;
-  bool gearvr_touchpad_invert_y = true;
-  double gearvr_madgwick_beta = 0.04;
+  // Provider-owned string options keyed by canonical or alias provider name.
+  // The core only parses `provider.key=value`; each provider validates and
+  // converts its own values. Adding a provider therefore does not add fields or
+  // provider-specific branches to main.cpp or the common interface.
+  std::map<std::string, ProviderOptionValues> provider_options;
+};
+
+struct ConfigMigrationResult {
+  bool changed = false;
+  std::vector<std::string> notes;
 };
 
 class InputProvider {
@@ -53,9 +55,26 @@ class InputProvider {
   virtual bool requires_polling() const { return false; }
   virtual std::vector<DeviceInfo> scan_devices(bool open_readable) = 0;
   virtual void flush_events(std::vector<DeviceInfo>& devices) = 0;
-  virtual std::optional<InputEvent> wait_event(std::vector<DeviceInfo>& devices, int timeout_ms, bool include_stdin) = 0;
-  virtual std::string input_name(uint16_t type, uint16_t code) const = 0;
-  virtual InputBindingSpec make_input_spec(const DeviceInfo& device, uint16_t type, uint16_t code) const = 0;
+  virtual std::optional<InputEvent> wait_event(std::vector<DeviceInfo>& devices,
+                                                int timeout_ms,
+                                                bool include_stdin) = 0;
+
+  // Device is part of the name lookup so a composite provider can route the
+  // request to the child that owns the event instead of assuming the first
+  // child understands every provider's input codes.
+  virtual std::string input_name(const DeviceInfo& device,
+                                 uint16_t type,
+                                 uint16_t code) const = 0;
+  virtual InputBindingSpec make_input_spec(const DeviceInfo& device,
+                                           uint16_t type,
+                                           uint16_t code) const = 0;
+
+  // Provider-owned migrations keep protocol/input-code knowledge out of the
+  // generic JSON loader. The composite provider invokes every enabled child.
+  virtual ConfigMigrationResult migrate_config(AppConfig& cfg) const {
+    (void)cfg;
+    return {};
+  }
 
   // Return the current per-device IMU state. Buttons-only providers keep the
   // default NOT_SUPPORTED state. The composite provider routes the request to

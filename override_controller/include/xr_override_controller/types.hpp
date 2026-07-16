@@ -199,11 +199,10 @@ struct InputConfig {
 struct AppConfig {
   std::string name = "default";
 
-  // Runtime-only: load_config_file inferred imu_side for a legacy config and
-  // the caller may persist the migrated schema atomically.
-  bool migrated_imu_side = false;
-  bool migrated_orientation_transform = false;
-  bool migrated_gearvr_touch_bindings = false;
+  // Runtime-only migration notes. The generic config loader records schema
+  // migrations, while enabled providers append provider-owned migrations.
+  // The caller persists the updated config atomically and then clears this list.
+  std::vector<std::string> pending_migrations;
   PublishConfig publish;
   InputConfig input;
   std::vector<ConfigDevice> devices;

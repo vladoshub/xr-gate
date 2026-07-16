@@ -105,8 +105,8 @@ std::optional<InputEvent> CompositeInputProvider::wait_event(std::vector<DeviceI
                                                               bool include_stdin) {
   // First consume events that child providers have already queued without
   // blocking. Do not use non-blocking polling for the entire wait interval:
-  // transport-backed providers such as gearvr_ble need wait_event() with a
-  // positive timeout so their native event loop is actually pumped.
+  // Transport-backed providers need wait_event() with a positive timeout so
+  // their native event loop is actually pumped.
   if (auto event = poll_children(devices, include_stdin)) return event;
   if (timeout_ms == 0) return std::nullopt;
 
@@ -149,8 +149,13 @@ std::optional<InputEvent> CompositeInputProvider::wait_event(std::vector<DeviceI
   }
 }
 
-std::string CompositeInputProvider::input_name(uint16_t type, uint16_t code) const {
-  return providers_.front()->input_name(type, code);
+std::string CompositeInputProvider::input_name(const DeviceInfo& device,
+                                                 uint16_t type,
+                                                 uint16_t code) const {
+  if (device.provider_slot >= providers_.size()) {
+    return "EV" + std::to_string(type) + ":" + std::to_string(code);
+  }
+  return providers_[device.provider_slot]->input_name(device, type, code);
 }
 
 InputBindingSpec CompositeInputProvider::make_input_spec(const DeviceInfo& device,
@@ -158,6 +163,16 @@ InputBindingSpec CompositeInputProvider::make_input_spec(const DeviceInfo& devic
                                                           uint16_t code) const {
   if (device.provider_slot >= providers_.size()) throw std::runtime_error("invalid provider slot");
   return providers_[device.provider_slot]->make_input_spec(device, type, code);
+}
+
+ConfigMigrationResult CompositeInputProvider::migrate_config(AppConfig& cfg) const {
+  ConfigMigrationResult result;
+  for (const auto& provider : providers_) {
+    ConfigMigrationResult child = provider->migrate_config(cfg);
+    result.changed = result.changed || child.changed;
+    result.notes.insert(result.notes.end(), child.notes.begin(), child.notes.end());
+  }
+  return result;
 }
 
 xr_runtime::ControllerImuStateV1 CompositeInputProvider::imu_state(const DeviceInfo& device) const {

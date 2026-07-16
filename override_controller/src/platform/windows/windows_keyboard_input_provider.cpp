@@ -81,19 +81,20 @@ std::optional<InputEvent> WindowsKeyboardInputProvider::wait_event(std::vector<D
   return std::nullopt;
 }
 
-std::string WindowsKeyboardInputProvider::input_name(uint16_t type, uint16_t code) const {
+std::string WindowsKeyboardInputProvider::input_name(const DeviceInfo& device, uint16_t type, uint16_t code) const {
+  (void)device;
   if (type != kWinKeyType) return "unknown";
   char buf[32];
   std::snprintf(buf, sizeof(buf), "VK_%u", static_cast<unsigned>(code));
   return buf;
 }
 
-InputBindingSpec WindowsKeyboardInputProvider::make_input_spec(const DeviceInfo&, uint16_t type, uint16_t code) const {
+InputBindingSpec WindowsKeyboardInputProvider::make_input_spec(const DeviceInfo& device, uint16_t type, uint16_t code) const {
   InputBindingSpec spec;
   spec.kind = InputKind::Key;
   spec.type = type;
   spec.code = code;
-  spec.name = input_name(type, code);
+  spec.name = input_name(device, type, code);
   return spec;
 }
 

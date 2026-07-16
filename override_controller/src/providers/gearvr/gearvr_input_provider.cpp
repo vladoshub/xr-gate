@@ -6,7 +6,9 @@
 // access is isolated behind BleTransport.
 
 #include "gearvr_ble_transport.hpp"
+#include "gearvr_config_migration.hpp"
 #include "gearvr_input_codes.hpp"
+#include "gearvr_options.hpp"
 #include "gearvr_protocol.hpp"
 #include "gearvr_touchpad.hpp"
 
@@ -102,18 +104,18 @@ struct GearVrInputProvider::Impl {
         : imu_processor(beta), touchpad(std::move(touchpad_options)) {}
   };
 
-  explicit Impl(InputProviderOptions input_options)
-      : options(std::move(input_options)), transport(make_platform_ble_transport(options)) {
+  explicit Impl(ProviderOptionValues input_options)
+      : options(load_gearvr_options(input_options)), transport(make_platform_ble_transport(options)) {
     if (!transport) throw std::runtime_error("Gear VR BLE transport is unavailable on this platform");
   }
 
   TouchpadOptions touchpad_options() const {
     TouchpadOptions out;
-    out.mode = options.gearvr_touchpad_mode;
-    out.deadzone = options.gearvr_touchpad_deadzone;
-    out.radius = options.gearvr_touchpad_radius;
-    out.invert_x = options.gearvr_touchpad_invert_x;
-    out.invert_y = options.gearvr_touchpad_invert_y;
+    out.mode = options.touchpad_mode;
+    out.deadzone = options.touchpad_deadzone;
+    out.radius = options.touchpad_radius;
+    out.invert_x = options.touchpad_invert_x;
+    out.invert_y = options.touchpad_invert_y;
     return out;
   }
 
@@ -200,7 +202,7 @@ struct GearVrInputProvider::Impl {
       auto& session_ptr = sessions[snapshot.stable_id];
       if (!session_ptr) {
         session_ptr = std::make_unique<Session>(
-            static_cast<float>(options.gearvr_madgwick_beta), touchpad_options());
+            static_cast<float>(options.madgwick_beta), touchpad_options());
         session_ptr->stable_id = snapshot.stable_id;
       }
       Session& session = *session_ptr;
@@ -439,13 +441,13 @@ struct GearVrInputProvider::Impl {
     }
   }
 
-  InputProviderOptions options;
+  GearVrOptions options;
   std::unique_ptr<BleTransport> transport;
   std::map<std::string, std::unique_ptr<Session>> sessions;
   std::deque<PendingEvent> pending_events;
 };
 
-GearVrInputProvider::GearVrInputProvider(InputProviderOptions options)
+GearVrInputProvider::GearVrInputProvider(ProviderOptionValues options)
     : impl_(std::make_unique<Impl>(std::move(options))) {}
 
 GearVrInputProvider::~GearVrInputProvider() = default;
@@ -453,7 +455,7 @@ GearVrInputProvider::~GearVrInputProvider() = default;
 std::vector<DeviceInfo> GearVrInputProvider::scan_devices(bool open_readable) {
   (void)open_readable;
   const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(impl_->options.gearvr_initial_scan_ms);
+                        std::chrono::milliseconds(impl_->options.initial_scan_ms);
   do {
     impl_->pump(50, false);
   } while (impl_->sessions.empty() && std::chrono::steady_clock::now() < deadline);
@@ -498,7 +500,10 @@ std::optional<InputEvent> GearVrInputProvider::wait_event(std::vector<DeviceInfo
   }
 }
 
-std::string GearVrInputProvider::input_name(uint16_t type, uint16_t code) const {
+std::string GearVrInputProvider::input_name(const DeviceInfo& device,
+                                                uint16_t type,
+                                                uint16_t code) const {
+  (void)device;
   if (type == codes::kEvKey) return key_name(code);
   if (type == codes::kEvAbs) return abs_name(code);
   return "EV" + std::to_string(type) + ":" + std::to_string(code);
@@ -511,7 +516,7 @@ InputBindingSpec GearVrInputProvider::make_input_spec(const DeviceInfo& device,
   InputBindingSpec spec;
   spec.type = type;
   spec.code = code;
-  spec.name = input_name(type, code);
+  spec.name = input_name(device, type, code);
   if (type == codes::kEvAbs) {
     spec.kind = InputKind::AbsAxis;
     spec.abs_min = -32767;
@@ -521,6 +526,10 @@ InputBindingSpec GearVrInputProvider::make_input_spec(const DeviceInfo& device,
     spec.kind = InputKind::Key;
   }
   return spec;
+}
+
+ConfigMigrationResult GearVrInputProvider::migrate_config(AppConfig& cfg) const {
+  return migrate_legacy_config(cfg);
 }
 
 xr_runtime::ControllerImuStateV1 GearVrInputProvider::imu_state(const DeviceInfo& device) const {
