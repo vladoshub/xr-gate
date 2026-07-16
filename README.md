@@ -714,5 +714,6 @@ The project uses or can build against these third-party components:
 - nrealAirLinuxDriver — MIT-licensed XREAL/NREAL Linux driver reference used for XREAL capture/display work.
 - ar-drivers-rs — MIT-licensed AR glasses tooling reference used for XREAL display helper work.
 - OpenVR-xrealAirGlassesHMD — reference for OpenVR/XREAL driver behavior and configuration ideas.
+- gearVRC — reference for GearVR provider behavior and configuration ideas in override_controller.
 - mercury_steamvr_driver — optional source for Mercury hand-tracking ONNX models; not included in the core repository/release.
 - xrizer — optional GPL-3.0-or-later OpenVR-to-OpenXR compatibility tool; not built by default.
