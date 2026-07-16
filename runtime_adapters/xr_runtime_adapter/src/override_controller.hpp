@@ -88,10 +88,25 @@ struct RuntimeControllerImuMotionConfig {
   bool publish_predicted_velocity = false;
   float reacquire_blend_ms = 0.0f;
 
-  // Optical hand orientation slowly updates a retained world-yaw offset. The
-  // offset remains active while the controller is outside the camera FOV.
-  float yaw_correction_alpha = 0.05f;
-  float yaw_correction_max_step_deg = 2.0f;
+  // Optical hand orientation updates a retained world-yaw offset. Periodic
+  // correction compares the latest optical and IMU orientations. With the
+  // trigger filter enabled, the latest residual error must remain above the
+  // deadband for trigger_hold_ms and its range during that time must stay
+  // within trigger_max_range_deg. The final target is always the latest pose,
+  // never a sample captured at the beginning of the hold.
+  bool yaw_correction_continuous = true;
+  bool yaw_correction_on_reacquire = true;
+  float yaw_correction_deadband_deg = 10.0f;
+  float yaw_correction_blend_ms = 500.0f;
+  bool yaw_correction_trigger_filter = true;
+  float yaw_correction_trigger_hold_ms = 1500.0f;
+  float yaw_correction_trigger_max_range_deg = 8.0f;
+  float yaw_correction_interval_ms = 1000.0f;
+
+  // Reacquire uses its own threshold and blend duration and immediately uses
+  // the latest valid optical/IMU difference without the periodic hold filter.
+  float yaw_correction_reacquire_deadband_deg = 1.0f;
+  float yaw_correction_reacquire_blend_ms = 250.0f;
 };
 
 struct RuntimeControllerImuSideRuntimeState {
@@ -100,8 +115,17 @@ struct RuntimeControllerImuSideRuntimeState {
   bool prediction_started = false;
   bool reacquire_blend_active = false;
   bool yaw_correction_valid = false;
+  bool yaw_correction_requested = false;
+  bool yaw_check_active = false;
+  bool yaw_check_reacquire = false;
+  bool yaw_blend_active = false;
+  bool yaw_blend_reacquire = false;
   uint64_t last_update_ns = 0;
   uint64_t last_optical_pose_ns = 0;
+  uint64_t last_yaw_correction_update_ns = 0;
+  uint64_t yaw_check_last_frame_sequence = 0;
+  uint64_t yaw_trigger_hold_start_ns = 0;
+  uint64_t yaw_blend_start_ns = 0;
   uint64_t reacquire_blend_start_ns = 0;
   float anchor_position_m[3] = {};
   float anchor_velocity_mps[3] = {};
@@ -111,7 +135,20 @@ struct RuntimeControllerImuSideRuntimeState {
   float acceleration_velocity_delta_mps[3] = {};
   float reacquire_blend_from_position_m[3] = {};
   float reacquire_blend_from_velocity_mps[3] = {};
+  bool yaw_trigger_range_valid = false;
+  float yaw_trigger_reference_error_rad = 0.0f;
+  float yaw_trigger_min_unwrapped_error_rad = 0.0f;
+  float yaw_trigger_max_unwrapped_error_rad = 0.0f;
   float yaw_correction_rad = 0.0f;
+  float yaw_blend_from_rad = 0.0f;
+  float yaw_blend_to_rad = 0.0f;
+  float yaw_blend_duration_ms = 0.0f;
+  float yaw_last_desired_rad = 0.0f;
+  float yaw_last_error_rad = 0.0f;
+  float yaw_last_step_rad = 0.0f;
+  uint64_t yaw_apply_count = 0;
+  uint64_t yaw_reacquire_apply_count = 0;
+  std::string yaw_last_action = "none";
 };
 
 struct RuntimeControllerSynthesisState {
@@ -202,6 +239,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     uint64_t timestamp_ns,
     const RuntimeControllerSynthesisConfig& cfg,
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& filtered_hand,
+    const std::optional<xr_runtime::HandTrackingFrameF32V2>& optical_yaw_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     RuntimeControllerSynthesisState* runtime_state = nullptr);

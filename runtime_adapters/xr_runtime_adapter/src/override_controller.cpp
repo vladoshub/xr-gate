@@ -365,13 +365,208 @@ bool real_optical_hand_pose(const xr_runtime::HandSideF32V2* hand_side) {
          std::isfinite(hand_side->controller_pz);
 }
 
+uint64_t nonnegative_ms_to_ns(float value_ms);
+
+void reset_yaw_trigger_observation(
+    RuntimeControllerImuSideRuntimeState& state) {
+  state.yaw_trigger_hold_start_ns = 0;
+  state.yaw_trigger_range_valid = false;
+  state.yaw_trigger_reference_error_rad = 0.0f;
+  state.yaw_trigger_min_unwrapped_error_rad = 0.0f;
+  state.yaw_trigger_max_unwrapped_error_rad = 0.0f;
+}
+
+void begin_yaw_check(RuntimeControllerImuSideRuntimeState& state) {
+  state.yaw_check_active = true;
+  state.yaw_check_reacquire =
+      state.yaw_correction_valid && state.yaw_correction_requested;
+  state.yaw_check_last_frame_sequence = 0;
+  reset_yaw_trigger_observation(state);
+}
+
+void finish_yaw_check(
+    RuntimeControllerImuSideRuntimeState& state,
+    uint64_t timestamp_ns) {
+  // The periodic interval starts only after the current check has completed.
+  // A hold-window restart therefore postpones the next interval naturally.
+  state.last_yaw_correction_update_ns = timestamp_ns;
+  state.yaw_correction_requested = false;
+  state.yaw_check_active = false;
+  state.yaw_check_reacquire = false;
+  state.yaw_check_last_frame_sequence = 0;
+  reset_yaw_trigger_observation(state);
+}
+
+void start_yaw_blend(
+    RuntimeControllerImuSideRuntimeState& state,
+    float desired_yaw_correction_rad,
+    float duration_ms,
+    bool reacquire,
+    uint64_t timestamp_ns) {
+  const float error = wrap_pi(desired_yaw_correction_rad - state.yaw_correction_rad);
+  state.yaw_blend_from_rad = state.yaw_correction_rad;
+  state.yaw_blend_to_rad = desired_yaw_correction_rad;
+  state.yaw_blend_duration_ms = std::max(0.0f, duration_ms);
+  state.yaw_blend_start_ns = timestamp_ns;
+  state.yaw_blend_reacquire = reacquire;
+  state.yaw_blend_active = state.yaw_blend_duration_ms > 0.0f;
+  state.yaw_last_step_rad = error;
+  state.yaw_last_action = reacquire
+      ? (state.yaw_blend_active ? "reacquire_blend_start"
+                                : "reacquire_apply_direct")
+      : (state.yaw_blend_active ? "periodic_blend_start"
+                                : "periodic_apply_direct");
+  if (!state.yaw_blend_active) {
+    state.yaw_correction_rad = desired_yaw_correction_rad;
+  }
+  ++state.yaw_apply_count;
+  if (reacquire) ++state.yaw_reacquire_apply_count;
+}
+
+void apply_latest_yaw_correction(
+    RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeControllerImuMotionConfig& cfg,
+    float desired_yaw_correction_rad,
+    uint64_t timestamp_ns) {
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+
+  desired_yaw_correction_rad = wrap_pi(desired_yaw_correction_rad);
+  state.yaw_last_desired_rad = desired_yaw_correction_rad;
+
+  if (!state.yaw_correction_valid) {
+    state.yaw_correction_rad = desired_yaw_correction_rad;
+    state.yaw_correction_valid = true;
+    state.yaw_last_error_rad = 0.0f;
+    state.yaw_last_step_rad = 0.0f;
+    state.yaw_last_action = "initial_align";
+    ++state.yaw_apply_count;
+    finish_yaw_check(state, timestamp_ns);
+    return;
+  }
+
+  const bool reacquire = state.yaw_check_reacquire;
+  const float error =
+      wrap_pi(desired_yaw_correction_rad - state.yaw_correction_rad);
+  state.yaw_last_error_rad = error;
+  state.yaw_last_step_rad = 0.0f;
+
+  const float deadband_deg = reacquire
+      ? cfg.yaw_correction_reacquire_deadband_deg
+      : cfg.yaw_correction_deadband_deg;
+  const float deadband = std::max(0.0f, deadband_deg) * kDegToRad;
+  if (std::abs(error) <= deadband) {
+    state.yaw_last_action = reacquire
+        ? "reacquire_deadband"
+        : "periodic_deadband";
+    finish_yaw_check(state, timestamp_ns);
+    return;
+  }
+
+  const float blend_ms = reacquire
+      ? cfg.yaw_correction_reacquire_blend_ms
+      : cfg.yaw_correction_blend_ms;
+  start_yaw_blend(
+      state, desired_yaw_correction_rad, blend_ms, reacquire, timestamp_ns);
+  finish_yaw_check(state, timestamp_ns);
+}
+
+void advance_yaw_blend(
+    RuntimeControllerImuSideRuntimeState& state,
+    uint64_t timestamp_ns) {
+  if (!state.yaw_blend_active) return;
+
+  const uint64_t duration_ns = std::max<uint64_t>(
+      1, nonnegative_ms_to_ns(state.yaw_blend_duration_ms));
+  const uint64_t elapsed_ns = timestamp_ns >= state.yaw_blend_start_ns
+      ? timestamp_ns - state.yaw_blend_start_ns
+      : 0;
+  const float t = std::clamp(
+      static_cast<float>(elapsed_ns) / static_cast<float>(duration_ns),
+      0.0f, 1.0f);
+  const float smooth_t = t * t * (3.0f - 2.0f * t);
+  const float delta = wrap_pi(state.yaw_blend_to_rad - state.yaw_blend_from_rad);
+  state.yaw_correction_rad = wrap_pi(
+      state.yaw_blend_from_rad + delta * smooth_t);
+
+  if (t >= 1.0f) {
+    state.yaw_correction_rad = state.yaw_blend_to_rad;
+    state.yaw_blend_active = false;
+    state.yaw_last_action = state.yaw_blend_reacquire
+        ? "reacquire_blend_done"
+        : "periodic_blend_done";
+  }
+}
+
+bool yaw_correction_check_due(
+    const RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeControllerImuMotionConfig& cfg,
+    uint64_t timestamp_ns) {
+  if (!state.yaw_correction_valid) return true;
+  if (state.yaw_blend_active) return false;
+  if (state.yaw_correction_requested) return true;
+  if (!cfg.yaw_correction_continuous) return false;
+
+  const uint64_t interval_ns = nonnegative_ms_to_ns(cfg.yaw_correction_interval_ms);
+  if (interval_ns == 0 || state.last_yaw_correction_update_ns == 0) return true;
+  return timestamp_ns >= state.last_yaw_correction_update_ns &&
+         timestamp_ns - state.last_yaw_correction_update_ns >= interval_ns;
+}
+
+void restart_periodic_yaw_trigger_window(
+    RuntimeControllerImuSideRuntimeState& state,
+    float latest_error_rad,
+    uint64_t timestamp_ns,
+    const char* action) {
+  state.yaw_trigger_hold_start_ns = timestamp_ns;
+  state.yaw_trigger_range_valid = true;
+  state.yaw_trigger_reference_error_rad = latest_error_rad;
+  state.yaw_trigger_min_unwrapped_error_rad = latest_error_rad;
+  state.yaw_trigger_max_unwrapped_error_rad = latest_error_rad;
+  state.yaw_last_action = action;
+}
+
 void update_yaw_correction(
     RuntimeControllerImuSideRuntimeState& state,
     const RuntimeControllerImuMotionConfig& cfg,
     Qf imu_orientation,
     const xr_runtime::HandSideF32V2* optical_hand_side,
+    uint64_t optical_frame_sequence,
     uint64_t timestamp_ns) {
-  if (!cfg.yaw_correction_enabled || !real_optical_hand_pose(optical_hand_side)) return;
+  if (!cfg.yaw_correction_enabled) return;
+
+  // A real reacquire request has priority over an in-progress periodic check.
+  if (state.yaw_correction_requested && state.yaw_check_active &&
+      !state.yaw_check_reacquire) {
+    state.yaw_check_active = false;
+    state.yaw_check_last_frame_sequence = 0;
+    reset_yaw_trigger_observation(state);
+  }
+
+  if (!state.yaw_check_active &&
+      !yaw_correction_check_due(state, cfg, timestamp_ns)) {
+    return;
+  }
+  if (!state.yaw_check_active) {
+    begin_yaw_check(state);
+  }
+
+  // Evaluate only when Mercury/backend publishes a new hand pose. The IMU
+  // orientation passed to this call is the latest available orientation at
+  // that moment, so every hold-window update compares the newest pair rather
+  // than poses captured when the window started.
+  const bool new_backend_frame =
+      optical_frame_sequence != 0 &&
+      optical_frame_sequence != state.yaw_check_last_frame_sequence;
+  if (!new_backend_frame) return;
+  state.yaw_check_last_frame_sequence = optical_frame_sequence;
+
+  if (!real_optical_hand_pose(optical_hand_side)) {
+    if (!state.yaw_check_reacquire) {
+      reset_yaw_trigger_observation(state);
+      state.yaw_last_action = "periodic_invalid_pose_reset";
+    }
+    return;
+  }
 
   const float optical_q_xyzw[4] = {
       optical_hand_side->controller_qx,
@@ -379,32 +574,105 @@ void update_yaw_correction(
       optical_hand_side->controller_qz,
       optical_hand_side->controller_qw,
   };
-  if (!finite_q_xyzw(optical_q_xyzw) || !nonzero_q_xyzw(optical_q_xyzw)) return;
-  const Qf optical_orientation = normalize_q({optical_hand_side->controller_qw,
-                                               optical_hand_side->controller_qx,
-                                               optical_hand_side->controller_qy,
-                                               optical_hand_side->controller_qz});
+  if (!finite_q_xyzw(optical_q_xyzw) || !nonzero_q_xyzw(optical_q_xyzw)) {
+    if (!state.yaw_check_reacquire) {
+      reset_yaw_trigger_observation(state);
+      state.yaw_last_action = "periodic_invalid_orientation_reset";
+    }
+    return;
+  }
+
+  const Qf optical_orientation = normalize_q({
+      optical_hand_side->controller_qw,
+      optical_hand_side->controller_qx,
+      optical_hand_side->controller_qy,
+      optical_hand_side->controller_qz,
+  });
   float imu_yaw = 0.0f;
   float optical_yaw = 0.0f;
   if (!yaw_rad_from_q(imu_orientation, imu_yaw) ||
       !yaw_rad_from_q(optical_orientation, optical_yaw)) {
+    if (!state.yaw_check_reacquire) {
+      reset_yaw_trigger_observation(state);
+      state.yaw_last_action = "periodic_invalid_yaw_reset";
+    }
     return;
   }
 
   const float desired = wrap_pi(optical_yaw - imu_yaw);
-  if (!state.yaw_correction_valid) {
-    state.yaw_correction_rad = desired;
-    state.yaw_correction_valid = true;
+  state.yaw_last_desired_rad = desired;
+
+  // Initial alignment and reacquire always use the latest valid pose pair.
+  // Reacquire has its own deadband/blend but no periodic hold/range filter.
+  if (!state.yaw_correction_valid || state.yaw_check_reacquire) {
+    apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
     return;
   }
 
-  const float alpha = std::clamp(cfg.yaw_correction_alpha, 0.0f, 1.0f);
-  float step = wrap_pi(desired - state.yaw_correction_rad) * alpha;
   constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
-  const float max_step = std::max(0.0f, cfg.yaw_correction_max_step_deg) * kDegToRad;
-  if (max_step > 0.0f) step = std::clamp(step, -max_step, max_step);
-  state.yaw_correction_rad = wrap_pi(state.yaw_correction_rad + step);
-  (void)timestamp_ns;
+  const float latest_error = wrap_pi(desired - state.yaw_correction_rad);
+  state.yaw_last_error_rad = latest_error;
+  state.yaw_last_step_rad = 0.0f;
+  const float deadband =
+      std::max(0.0f, cfg.yaw_correction_deadband_deg) * kDegToRad;
+
+  // No persistent mismatch at this interval: complete the check now and start
+  // the next interval from this latest observation.
+  if (std::abs(latest_error) <= deadband) {
+    state.yaw_last_action = "periodic_deadband";
+    finish_yaw_check(state, timestamp_ns);
+    return;
+  }
+
+  // Disabled filter: the first latest pose pair above deadband immediately
+  // becomes the periodic target. INTERVAL_MS still applies between checks.
+  if (!cfg.yaw_correction_trigger_filter) {
+    state.yaw_last_action = "periodic_trigger_filter_disabled";
+    apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
+    return;
+  }
+
+  if (!state.yaw_trigger_range_valid ||
+      state.yaw_trigger_hold_start_ns == 0) {
+    restart_periodic_yaw_trigger_window(
+        state, latest_error, timestamp_ns, "periodic_trigger_hold_start");
+    return;
+  }
+
+  // Track the range of the latest residual errors over the entire temporal
+  // hold window, with wrap-safe unwrapping around the first error. If motion
+  // makes the range too large, restart the full hold from the latest sample.
+  const float unwrapped_error = state.yaw_trigger_reference_error_rad +
+      wrap_pi(latest_error - state.yaw_trigger_reference_error_rad);
+  state.yaw_trigger_min_unwrapped_error_rad = std::min(
+      state.yaw_trigger_min_unwrapped_error_rad, unwrapped_error);
+  state.yaw_trigger_max_unwrapped_error_rad = std::max(
+      state.yaw_trigger_max_unwrapped_error_rad, unwrapped_error);
+  const float observed_range =
+      state.yaw_trigger_max_unwrapped_error_rad -
+      state.yaw_trigger_min_unwrapped_error_rad;
+  const float max_range =
+      std::max(0.0f, cfg.yaw_correction_trigger_max_range_deg) * kDegToRad;
+  if (observed_range > max_range) {
+    restart_periodic_yaw_trigger_window(
+        state, latest_error, timestamp_ns, "periodic_trigger_range_restart");
+    return;
+  }
+
+  const uint64_t hold_ns =
+      nonnegative_ms_to_ns(cfg.yaw_correction_trigger_hold_ms);
+  const bool hold_complete =
+      hold_ns == 0 ||
+      (timestamp_ns >= state.yaw_trigger_hold_start_ns &&
+       timestamp_ns - state.yaw_trigger_hold_start_ns >= hold_ns);
+  if (!hold_complete) {
+    state.yaw_last_action = "periodic_wait_trigger_hold";
+    return;
+  }
+
+  // Use the newest optical/IMU difference at completion, not the first,
+  // minimum, maximum or average value observed during the hold.
+  apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
 }
 
 void apply_runtime_yaw_correction(
@@ -412,13 +680,15 @@ void apply_runtime_yaw_correction(
     const RuntimeControllerImuMotionConfig& motion_cfg,
     RuntimeControllerImuSideRuntimeState* runtime_state,
     const xr_runtime::HandSideF32V2* optical_hand_side,
+    uint64_t optical_frame_sequence,
     uint64_t timestamp_ns) {
   if (!imu.orientation_valid || runtime_state == nullptr ||
       !motion_cfg.yaw_correction_enabled) {
     return;
   }
+  advance_yaw_blend(*runtime_state, timestamp_ns);
   update_yaw_correction(*runtime_state, motion_cfg, imu.orientation,
-                        optical_hand_side, timestamp_ns);
+                        optical_hand_side, optical_frame_sequence, timestamp_ns);
   if (runtime_state->yaw_correction_valid) {
     imu.orientation = q_mul(yaw_q(runtime_state->yaw_correction_rad), imu.orientation);
   }
@@ -997,6 +1267,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   bool left,
                   const RuntimeControllerSynthesisConfig& cfg,
                   const xr_runtime::HandTrackingFrameF32V2* hand,
+                  const xr_runtime::HandTrackingFrameF32V2* optical_yaw_hand,
                   const xr_runtime::ControllerInputV3* controller_input,
                   const xr_runtime::HmdPoseF64V1* hmd,
                   uint64_t timestamp_ns,
@@ -1009,6 +1280,13 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
   if (hand != nullptr) {
     hand_side = left ? &hand->left : &hand->right;
     valid_hand_side = hand_side_is_valid(*hand, *hand_side, left);
+  }
+
+  const xr_runtime::HandSideF32V2* optical_yaw_hand_side = nullptr;
+  uint64_t optical_yaw_frame_sequence = 0;
+  if (optical_yaw_hand != nullptr) {
+    optical_yaw_hand_side = left ? &optical_yaw_hand->left : &optical_yaw_hand->right;
+    optical_yaw_frame_sequence = optical_yaw_hand->sequence;
   }
 
   const xr_runtime::ControllerDeviceStateV3* controller_side = nullptr;
@@ -1056,8 +1334,12 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       const RuntimeControllerImuMotionConfig& imu_motion_cfg =
           left ? cfg.left_imu_motion : cfg.right_imu_motion;
       RuntimeImuSample imu = runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      // Position prediction uses the selected/gated hand profile. Yaw
+      // correction samples the raw backend hand frame so predicted or held
+      // runtime poses never enter the optical correction window.
       apply_runtime_yaw_correction(
-          imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
+          imu, imu_motion_cfg, runtime_state, optical_yaw_hand_side,
+          optical_yaw_frame_sequence, timestamp_ns);
       update_or_apply_imu_position_prediction(
           out, imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
       apply_imu_orientation_override(out, imu);
@@ -1348,6 +1630,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     uint64_t timestamp_ns,
     const RuntimeControllerSynthesisConfig& cfg,
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& filtered_hand,
+    const std::optional<xr_runtime::HandTrackingFrameF32V2>& optical_yaw_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     RuntimeControllerSynthesisState* runtime_state) {
@@ -1356,12 +1639,14 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
   frame.timestamp_ns = timestamp_ns;
 
   const xr_runtime::HandTrackingFrameF32V2* hand = filtered_hand ? &(*filtered_hand) : nullptr;
+  const xr_runtime::HandTrackingFrameF32V2* yaw_hand =
+      optical_yaw_hand ? &(*optical_yaw_hand) : nullptr;
   const xr_runtime::ControllerInputV3* controller = controller_input ? &(*controller_input) : nullptr;
   const xr_runtime::HmdPoseF64V1* hmd = runtime_hmd_pose ? &(*runtime_hmd_pose) : nullptr;
 
-  compose_side(frame.left, true, cfg, hand, controller, hmd, timestamp_ns,
+  compose_side(frame.left, true, cfg, hand, yaw_hand, controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->left : nullptr);
-  compose_side(frame.right, false, cfg, hand, controller, hmd, timestamp_ns,
+  compose_side(frame.right, false, cfg, hand, yaw_hand, controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->right : nullptr);
 
   if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {

@@ -69,6 +69,11 @@ struct HandPoseStabilityFilterStats {
   uint64_t right_blended = 0;
 };
 
+struct HandPoseStabilityFilterEvents {
+  bool left_reacquired = false;
+  bool right_reacquired = false;
+};
+
 class HandPoseStabilityFilter {
  public:
   HandPoseStabilityFilter() = default;
@@ -100,12 +105,15 @@ class HandPoseStabilityFilter {
     left_v2_ = HandStateV2{};
     right_v2_ = HandStateV2{};
     stats_ = HandPoseStabilityFilterStats{};
+    last_events_ = HandPoseStabilityFilterEvents{};
   }
 
   [[nodiscard]] const HandPoseStabilityFilterConfig& config() const { return cfg_; }
   [[nodiscard]] const HandPoseStabilityFilterStats& stats() const { return stats_; }
+  [[nodiscard]] const HandPoseStabilityFilterEvents& last_events() const { return last_events_; }
 
   xr_runtime::HandTrackingFrameF64V1 filter(xr_runtime::HandTrackingFrameF64V1 frame) {
+    last_events_ = HandPoseStabilityFilterEvents{};
     if (!cfg_.enabled) return frame;
 
     ++stats_.rows;
@@ -124,6 +132,7 @@ class HandPoseStabilityFilter {
   }
 
   xr_runtime::HandTrackingFrameF32V2 filter(xr_runtime::HandTrackingFrameF32V2 frame) {
+    last_events_ = HandPoseStabilityFilterEvents{};
     if (!cfg_.enabled) return frame;
 
     ++stats_.rows;
@@ -133,6 +142,8 @@ class HandPoseStabilityFilter {
 
     frame.left = left.side;
     frame.right = right.side;
+    last_events_.left_reacquired = left.reacquired;
+    last_events_.right_reacquired = right.reacquired;
 
     recompute_frame_status_v2(frame);
     write_debug(frame.sequence, frame.source_timestamp_ns, "left", left);
@@ -196,6 +207,7 @@ class HandPoseStabilityFilter {
 
   struct HandStateV2 {
     bool has_last_good = false;
+    bool raw_inactive_since_last_accept = false;
     xr_runtime::HandSideF32V2 last_good{};
     uint64_t last_good_source_ts = 0;
 
@@ -232,6 +244,7 @@ class HandPoseStabilityFilter {
     xr_runtime::HandSideF32V2 side{};
     bool orig_active = false;
     bool gated_active = false;
+    bool reacquired = false;
     std::string mode = "inactive";
     double jump_m = std::numeric_limits<double>::quiet_NaN();
     double velocity_mps = std::numeric_limits<double>::quiet_NaN();
@@ -852,6 +865,10 @@ class HandPoseStabilityFilter {
     SideDecisionV2 d;
     d.side = input;
     d.orig_active = side_pose_is_active_v2(input);
+    const auto mark_backend_pose_accepted = [&]() {
+      d.reacquired = state.raw_inactive_since_last_accept;
+      state.raw_inactive_since_last_accept = false;
+    };
 
     if (d.orig_active) {
       d.has_candidate = true;
@@ -897,6 +914,7 @@ class HandPoseStabilityFilter {
       d.jump_m = 0.0;
       d.has_output = true;
       d.output = d.candidate;
+      mark_backend_pose_accepted();
       stat_gated_active(hand_name)++;
       return d;
     }
@@ -927,6 +945,7 @@ class HandPoseStabilityFilter {
           d.mode = "accept_prediction_reacquire_blend";
           d.has_output = true;
           d.output = controller_v2(d.side);
+          mark_backend_pose_accepted();
           stat_gated_active(hand_name)++;
           stat_blended(hand_name)++;
           return d;
@@ -940,6 +959,7 @@ class HandPoseStabilityFilter {
         d.mode = "accept_continuity";
         d.has_output = true;
         d.output = d.candidate;
+        mark_backend_pose_accepted();
         stat_gated_active(hand_name)++;
         return d;
       }
@@ -985,6 +1005,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           d.mode = "accept_confirmed_prediction_reacquire_blend";
           d.has_output = true;
           d.output = controller_v2(d.side);
+          mark_backend_pose_accepted();
           stat_gated_active(hand_name)++;
           stat_blended(hand_name)++;
           return d;
@@ -998,6 +1019,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
         d.mode = "accept_confirmed_reacquire";
         d.has_output = true;
         d.output = d.candidate;
+        mark_backend_pose_accepted();
         stat_gated_active(hand_name)++;
         return d;
       }
@@ -1034,6 +1056,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
       return d;
     }
 
+    state.raw_inactive_since_last_accept = true;
     state.has_pending = false;
     state.pending_count = 0;
     state.blend_active = false;
@@ -1072,7 +1095,9 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
     // The hand has been inactive beyond the lost-output window. Drop stale last_good
     // so the next valid detection can initialize normally instead of being
     // rejected forever against an old controller pose.
+    const bool raw_inactive_since_last_accept = state.raw_inactive_since_last_accept;
     state = HandStateV2{};
+    state.raw_inactive_since_last_accept = raw_inactive_since_last_accept;
     clear_side_v2(d.side);
     d.gated_active = false;
     d.mode = "inactive";
@@ -1255,6 +1280,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
   }
 
   HandPoseStabilityFilterConfig cfg_;
+  HandPoseStabilityFilterEvents last_events_{};
   HandState left_;
   HandState right_;
   HandStateV2 left_v2_;

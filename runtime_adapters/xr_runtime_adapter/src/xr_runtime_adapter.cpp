@@ -2705,8 +2705,16 @@ int main(int argc, char** argv) {
   uint64_t runtime_controller_imu_control_reset_counter = 0;
   double runtime_controller_imu_acceleration_deadband_mps2 = 0.15;
   double runtime_controller_imu_max_linear_acceleration_mps2 = 12.0;
-  double runtime_controller_imu_yaw_correction_alpha = 0.05;
-  double runtime_controller_imu_yaw_correction_max_step_deg = 2.0;
+  bool runtime_controller_imu_yaw_correction_continuous = true;
+  bool runtime_controller_imu_yaw_correction_on_reacquire = true;
+  double runtime_controller_imu_yaw_correction_deadband_deg = 10.0;
+  double runtime_controller_imu_yaw_correction_blend_ms = 500.0;
+  bool runtime_controller_imu_yaw_correction_trigger_filter = true;
+  double runtime_controller_imu_yaw_correction_trigger_hold_ms = 1500.0;
+  double runtime_controller_imu_yaw_correction_trigger_max_range_deg = 8.0;
+  double runtime_controller_imu_yaw_correction_interval_ms = 1000.0;
+  double runtime_controller_imu_yaw_correction_reacquire_deadband_deg = 1.0;
+  double runtime_controller_imu_yaw_correction_reacquire_blend_ms = 250.0;
   std::string runtime_controller_left_movement_space_hand_tracking = "controller";
   std::string runtime_controller_right_movement_space_hand_tracking = "controller";
   std::string runtime_controller_left_movement_space_imu = "controller";
@@ -3109,10 +3117,26 @@ int main(int argc, char** argv) {
                  "IMU linear-acceleration magnitude deadband after gravity removal");
   app.add_option("--runtime-controller-imu-max-linear-acceleration-mps2", runtime_controller_imu_max_linear_acceleration_mps2,
                  "Clamp for IMU-derived world linear acceleration; <=0 disables clamp");
-  app.add_option("--runtime-controller-imu-yaw-correction-alpha", runtime_controller_imu_yaw_correction_alpha,
-                 "Optical-to-IMU yaw-offset EMA alpha in [0..1]");
-  app.add_option("--runtime-controller-imu-yaw-correction-max-step-deg", runtime_controller_imu_yaw_correction_max_step_deg,
-                 "Maximum retained yaw-offset correction step per runtime tick in degrees; <=0 disables limit");
+  app.add_option("--runtime-controller-imu-yaw-correction-continuous", runtime_controller_imu_yaw_correction_continuous,
+                 "Enable periodic retained optical yaw correction in addition to initial alignment.");
+  app.add_option("--runtime-controller-imu-yaw-correction-on-reacquire", runtime_controller_imu_yaw_correction_on_reacquire,
+                 "Request a filtered optical yaw correction after the hand gate accepts a backend pose following loss.");
+  app.add_option("--runtime-controller-imu-yaw-correction-deadband-deg", runtime_controller_imu_yaw_correction_deadband_deg,
+                 "Periodic yaw error threshold in degrees. The error must remain above this value for the configured trigger hold before correction starts.");
+  app.add_option("--runtime-controller-imu-yaw-correction-blend-ms", runtime_controller_imu_yaw_correction_blend_ms,
+                 "Smooth blend duration for the latest periodic yaw target; 0 applies it immediately");
+  app.add_option("--runtime-controller-imu-yaw-correction-trigger-filter", runtime_controller_imu_yaw_correction_trigger_filter,
+                 "Enable the periodic temporal stability filter. When disabled, the latest mismatch above deadband is corrected immediately after the interval");
+  app.add_option("--runtime-controller-imu-yaw-correction-trigger-hold-ms", runtime_controller_imu_yaw_correction_trigger_hold_ms,
+                 "Continuous time the latest periodic yaw mismatch must remain above deadband before correction starts");
+  app.add_option("--runtime-controller-imu-yaw-correction-trigger-max-range-deg", runtime_controller_imu_yaw_correction_trigger_max_range_deg,
+                 "Maximum residual-yaw range allowed during the periodic trigger hold; exceeding it restarts the full hold window");
+  app.add_option("--runtime-controller-imu-yaw-correction-interval-ms", runtime_controller_imu_yaw_correction_interval_ms,
+                 "Minimum delay after a completed yaw check/correction before the next periodic check starts");
+  app.add_option("--runtime-controller-imu-yaw-correction-reacquire-deadband-deg", runtime_controller_imu_yaw_correction_reacquire_deadband_deg,
+                 "Yaw error threshold for a hand-reacquire correction");
+  app.add_option("--runtime-controller-imu-yaw-correction-reacquire-blend-ms", runtime_controller_imu_yaw_correction_reacquire_blend_ms,
+                 "Smooth blend duration for the latest hand-reacquire yaw target; 0 applies it immediately");
   app.add_option("--runtime-controller-left-movement-space-hand-tracking", runtime_controller_left_movement_space_hand_tracking,
                  "Left controller movement space while using HAND_TRACKING_BACKEND: controller or hmd_pose");
   app.add_option("--runtime-controller-right-movement-space-hand-tracking", runtime_controller_right_movement_space_hand_tracking,
@@ -3926,8 +3950,19 @@ int main(int argc, char** argv) {
     std::cout << "runtime_controller_imu_acceleration_deadband_mps2: " << runtime_controller_imu_acceleration_deadband_mps2 << "\n";
     std::cout << "runtime_controller_imu_max_linear_acceleration_mps2: " << runtime_controller_imu_max_linear_acceleration_mps2 << "\n";
     std::cout << "runtime_controller_imu_prediction_timing_source: runtime_hand_gate_imu_profile\n";
-    std::cout << "runtime_controller_imu_yaw_correction_alpha: " << runtime_controller_imu_yaw_correction_alpha << "\n";
-    std::cout << "runtime_controller_imu_yaw_correction_max_step_deg: " << runtime_controller_imu_yaw_correction_max_step_deg << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_continuous: "
+              << (runtime_controller_imu_yaw_correction_continuous ? "true" : "false") << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_on_reacquire: "
+              << (runtime_controller_imu_yaw_correction_on_reacquire ? "true" : "false") << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_deadband_deg: " << runtime_controller_imu_yaw_correction_deadband_deg << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_blend_ms: " << runtime_controller_imu_yaw_correction_blend_ms << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_trigger_filter: "
+              << (runtime_controller_imu_yaw_correction_trigger_filter ? "true" : "false") << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_trigger_hold_ms: " << runtime_controller_imu_yaw_correction_trigger_hold_ms << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_trigger_max_range_deg: " << runtime_controller_imu_yaw_correction_trigger_max_range_deg << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_interval_ms: " << runtime_controller_imu_yaw_correction_interval_ms << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_reacquire_deadband_deg: " << runtime_controller_imu_yaw_correction_reacquire_deadband_deg << "\n";
+    std::cout << "runtime_controller_imu_yaw_correction_reacquire_blend_ms: " << runtime_controller_imu_yaw_correction_reacquire_blend_ms << "\n";
     const auto log_imu_orientation_config = [](
         const char* side,
         const override_controller::RuntimeControllerImuOrientationConfig& cfg) {
@@ -4550,10 +4585,26 @@ int main(int argc, char** argv) {
       dst.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       dst.reacquire_blend_ms = static_cast<float>(
           std::max(0.0, runtime_hand_gate_reacquire_blend_ms_imu));
-      dst.yaw_correction_alpha = static_cast<float>(
-          std::clamp(runtime_controller_imu_yaw_correction_alpha, 0.0, 1.0));
-      dst.yaw_correction_max_step_deg = static_cast<float>(
-          std::max(0.0, runtime_controller_imu_yaw_correction_max_step_deg));
+      dst.yaw_correction_continuous =
+          runtime_controller_imu_yaw_correction_continuous;
+      dst.yaw_correction_on_reacquire =
+          runtime_controller_imu_yaw_correction_on_reacquire;
+      dst.yaw_correction_deadband_deg = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_deadband_deg));
+      dst.yaw_correction_blend_ms = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_blend_ms));
+      dst.yaw_correction_trigger_filter =
+          runtime_controller_imu_yaw_correction_trigger_filter;
+      dst.yaw_correction_trigger_hold_ms = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_trigger_hold_ms));
+      dst.yaw_correction_trigger_max_range_deg = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_trigger_max_range_deg));
+      dst.yaw_correction_interval_ms = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_interval_ms));
+      dst.yaw_correction_reacquire_deadband_deg = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_reacquire_deadband_deg));
+      dst.yaw_correction_reacquire_blend_ms = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_yaw_correction_reacquire_blend_ms));
     };
     configure_imu_motion(runtime_controller_synthesis_cfg.left_imu_motion,
                          runtime_controller_left_imu_acceleration_integration,
@@ -4689,10 +4740,15 @@ int main(int argc, char** argv) {
           runtime_hand_gate_predict_lost_ms_hand_tracking,
           runtime_hand_gate_reacquire_blend_ms_hand_tracking,
           runtime_hand_gate_debug_csv));
+      // The IMU controller path owns lost-pose prediction and optical
+      // reacquire blending. Keep the IMU hand gate as a validator/confirmation
+      // stage only: it may retain its internal lost-output state to reject bad
+      // candidates, but it must not add a second blend before the controller
+      // predictor sees a confirmed real optical pose.
       runtime_hand_stability_filter_imu.configure(make_hand_gate_cfg(
           runtime_hand_gate_hold_lost_ms_imu,
           runtime_hand_gate_predict_lost_ms_imu,
-          runtime_hand_gate_reacquire_blend_ms_imu,
+          0.0,
           {}));
     }
 
@@ -5131,10 +5187,31 @@ int main(int argc, char** argv) {
           controller_input_for_tracking_profiles,
           false);
 
+      // Keep the transformed but ungated backend hand frame for optical yaw
+      // sampling. The controller pose continues to use the selected hand-gate
+      // profile, but held/predicted poses must never enter yaw correction.
+      std::optional<xr_runtime::HandTrackingFrameF32V2> raw_optical_yaw_hand;
+      if (frame.hand_v2.sequence != 0) {
+        raw_optical_yaw_hand = frame.hand_v2;
+      } else if (frame.hand.sequence != 0) {
+        raw_optical_yaw_hand = gestures::runtime_hand_v2_from_runtime_v1(frame.hand);
+      }
+
       if (runtime_hand_stability_gate && frame.hand_v2.sequence != 0) {
         const auto hand_tracking_filtered =
             runtime_hand_stability_filter_hand_tracking.filter(frame.hand_v2);
         const auto imu_filtered = runtime_hand_stability_filter_imu.filter(frame.hand_v2);
+        const auto& imu_filter_events = runtime_hand_stability_filter_imu.last_events();
+        if (left_uses_imu_profile &&
+            runtime_controller_synthesis_cfg.left_imu_motion.yaw_correction_on_reacquire &&
+            imu_filter_events.left_reacquired) {
+          runtime_controller_synthesis_state.left.yaw_correction_requested = true;
+        }
+        if (right_uses_imu_profile &&
+            runtime_controller_synthesis_cfg.right_imu_motion.yaw_correction_on_reacquire &&
+            imu_filter_events.right_reacquired) {
+          runtime_controller_synthesis_state.right.yaw_correction_requested = true;
+        }
         select_runtime_hand_profile_sides(frame.hand_v2,
                                           hand_tracking_filtered,
                                           imu_filtered,
@@ -5419,6 +5496,16 @@ int main(int argc, char** argv) {
                                        apply_left_hand_orientation_offset,
                                        apply_right_hand_orientation_offset);
           }
+          if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
+            // Yaw correction compares optical and IMU orientations. Both must
+            // be expressed in the same final controller frame. Keep this copy
+            // ungated, but apply the same coordinate and mounting offsets.
+            apply_hand_frame_transform(*raw_optical_yaw_hand,
+                                       hand_transform,
+                                       hmd_position_ptr, hmd_orientation_ptr,
+                                       apply_left_hand_orientation_offset,
+                                       apply_right_hand_orientation_offset);
+          }
         }
 
         if (runtime_jitter_filter_enabled) {
@@ -5550,6 +5637,7 @@ int main(int argc, char** argv) {
               static_cast<uint64_t>(frame.read_timestamp_ns),
               runtime_controller_synthesis_cfg_for_frame,
               runtime_controller_hand,
+              raw_optical_yaw_hand,
               fresh_controller_input,
               runtime_controller_hmd,
               &runtime_controller_synthesis_state);
@@ -5705,6 +5793,42 @@ int main(int argc, char** argv) {
                     << " controller_right_imu=" << (controller_right_imu_present ? "yes" : "no")
                     << " controller_right_imu_active=" << (controller_right_imu_active ? "yes" : "no")
                     << " controller_right_imu_status=" << xr_runtime::controller_imu_status_name(controller_right_imu_status)
+                    << " controller_left_yaw_correction_deg="
+                    << (runtime_controller_synthesis_state.left.yaw_correction_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_left_yaw_requested="
+                    << (runtime_controller_synthesis_state.left.yaw_correction_requested ? "yes" : "no")
+                    << " controller_left_yaw_check="
+                    << (runtime_controller_synthesis_state.left.yaw_check_active ? "yes" : "no")
+                    << " controller_left_yaw_check_reacquire="
+                    << (runtime_controller_synthesis_state.left.yaw_check_reacquire ? "yes" : "no")
+                    << " controller_left_yaw_blend="
+                    << (runtime_controller_synthesis_state.left.yaw_blend_active ? "yes" : "no")
+                    << " controller_left_yaw_trigger_hold_start_ns="
+                    << runtime_controller_synthesis_state.left.yaw_trigger_hold_start_ns
+                    << " controller_left_yaw_trigger_range_valid="
+                    << (runtime_controller_synthesis_state.left.yaw_trigger_range_valid ? 1 : 0)
+                    << " controller_left_yaw_error_deg="
+                    << (runtime_controller_synthesis_state.left.yaw_last_error_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_left_yaw_action="
+                    << runtime_controller_synthesis_state.left.yaw_last_action
+                    << " controller_right_yaw_correction_deg="
+                    << (runtime_controller_synthesis_state.right.yaw_correction_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_right_yaw_requested="
+                    << (runtime_controller_synthesis_state.right.yaw_correction_requested ? "yes" : "no")
+                    << " controller_right_yaw_check="
+                    << (runtime_controller_synthesis_state.right.yaw_check_active ? "yes" : "no")
+                    << " controller_right_yaw_check_reacquire="
+                    << (runtime_controller_synthesis_state.right.yaw_check_reacquire ? "yes" : "no")
+                    << " controller_right_yaw_blend="
+                    << (runtime_controller_synthesis_state.right.yaw_blend_active ? "yes" : "no")
+                    << " controller_right_yaw_trigger_hold_start_ns="
+                    << runtime_controller_synthesis_state.right.yaw_trigger_hold_start_ns
+                    << " controller_right_yaw_trigger_range_valid="
+                    << (runtime_controller_synthesis_state.right.yaw_trigger_range_valid ? 1 : 0)
+                    << " controller_right_yaw_error_deg="
+                    << (runtime_controller_synthesis_state.right.yaw_last_error_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_right_yaw_action="
+                    << runtime_controller_synthesis_state.right.yaw_last_action
                     << " body_trackers=" << (body_tracker_health.enabled && body_tracker_health.connected ? "yes" : "no")
                     << " body_trackers_input=" << body_trackers_input
                     << " body_trackers_seq=" << body_tracker_health.last_sequence
@@ -5883,6 +6007,22 @@ int main(int argc, char** argv) {
     std::cout << "runtime_controller_imu_control_final_reset_counter: "
               << runtime_controller_imu_control_reset_counter << "\n";
     std::cout << "runtime_controller_state_output: " << (runtime_controller_state_publisher ? "enabled" : "disabled") << "\n";
+    std::cout << "runtime_controller_left_yaw_correction_deg: "
+              << (runtime_controller_synthesis_state.left.yaw_correction_rad * 180.0 / 3.14159265358979323846) << "\n";
+    std::cout << "runtime_controller_left_yaw_apply_count: "
+              << runtime_controller_synthesis_state.left.yaw_apply_count << "\n";
+    std::cout << "runtime_controller_left_yaw_reacquire_apply_count: "
+              << runtime_controller_synthesis_state.left.yaw_reacquire_apply_count << "\n";
+    std::cout << "runtime_controller_left_yaw_last_action: "
+              << runtime_controller_synthesis_state.left.yaw_last_action << "\n";
+    std::cout << "runtime_controller_right_yaw_correction_deg: "
+              << (runtime_controller_synthesis_state.right.yaw_correction_rad * 180.0 / 3.14159265358979323846) << "\n";
+    std::cout << "runtime_controller_right_yaw_apply_count: "
+              << runtime_controller_synthesis_state.right.yaw_apply_count << "\n";
+    std::cout << "runtime_controller_right_yaw_reacquire_apply_count: "
+              << runtime_controller_synthesis_state.right.yaw_reacquire_apply_count << "\n";
+    std::cout << "runtime_controller_right_yaw_last_action: "
+              << runtime_controller_synthesis_state.right.yaw_last_action << "\n";
     std::cout << "runtime_controller_mode: " << xr_runtime::runtime_controller_mode_name(runtime_controller_mode_value) << "\n";
     std::cout << "runtime_controller_lost_hand_pose_fallback: "
               << override_controller::lost_hand_pose_fallback_mode_name(runtime_controller_lost_hand_pose_fallback_value)
