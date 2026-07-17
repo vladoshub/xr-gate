@@ -63,6 +63,23 @@ imu:
   #   axes: [x, -z, y]
   # transform:
   #   quaternion_xyzw: [qx, qy, qz, qw]
+
+
+  #  ______
+  # | LEAP |
+  # | BACK |
+  # |      |
+  # | IMU  |
+  # | [~]  |
+  # |  ↓   |
+  # | type |
+  # |  c   |
+  # |______|
+  #    ↓
+  #  USB3.0
+  transform:
+    axes: [ y, -x, z ]
+
   raw:
     enabled: false
   serial:
