@@ -257,6 +257,19 @@ with the rolling optical estimate. Existing hold/predict timing, damping,
 velocity clamp, reacquire blend, and optional accelerometer integration remain
 unchanged.
 
+The final IMU-controller predicted position also has an independent speed
+limit:
+
+```bash
+RUNTIME_CONTROLLER_IMU_MAX_PREDICTION_SPEED_MPS=2.0
+```
+
+The limit constrains both the selected launch velocity and the final output
+after acceleration integration and lever-arm displacement. `0` disables this
+additional speed guard; the existing shared launch-velocity cap still applies.
+The prediction state machine, time/path terminals, and lost-hand fallback are
+unchanged.
+
 ## Spatial proxy mesh
 
 The adapter can receive spatial proxy mesh data from `spatial_mapper` and republish it in runtime coordinates.

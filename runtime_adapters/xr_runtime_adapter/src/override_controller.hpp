@@ -86,6 +86,10 @@ struct RuntimeControllerImuMotionConfig {
   float hold_lost_ms = 0.0f;
   float predict_lost_ms = 600.0f;
   float max_prediction_velocity_mps = 3.0f;
+  // Maximum IMU-controller prediction speed. It constrains the launch/base
+  // velocity and the final synthetic output after acceleration integration and
+  // lever-arm displacement. <= 0 disables this additional limit.
+  float max_prediction_speed_mps = 2.0f;
   float prediction_damping = 1.0f;
   // Maximum accumulated synthetic controller path during prediction, in metres.
   // <= 0 disables the path limit.
@@ -166,6 +170,12 @@ struct RuntimeControllerImuSideRuntimeState {
   float velocity_mps[3] = {};
   float acceleration_position_delta_m[3] = {};
   float acceleration_velocity_delta_mps[3] = {};
+  // Last position actually published by the IMU predictor. This is separate
+  // from the analytical trajectory so the final output can be rate-limited
+  // after acceleration and lever-arm displacement have both been applied.
+  bool prediction_output_history_active = false;
+  float prediction_output_last_position_m[3] = {};
+  uint64_t prediction_output_last_timestamp_ns = 0;
   bool prediction_path_active = false;
   float prediction_path_m = 0.0f;
   float prediction_path_last_position_m[3] = {};

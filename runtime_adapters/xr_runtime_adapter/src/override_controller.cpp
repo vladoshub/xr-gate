@@ -937,6 +937,10 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
             std::end(state.acceleration_position_delta_m), 0.0f);
   std::fill(std::begin(state.acceleration_velocity_delta_mps),
             std::end(state.acceleration_velocity_delta_mps), 0.0f);
+  state.prediction_output_history_active = false;
+  std::fill(std::begin(state.prediction_output_last_position_m),
+            std::end(state.prediction_output_last_position_m), 0.0f);
+  state.prediction_output_last_timestamp_ns = 0;
   state.prediction_path_active = false;
   state.prediction_path_m = 0.0f;
   std::fill(std::begin(state.prediction_path_last_position_m),
@@ -967,6 +971,21 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
     state.position_history.reset();
     state.position_history_last_frame_sequence = 0;
   }
+}
+
+float effective_imu_prediction_velocity_limit(
+    const RuntimeControllerImuMotionConfig& cfg) {
+  const bool legacy_valid = std::isfinite(cfg.max_prediction_velocity_mps) &&
+                            cfg.max_prediction_velocity_mps > 0.0f;
+  const bool output_valid = std::isfinite(cfg.max_prediction_speed_mps) &&
+                            cfg.max_prediction_speed_mps > 0.0f;
+  if (legacy_valid && output_valid) {
+    return std::min(cfg.max_prediction_velocity_mps,
+                    cfg.max_prediction_speed_mps);
+  }
+  if (output_valid) return cfg.max_prediction_speed_mps;
+  if (legacy_valid) return cfg.max_prediction_velocity_mps;
+  return 0.0f;
 }
 
 void update_lever_arm_anchor(
@@ -1007,7 +1026,7 @@ void update_lever_arm_anchor(
             tangential_velocity[axis];
       }
       clamp_v3_length(state.lever_arm_pivot_anchor_velocity_mps,
-                      cfg.max_prediction_velocity_mps);
+                      effective_imu_prediction_velocity_limit(cfg));
     }
   }
 }
@@ -1033,7 +1052,8 @@ void accept_optical_position_anchor(
       state.anchor_velocity_mps[0] = static_cast<float>(estimated_velocity[0]);
       state.anchor_velocity_mps[1] = static_cast<float>(estimated_velocity[1]);
       state.anchor_velocity_mps[2] = static_cast<float>(estimated_velocity[2]);
-      clamp_v3_length(state.anchor_velocity_mps, cfg.max_prediction_velocity_mps);
+      clamp_v3_length(state.anchor_velocity_mps,
+                      effective_imu_prediction_velocity_limit(cfg));
     } else {
       std::fill(std::begin(state.anchor_velocity_mps),
                 std::end(state.anchor_velocity_mps), 0.0f);
@@ -1044,7 +1064,8 @@ void accept_optical_position_anchor(
     state.anchor_velocity_mps[0] = hand_side.vx;
     state.anchor_velocity_mps[1] = hand_side.vy;
     state.anchor_velocity_mps[2] = hand_side.vz;
-    clamp_v3_length(state.anchor_velocity_mps, cfg.max_prediction_velocity_mps);
+    clamp_v3_length(state.anchor_velocity_mps,
+                    effective_imu_prediction_velocity_limit(cfg));
   } else {
     std::fill(std::begin(state.anchor_velocity_mps),
               std::end(state.anchor_velocity_mps), 0.0f);
@@ -1059,6 +1080,11 @@ void accept_optical_position_anchor(
 
   clear_imu_position_loss_state(state, false);
   state.last_update_ns = timestamp_ns;
+  state.prediction_output_history_active = true;
+  std::copy(std::begin(state.anchor_position_m),
+            std::end(state.anchor_position_m),
+            state.prediction_output_last_position_m);
+  state.prediction_output_last_timestamp_ns = timestamp_ns;
 }
 
 void publish_synthetic_controller_position(
@@ -1191,6 +1217,10 @@ void update_or_apply_imu_position_prediction(
                   state->anchor_position_m);
         std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
                   state->anchor_velocity_mps);
+        state->prediction_output_history_active = true;
+        std::copy(std::begin(state->position_m), std::end(state->position_m),
+                  state->prediction_output_last_position_m);
+        state->prediction_output_last_timestamp_ns = timestamp_ns;
         state->prediction_path_active = false;
         state->prediction_path_m = 0.0f;
         std::copy(std::begin(state->position_m), std::end(state->position_m),
@@ -1235,6 +1265,10 @@ void update_or_apply_imu_position_prediction(
               std::end(state->anchor_position_m), state->position_m);
     std::fill(std::begin(state->velocity_mps),
               std::end(state->velocity_mps), 0.0f);
+    state->prediction_output_history_active = true;
+    std::copy(std::begin(state->position_m), std::end(state->position_m),
+              state->prediction_output_last_position_m);
+    state->prediction_output_last_timestamp_ns = timestamp_ns;
     publish_synthetic_controller_position(
         out, state->position_m, state->velocity_mps, false, false,
         imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
@@ -1295,7 +1329,7 @@ void update_or_apply_imu_position_prediction(
       state->acceleration_velocity_delta_mps[axis] += a * dt_s;
     }
     clamp_v3_length(state->acceleration_velocity_delta_mps,
-                    cfg.max_prediction_velocity_mps);
+                    effective_imu_prediction_velocity_limit(cfg));
   }
 
   const float integrated_time_s =
@@ -1345,7 +1379,43 @@ void update_or_apply_imu_position_prediction(
       }
     }
   }
-  clamp_v3_length(state->velocity_mps, cfg.max_prediction_velocity_mps);
+  clamp_v3_length(state->velocity_mps,
+                  effective_imu_prediction_velocity_limit(cfg));
+
+  // Limit the speed of the final synthetic output, not just the launch
+  // velocity. The candidate position above already includes acceleration
+  // integration and live lever-arm displacement, so this clamp covers all IMU
+  // position contributions. It changes only the coordinate produced inside
+  // Predicting and does not add a state or terminate prediction.
+  const float max_prediction_speed_mps = cfg.max_prediction_speed_mps;
+  if (std::isfinite(max_prediction_speed_mps) &&
+      max_prediction_speed_mps > 0.0f &&
+      state->prediction_output_history_active &&
+      timestamp_ns > state->prediction_output_last_timestamp_ns) {
+    const float output_dt_s =
+        static_cast<float>(timestamp_ns -
+                           state->prediction_output_last_timestamp_ns) /
+        1.0e9f;
+    const float output_step[3] = {
+        state->position_m[0] - state->prediction_output_last_position_m[0],
+        state->position_m[1] - state->prediction_output_last_position_m[1],
+        state->position_m[2] - state->prediction_output_last_position_m[2],
+    };
+    const float output_step_m = v3_length(output_step);
+    const float max_step_m = max_prediction_speed_mps * output_dt_s;
+    if (std::isfinite(output_dt_s) && output_dt_s > 0.0f &&
+        std::isfinite(output_step_m) && output_step_m > max_step_m &&
+        output_step_m > 1.0e-6f) {
+      const float scale = max_step_m / output_step_m;
+      for (int axis = 0; axis < 3; ++axis) {
+        const float limited_step = output_step[axis] * scale;
+        state->position_m[axis] =
+            state->prediction_output_last_position_m[axis] + limited_step;
+        state->velocity_mps[axis] = limited_step / output_dt_s;
+      }
+    }
+  }
+  clamp_v3_length(state->velocity_mps, max_prediction_speed_mps);
 
   const float max_prediction_path_m = cfg.max_prediction_path_m;
   if (std::isfinite(max_prediction_path_m) && max_prediction_path_m > 0.0f &&
@@ -1368,6 +1438,11 @@ void update_or_apply_imu_position_prediction(
               state->prediction_path_last_position_m);
     state->prediction_path_last_timestamp_ns = timestamp_ns;
   }
+
+  state->prediction_output_history_active = true;
+  std::copy(std::begin(state->position_m), std::end(state->position_m),
+            state->prediction_output_last_position_m);
+  state->prediction_output_last_timestamp_ns = timestamp_ns;
 
   publish_synthetic_controller_position(
       out, state->position_m, state->velocity_mps,

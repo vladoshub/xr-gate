@@ -1947,3 +1947,14 @@ integration are both enabled. Centripetal correction subtracts
 Because the exact IMU board location cannot be identified reliably, `r` is the
 same configured per-side controller lever-arm vector. The options do not add or
 change prediction states, timers, timeout, reacquire confirmation, or blend.
+
+## Controller IMU prediction speed limit
+
+```bash
+RUNTIME_CONTROLLER_IMU_MAX_PREDICTION_SPEED_MPS=2.0
+```
+
+The speed guard constrains the launch velocity and clamps the final per-frame
+predicted displacement after accelerometer integration and lever-arm
+displacement. `0` disables the additional guard. It does not change prediction
+states, time/path terminals, or lost-hand fallback behavior.
