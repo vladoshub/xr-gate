@@ -354,6 +354,48 @@ are mutually exclusive; configuring both is a startup error. The same rotation
 is applied to gyro and accelerometer vectors immediately before normalized
 `imu0` publication.
 
+#### Guided IMU mount calibration
+
+Use the SHM calibration tool after mounting an external IMU:
+
+```bash
+python3 tools/calibrate_imu_axes.py
+```
+
+The tool reads the normalized `imu0` `IMU_F32_LE` stream directly from
+`/tmp/capture_service_streams.json` and the associated POSIX SHM ring. The
+verified XREAL Ultra axis layout is used as the reference:
+
+```text
+pitch up   -> +X
+yaw right  -> -Y
+roll right -> -Z
+```
+
+Before calibration, remove/comment `imu.transform` in the tested profile and
+restart `capture_service_cpp`. The 30-second guided procedure prints one
+ready-to-paste result:
+
+- no transform when the source already matches XREAL Ultra;
+- `axes: [...]` for a mount close to 90-degree increments;
+- `quaternion_xyzw: [...]` for an arbitrary rigid mounting angle.
+
+The script also writes a JSON report to
+`/tmp/capture_imu_mount_calibration.json`. Override paths when needed:
+
+```bash
+python3 tools/calibrate_imu_axes.py \
+  --registry /tmp/capture_service_streams.json \
+  --stream imu0 \
+  --output /tmp/my_imu_mount.json
+```
+
+A deterministic dependency-free check is available with:
+
+```bash
+python3 tools/calibrate_imu_axes.py --self-test
+```
+
 ## CLI overrides
 
 ```text
