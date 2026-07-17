@@ -93,13 +93,13 @@
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": -30.0
+          "rz_deg": -60.0
         },
         "right": {
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 30.0
+          "rz_deg": 60.0
         }
       }
     },
