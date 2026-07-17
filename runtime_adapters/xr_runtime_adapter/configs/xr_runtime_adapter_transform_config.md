@@ -511,6 +511,7 @@ Example:
 ```json
 "hand_orientation_offset": {
   "enabled": true,
+  "only_optic": true,
   "multiply_order": "post",
   "apply_to": {
     "controller": true,
@@ -534,6 +535,14 @@ Example:
 ```
 
 This block is for final hand/controller orientation tuning.
+
+`only_optic` defaults to `true`. When enabled, this offset is applied only to a
+side whose effective controller orientation source is optical hand tracking. If
+a fresh controller IMU is actively driving that side, the offset is skipped; use
+`controller_override.imu_orientation.<side>.orientation_offset` for the IMU
+mounting/presentation correction instead. Set `only_optic` to `false` to retain
+the legacy behavior and apply `hand_orientation_offset` to both optical and IMU
+controller modes.
 
 Use it when:
 

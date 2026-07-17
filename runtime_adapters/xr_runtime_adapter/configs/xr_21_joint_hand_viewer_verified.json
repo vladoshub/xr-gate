@@ -81,6 +81,7 @@
       },
       "hand_orientation_offset": {
         "enabled": true,
+        "only_optic": true,
         "multiply_order": "post",
         "apply_to": {
           "controller": true,
@@ -143,6 +144,7 @@
       },
       "hand_orientation_offset": {
         "enabled": true,
+        "only_optic": true,
         "multiply_order": "post",
         "apply_to": {
           "controller": true,
@@ -348,7 +350,7 @@
           "basis_rotation": {
             "rx_deg": 0.0,
             "ry_deg": 0.0,
-            "rz_deg": -30.0
+            "rz_deg": 0.0
           }
         },
         "orientation_offset": {
@@ -357,7 +359,7 @@
           "rotation_deg": {
             "rx_deg": 0.0,
             "ry_deg": 0.0,
-            "rz_deg": 30.0
+            "rz_deg": 0.0
           }
         }
       },

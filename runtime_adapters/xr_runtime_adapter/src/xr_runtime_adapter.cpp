@@ -5649,26 +5649,36 @@ int main(int argc, char** argv) {
           const StreamTransformConfig& hand_transform = skeleton26_input_used
               ? tracking_transform_config.hand_skeleton26
               : tracking_transform_config.hand_tracking_21_joint;
-          // hand_orientation_offset is intended to align visual hands with an
-          // override_controller device. By default, apply it independently per
-          // side only while a fresh ControllerInputV3 frame marks that side as
-          // present. All other coordinate/orientation transforms still apply.
-          const bool apply_left_hand_orientation_offset =
-              !hand_orientation_offset_only_runtime || controller_left_connected;
-          const bool apply_right_hand_orientation_offset =
-              !hand_orientation_offset_only_runtime || controller_right_connected;
+          // hand_orientation_offset is optical/controller-alignment data.
+          // HAND_ORIENTATION_OFFSET_ONLY_RUNTIME optionally limits it to sides
+          // present in fresh ControllerInputV3 input. The per-stream
+          // hand_orientation_offset.only_optic policy (enabled by default)
+          // additionally suppresses it whenever that side is currently using
+          // an active IMU orientation source. All other transforms still apply.
+          const auto should_apply_hand_orientation_offset =
+              [&](const StreamTransformConfig& transform, bool controller_connected,
+                  bool uses_imu_profile) {
+                return (!hand_orientation_offset_only_runtime || controller_connected) &&
+                       (!transform.hand_orientation_offset.only_optic ||
+                        !uses_imu_profile);
+              };
           if (frame.hand_v2.sequence != 0) {
-            apply_hand_frame_transform(frame.hand_v2, hand_transform, hmd_position_ptr,
-                                       hmd_orientation_ptr,
-                                       apply_left_hand_orientation_offset,
-                                       apply_right_hand_orientation_offset);
+            apply_hand_frame_transform(
+                frame.hand_v2, hand_transform, hmd_position_ptr, hmd_orientation_ptr,
+                should_apply_hand_orientation_offset(
+                    hand_transform, controller_left_connected, left_uses_imu_profile),
+                should_apply_hand_orientation_offset(
+                    hand_transform, controller_right_connected, right_uses_imu_profile));
           }
           if (frame.hand.sequence != 0) {
-            apply_hand_frame_transform(frame.hand,
-                                       tracking_transform_config.hand_tracking_21_joint,
-                                       hmd_position_ptr, hmd_orientation_ptr,
-                                       apply_left_hand_orientation_offset,
-                                       apply_right_hand_orientation_offset);
+            const StreamTransformConfig& hand_v1_transform =
+                tracking_transform_config.hand_tracking_21_joint;
+            apply_hand_frame_transform(
+                frame.hand, hand_v1_transform, hmd_position_ptr, hmd_orientation_ptr,
+                should_apply_hand_orientation_offset(
+                    hand_v1_transform, controller_left_connected, left_uses_imu_profile),
+                should_apply_hand_orientation_offset(
+                    hand_v1_transform, controller_right_connected, right_uses_imu_profile));
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
             // Yaw correction uses a clean optical reference: apply the normal
