@@ -233,6 +233,12 @@ float v3_length(const float v[3]) {
   return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
+void cross_v3(const float a[3], const float b[3], float out[3]) {
+  out[0] = a[1] * b[2] - a[2] * b[1];
+  out[1] = a[2] * b[0] - a[0] * b[2];
+  out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
 void clamp_v3_length(float v[3], float max_length) {
   if (!std::isfinite(max_length) || max_length <= 0.0f) return;
   const float length = v3_length(v);
@@ -269,6 +275,13 @@ struct RuntimeImuSample {
   bool angular_velocity_valid = false;
   bool specific_force_valid = false;
   uint64_t timestamp_ns = 0;
+  uint64_t angular_velocity_timestamp_ns = 0;
+  // Canonical IMU orientation after axis/basis conversion but before the
+  // configurable presentation/mounting orientation_offset. Yaw correction
+  // compares this clean reference with the equally clean optical reference.
+  Qf yaw_reference_orientation{};
+  // Final IMU orientation used by controller output and acceleration logic.
+  // This includes orientation_offset when configured.
   Qf orientation{};
   float angular_velocity_rad_s[3] = {};
   float specific_force_m_s2[3] = {};
@@ -289,6 +302,10 @@ RuntimeImuSample runtime_imu_sample(
         orientation, cfg.invert_x, cfg.invert_y, cfg.invert_z);
     orientation = apply_basis_transform(basis, orientation);
   }
+  // Keep the axis/basis-corrected pose as the clean yaw reference. The
+  // optional orientation_offset is a final controller presentation/mounting
+  // adjustment and must not be mistaken for IMU yaw drift.
+  out.yaw_reference_orientation = orientation;
   if (cfg.offset_enabled) {
     orientation = cfg.offset_pre_multiply
         ? q_mul(offset, orientation)
@@ -323,6 +340,7 @@ RuntimeImuSample runtime_imu_sample(
       std::copy(std::begin(angular_velocity), std::end(angular_velocity),
                 out.angular_velocity_rad_s);
       out.angular_velocity_valid = true;
+      out.angular_velocity_timestamp_ns = latest_gyro->timestamp_ns;
       out.timestamp_ns = std::max(out.timestamp_ns, latest_gyro->timestamp_ns);
     }
   }
@@ -365,13 +383,208 @@ bool real_optical_hand_pose(const xr_runtime::HandSideF32V2* hand_side) {
          std::isfinite(hand_side->controller_pz);
 }
 
+uint64_t nonnegative_ms_to_ns(float value_ms);
+
+void reset_yaw_trigger_observation(
+    RuntimeControllerImuSideRuntimeState& state) {
+  state.yaw_trigger_hold_start_ns = 0;
+  state.yaw_trigger_range_valid = false;
+  state.yaw_trigger_reference_error_rad = 0.0f;
+  state.yaw_trigger_min_unwrapped_error_rad = 0.0f;
+  state.yaw_trigger_max_unwrapped_error_rad = 0.0f;
+}
+
+void begin_yaw_check(RuntimeControllerImuSideRuntimeState& state) {
+  state.yaw_check_active = true;
+  state.yaw_check_reacquire =
+      state.yaw_correction_valid && state.yaw_correction_requested;
+  state.yaw_check_last_frame_sequence = 0;
+  reset_yaw_trigger_observation(state);
+}
+
+void finish_yaw_check(
+    RuntimeControllerImuSideRuntimeState& state,
+    uint64_t timestamp_ns) {
+  // The periodic interval starts only after the current check has completed.
+  // A hold-window restart therefore postpones the next interval naturally.
+  state.last_yaw_correction_update_ns = timestamp_ns;
+  state.yaw_correction_requested = false;
+  state.yaw_check_active = false;
+  state.yaw_check_reacquire = false;
+  state.yaw_check_last_frame_sequence = 0;
+  reset_yaw_trigger_observation(state);
+}
+
+void start_yaw_blend(
+    RuntimeControllerImuSideRuntimeState& state,
+    float desired_yaw_correction_rad,
+    float duration_ms,
+    bool reacquire,
+    uint64_t timestamp_ns) {
+  const float error = wrap_pi(desired_yaw_correction_rad - state.yaw_correction_rad);
+  state.yaw_blend_from_rad = state.yaw_correction_rad;
+  state.yaw_blend_to_rad = desired_yaw_correction_rad;
+  state.yaw_blend_duration_ms = std::max(0.0f, duration_ms);
+  state.yaw_blend_start_ns = timestamp_ns;
+  state.yaw_blend_reacquire = reacquire;
+  state.yaw_blend_active = state.yaw_blend_duration_ms > 0.0f;
+  state.yaw_last_step_rad = error;
+  state.yaw_last_action = reacquire
+      ? (state.yaw_blend_active ? "reacquire_blend_start"
+                                : "reacquire_apply_direct")
+      : (state.yaw_blend_active ? "periodic_blend_start"
+                                : "periodic_apply_direct");
+  if (!state.yaw_blend_active) {
+    state.yaw_correction_rad = desired_yaw_correction_rad;
+  }
+  ++state.yaw_apply_count;
+  if (reacquire) ++state.yaw_reacquire_apply_count;
+}
+
+void apply_latest_yaw_correction(
+    RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeControllerImuMotionConfig& cfg,
+    float desired_yaw_correction_rad,
+    uint64_t timestamp_ns) {
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+
+  desired_yaw_correction_rad = wrap_pi(desired_yaw_correction_rad);
+  state.yaw_last_desired_rad = desired_yaw_correction_rad;
+
+  if (!state.yaw_correction_valid) {
+    state.yaw_correction_rad = desired_yaw_correction_rad;
+    state.yaw_correction_valid = true;
+    state.yaw_last_error_rad = 0.0f;
+    state.yaw_last_step_rad = 0.0f;
+    state.yaw_last_action = "initial_align";
+    ++state.yaw_apply_count;
+    finish_yaw_check(state, timestamp_ns);
+    return;
+  }
+
+  const bool reacquire = state.yaw_check_reacquire;
+  const float error =
+      wrap_pi(desired_yaw_correction_rad - state.yaw_correction_rad);
+  state.yaw_last_error_rad = error;
+  state.yaw_last_step_rad = 0.0f;
+
+  const float deadband_deg = reacquire
+      ? cfg.yaw_correction_reacquire_deadband_deg
+      : cfg.yaw_correction_deadband_deg;
+  const float deadband = std::max(0.0f, deadband_deg) * kDegToRad;
+  if (std::abs(error) <= deadband) {
+    state.yaw_last_action = reacquire
+        ? "reacquire_deadband"
+        : "periodic_deadband";
+    finish_yaw_check(state, timestamp_ns);
+    return;
+  }
+
+  const float blend_ms = reacquire
+      ? cfg.yaw_correction_reacquire_blend_ms
+      : cfg.yaw_correction_blend_ms;
+  start_yaw_blend(
+      state, desired_yaw_correction_rad, blend_ms, reacquire, timestamp_ns);
+  finish_yaw_check(state, timestamp_ns);
+}
+
+void advance_yaw_blend(
+    RuntimeControllerImuSideRuntimeState& state,
+    uint64_t timestamp_ns) {
+  if (!state.yaw_blend_active) return;
+
+  const uint64_t duration_ns = std::max<uint64_t>(
+      1, nonnegative_ms_to_ns(state.yaw_blend_duration_ms));
+  const uint64_t elapsed_ns = timestamp_ns >= state.yaw_blend_start_ns
+      ? timestamp_ns - state.yaw_blend_start_ns
+      : 0;
+  const float t = std::clamp(
+      static_cast<float>(elapsed_ns) / static_cast<float>(duration_ns),
+      0.0f, 1.0f);
+  const float smooth_t = t * t * (3.0f - 2.0f * t);
+  const float delta = wrap_pi(state.yaw_blend_to_rad - state.yaw_blend_from_rad);
+  state.yaw_correction_rad = wrap_pi(
+      state.yaw_blend_from_rad + delta * smooth_t);
+
+  if (t >= 1.0f) {
+    state.yaw_correction_rad = state.yaw_blend_to_rad;
+    state.yaw_blend_active = false;
+    state.yaw_last_action = state.yaw_blend_reacquire
+        ? "reacquire_blend_done"
+        : "periodic_blend_done";
+  }
+}
+
+bool yaw_correction_check_due(
+    const RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeControllerImuMotionConfig& cfg,
+    uint64_t timestamp_ns) {
+  if (!state.yaw_correction_valid) return true;
+  if (state.yaw_blend_active) return false;
+  if (state.yaw_correction_requested) return true;
+  if (!cfg.yaw_correction_continuous) return false;
+
+  const uint64_t interval_ns = nonnegative_ms_to_ns(cfg.yaw_correction_interval_ms);
+  if (interval_ns == 0 || state.last_yaw_correction_update_ns == 0) return true;
+  return timestamp_ns >= state.last_yaw_correction_update_ns &&
+         timestamp_ns - state.last_yaw_correction_update_ns >= interval_ns;
+}
+
+void restart_periodic_yaw_trigger_window(
+    RuntimeControllerImuSideRuntimeState& state,
+    float latest_error_rad,
+    uint64_t timestamp_ns,
+    const char* action) {
+  state.yaw_trigger_hold_start_ns = timestamp_ns;
+  state.yaw_trigger_range_valid = true;
+  state.yaw_trigger_reference_error_rad = latest_error_rad;
+  state.yaw_trigger_min_unwrapped_error_rad = latest_error_rad;
+  state.yaw_trigger_max_unwrapped_error_rad = latest_error_rad;
+  state.yaw_last_action = action;
+}
+
 void update_yaw_correction(
     RuntimeControllerImuSideRuntimeState& state,
     const RuntimeControllerImuMotionConfig& cfg,
     Qf imu_orientation,
     const xr_runtime::HandSideF32V2* optical_hand_side,
+    uint64_t optical_frame_sequence,
     uint64_t timestamp_ns) {
-  if (!cfg.yaw_correction_enabled || !real_optical_hand_pose(optical_hand_side)) return;
+  if (!cfg.yaw_correction_enabled) return;
+
+  // A real reacquire request has priority over an in-progress periodic check.
+  if (state.yaw_correction_requested && state.yaw_check_active &&
+      !state.yaw_check_reacquire) {
+    state.yaw_check_active = false;
+    state.yaw_check_last_frame_sequence = 0;
+    reset_yaw_trigger_observation(state);
+  }
+
+  if (!state.yaw_check_active &&
+      !yaw_correction_check_due(state, cfg, timestamp_ns)) {
+    return;
+  }
+  if (!state.yaw_check_active) {
+    begin_yaw_check(state);
+  }
+
+  // Evaluate only when Mercury/backend publishes a new hand pose. The IMU
+  // orientation passed to this call is the latest available orientation at
+  // that moment, so every hold-window update compares the newest pair rather
+  // than poses captured when the window started.
+  const bool new_backend_frame =
+      optical_frame_sequence != 0 &&
+      optical_frame_sequence != state.yaw_check_last_frame_sequence;
+  if (!new_backend_frame) return;
+  state.yaw_check_last_frame_sequence = optical_frame_sequence;
+
+  if (!real_optical_hand_pose(optical_hand_side)) {
+    if (!state.yaw_check_reacquire) {
+      reset_yaw_trigger_observation(state);
+      state.yaw_last_action = "periodic_invalid_pose_reset";
+    }
+    return;
+  }
 
   const float optical_q_xyzw[4] = {
       optical_hand_side->controller_qx,
@@ -379,32 +592,105 @@ void update_yaw_correction(
       optical_hand_side->controller_qz,
       optical_hand_side->controller_qw,
   };
-  if (!finite_q_xyzw(optical_q_xyzw) || !nonzero_q_xyzw(optical_q_xyzw)) return;
-  const Qf optical_orientation = normalize_q({optical_hand_side->controller_qw,
-                                               optical_hand_side->controller_qx,
-                                               optical_hand_side->controller_qy,
-                                               optical_hand_side->controller_qz});
+  if (!finite_q_xyzw(optical_q_xyzw) || !nonzero_q_xyzw(optical_q_xyzw)) {
+    if (!state.yaw_check_reacquire) {
+      reset_yaw_trigger_observation(state);
+      state.yaw_last_action = "periodic_invalid_orientation_reset";
+    }
+    return;
+  }
+
+  const Qf optical_orientation = normalize_q({
+      optical_hand_side->controller_qw,
+      optical_hand_side->controller_qx,
+      optical_hand_side->controller_qy,
+      optical_hand_side->controller_qz,
+  });
   float imu_yaw = 0.0f;
   float optical_yaw = 0.0f;
   if (!yaw_rad_from_q(imu_orientation, imu_yaw) ||
       !yaw_rad_from_q(optical_orientation, optical_yaw)) {
+    if (!state.yaw_check_reacquire) {
+      reset_yaw_trigger_observation(state);
+      state.yaw_last_action = "periodic_invalid_yaw_reset";
+    }
     return;
   }
 
   const float desired = wrap_pi(optical_yaw - imu_yaw);
-  if (!state.yaw_correction_valid) {
-    state.yaw_correction_rad = desired;
-    state.yaw_correction_valid = true;
+  state.yaw_last_desired_rad = desired;
+
+  // Initial alignment and reacquire always use the latest valid pose pair.
+  // Reacquire has its own deadband/blend but no periodic hold/range filter.
+  if (!state.yaw_correction_valid || state.yaw_check_reacquire) {
+    apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
     return;
   }
 
-  const float alpha = std::clamp(cfg.yaw_correction_alpha, 0.0f, 1.0f);
-  float step = wrap_pi(desired - state.yaw_correction_rad) * alpha;
   constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
-  const float max_step = std::max(0.0f, cfg.yaw_correction_max_step_deg) * kDegToRad;
-  if (max_step > 0.0f) step = std::clamp(step, -max_step, max_step);
-  state.yaw_correction_rad = wrap_pi(state.yaw_correction_rad + step);
-  (void)timestamp_ns;
+  const float latest_error = wrap_pi(desired - state.yaw_correction_rad);
+  state.yaw_last_error_rad = latest_error;
+  state.yaw_last_step_rad = 0.0f;
+  const float deadband =
+      std::max(0.0f, cfg.yaw_correction_deadband_deg) * kDegToRad;
+
+  // No persistent mismatch at this interval: complete the check now and start
+  // the next interval from this latest observation.
+  if (std::abs(latest_error) <= deadband) {
+    state.yaw_last_action = "periodic_deadband";
+    finish_yaw_check(state, timestamp_ns);
+    return;
+  }
+
+  // Disabled filter: the first latest pose pair above deadband immediately
+  // becomes the periodic target. INTERVAL_MS still applies between checks.
+  if (!cfg.yaw_correction_trigger_filter) {
+    state.yaw_last_action = "periodic_trigger_filter_disabled";
+    apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
+    return;
+  }
+
+  if (!state.yaw_trigger_range_valid ||
+      state.yaw_trigger_hold_start_ns == 0) {
+    restart_periodic_yaw_trigger_window(
+        state, latest_error, timestamp_ns, "periodic_trigger_hold_start");
+    return;
+  }
+
+  // Track the range of the latest residual errors over the entire temporal
+  // hold window, with wrap-safe unwrapping around the first error. If motion
+  // makes the range too large, restart the full hold from the latest sample.
+  const float unwrapped_error = state.yaw_trigger_reference_error_rad +
+      wrap_pi(latest_error - state.yaw_trigger_reference_error_rad);
+  state.yaw_trigger_min_unwrapped_error_rad = std::min(
+      state.yaw_trigger_min_unwrapped_error_rad, unwrapped_error);
+  state.yaw_trigger_max_unwrapped_error_rad = std::max(
+      state.yaw_trigger_max_unwrapped_error_rad, unwrapped_error);
+  const float observed_range =
+      state.yaw_trigger_max_unwrapped_error_rad -
+      state.yaw_trigger_min_unwrapped_error_rad;
+  const float max_range =
+      std::max(0.0f, cfg.yaw_correction_trigger_max_range_deg) * kDegToRad;
+  if (observed_range > max_range) {
+    restart_periodic_yaw_trigger_window(
+        state, latest_error, timestamp_ns, "periodic_trigger_range_restart");
+    return;
+  }
+
+  const uint64_t hold_ns =
+      nonnegative_ms_to_ns(cfg.yaw_correction_trigger_hold_ms);
+  const bool hold_complete =
+      hold_ns == 0 ||
+      (timestamp_ns >= state.yaw_trigger_hold_start_ns &&
+       timestamp_ns - state.yaw_trigger_hold_start_ns >= hold_ns);
+  if (!hold_complete) {
+    state.yaw_last_action = "periodic_wait_trigger_hold";
+    return;
+  }
+
+  // Use the newest optical/IMU difference at completion, not the first,
+  // minimum, maximum or average value observed during the hold.
+  apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
 }
 
 void apply_runtime_yaw_correction(
@@ -412,13 +698,16 @@ void apply_runtime_yaw_correction(
     const RuntimeControllerImuMotionConfig& motion_cfg,
     RuntimeControllerImuSideRuntimeState* runtime_state,
     const xr_runtime::HandSideF32V2* optical_hand_side,
+    uint64_t optical_frame_sequence,
     uint64_t timestamp_ns) {
   if (!imu.orientation_valid || runtime_state == nullptr ||
       !motion_cfg.yaw_correction_enabled) {
     return;
   }
-  update_yaw_correction(*runtime_state, motion_cfg, imu.orientation,
-                        optical_hand_side, timestamp_ns);
+  advance_yaw_blend(*runtime_state, timestamp_ns);
+  update_yaw_correction(*runtime_state, motion_cfg,
+                        imu.yaw_reference_orientation,
+                        optical_hand_side, optical_frame_sequence, timestamp_ns);
   if (runtime_state->yaw_correction_valid) {
     imu.orientation = q_mul(yaw_q(runtime_state->yaw_correction_rad), imu.orientation);
   }
@@ -447,6 +736,8 @@ void apply_imu_orientation_override(
 bool runtime_world_linear_acceleration(
     const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
+    RuntimeControllerImuSideRuntimeState* state,
+    uint64_t runtime_timestamp_ns,
     float out_acceleration[3]) {
   if (!cfg.acceleration_integration_enabled ||
       !imu.orientation_valid || !imu.specific_force_valid) {
@@ -457,6 +748,136 @@ bool runtime_world_linear_acceleration(
   out_acceleration[1] -= std::max(0.0f, cfg.gravity_mps2);
   if (!finite_v3(out_acceleration)) return false;
 
+  const bool compensate_centripetal =
+      cfg.lever_arm_enabled &&
+      cfg.lever_arm_centripetal_compensation_enabled;
+  const bool compensate_tangential =
+      cfg.lever_arm_enabled &&
+      cfg.lever_arm_tangential_compensation_enabled;
+  if (state != nullptr && (compensate_centripetal || compensate_tangential) &&
+      imu.angular_velocity_valid && finite_v3(cfg.lever_arm_local_m)) {
+    // The exact physical IMU location inside the controller is not known.
+    // Approximate pivot-to-sensor with the same local vector used by the
+    // trajectory lever arm so both parts of the model stay geometrically
+    // consistent and remain independently opt-in.
+    float lever_world[3] = {};
+    float angular_velocity_world[3] = {};
+    q_rotate(imu.orientation, cfg.lever_arm_local_m, lever_world);
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s,
+             angular_velocity_world);
+
+    if (finite_v3(lever_world) && finite_v3(angular_velocity_world)) {
+      if (compensate_centripetal) {
+        float omega_cross_r[3] = {};
+        float centripetal_acceleration[3] = {};
+        cross_v3(angular_velocity_world, lever_world, omega_cross_r);
+        cross_v3(angular_velocity_world, omega_cross_r,
+                 centripetal_acceleration);
+        if (finite_v3(centripetal_acceleration)) {
+          for (int axis = 0; axis < 3; ++axis) {
+            out_acceleration[axis] -= centripetal_acceleration[axis];
+          }
+        }
+      }
+
+      if (compensate_tangential) {
+        const uint64_t sample_timestamp_ns =
+            imu.angular_velocity_timestamp_ns != 0
+                ? imu.angular_velocity_timestamp_ns
+                : (imu.timestamp_ns != 0 ? imu.timestamp_ns
+                                         : runtime_timestamp_ns);
+        bool have_filtered_alpha =
+            state->lever_arm_angular_history_valid;
+
+        if (!state->lever_arm_angular_history_valid) {
+          state->lever_arm_angular_history_valid = true;
+          state->lever_arm_angular_history_timestamp_ns = sample_timestamp_ns;
+          std::copy(std::begin(angular_velocity_world),
+                    std::end(angular_velocity_world),
+                    state->lever_arm_previous_angular_velocity_world_rad_s);
+          std::fill(
+              std::begin(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+              std::end(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+              0.0f);
+          have_filtered_alpha = false;
+        } else if (sample_timestamp_ns != 0 &&
+                   sample_timestamp_ns !=
+                       state->lever_arm_angular_history_timestamp_ns) {
+          const bool monotonic =
+              sample_timestamp_ns >
+              state->lever_arm_angular_history_timestamp_ns;
+          const uint64_t delta_ns = monotonic
+              ? sample_timestamp_ns -
+                    state->lever_arm_angular_history_timestamp_ns
+              : 0;
+          // A long pause or timestamp rollback is not a usable derivative.
+          // Re-anchor without changing any prediction state or transition.
+          if (!monotonic || delta_ns > 100'000'000ull) {
+            std::fill(
+                std::begin(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+                std::end(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+                0.0f);
+            have_filtered_alpha = false;
+          } else if (delta_ns > 0) {
+            const float dt_s = static_cast<float>(delta_ns) / 1.0e9f;
+            float raw_angular_acceleration[3] = {
+                (angular_velocity_world[0] -
+                 state->lever_arm_previous_angular_velocity_world_rad_s[0]) /
+                    dt_s,
+                (angular_velocity_world[1] -
+                 state->lever_arm_previous_angular_velocity_world_rad_s[1]) /
+                    dt_s,
+                (angular_velocity_world[2] -
+                 state->lever_arm_previous_angular_velocity_world_rad_s[2]) /
+                    dt_s,
+            };
+            clamp_v3_length(
+                raw_angular_acceleration,
+                cfg.lever_arm_max_angular_acceleration_rad_s2);
+            const float alpha = std::clamp(
+                cfg.lever_arm_angular_acceleration_smooth_alpha,
+                0.0f, 1.0f);
+            for (int axis = 0; axis < 3; ++axis) {
+              state->lever_arm_filtered_angular_acceleration_world_rad_s2[axis] =
+                  state->lever_arm_filtered_angular_acceleration_world_rad_s2[axis] *
+                      (1.0f - alpha) +
+                  raw_angular_acceleration[axis] * alpha;
+            }
+            clamp_v3_length(
+                state->lever_arm_filtered_angular_acceleration_world_rad_s2,
+                cfg.lever_arm_max_angular_acceleration_rad_s2);
+            have_filtered_alpha = finite_v3(
+                state->lever_arm_filtered_angular_acceleration_world_rad_s2);
+          }
+
+          state->lever_arm_angular_history_timestamp_ns = sample_timestamp_ns;
+          std::copy(std::begin(angular_velocity_world),
+                    std::end(angular_velocity_world),
+                    state->lever_arm_previous_angular_velocity_world_rad_s);
+        }
+
+        if (have_filtered_alpha) {
+          float tangential_acceleration[3] = {};
+          cross_v3(
+              state->lever_arm_filtered_angular_acceleration_world_rad_s2,
+              lever_world, tangential_acceleration);
+          if (finite_v3(tangential_acceleration)) {
+            for (int axis = 0; axis < 3; ++axis) {
+              out_acceleration[axis] -= tangential_acceleration[axis];
+            }
+          }
+        }
+      } else {
+        state->lever_arm_angular_history_valid = false;
+        state->lever_arm_angular_history_timestamp_ns = 0;
+      }
+    }
+  } else if (state != nullptr && compensate_tangential) {
+    state->lever_arm_angular_history_valid = false;
+    state->lever_arm_angular_history_timestamp_ns = 0;
+  }
+
+  if (!finite_v3(out_acceleration)) return false;
   const float deadband = std::max(0.0f, cfg.acceleration_deadband_mps2);
   const float magnitude = v3_length(out_acceleration);
   if (!std::isfinite(magnitude)) return false;
@@ -516,6 +937,19 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
             std::end(state.acceleration_position_delta_m), 0.0f);
   std::fill(std::begin(state.acceleration_velocity_delta_mps),
             std::end(state.acceleration_velocity_delta_mps), 0.0f);
+  state.prediction_path_active = false;
+  state.prediction_path_m = 0.0f;
+  std::fill(std::begin(state.prediction_path_last_position_m),
+            std::end(state.prediction_path_last_position_m), 0.0f);
+  state.prediction_path_last_timestamp_ns = 0;
+  state.lever_arm_angular_history_valid = false;
+  state.lever_arm_angular_history_timestamp_ns = 0;
+  std::fill(std::begin(state.lever_arm_previous_angular_velocity_world_rad_s),
+            std::end(state.lever_arm_previous_angular_velocity_world_rad_s),
+            0.0f);
+  std::fill(std::begin(state.lever_arm_filtered_angular_acceleration_world_rad_s2),
+            std::end(state.lever_arm_filtered_angular_acceleration_world_rad_s2),
+            0.0f);
   if (clear_anchor) {
     state.has_position_anchor = false;
     state.last_optical_pose_ns = 0;
@@ -523,12 +957,65 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
               std::end(state.anchor_position_m), 0.0f);
     std::fill(std::begin(state.anchor_velocity_mps),
               std::end(state.anchor_velocity_mps), 0.0f);
+    state.lever_arm_anchor_valid = false;
+    std::fill(std::begin(state.lever_arm_anchor_world_m),
+              std::end(state.lever_arm_anchor_world_m), 0.0f);
+    std::fill(std::begin(state.lever_arm_pivot_anchor_position_m),
+              std::end(state.lever_arm_pivot_anchor_position_m), 0.0f);
+    std::fill(std::begin(state.lever_arm_pivot_anchor_velocity_mps),
+              std::end(state.lever_arm_pivot_anchor_velocity_mps), 0.0f);
+    state.position_history.reset();
+    state.position_history_last_frame_sequence = 0;
+  }
+}
+
+void update_lever_arm_anchor(
+    RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeImuSample& imu,
+    const RuntimeControllerImuMotionConfig& cfg) {
+  state.lever_arm_anchor_valid = false;
+  if (!cfg.lever_arm_enabled || !imu.orientation_valid ||
+      !finite_v3(cfg.lever_arm_local_m)) {
+    return;
+  }
+
+  float lever_world[3] = {};
+  q_rotate(imu.orientation, cfg.lever_arm_local_m, lever_world);
+  if (!finite_v3(lever_world)) return;
+
+  state.lever_arm_anchor_valid = true;
+  for (int axis = 0; axis < 3; ++axis) {
+    state.lever_arm_anchor_world_m[axis] = lever_world[axis];
+    state.lever_arm_pivot_anchor_position_m[axis] =
+        state.anchor_position_m[axis] - lever_world[axis];
+    state.lever_arm_pivot_anchor_velocity_mps[axis] =
+        state.anchor_velocity_mps[axis];
+  }
+
+  // The optical controller velocity already contains tangential motion caused
+  // by rotation about the pivot. Remove omega x r so that adding the live
+  // rotated lever arm during prediction does not count it twice.
+  if (imu.angular_velocity_valid) {
+    float angular_velocity_world[3] = {};
+    float tangential_velocity[3] = {};
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s,
+             angular_velocity_world);
+    cross_v3(angular_velocity_world, lever_world, tangential_velocity);
+    if (finite_v3(tangential_velocity)) {
+      for (int axis = 0; axis < 3; ++axis) {
+        state.lever_arm_pivot_anchor_velocity_mps[axis] -=
+            tangential_velocity[axis];
+      }
+      clamp_v3_length(state.lever_arm_pivot_anchor_velocity_mps,
+                      cfg.max_prediction_velocity_mps);
+    }
   }
 }
 
 void accept_optical_position_anchor(
     RuntimeControllerImuSideRuntimeState& state,
     const xr_runtime::HandSideF32V2& hand_side,
+    const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
     uint64_t timestamp_ns) {
   state.has_position_anchor = true;
@@ -540,9 +1027,20 @@ void accept_optical_position_anchor(
   std::copy(std::begin(state.anchor_position_m),
             std::end(state.anchor_position_m), state.position_m);
 
-  if ((hand_side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
-      std::isfinite(hand_side.vx) && std::isfinite(hand_side.vy) &&
-      std::isfinite(hand_side.vz)) {
+  if (cfg.prediction_window_mode) {
+    double estimated_velocity[3] = {};
+    if (state.position_history.estimate_velocity(estimated_velocity)) {
+      state.anchor_velocity_mps[0] = static_cast<float>(estimated_velocity[0]);
+      state.anchor_velocity_mps[1] = static_cast<float>(estimated_velocity[1]);
+      state.anchor_velocity_mps[2] = static_cast<float>(estimated_velocity[2]);
+      clamp_v3_length(state.anchor_velocity_mps, cfg.max_prediction_velocity_mps);
+    } else {
+      std::fill(std::begin(state.anchor_velocity_mps),
+                std::end(state.anchor_velocity_mps), 0.0f);
+    }
+  } else if ((hand_side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
+             std::isfinite(hand_side.vx) && std::isfinite(hand_side.vy) &&
+             std::isfinite(hand_side.vz)) {
     state.anchor_velocity_mps[0] = hand_side.vx;
     state.anchor_velocity_mps[1] = hand_side.vy;
     state.anchor_velocity_mps[2] = hand_side.vz;
@@ -553,6 +1051,12 @@ void accept_optical_position_anchor(
   }
   std::copy(std::begin(state.anchor_velocity_mps),
             std::end(state.anchor_velocity_mps), state.velocity_mps);
+
+  // Lever-arm mode changes only the trajectory calculation used later while
+  // Predicting. Capture an equivalent pivot anchor without changing any
+  // prediction state or transition.
+  update_lever_arm_anchor(state, imu, cfg);
+
   clear_imu_position_loss_state(state, false);
   state.last_update_ns = timestamp_ns;
 }
@@ -600,7 +1104,9 @@ void update_or_apply_imu_position_prediction(
     const RuntimeControllerImuMotionConfig& cfg,
     RuntimeControllerImuSideRuntimeState* state,
     const xr_runtime::HandSideF32V2* hand_side,
-    uint64_t timestamp_ns) {
+    uint64_t timestamp_ns,
+    uint64_t hand_frame_sequence,
+    uint64_t hand_source_timestamp_ns) {
   if (state == nullptr) return;
 
   const uint64_t hold_ns = nonnegative_ms_to_ns(cfg.hold_lost_ms);
@@ -614,6 +1120,18 @@ void update_or_apply_imu_position_prediction(
         hand_side->controller_py,
         hand_side->controller_pz,
     };
+    if (cfg.prediction_window_mode &&
+        (hand_frame_sequence == 0 ||
+         hand_frame_sequence != state->position_history_last_frame_sequence)) {
+      const uint64_t sample_timestamp_ns =
+          hand_source_timestamp_ns != 0 ? hand_source_timestamp_ns : timestamp_ns;
+      state->position_history.add(sample_timestamp_ns,
+                                  optical_position[0],
+                                  optical_position[1],
+                                  optical_position[2],
+                                  cfg.prediction_window_ms);
+      state->position_history_last_frame_sequence = hand_frame_sequence;
+    }
     float optical_velocity[3] = {};
     const bool optical_velocity_valid =
         (hand_side->flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
@@ -673,6 +1191,12 @@ void update_or_apply_imu_position_prediction(
                   state->anchor_position_m);
         std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
                   state->anchor_velocity_mps);
+        state->prediction_path_active = false;
+        state->prediction_path_m = 0.0f;
+        std::copy(std::begin(state->position_m), std::end(state->position_m),
+                  state->prediction_path_last_position_m);
+        state->prediction_path_last_timestamp_ns = timestamp_ns;
+        update_lever_arm_anchor(*state, imu, cfg);
         publish_synthetic_controller_position(
             out, state->position_m, state->velocity_mps, true, true,
             imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
@@ -680,7 +1204,7 @@ void update_or_apply_imu_position_prediction(
       }
     }
 
-    accept_optical_position_anchor(*state, *hand_side, cfg, timestamp_ns);
+    accept_optical_position_anchor(*state, *hand_side, imu, cfg, timestamp_ns);
     return;
   }
 
@@ -739,6 +1263,12 @@ void update_or_apply_imu_position_prediction(
               std::end(state->acceleration_position_delta_m), 0.0f);
     std::fill(std::begin(state->acceleration_velocity_delta_mps),
               std::end(state->acceleration_velocity_delta_mps), 0.0f);
+    state->prediction_path_active = true;
+    state->prediction_path_m = 0.0f;
+    std::copy(std::begin(state->anchor_position_m),
+              std::end(state->anchor_position_m),
+              state->prediction_path_last_position_m);
+    state->prediction_path_last_timestamp_ns = state->last_optical_pose_ns;
   }
 
   uint64_t dt_ns = state->last_update_ns != 0 &&
@@ -750,8 +1280,8 @@ void update_or_apply_imu_position_prediction(
   state->last_update_ns = timestamp_ns;
 
   float acceleration[3] = {};
-  const bool acceleration_valid =
-      runtime_world_linear_acceleration(imu, cfg, acceleration);
+  const bool acceleration_valid = runtime_world_linear_acceleration(
+      imu, cfg, state, timestamp_ns, acceleration);
   if (dt_s > 0.0f && acceleration_valid) {
     // Fade the acceleration contribution with the same remaining-window factor
     // used for published prediction velocity. This keeps noisy IMU acceleration
@@ -770,17 +1300,74 @@ void update_or_apply_imu_position_prediction(
 
   const float integrated_time_s =
       prediction_elapsed_s * (1.0f - 0.5f * progress);
+  const bool lever_arm_requested =
+      cfg.lever_arm_enabled && state->lever_arm_anchor_valid &&
+      imu.orientation_valid && finite_v3(cfg.lever_arm_local_m);
+  float current_lever_world[3] = {};
+  bool use_lever_arm = false;
+  if (lever_arm_requested) {
+    q_rotate(imu.orientation, cfg.lever_arm_local_m, current_lever_world);
+    use_lever_arm = finite_v3(current_lever_world);
+  }
+  const float* base_anchor_position = use_lever_arm
+      ? state->lever_arm_pivot_anchor_position_m
+      : state->anchor_position_m;
+  const float* base_anchor_velocity = use_lever_arm
+      ? state->lever_arm_pivot_anchor_velocity_mps
+      : state->anchor_velocity_mps;
+
   for (int axis = 0; axis < 3; ++axis) {
     const float base_delta =
-        state->anchor_velocity_mps[axis] * damping * integrated_time_s;
-    state->position_m[axis] = state->anchor_position_m[axis] + base_delta +
-                              state->acceleration_position_delta_m[axis];
+        base_anchor_velocity[axis] * damping * integrated_time_s;
+    state->position_m[axis] = base_anchor_position[axis] + base_delta +
+                              state->acceleration_position_delta_m[axis] +
+                              (use_lever_arm ? current_lever_world[axis] : 0.0f);
     state->velocity_mps[axis] =
-        (state->anchor_velocity_mps[axis] * damping +
+        (base_anchor_velocity[axis] * damping +
          state->acceleration_velocity_delta_mps[axis]) *
         (1.0f - progress);
   }
+
+  // Keep published velocity consistent with the curved position trajectory.
+  // This changes only the value produced inside Predicting; timeout and all
+  // state-machine transitions remain untouched.
+  if (use_lever_arm && imu.angular_velocity_valid) {
+    float angular_velocity_world[3] = {};
+    float tangential_velocity[3] = {};
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s,
+             angular_velocity_world);
+    cross_v3(angular_velocity_world, current_lever_world,
+             tangential_velocity);
+    if (finite_v3(tangential_velocity)) {
+      const float remaining = 1.0f - progress;
+      for (int axis = 0; axis < 3; ++axis) {
+        state->velocity_mps[axis] += tangential_velocity[axis] * remaining;
+      }
+    }
+  }
   clamp_v3_length(state->velocity_mps, cfg.max_prediction_velocity_mps);
+
+  const float max_prediction_path_m = cfg.max_prediction_path_m;
+  if (std::isfinite(max_prediction_path_m) && max_prediction_path_m > 0.0f &&
+      state->prediction_path_active &&
+      timestamp_ns > state->prediction_path_last_timestamp_ns) {
+    const float step_delta[3] = {
+        state->position_m[0] - state->prediction_path_last_position_m[0],
+        state->position_m[1] - state->prediction_path_last_position_m[1],
+        state->position_m[2] - state->prediction_path_last_position_m[2],
+    };
+    const float step_m = v3_length(step_delta);
+    if (std::isfinite(step_m) &&
+        state->prediction_path_m + step_m > max_prediction_path_m) {
+      clear_imu_position_loss_state(*state, true);
+      invalidate_runtime_controller_pose(out);
+      return;
+    }
+    if (std::isfinite(step_m)) state->prediction_path_m += step_m;
+    std::copy(std::begin(state->position_m), std::end(state->position_m),
+              state->prediction_path_last_position_m);
+    state->prediction_path_last_timestamp_ns = timestamp_ns;
+  }
 
   publish_synthetic_controller_position(
       out, state->position_m, state->velocity_mps,
@@ -997,6 +1584,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   bool left,
                   const RuntimeControllerSynthesisConfig& cfg,
                   const xr_runtime::HandTrackingFrameF32V2* hand,
+                  const xr_runtime::HandTrackingFrameF32V2* optical_yaw_hand,
                   const xr_runtime::ControllerInputV3* controller_input,
                   const xr_runtime::HmdPoseF64V1* hmd,
                   uint64_t timestamp_ns,
@@ -1009,6 +1597,13 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
   if (hand != nullptr) {
     hand_side = left ? &hand->left : &hand->right;
     valid_hand_side = hand_side_is_valid(*hand, *hand_side, left);
+  }
+
+  const xr_runtime::HandSideF32V2* optical_yaw_hand_side = nullptr;
+  uint64_t optical_yaw_frame_sequence = 0;
+  if (optical_yaw_hand != nullptr) {
+    optical_yaw_hand_side = left ? &optical_yaw_hand->left : &optical_yaw_hand->right;
+    optical_yaw_frame_sequence = optical_yaw_hand->sequence;
   }
 
   const xr_runtime::ControllerDeviceStateV3* controller_side = nullptr;
@@ -1044,6 +1639,11 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       break;
   }
 
+  const bool using_lost_hand_hmd_relative_pose =
+      !valid_hand_side && use_hmd_relative_lost_hand_fallback &&
+      (out.source_mask &
+       xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE) != 0u;
+
   if (controller_side != nullptr) {
     fill_inputs_from_controller(out, *controller_side, cfg);
     const RuntimeControllerOrientationSource configured_orientation_source =
@@ -1055,12 +1655,33 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           left ? cfg.left_imu_orientation : cfg.right_imu_orientation;
       const RuntimeControllerImuMotionConfig& imu_motion_cfg =
           left ? cfg.left_imu_motion : cfg.right_imu_motion;
-      RuntimeImuSample imu = runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      const RuntimeImuSample physical_imu =
+          runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      RuntimeImuSample presentation_imu = physical_imu;
+
+      // Yaw correction is a presentation-only wrist-orientation adjustment.
+      // It samples the raw backend hand frame so predicted or held runtime
+      // poses never enter the optical correction window, but it must not alter
+      // the physical IMU frame used by spatial position prediction.
       apply_runtime_yaw_correction(
-          imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
+          presentation_imu, imu_motion_cfg, runtime_state,
+          optical_yaw_hand_side, optical_yaw_frame_sequence, timestamp_ns);
+
+      // Keep the uncorrected physical IMU sample for position prediction,
+      // lever-arm trajectory, acceleration world transform and rotational
+      // acceleration compensation. Periodic/reacquire yaw correction therefore
+      // cannot move the controller in space or bend its predicted trajectory.
       update_or_apply_imu_position_prediction(
-          out, imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
-      apply_imu_orientation_override(out, imu);
+          out, physical_imu, imu_motion_cfg, runtime_state, hand_side,
+          timestamp_ns, hand != nullptr ? hand->sequence : 0,
+          hand != nullptr ? hand->source_timestamp_ns : 0);
+
+      // The lost-hand HMD-relative fallback owns the complete published
+      // orientation. Otherwise publish only the presentation copy with yaw
+      // correction; position above remains based on the raw physical sample.
+      if (!using_lost_hand_hmd_relative_pose) {
+        apply_imu_orientation_override(out, presentation_imu);
+      }
     } else if (runtime_state != nullptr) {
       // The feature is dormant while this side uses hand-tracking fallback.
       // Drop the old optical anchor so a later IMU reconnect cannot resume a
@@ -1348,6 +1969,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     uint64_t timestamp_ns,
     const RuntimeControllerSynthesisConfig& cfg,
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& filtered_hand,
+    const std::optional<xr_runtime::HandTrackingFrameF32V2>& optical_yaw_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     RuntimeControllerSynthesisState* runtime_state) {
@@ -1356,12 +1978,14 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
   frame.timestamp_ns = timestamp_ns;
 
   const xr_runtime::HandTrackingFrameF32V2* hand = filtered_hand ? &(*filtered_hand) : nullptr;
+  const xr_runtime::HandTrackingFrameF32V2* yaw_hand =
+      optical_yaw_hand ? &(*optical_yaw_hand) : nullptr;
   const xr_runtime::ControllerInputV3* controller = controller_input ? &(*controller_input) : nullptr;
   const xr_runtime::HmdPoseF64V1* hmd = runtime_hmd_pose ? &(*runtime_hmd_pose) : nullptr;
 
-  compose_side(frame.left, true, cfg, hand, controller, hmd, timestamp_ns,
+  compose_side(frame.left, true, cfg, hand, yaw_hand, controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->left : nullptr);
-  compose_side(frame.right, false, cfg, hand, controller, hmd, timestamp_ns,
+  compose_side(frame.right, false, cfg, hand, yaw_hand, controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->right : nullptr);
 
   if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {

@@ -1110,15 +1110,28 @@ class LinuxGearVrBleTransport final : public BleTransport {
       timeout = std::min(timeout, ms);
     };
     shorten(next_refresh_ns_);
-    for (const auto& [id, session] : sessions_) {
-      shorten(session->next_connect_ns);
-      if (session->connected) {
+    const auto &commands = initialization_commands();
+    for (const auto &[id, session]: sessions_) {
+      if (!session->connected) {
+        shorten(session->next_connect_ns);
+        continue;
+      }
+      if (!session->notifications_started) {
         shorten(session->next_notify_attempt_ns);
-        shorten(session->next_init_command_ns);
+      }
+      if (session->notifications_started &&
+          session->full_sensor_frame_count == 0) {
         shorten(session->notification_watchdog_ns);
+      }
+      if (session->notifications_started &&
+          session->init_command_index < commands.size()) {
+        shorten(session->next_init_command_ns);
+      }
+      if (session->init_command_index == commands.size()) {
         shorten(session->next_keepalive_ns);
       }
     }
+
     uint64_t bus_timeout_us = std::numeric_limits<uint64_t>::max();
     if (api_->get_timeout(bus_, &bus_timeout_us) >= 0 &&
         bus_timeout_us != std::numeric_limits<uint64_t>::max()) {

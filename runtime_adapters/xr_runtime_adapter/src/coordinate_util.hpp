@@ -73,6 +73,11 @@ struct HandOrientationOffsetConfig {
   bool apply_to_palm = true;
   bool apply_to_wrist = true;
   bool apply_to_joints = false;
+  // Apply this optical hand-alignment offset only while the effective
+  // controller orientation source for the side is not IMU. Enabled by
+  // default so IMU-controlled wrists use only their dedicated
+  // controller_override.imu_orientation.*.orientation_offset.
+  bool only_optic = true;
   bool pre_multiply = false;
 };
 

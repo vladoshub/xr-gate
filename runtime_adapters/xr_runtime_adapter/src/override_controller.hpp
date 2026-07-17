@@ -8,6 +8,8 @@
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
 
+#include "prediction_window_estimator.hpp"
+
 namespace xr_runtime_adapter::override_controller {
 
 constexpr uint32_t RUNTIME_BUTTON_DPAD_UP = static_cast<uint32_t>(xr_runtime::CONTROLLER_BUTTON_DPAD_UP);
@@ -85,13 +87,53 @@ struct RuntimeControllerImuMotionConfig {
   float predict_lost_ms = 600.0f;
   float max_prediction_velocity_mps = 3.0f;
   float prediction_damping = 1.0f;
+  // Maximum accumulated synthetic controller path during prediction, in metres.
+  // <= 0 disables the path limit.
+  float max_prediction_path_m = 0.65f;
+  bool prediction_window_mode = false;
+  float prediction_window_ms = 500.0f;
+
+  // Optional trajectory-only lever-arm model. It does not add states or alter
+  // hold/predict/reacquire timing. The vector is from the inferred pivot to the
+  // controller origin in the final controller-local orientation frame.
+  bool lever_arm_enabled = false;
+  float lever_arm_local_m[3] = {0.0f, 0.0f, -0.12f};
+
+  // Optional correction of accelerometer integration while lever-arm
+  // trajectory mode is active. Because the physical IMU position inside a
+  // controller cannot be determined reliably, the same pivot-to-controller
+  // lever_arm_local_m vector is used as an approximation for pivot-to-sensor.
+  // Both corrections are opt-in and alter only the acceleration fed into the
+  // existing Predicting-state integrator.
+  bool lever_arm_centripetal_compensation_enabled = false;
+  bool lever_arm_tangential_compensation_enabled = false;
+  float lever_arm_angular_acceleration_smooth_alpha = 0.15f;
+  float lever_arm_max_angular_acceleration_rad_s2 = 50.0f;
+
   bool publish_predicted_velocity = false;
   float reacquire_blend_ms = 0.0f;
 
-  // Optical hand orientation slowly updates a retained world-yaw offset. The
-  // offset remains active while the controller is outside the camera FOV.
-  float yaw_correction_alpha = 0.05f;
-  float yaw_correction_max_step_deg = 2.0f;
+  // Optical hand orientation updates a retained world-yaw offset. Periodic
+  // correction compares the latest clean optical and IMU orientations after
+  // coordinate/axis transforms but before hand_orientation_offset and
+  // imu_orientation.orientation_offset. With the
+  // trigger filter enabled, the latest residual error must remain above the
+  // deadband for trigger_hold_ms and its range during that time must stay
+  // within trigger_max_range_deg. The final target is always the latest pose,
+  // never a sample captured at the beginning of the hold.
+  bool yaw_correction_continuous = true;
+  bool yaw_correction_on_reacquire = true;
+  float yaw_correction_deadband_deg = 10.0f;
+  float yaw_correction_blend_ms = 500.0f;
+  bool yaw_correction_trigger_filter = true;
+  float yaw_correction_trigger_hold_ms = 1500.0f;
+  float yaw_correction_trigger_max_range_deg = 8.0f;
+  float yaw_correction_interval_ms = 1000.0f;
+
+  // Reacquire uses its own threshold and blend duration and immediately uses
+  // the latest valid optical/IMU difference without the periodic hold filter.
+  float yaw_correction_reacquire_deadband_deg = 1.0f;
+  float yaw_correction_reacquire_blend_ms = 250.0f;
 };
 
 struct RuntimeControllerImuSideRuntimeState {
@@ -100,18 +142,54 @@ struct RuntimeControllerImuSideRuntimeState {
   bool prediction_started = false;
   bool reacquire_blend_active = false;
   bool yaw_correction_valid = false;
+  bool yaw_correction_requested = false;
+  bool yaw_check_active = false;
+  bool yaw_check_reacquire = false;
+  bool yaw_blend_active = false;
+  bool yaw_blend_reacquire = false;
   uint64_t last_update_ns = 0;
   uint64_t last_optical_pose_ns = 0;
+  uint64_t last_yaw_correction_update_ns = 0;
+  uint64_t yaw_check_last_frame_sequence = 0;
+  uint64_t yaw_trigger_hold_start_ns = 0;
+  uint64_t yaw_blend_start_ns = 0;
   uint64_t reacquire_blend_start_ns = 0;
   float anchor_position_m[3] = {};
   float anchor_velocity_mps[3] = {};
+  bool lever_arm_anchor_valid = false;
+  float lever_arm_anchor_world_m[3] = {};
+  float lever_arm_pivot_anchor_position_m[3] = {};
+  float lever_arm_pivot_anchor_velocity_mps[3] = {};
+  prediction_window::PositionWindowEstimator<> position_history{};
+  uint64_t position_history_last_frame_sequence = 0;
   float position_m[3] = {};
   float velocity_mps[3] = {};
   float acceleration_position_delta_m[3] = {};
   float acceleration_velocity_delta_mps[3] = {};
+  bool prediction_path_active = false;
+  float prediction_path_m = 0.0f;
+  float prediction_path_last_position_m[3] = {};
+  uint64_t prediction_path_last_timestamp_ns = 0;
+  bool lever_arm_angular_history_valid = false;
+  uint64_t lever_arm_angular_history_timestamp_ns = 0;
+  float lever_arm_previous_angular_velocity_world_rad_s[3] = {};
+  float lever_arm_filtered_angular_acceleration_world_rad_s2[3] = {};
   float reacquire_blend_from_position_m[3] = {};
   float reacquire_blend_from_velocity_mps[3] = {};
+  bool yaw_trigger_range_valid = false;
+  float yaw_trigger_reference_error_rad = 0.0f;
+  float yaw_trigger_min_unwrapped_error_rad = 0.0f;
+  float yaw_trigger_max_unwrapped_error_rad = 0.0f;
   float yaw_correction_rad = 0.0f;
+  float yaw_blend_from_rad = 0.0f;
+  float yaw_blend_to_rad = 0.0f;
+  float yaw_blend_duration_ms = 0.0f;
+  float yaw_last_desired_rad = 0.0f;
+  float yaw_last_error_rad = 0.0f;
+  float yaw_last_step_rad = 0.0f;
+  uint64_t yaw_apply_count = 0;
+  uint64_t yaw_reacquire_apply_count = 0;
+  std::string yaw_last_action = "none";
 };
 
 struct RuntimeControllerSynthesisState {
@@ -202,6 +280,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     uint64_t timestamp_ns,
     const RuntimeControllerSynthesisConfig& cfg,
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& filtered_hand,
+    const std::optional<xr_runtime::HandTrackingFrameF32V2>& optical_yaw_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     RuntimeControllerSynthesisState* runtime_state = nullptr);

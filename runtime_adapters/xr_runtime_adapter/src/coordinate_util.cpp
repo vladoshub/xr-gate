@@ -193,6 +193,7 @@ void parse_hand_orientation_offset(const nlohmann::json& j, HandOrientationOffse
   out.apply_to_palm = j.value("apply_to_palm", out.apply_to_palm);
   out.apply_to_wrist = j.value("apply_to_wrist", out.apply_to_wrist);
   out.apply_to_joints = j.value("apply_to_joints", out.apply_to_joints);
+  out.only_optic = j.value("only_optic", out.only_optic);
 
   if (j.contains("apply_to") && j.at("apply_to").is_object()) {
     const auto& a = j.at("apply_to");
@@ -778,7 +779,11 @@ void log_stream_transform(const char* name, const StreamTransformConfig& cfg, bo
             << " hmd_rotate_with_hmd=" << (cfg.hmd_relative.rotate_with_hmd_orientation ? "true" : "false")
             << " hmd_offset_m=(" << cfg.hmd_relative.offset_m.x << ","
             << cfg.hmd_relative.offset_m.y << ","
-            << cfg.hmd_relative.offset_m.z << ")";
+            << cfg.hmd_relative.offset_m.z << ")"
+            << " hand_orientation_offset_enabled="
+            << (cfg.hand_orientation_offset.enabled ? "true" : "false")
+            << " hand_orientation_offset_only_optic="
+            << (cfg.hand_orientation_offset.only_optic ? "true" : "false");
   if (include_mesh_runtime) {
     std::cout << " mesh_triangle_winding=" << cfg.spatial_mesh.triangle_winding
               << " mesh_extra_rotation_deg=(" << cfg.spatial_mesh.extra_rotation_deg.x << ","
