@@ -27,6 +27,7 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/tcp_fanout.cpp
   src/camera_pipeline.cpp
   src/imu_pipeline.cpp
+  src/imu_transform.cpp
   src/config/capture_config.cpp
   src/platform/camera_controls_common.cpp
   src/platform/hidapi_input_device.cpp
@@ -100,6 +101,16 @@ if(BUILD_TESTING)
   target_include_directories(capture_config_legacy_smoke PRIVATE include)
   add_test(NAME capture_config_legacy_smoke COMMAND capture_config_legacy_smoke)
 
+  add_executable(capture_config_canonical_smoke
+    tests/capture_config_canonical_smoke.cpp
+    src/common.cpp
+    src/config/capture_config.cpp
+    ${CAPTURE_CONFIG_TEST_PLATFORM_SOURCE}
+  )
+  target_include_directories(capture_config_canonical_smoke PRIVATE include)
+  add_test(NAME capture_config_canonical_smoke
+    COMMAND capture_config_canonical_smoke ${CMAKE_CURRENT_SOURCE_DIR}/configs/xreal_ultra.yaml)
+
   add_executable(camera_controls_config_smoke
     tests/camera_controls_config_smoke.cpp
     src/common.cpp
@@ -136,6 +147,16 @@ if(BUILD_TESTING)
   )
   target_include_directories(affine_device_clock_mapper_smoke PRIVATE include)
   add_test(NAME affine_device_clock_mapper_smoke COMMAND affine_device_clock_mapper_smoke)
+
+  add_executable(imu_transform_smoke
+    tests/imu_transform_smoke.cpp
+    src/imu_transform.cpp
+    src/common.cpp
+    src/config/capture_config.cpp
+    ${CAPTURE_CONFIG_TEST_PLATFORM_SOURCE}
+  )
+  target_include_directories(imu_transform_smoke PRIVATE include)
+  add_test(NAME imu_transform_smoke COMMAND imu_transform_smoke)
 
   if(NOT WIN32)
     add_executable(serial_imu_transport_activity_linux

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -292,6 +293,105 @@ size_t parse_size_value(const std::string& value) {
   return static_cast<size_t>(parsed);
 }
 
+
+double parse_double_value(const std::string& value) {
+  const std::string cleaned = trim(value);
+  size_t consumed = 0;
+  const double parsed = std::stod(cleaned, &consumed);
+  if (consumed != cleaned.size() || !std::isfinite(parsed)) {
+    throw std::runtime_error("invalid finite floating-point value: " + value);
+  }
+  return parsed;
+}
+
+std::vector<std::string> get_yaml_sequence(const FlatYaml& y, const std::string& key) {
+  const auto seq_it = y.sequences.find(key);
+  if (seq_it != y.sequences.end()) return seq_it->second;
+  const auto scalar_it = y.scalars.find(key);
+  if (scalar_it != y.scalars.end()) {
+    throw std::runtime_error(key + " must be a YAML sequence");
+  }
+  return {};
+}
+
+int axis_index(const std::string& axis_name) {
+  if (axis_name == "x") return 0;
+  if (axis_name == "y") return 1;
+  if (axis_name == "z") return 2;
+  return -1;
+}
+
+void configure_axes_transform(const std::vector<std::string>& values, ImuTransformConfig& transform) {
+  if (values.size() != 3) {
+    throw std::runtime_error("imu.transform.axes must contain exactly 3 entries");
+  }
+
+  std::array<bool, 3> used{{false, false, false}};
+  std::array<double, 9> matrix{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  for (size_t output_axis = 0; output_axis < 3; ++output_axis) {
+    std::string token = lowercase(trim(values[output_axis]));
+    double sign = 1.0;
+    if (!token.empty() && (token.front() == '-' || token.front() == '+')) {
+      if (token.front() == '-') sign = -1.0;
+      token.erase(token.begin());
+    }
+    const int input_axis = axis_index(token);
+    if (input_axis < 0) {
+      throw std::runtime_error(
+          "imu.transform.axes entries must be x, y, z, -x, -y, or -z");
+    }
+    if (used[static_cast<size_t>(input_axis)]) {
+      throw std::runtime_error("imu.transform.axes must use each source axis exactly once");
+    }
+    used[static_cast<size_t>(input_axis)] = true;
+    transform.axes[output_axis] = (sign < 0.0 ? "-" : "") + token;
+    matrix[output_axis * 3 + static_cast<size_t>(input_axis)] = sign;
+  }
+
+  const double determinant =
+      matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7]) -
+      matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6]) +
+      matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6]);
+  if (determinant < 0.5) {
+    throw std::runtime_error(
+        "imu.transform.axes must describe a proper rotation (determinant +1), not a reflection");
+  }
+
+  transform.mode = ImuTransformMode::Axes;
+  transform.rotation_matrix = matrix;
+}
+
+void configure_quaternion_transform(const std::vector<std::string>& values,
+                                    ImuTransformConfig& transform) {
+  if (values.size() != 4) {
+    throw std::runtime_error("imu.transform.quaternion_xyzw must contain exactly 4 entries");
+  }
+
+  double x = parse_double_value(values[0]);
+  double y = parse_double_value(values[1]);
+  double z = parse_double_value(values[2]);
+  double w = parse_double_value(values[3]);
+  const double norm = std::sqrt(x * x + y * y + z * z + w * w);
+  if (!std::isfinite(norm) || norm < 1e-12) {
+    throw std::runtime_error("imu.transform.quaternion_xyzw must have a non-zero finite norm");
+  }
+  x /= norm;
+  y /= norm;
+  z /= norm;
+  w /= norm;
+
+  transform.mode = ImuTransformMode::Quaternion;
+  transform.quaternion_xyzw = {{x, y, z, w}};
+  transform.rotation_matrix = {{
+      1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w),
+      2.0 * (x * z + y * w),
+      2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z),
+      2.0 * (y * z - x * w),
+      2.0 * (x * z - y * w), 2.0 * (y * z + x * w),
+      1.0 - 2.0 * (x * x + y * y),
+  }};
+}
+
 void set_string(const FlatYaml& y, const std::vector<std::string>& keys, std::string& target) {
   for (const auto& key : keys) {
     const auto it = y.scalars.find(key);
@@ -482,6 +582,19 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_int(y, {"imu.slot_count"}, cfg.imu.slot_count);
   set_int(y, {"imu.raw.slot_count"}, cfg.imu.raw_slot_count);
   set_int(y, {"imu.stall_exit_ms"}, cfg.imu.stall_exit_ms);
+
+  const bool has_axes_transform = has(y, "imu.transform.axes");
+  const bool has_quaternion_transform = has(y, "imu.transform.quaternion_xyzw");
+  if (has_axes_transform && has_quaternion_transform) {
+    throw std::runtime_error(
+        "imu.transform.axes and imu.transform.quaternion_xyzw are mutually exclusive");
+  }
+  if (has_axes_transform) {
+    configure_axes_transform(get_yaml_sequence(y, "imu.transform.axes"), cfg.imu.transform);
+  } else if (has_quaternion_transform) {
+    configure_quaternion_transform(
+        get_yaml_sequence(y, "imu.transform.quaternion_xyzw"), cfg.imu.transform);
+  }
 
   int vid = cfg.imu.xreal_hid.vendor_id;
   int pid = cfg.imu.xreal_hid.product_id;

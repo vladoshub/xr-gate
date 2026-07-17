@@ -16,7 +16,7 @@ All multi-byte fields are little-endian. Every packet is 48 bytes:
 | 32 | `float32[3]` | Accelerometer XYZ in m/s² |
 | 44 | `uint32` | IEEE CRC32 over bytes `[0, 44)` |
 
-The timestamp must be captured when the IMU sample is read or placed into the MCU FIFO, not when the UART packet is transmitted. `capture_service_cpp` maps this device clock into the host monotonic clock domain and publishes the unchanged existing `IMU_F32_LE` payload.
+The timestamp must be captured when the IMU sample is read or placed into the MCU FIFO, not when the UART packet is transmitted. XYZ is the source IMU's native sensor-frame order; firmware must not perform a mount-specific axis remap. `capture_service_cpp` maps the device clock into the host monotonic clock domain and, when `imu.transform` is configured, rotates gyro and accelerometer into the normalized output frame immediately before publishing `IMU_F32_LE`. With no transform configured, values remain unchanged. Raw serial packets are always published unchanged.
 
 For firmware bring-up, `protocol: csv_f32` is also supported:
 

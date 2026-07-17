@@ -50,6 +50,11 @@ imu:
   output:
     stream: imu0
     frame: imu0
+  # Optional mount rotation, applied only to normalized imu0. Choose one:
+  # transform:
+  #   axes: [x, -z, y]
+  # transform:
+  #   quaternion_xyzw: [qx, qy, qz, qw]
   raw:
     enabled: false
   serial:

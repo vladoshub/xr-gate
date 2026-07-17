@@ -41,6 +41,8 @@ int main(int argc, char** argv) {
               cfg.camera.right_transform.flip == "xy",
           "camera transforms");
   require(cfg.imu.driver == "xreal_hid", "imu driver");
+  require(cfg.imu.transform.mode == xr_capture_cpp::ImuTransformMode::Identity,
+          "XREAL IMU transform must remain identity");
   require(cfg.imu.slot_count == 2048 && cfg.imu.raw_slot_count == 2048,
           "imu slot counts");
   require(cfg.imu.xreal_hid.read_timeout_ms == 100, "imu timeout");

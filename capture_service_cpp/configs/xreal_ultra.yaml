@@ -62,6 +62,7 @@ imu:
   output:
     stream: imu0
     frame: imu0
+  # No imu.transform section: identity mapping preserves the verified XREAL Ultra path.
   raw:
     enabled: true
     stream: xreal_raw_hid

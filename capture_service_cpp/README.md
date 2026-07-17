@@ -305,6 +305,55 @@ Only complete validated serial samples reset `imu.stall_exit_ms`. Receiving part
 
 For HMD VIO, firmware should send raw calibrated-unit gyro/accelerometer samples without Madgwick/Mahony orientation fusion or startup gyro-bias subtraction. Basalt continues to estimate IMU bias in the existing pipeline.
 
+
+### IMU frame transform
+
+`capture_service_cpp` is the only layer that may rotate IMU axes. Firmware and
+source drivers publish their native XYZ order; consumers receive the normalized
+`imu0` frame. Raw IMU packets are never modified.
+
+Omitting `imu.transform` is an identity transform. This preserves existing
+XREAL Ultra profiles and legacy configs exactly:
+
+```yaml
+imu:
+  driver: xreal_hid
+  # no transform: native XYZ is published unchanged
+```
+
+For a rigid mount aligned in 90-degree increments, use a signed axis mapping:
+
+```yaml
+imu:
+  transform:
+    axes: [x, -z, y]
+```
+
+The list describes output axes, so the example means:
+
+```text
+out.x =  in.x
+out.y = -in.z
+out.z =  in.y
+```
+
+Every source axis must appear exactly once, and the mapping must be a proper
+right-handed rotation. Reflections such as `[x, y, -z]` are rejected.
+
+For an arbitrary rigid mounting angle, use a quaternion in `x, y, z, w` order:
+
+```yaml
+imu:
+  transform:
+    quaternion_xyzw: [qx, qy, qz, qw]
+```
+
+The quaternion is normalized at startup and represents the rotation from the
+source IMU frame to the published output frame. `axes` and `quaternion_xyzw`
+are mutually exclusive; configuring both is a startup error. The same rotation
+is applied to gyro and accelerometer vectors immediately before normalized
+`imu0` publication.
+
 ## CLI overrides
 
 ```text

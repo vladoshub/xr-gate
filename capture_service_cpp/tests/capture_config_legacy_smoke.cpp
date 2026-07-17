@@ -94,6 +94,8 @@ int main() {
     require(cfg.camera.right_transform.flip == "xy",
             "built-in XREAL right-eye compatibility transform changed");
     require(cfg.imu.driver == "xreal_hid", "legacy XREAL IMU was not selected");
+    require(cfg.imu.transform.mode == xr_capture_cpp::ImuTransformMode::Identity,
+            "legacy XREAL IMU transform must remain identity");
     require(cfg.imu.xreal_hid.vendor_id == 0x3318 && cfg.imu.xreal_hid.product_id == 0x0426 &&
                 cfg.imu.xreal_hid.interface_number == 2,
             "legacy XREAL HID identity was not loaded");

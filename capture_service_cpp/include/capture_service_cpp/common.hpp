@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -128,6 +129,26 @@ struct XrealHidImuConfig {
   int read_timeout_ms = 50;
 };
 
+enum class ImuTransformMode {
+  Identity,
+  Axes,
+  Quaternion,
+};
+
+struct ImuTransformConfig {
+  // Optional rigid rotation from the source IMU frame to the normalized output
+  // frame. The default is identity so all existing XREAL profiles and configs
+  // retain their current byte-for-byte IMU values.
+  ImuTransformMode mode = ImuTransformMode::Identity;
+  std::array<std::string, 3> axes{{"x", "y", "z"}};
+  std::array<double, 4> quaternion_xyzw{{0.0, 0.0, 0.0, 1.0}};
+  std::array<double, 9> rotation_matrix{{
+      1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0,
+  }};
+};
+
 struct ImuSourceConfig {
   bool enabled = true;
   std::string driver = "xreal_hid";
@@ -140,6 +161,7 @@ struct ImuSourceConfig {
   int slot_count = 0;      // 0 means inherit service.slot_count
   int raw_slot_count = 0;  // 0 means inherit imu.slot_count
   int stall_exit_ms = 2000;
+  ImuTransformConfig transform;
   XrealHidImuConfig xreal_hid;
   SerialImuConfig serial;
 };

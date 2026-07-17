@@ -1,5 +1,7 @@
 #include "capture_service_cpp/imu_pipeline.hpp"
 
+#include "capture_service_cpp/imu_transform.hpp"
+
 #include <array>
 #include <iostream>
 #include <thread>
@@ -10,7 +12,8 @@ void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, St
   try {
     const std::string source_name = source->name();
     source->open();
-    std::cerr << "[capture_service_cpp] IMU source started: " << source_name << std::endl;
+    std::cerr << "[capture_service_cpp] IMU source started: " << source_name
+              << " transform=" << imu_transform_description(cfg.imu.transform) << std::endl;
 
     uint64_t last_data_ns = steady_ns();
     uint64_t published_samples = 0;
@@ -44,6 +47,10 @@ void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, St
                             0, 0, kFormatBytes, 0, cfg.imu.raw_frame_id);
       }
       if (!result.has_sample) continue;
+
+      // Raw source packets remain untouched. Only the normalized imu0 sample is
+      // rotated into the configured output frame here, in capture_service_cpp.
+      apply_imu_transform(cfg.imu.transform, result.sample);
 
       std::array<float, 6> payload{};
       for (size_t i = 0; i < 3; ++i) {
