@@ -132,7 +132,7 @@ DERIVED_GRAB_RESPONSE_START=0.85
 
 The adapter can merge hand tracking with external controller input. This is useful when hand pose is available, but buttons, triggers, sticks, or fallback input should come from an external controller.
 
-When an HMD-relative lost-hand fallback is active together with an IMU orientation source, the published fallback orientation keeps the same HMD-relative yaw used by controllers without IMU yaw. IMU pitch/roll remain active, while only the published IMU yaw and its output angular-velocity component are suppressed. Position prediction, lever-arm trajectory and acceleration compensation continue to use the complete physical IMU orientation and gyro.
+When an HMD-relative lost-hand fallback is active together with an IMU orientation source, the published fallback orientation comes entirely from the existing non-IMU HMD-relative/static fallback. IMU orientation and angular velocity are not merged into the fallback output. Position prediction, lever-arm trajectory and acceleration compensation continue to use the complete physical IMU sample internally.
 
 Typical stream:
 
