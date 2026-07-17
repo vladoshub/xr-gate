@@ -8,6 +8,8 @@
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
 
+#include "prediction_window_estimator.hpp"
+
 namespace xr_runtime_adapter::override_controller {
 
 constexpr uint32_t RUNTIME_BUTTON_DPAD_UP = static_cast<uint32_t>(xr_runtime::CONTROLLER_BUTTON_DPAD_UP);
@@ -85,6 +87,26 @@ struct RuntimeControllerImuMotionConfig {
   float predict_lost_ms = 600.0f;
   float max_prediction_velocity_mps = 3.0f;
   float prediction_damping = 1.0f;
+  bool prediction_window_mode = false;
+  float prediction_window_ms = 500.0f;
+
+  // Optional trajectory-only lever-arm model. It does not add states or alter
+  // hold/predict/reacquire timing. The vector is from the inferred pivot to the
+  // controller origin in the final controller-local orientation frame.
+  bool lever_arm_enabled = false;
+  float lever_arm_local_m[3] = {0.0f, 0.0f, -0.12f};
+
+  // Optional correction of accelerometer integration while lever-arm
+  // trajectory mode is active. Because the physical IMU position inside a
+  // controller cannot be determined reliably, the same pivot-to-controller
+  // lever_arm_local_m vector is used as an approximation for pivot-to-sensor.
+  // Both corrections are opt-in and alter only the acceleration fed into the
+  // existing Predicting-state integrator.
+  bool lever_arm_centripetal_compensation_enabled = false;
+  bool lever_arm_tangential_compensation_enabled = false;
+  float lever_arm_angular_acceleration_smooth_alpha = 0.15f;
+  float lever_arm_max_angular_acceleration_rad_s2 = 50.0f;
+
   bool publish_predicted_velocity = false;
   float reacquire_blend_ms = 0.0f;
 
@@ -131,10 +153,20 @@ struct RuntimeControllerImuSideRuntimeState {
   uint64_t reacquire_blend_start_ns = 0;
   float anchor_position_m[3] = {};
   float anchor_velocity_mps[3] = {};
+  bool lever_arm_anchor_valid = false;
+  float lever_arm_anchor_world_m[3] = {};
+  float lever_arm_pivot_anchor_position_m[3] = {};
+  float lever_arm_pivot_anchor_velocity_mps[3] = {};
+  prediction_window::PositionWindowEstimator<> position_history{};
+  uint64_t position_history_last_frame_sequence = 0;
   float position_m[3] = {};
   float velocity_mps[3] = {};
   float acceleration_position_delta_m[3] = {};
   float acceleration_velocity_delta_mps[3] = {};
+  bool lever_arm_angular_history_valid = false;
+  uint64_t lever_arm_angular_history_timestamp_ns = 0;
+  float lever_arm_previous_angular_velocity_world_rad_s[3] = {};
+  float lever_arm_filtered_angular_acceleration_world_rad_s2[3] = {};
   float reacquire_blend_from_position_m[3] = {};
   float reacquire_blend_from_velocity_mps[3] = {};
   bool yaw_trigger_range_valid = false;

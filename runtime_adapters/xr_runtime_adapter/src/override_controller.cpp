@@ -233,6 +233,12 @@ float v3_length(const float v[3]) {
   return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
+void cross_v3(const float a[3], const float b[3], float out[3]) {
+  out[0] = a[1] * b[2] - a[2] * b[1];
+  out[1] = a[2] * b[0] - a[0] * b[2];
+  out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
 void clamp_v3_length(float v[3], float max_length) {
   if (!std::isfinite(max_length) || max_length <= 0.0f) return;
   const float length = v3_length(v);
@@ -269,6 +275,7 @@ struct RuntimeImuSample {
   bool angular_velocity_valid = false;
   bool specific_force_valid = false;
   uint64_t timestamp_ns = 0;
+  uint64_t angular_velocity_timestamp_ns = 0;
   // Canonical IMU orientation after axis/basis conversion but before the
   // configurable presentation/mounting orientation_offset. Yaw correction
   // compares this clean reference with the equally clean optical reference.
@@ -333,6 +340,7 @@ RuntimeImuSample runtime_imu_sample(
       std::copy(std::begin(angular_velocity), std::end(angular_velocity),
                 out.angular_velocity_rad_s);
       out.angular_velocity_valid = true;
+      out.angular_velocity_timestamp_ns = latest_gyro->timestamp_ns;
       out.timestamp_ns = std::max(out.timestamp_ns, latest_gyro->timestamp_ns);
     }
   }
@@ -728,6 +736,8 @@ void apply_imu_orientation_override(
 bool runtime_world_linear_acceleration(
     const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
+    RuntimeControllerImuSideRuntimeState* state,
+    uint64_t runtime_timestamp_ns,
     float out_acceleration[3]) {
   if (!cfg.acceleration_integration_enabled ||
       !imu.orientation_valid || !imu.specific_force_valid) {
@@ -738,6 +748,136 @@ bool runtime_world_linear_acceleration(
   out_acceleration[1] -= std::max(0.0f, cfg.gravity_mps2);
   if (!finite_v3(out_acceleration)) return false;
 
+  const bool compensate_centripetal =
+      cfg.lever_arm_enabled &&
+      cfg.lever_arm_centripetal_compensation_enabled;
+  const bool compensate_tangential =
+      cfg.lever_arm_enabled &&
+      cfg.lever_arm_tangential_compensation_enabled;
+  if (state != nullptr && (compensate_centripetal || compensate_tangential) &&
+      imu.angular_velocity_valid && finite_v3(cfg.lever_arm_local_m)) {
+    // The exact physical IMU location inside the controller is not known.
+    // Approximate pivot-to-sensor with the same local vector used by the
+    // trajectory lever arm so both parts of the model stay geometrically
+    // consistent and remain independently opt-in.
+    float lever_world[3] = {};
+    float angular_velocity_world[3] = {};
+    q_rotate(imu.orientation, cfg.lever_arm_local_m, lever_world);
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s,
+             angular_velocity_world);
+
+    if (finite_v3(lever_world) && finite_v3(angular_velocity_world)) {
+      if (compensate_centripetal) {
+        float omega_cross_r[3] = {};
+        float centripetal_acceleration[3] = {};
+        cross_v3(angular_velocity_world, lever_world, omega_cross_r);
+        cross_v3(angular_velocity_world, omega_cross_r,
+                 centripetal_acceleration);
+        if (finite_v3(centripetal_acceleration)) {
+          for (int axis = 0; axis < 3; ++axis) {
+            out_acceleration[axis] -= centripetal_acceleration[axis];
+          }
+        }
+      }
+
+      if (compensate_tangential) {
+        const uint64_t sample_timestamp_ns =
+            imu.angular_velocity_timestamp_ns != 0
+                ? imu.angular_velocity_timestamp_ns
+                : (imu.timestamp_ns != 0 ? imu.timestamp_ns
+                                         : runtime_timestamp_ns);
+        bool have_filtered_alpha =
+            state->lever_arm_angular_history_valid;
+
+        if (!state->lever_arm_angular_history_valid) {
+          state->lever_arm_angular_history_valid = true;
+          state->lever_arm_angular_history_timestamp_ns = sample_timestamp_ns;
+          std::copy(std::begin(angular_velocity_world),
+                    std::end(angular_velocity_world),
+                    state->lever_arm_previous_angular_velocity_world_rad_s);
+          std::fill(
+              std::begin(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+              std::end(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+              0.0f);
+          have_filtered_alpha = false;
+        } else if (sample_timestamp_ns != 0 &&
+                   sample_timestamp_ns !=
+                       state->lever_arm_angular_history_timestamp_ns) {
+          const bool monotonic =
+              sample_timestamp_ns >
+              state->lever_arm_angular_history_timestamp_ns;
+          const uint64_t delta_ns = monotonic
+              ? sample_timestamp_ns -
+                    state->lever_arm_angular_history_timestamp_ns
+              : 0;
+          // A long pause or timestamp rollback is not a usable derivative.
+          // Re-anchor without changing any prediction state or transition.
+          if (!monotonic || delta_ns > 100'000'000ull) {
+            std::fill(
+                std::begin(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+                std::end(state->lever_arm_filtered_angular_acceleration_world_rad_s2),
+                0.0f);
+            have_filtered_alpha = false;
+          } else if (delta_ns > 0) {
+            const float dt_s = static_cast<float>(delta_ns) / 1.0e9f;
+            float raw_angular_acceleration[3] = {
+                (angular_velocity_world[0] -
+                 state->lever_arm_previous_angular_velocity_world_rad_s[0]) /
+                    dt_s,
+                (angular_velocity_world[1] -
+                 state->lever_arm_previous_angular_velocity_world_rad_s[1]) /
+                    dt_s,
+                (angular_velocity_world[2] -
+                 state->lever_arm_previous_angular_velocity_world_rad_s[2]) /
+                    dt_s,
+            };
+            clamp_v3_length(
+                raw_angular_acceleration,
+                cfg.lever_arm_max_angular_acceleration_rad_s2);
+            const float alpha = std::clamp(
+                cfg.lever_arm_angular_acceleration_smooth_alpha,
+                0.0f, 1.0f);
+            for (int axis = 0; axis < 3; ++axis) {
+              state->lever_arm_filtered_angular_acceleration_world_rad_s2[axis] =
+                  state->lever_arm_filtered_angular_acceleration_world_rad_s2[axis] *
+                      (1.0f - alpha) +
+                  raw_angular_acceleration[axis] * alpha;
+            }
+            clamp_v3_length(
+                state->lever_arm_filtered_angular_acceleration_world_rad_s2,
+                cfg.lever_arm_max_angular_acceleration_rad_s2);
+            have_filtered_alpha = finite_v3(
+                state->lever_arm_filtered_angular_acceleration_world_rad_s2);
+          }
+
+          state->lever_arm_angular_history_timestamp_ns = sample_timestamp_ns;
+          std::copy(std::begin(angular_velocity_world),
+                    std::end(angular_velocity_world),
+                    state->lever_arm_previous_angular_velocity_world_rad_s);
+        }
+
+        if (have_filtered_alpha) {
+          float tangential_acceleration[3] = {};
+          cross_v3(
+              state->lever_arm_filtered_angular_acceleration_world_rad_s2,
+              lever_world, tangential_acceleration);
+          if (finite_v3(tangential_acceleration)) {
+            for (int axis = 0; axis < 3; ++axis) {
+              out_acceleration[axis] -= tangential_acceleration[axis];
+            }
+          }
+        }
+      } else {
+        state->lever_arm_angular_history_valid = false;
+        state->lever_arm_angular_history_timestamp_ns = 0;
+      }
+    }
+  } else if (state != nullptr && compensate_tangential) {
+    state->lever_arm_angular_history_valid = false;
+    state->lever_arm_angular_history_timestamp_ns = 0;
+  }
+
+  if (!finite_v3(out_acceleration)) return false;
   const float deadband = std::max(0.0f, cfg.acceleration_deadband_mps2);
   const float magnitude = v3_length(out_acceleration);
   if (!std::isfinite(magnitude)) return false;
@@ -797,6 +937,14 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
             std::end(state.acceleration_position_delta_m), 0.0f);
   std::fill(std::begin(state.acceleration_velocity_delta_mps),
             std::end(state.acceleration_velocity_delta_mps), 0.0f);
+  state.lever_arm_angular_history_valid = false;
+  state.lever_arm_angular_history_timestamp_ns = 0;
+  std::fill(std::begin(state.lever_arm_previous_angular_velocity_world_rad_s),
+            std::end(state.lever_arm_previous_angular_velocity_world_rad_s),
+            0.0f);
+  std::fill(std::begin(state.lever_arm_filtered_angular_acceleration_world_rad_s2),
+            std::end(state.lever_arm_filtered_angular_acceleration_world_rad_s2),
+            0.0f);
   if (clear_anchor) {
     state.has_position_anchor = false;
     state.last_optical_pose_ns = 0;
@@ -804,12 +952,65 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
               std::end(state.anchor_position_m), 0.0f);
     std::fill(std::begin(state.anchor_velocity_mps),
               std::end(state.anchor_velocity_mps), 0.0f);
+    state.lever_arm_anchor_valid = false;
+    std::fill(std::begin(state.lever_arm_anchor_world_m),
+              std::end(state.lever_arm_anchor_world_m), 0.0f);
+    std::fill(std::begin(state.lever_arm_pivot_anchor_position_m),
+              std::end(state.lever_arm_pivot_anchor_position_m), 0.0f);
+    std::fill(std::begin(state.lever_arm_pivot_anchor_velocity_mps),
+              std::end(state.lever_arm_pivot_anchor_velocity_mps), 0.0f);
+    state.position_history.reset();
+    state.position_history_last_frame_sequence = 0;
+  }
+}
+
+void update_lever_arm_anchor(
+    RuntimeControllerImuSideRuntimeState& state,
+    const RuntimeImuSample& imu,
+    const RuntimeControllerImuMotionConfig& cfg) {
+  state.lever_arm_anchor_valid = false;
+  if (!cfg.lever_arm_enabled || !imu.orientation_valid ||
+      !finite_v3(cfg.lever_arm_local_m)) {
+    return;
+  }
+
+  float lever_world[3] = {};
+  q_rotate(imu.orientation, cfg.lever_arm_local_m, lever_world);
+  if (!finite_v3(lever_world)) return;
+
+  state.lever_arm_anchor_valid = true;
+  for (int axis = 0; axis < 3; ++axis) {
+    state.lever_arm_anchor_world_m[axis] = lever_world[axis];
+    state.lever_arm_pivot_anchor_position_m[axis] =
+        state.anchor_position_m[axis] - lever_world[axis];
+    state.lever_arm_pivot_anchor_velocity_mps[axis] =
+        state.anchor_velocity_mps[axis];
+  }
+
+  // The optical controller velocity already contains tangential motion caused
+  // by rotation about the pivot. Remove omega x r so that adding the live
+  // rotated lever arm during prediction does not count it twice.
+  if (imu.angular_velocity_valid) {
+    float angular_velocity_world[3] = {};
+    float tangential_velocity[3] = {};
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s,
+             angular_velocity_world);
+    cross_v3(angular_velocity_world, lever_world, tangential_velocity);
+    if (finite_v3(tangential_velocity)) {
+      for (int axis = 0; axis < 3; ++axis) {
+        state.lever_arm_pivot_anchor_velocity_mps[axis] -=
+            tangential_velocity[axis];
+      }
+      clamp_v3_length(state.lever_arm_pivot_anchor_velocity_mps,
+                      cfg.max_prediction_velocity_mps);
+    }
   }
 }
 
 void accept_optical_position_anchor(
     RuntimeControllerImuSideRuntimeState& state,
     const xr_runtime::HandSideF32V2& hand_side,
+    const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
     uint64_t timestamp_ns) {
   state.has_position_anchor = true;
@@ -821,9 +1022,20 @@ void accept_optical_position_anchor(
   std::copy(std::begin(state.anchor_position_m),
             std::end(state.anchor_position_m), state.position_m);
 
-  if ((hand_side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
-      std::isfinite(hand_side.vx) && std::isfinite(hand_side.vy) &&
-      std::isfinite(hand_side.vz)) {
+  if (cfg.prediction_window_mode) {
+    double estimated_velocity[3] = {};
+    if (state.position_history.estimate_velocity(estimated_velocity)) {
+      state.anchor_velocity_mps[0] = static_cast<float>(estimated_velocity[0]);
+      state.anchor_velocity_mps[1] = static_cast<float>(estimated_velocity[1]);
+      state.anchor_velocity_mps[2] = static_cast<float>(estimated_velocity[2]);
+      clamp_v3_length(state.anchor_velocity_mps, cfg.max_prediction_velocity_mps);
+    } else {
+      std::fill(std::begin(state.anchor_velocity_mps),
+                std::end(state.anchor_velocity_mps), 0.0f);
+    }
+  } else if ((hand_side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
+             std::isfinite(hand_side.vx) && std::isfinite(hand_side.vy) &&
+             std::isfinite(hand_side.vz)) {
     state.anchor_velocity_mps[0] = hand_side.vx;
     state.anchor_velocity_mps[1] = hand_side.vy;
     state.anchor_velocity_mps[2] = hand_side.vz;
@@ -834,6 +1046,12 @@ void accept_optical_position_anchor(
   }
   std::copy(std::begin(state.anchor_velocity_mps),
             std::end(state.anchor_velocity_mps), state.velocity_mps);
+
+  // Lever-arm mode changes only the trajectory calculation used later while
+  // Predicting. Capture an equivalent pivot anchor without changing any
+  // prediction state or transition.
+  update_lever_arm_anchor(state, imu, cfg);
+
   clear_imu_position_loss_state(state, false);
   state.last_update_ns = timestamp_ns;
 }
@@ -881,7 +1099,9 @@ void update_or_apply_imu_position_prediction(
     const RuntimeControllerImuMotionConfig& cfg,
     RuntimeControllerImuSideRuntimeState* state,
     const xr_runtime::HandSideF32V2* hand_side,
-    uint64_t timestamp_ns) {
+    uint64_t timestamp_ns,
+    uint64_t hand_frame_sequence,
+    uint64_t hand_source_timestamp_ns) {
   if (state == nullptr) return;
 
   const uint64_t hold_ns = nonnegative_ms_to_ns(cfg.hold_lost_ms);
@@ -895,6 +1115,18 @@ void update_or_apply_imu_position_prediction(
         hand_side->controller_py,
         hand_side->controller_pz,
     };
+    if (cfg.prediction_window_mode &&
+        (hand_frame_sequence == 0 ||
+         hand_frame_sequence != state->position_history_last_frame_sequence)) {
+      const uint64_t sample_timestamp_ns =
+          hand_source_timestamp_ns != 0 ? hand_source_timestamp_ns : timestamp_ns;
+      state->position_history.add(sample_timestamp_ns,
+                                  optical_position[0],
+                                  optical_position[1],
+                                  optical_position[2],
+                                  cfg.prediction_window_ms);
+      state->position_history_last_frame_sequence = hand_frame_sequence;
+    }
     float optical_velocity[3] = {};
     const bool optical_velocity_valid =
         (hand_side->flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
@@ -954,6 +1186,7 @@ void update_or_apply_imu_position_prediction(
                   state->anchor_position_m);
         std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
                   state->anchor_velocity_mps);
+        update_lever_arm_anchor(*state, imu, cfg);
         publish_synthetic_controller_position(
             out, state->position_m, state->velocity_mps, true, true,
             imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
@@ -961,7 +1194,7 @@ void update_or_apply_imu_position_prediction(
       }
     }
 
-    accept_optical_position_anchor(*state, *hand_side, cfg, timestamp_ns);
+    accept_optical_position_anchor(*state, *hand_side, imu, cfg, timestamp_ns);
     return;
   }
 
@@ -1031,8 +1264,8 @@ void update_or_apply_imu_position_prediction(
   state->last_update_ns = timestamp_ns;
 
   float acceleration[3] = {};
-  const bool acceleration_valid =
-      runtime_world_linear_acceleration(imu, cfg, acceleration);
+  const bool acceleration_valid = runtime_world_linear_acceleration(
+      imu, cfg, state, timestamp_ns, acceleration);
   if (dt_s > 0.0f && acceleration_valid) {
     // Fade the acceleration contribution with the same remaining-window factor
     // used for published prediction velocity. This keeps noisy IMU acceleration
@@ -1051,15 +1284,50 @@ void update_or_apply_imu_position_prediction(
 
   const float integrated_time_s =
       prediction_elapsed_s * (1.0f - 0.5f * progress);
+  const bool lever_arm_requested =
+      cfg.lever_arm_enabled && state->lever_arm_anchor_valid &&
+      imu.orientation_valid && finite_v3(cfg.lever_arm_local_m);
+  float current_lever_world[3] = {};
+  bool use_lever_arm = false;
+  if (lever_arm_requested) {
+    q_rotate(imu.orientation, cfg.lever_arm_local_m, current_lever_world);
+    use_lever_arm = finite_v3(current_lever_world);
+  }
+  const float* base_anchor_position = use_lever_arm
+      ? state->lever_arm_pivot_anchor_position_m
+      : state->anchor_position_m;
+  const float* base_anchor_velocity = use_lever_arm
+      ? state->lever_arm_pivot_anchor_velocity_mps
+      : state->anchor_velocity_mps;
+
   for (int axis = 0; axis < 3; ++axis) {
     const float base_delta =
-        state->anchor_velocity_mps[axis] * damping * integrated_time_s;
-    state->position_m[axis] = state->anchor_position_m[axis] + base_delta +
-                              state->acceleration_position_delta_m[axis];
+        base_anchor_velocity[axis] * damping * integrated_time_s;
+    state->position_m[axis] = base_anchor_position[axis] + base_delta +
+                              state->acceleration_position_delta_m[axis] +
+                              (use_lever_arm ? current_lever_world[axis] : 0.0f);
     state->velocity_mps[axis] =
-        (state->anchor_velocity_mps[axis] * damping +
+        (base_anchor_velocity[axis] * damping +
          state->acceleration_velocity_delta_mps[axis]) *
         (1.0f - progress);
+  }
+
+  // Keep published velocity consistent with the curved position trajectory.
+  // This changes only the value produced inside Predicting; timeout and all
+  // state-machine transitions remain untouched.
+  if (use_lever_arm && imu.angular_velocity_valid) {
+    float angular_velocity_world[3] = {};
+    float tangential_velocity[3] = {};
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s,
+             angular_velocity_world);
+    cross_v3(angular_velocity_world, current_lever_world,
+             tangential_velocity);
+    if (finite_v3(tangential_velocity)) {
+      const float remaining = 1.0f - progress;
+      for (int axis = 0; axis < 3; ++axis) {
+        state->velocity_mps[axis] += tangential_velocity[axis] * remaining;
+      }
+    }
   }
   clamp_v3_length(state->velocity_mps, cfg.max_prediction_velocity_mps);
 
@@ -1352,7 +1620,9 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           imu, imu_motion_cfg, runtime_state, optical_yaw_hand_side,
           optical_yaw_frame_sequence, timestamp_ns);
       update_or_apply_imu_position_prediction(
-          out, imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns);
+          out, imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns,
+          hand != nullptr ? hand->sequence : 0,
+          hand != nullptr ? hand->source_timestamp_ns : 0);
       apply_imu_orientation_override(out, imu);
     } else if (runtime_state != nullptr) {
       // The feature is dormant while this side uses hand-tracking fallback.

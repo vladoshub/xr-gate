@@ -354,14 +354,29 @@ void BodyTrackerStabilityFilter::update_state(const xr_tracking::BodyTrackerF32V
   State& state = find_or_create_state(key);
   Vec3 v{};
   bool have_v = false;
-  if ((tracker.flags & xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) != 0u &&
-      finite3(tracker.pose.vx, tracker.pose.vy, tracker.pose.vz)) {
+  const Vec3 observed_position = pose_position(tracker);
+  if (cfg_.prediction_window_mode) {
+    state.position_history.add(sample_ns,
+                               observed_position.x,
+                               observed_position.y,
+                               observed_position.z,
+                               cfg_.prediction_window_ms);
+    double estimated_velocity[3] = {};
+    if (state.position_history.estimate_velocity(estimated_velocity)) {
+      v = {estimated_velocity[0], estimated_velocity[1], estimated_velocity[2]};
+      have_v = true;
+    } else {
+      state.velocity_mps = {};
+      state.has_velocity = false;
+    }
+  } else if ((tracker.flags & xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) != 0u &&
+             finite3(tracker.pose.vx, tracker.pose.vy, tracker.pose.vz)) {
     v = {tracker.pose.vx, tracker.pose.vy, tracker.pose.vz};
     have_v = true;
   } else if (state.last_good_ns != 0 && sample_ns > state.last_good_ns) {
     const double dt_s = static_cast<double>(sample_ns - state.last_good_ns) / 1e9;
     if (dt_s > 1e-6) {
-      v = scale(sub(pose_position(tracker), pose_position(state.last_good)), 1.0 / dt_s);
+      v = scale(sub(observed_position, pose_position(state.last_good)), 1.0 / dt_s);
       have_v = true;
     }
   }

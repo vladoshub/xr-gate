@@ -99,6 +99,18 @@ RUNTIME_HAND_GATE_PREDICTION_DAMPING=0.35
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS=0.8
 ```
 
+Optional rolling-window velocity estimation can replace the legacy final-frame
+velocity source without changing the hold/predict/reacquire state machine:
+
+```bash
+RUNTIME_HAND_TRACKING_PREDICTION_WINDOW_MODE=1
+RUNTIME_HAND_TRACKING_PREDICTION_WINDOW_MS=500
+```
+
+The estimator keeps accepted real controller positions from the last window and
+uses a least-squares position-vs-time slope when tracking is lost. Synthetic
+predicted or reacquire-blended positions are not used as input samples.
+
 ## Derived gestures
 
 The adapter can ignore backend-provided hand gestures and derive runtime gestures from hand pose data.
@@ -174,6 +186,64 @@ RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS=180
 ```
 
 This keeps short body tracker losses from immediately dropping the tracker. Prediction is applied per tracker, not to the whole body set. Set `RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY=1` only when the downstream runtime should also receive the decaying synthetic linear velocity; the default `0` avoids double prediction.
+
+To estimate each tracker's launch velocity from a rolling real-pose history:
+
+```bash
+RUNTIME_BODY_TRACKER_PREDICTION_WINDOW_MODE=1
+RUNTIME_BODY_TRACKER_PREDICTION_WINDOW_MS=500
+```
+
+Controller IMU position prediction has an independent optical history:
+
+```bash
+RUNTIME_CONTROLLER_IMU_PREDICTION_WINDOW_MODE=1
+RUNTIME_CONTROLLER_IMU_PREDICTION_WINDOW_MS=500
+```
+
+An independent lever-arm trajectory mode can curve the position prediction from
+live IMU orientation without changing the hold/predict/reacquire state machine:
+
+```bash
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_MODE=1
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_X_M=0
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_Y_M=0
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_Z_M=-0.12
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_X_M=0
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_Y_M=0
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_Z_M=-0.12
+```
+
+The vector is pivot-to-controller in the final controller-local frame. Window
+mode and lever-arm mode are independent and may be enabled in any combination.
+The lever-arm path subtracts `omega x r` from the selected launch velocity to
+avoid counting the initial tangential velocity twice. Accelerometer integration
+remains the existing optional additive trajectory term.
+
+When accelerometer integration and lever-arm trajectory are both enabled, two
+independent opt-in corrections can remove rotational acceleration that the
+lever-arm path already represents:
+
+```bash
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_CENTRIPETAL_COMPENSATION=0
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_TANGENTIAL_COMPENSATION=0
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_ANGULAR_ACCELERATION_SMOOTH_ALPHA=0.15
+RUNTIME_CONTROLLER_IMU_LEVER_ARM_MAX_ANGULAR_ACCELERATION_RAD_S2=50.0
+```
+
+Centripetal compensation subtracts `omega x (omega x r)`. Tangential
+compensation derives angular acceleration from gyro samples, low-pass filters
+it, and subtracts `alpha x r`. The exact IMU board position inside inexpensive
+controllers is not reliably known, so both corrections intentionally reuse the
+configured pivot-to-controller lever-arm vector as a pivot-to-sensor
+approximation. All values default to disabled and modify only the acceleration
+fed into the existing `Predicting` trajectory integrator; state transitions and
+timers are unchanged.
+
+The controller mode replaces only the legacy backend instantaneous velocity
+with the rolling optical estimate. Existing hold/predict timing, damping,
+velocity clamp, reacquire blend, and optional accelerometer integration remain
+unchanged.
 
 ## Spatial proxy mesh
 

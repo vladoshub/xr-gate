@@ -18,6 +18,8 @@
 
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 
+#include "prediction_window_estimator.hpp"
+
 namespace xr_runtime_adapter::hand_filter {
 
 constexpr uint32_t kHandStatusNoHands = 0u;
@@ -43,6 +45,8 @@ struct HandPoseStabilityFilterConfig {
   double predict_lost_ms = 0.0;
   double max_prediction_velocity_mps = 2.0;
   double prediction_damping = 0.5;
+  bool prediction_window_mode = false;
+  double prediction_window_ms = 500.0;
   bool publish_predicted_velocity = false;
   double reacquire_blend_ms = 0.0;
 
@@ -164,6 +168,9 @@ class HandPoseStabilityFilter {
     os << "hand_gate_predict_lost_ms: " << cfg_.predict_lost_ms << "\n";
     os << "hand_gate_max_prediction_velocity_mps: " << cfg_.max_prediction_velocity_mps << "\n";
     os << "hand_gate_prediction_damping: " << cfg_.prediction_damping << "\n";
+    os << "hand_gate_prediction_window_mode: "
+       << (cfg_.prediction_window_mode ? "true" : "false") << "\n";
+    os << "hand_gate_prediction_window_ms: " << cfg_.prediction_window_ms << "\n";
     os << "hand_gate_publish_predicted_velocity: "
        << (cfg_.publish_predicted_velocity ? "true" : "false") << "\n";
     os << "hand_gate_reacquire_blend_ms: " << cfg_.reacquire_blend_ms << "\n";
@@ -217,6 +224,7 @@ class HandPoseStabilityFilter {
 
     bool has_velocity = false;
     Vec3 velocity_mps{};
+    prediction_window::PositionWindowEstimator<> position_history{};
 
     bool has_last_prediction = false;
     xr_runtime::HandSideF32V2 last_prediction{};
@@ -639,9 +647,22 @@ class HandPoseStabilityFilter {
 
   static void update_velocity_v2(HandStateV2& state,
                                  const xr_runtime::HandSideF32V2& accepted,
+                                 const xr_runtime::HandSideF32V2& observed,
                                  uint64_t source_ts,
                                  const HandPoseStabilityFilterConfig& cfg) {
-    if (state.has_last_good && source_ts > state.last_good_source_ts) {
+    if (cfg.prediction_window_mode) {
+      const Vec3 p = controller_v2(observed);
+      state.position_history.add(source_ts, p.x, p.y, p.z, cfg.prediction_window_ms);
+      double estimated_velocity[3] = {};
+      if (state.position_history.estimate_velocity(estimated_velocity)) {
+        state.velocity_mps = clamp_velocity(
+            {estimated_velocity[0], estimated_velocity[1], estimated_velocity[2]}, cfg);
+        state.has_velocity = true;
+      } else {
+        state.velocity_mps = {};
+        state.has_velocity = false;
+      }
+    } else if (state.has_last_good && source_ts > state.last_good_source_ts) {
       const double dt_s = static_cast<double>(source_ts - state.last_good_source_ts) / 1e9;
       if (dt_s > 1e-6) {
         const Vec3 v = scale(sub(controller_v2(accepted), controller_v2(state.last_good)), 1.0 / dt_s);
@@ -881,10 +902,10 @@ class HandPoseStabilityFilter {
       const uint64_t elapsed_ns = source_ts >= state.blend_start_ts ? source_ts - state.blend_start_ts : 0;
       const double t = std::clamp(static_cast<double>(elapsed_ns) / static_cast<double>(duration_ns), 0.0, 1.0);
       xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, t);
-      update_velocity_v2(state, out, source_ts, cfg_);
+      update_velocity_v2(state, out, input, source_ts, cfg_);
 
       if (t >= 1.0) {
-        update_velocity_v2(state, input, source_ts, cfg_);
+        update_velocity_v2(state, input, input, source_ts, cfg_);
         state.blend_active = false;
         state.has_last_prediction = false;
         out = input;
@@ -903,7 +924,7 @@ class HandPoseStabilityFilter {
     }
 
     if (d.orig_active && !state.has_last_good) {
-      update_velocity_v2(state, input, source_ts, cfg_);
+      update_velocity_v2(state, input, input, source_ts, cfg_);
       state.has_pending = false;
       state.pending_count = 0;
       state.blend_active = false;
@@ -938,7 +959,7 @@ class HandPoseStabilityFilter {
           state.blend_start_ts = source_ts;
           state.has_last_prediction = false;
           xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, 0.0);
-          update_velocity_v2(state, out, source_ts, cfg_);
+          update_velocity_v2(state, out, input, source_ts, cfg_);
 
           d.side = out;
           d.gated_active = true;
@@ -951,7 +972,7 @@ class HandPoseStabilityFilter {
           return d;
         }
 
-        update_velocity_v2(state, input, source_ts, cfg_);
+        update_velocity_v2(state, input, input, source_ts, cfg_);
         state.blend_active = false;
         state.has_last_prediction = false;
 
@@ -998,7 +1019,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           state.blend_start_ts = source_ts;
           state.has_last_prediction = false;
           xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, 0.0);
-          update_velocity_v2(state, out, source_ts, cfg_);
+          update_velocity_v2(state, out, input, source_ts, cfg_);
 
           d.side = out;
           d.gated_active = true;
@@ -1011,7 +1032,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           return d;
         }
 
-        update_velocity_v2(state, input, source_ts, cfg_);
+        update_velocity_v2(state, input, input, source_ts, cfg_);
         state.blend_active = false;
         state.has_last_prediction = false;
 

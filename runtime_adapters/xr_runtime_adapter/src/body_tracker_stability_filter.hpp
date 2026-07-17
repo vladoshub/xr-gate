@@ -7,6 +7,8 @@
 
 #include <xr_tracking/contracts/body_tracker_set_contract.hpp>
 
+#include "prediction_window_estimator.hpp"
+
 namespace xr_runtime_adapter::body_tracker_filter {
 
 struct BodyTrackerStabilityGateConfig {
@@ -17,6 +19,8 @@ struct BodyTrackerStabilityGateConfig {
   double max_prediction_velocity_mps = 0.8;
   double max_prediction_acceleration_mps2 = 0.0;
   double prediction_damping = 0.35;
+  bool prediction_window_mode = false;
+  double prediction_window_ms = 500.0;
   bool publish_predicted_velocity = false;
   double reacquire_blend_ms = 0.0;
   double synthetic_publish_hz = 90.0;
@@ -49,6 +53,7 @@ class BodyTrackerStabilityFilter {
     uint64_t last_good_ns = 0;
     Vec3 velocity_mps{};
     bool has_velocity = false;
+    prediction_window::PositionWindowEstimator<> position_history{};
 
     bool has_last_prediction = false;
     xr_tracking::BodyTrackerF32V1 last_prediction{};
