@@ -19,6 +19,9 @@ struct BodyTrackerStabilityGateConfig {
   double max_prediction_velocity_mps = 0.8;
   double max_prediction_acceleration_mps2 = 0.0;
   double prediction_damping = 0.35;
+  // Maximum accumulated synthetic path during prediction, in metres.
+  // <= 0 disables the path limit.
+  double max_prediction_path_m = 0.65;
   bool prediction_window_mode = false;
   double prediction_window_ms = 500.0;
   bool publish_predicted_velocity = false;
@@ -57,6 +60,11 @@ class BodyTrackerStabilityFilter {
 
     bool has_last_prediction = false;
     xr_tracking::BodyTrackerF32V1 last_prediction{};
+
+    bool prediction_path_active = false;
+    double prediction_path_m = 0.0;
+    Vec3 prediction_path_last_position{};
+    uint64_t prediction_path_last_ns = 0;
 
     bool blend_active = false;
     xr_tracking::BodyTrackerF32V1 blend_from{};

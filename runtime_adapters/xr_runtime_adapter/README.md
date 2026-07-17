@@ -156,9 +156,12 @@ orientation offset unconditionally, even when `override_controller` is absent.
 IMU yaw correction deliberately excludes `hand_orientation_offset` and
 `controller_override.imu_orientation.*.orientation_offset` from its comparison.
 It compares coordinate/axis-corrected optical and IMU poses, then applies the
-retained yaw correction to the final IMU output where the configured offsets
-remain active. This prevents presentation/mounting offsets from being learned
-again as yaw drift.
+retained yaw correction only to the final published IMU orientation where the
+configured offsets remain active. The uncorrected physical IMU orientation is
+kept for position prediction, lever-arm trajectory and acceleration conversion,
+so periodic and reacquire yaw correction cannot move the hand in space. This
+also prevents presentation/mounting offsets from being learned again as yaw
+drift.
 
 Controller input TCP uses the same packed `ControllerInputV3` payload as SHM
 (`CIV3`, protocol version 3, 1432-byte payload), including the complete per-side

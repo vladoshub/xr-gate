@@ -2698,6 +2698,7 @@ int main(int argc, char** argv) {
   bool runtime_controller_right_imu_position_prediction = false;
   bool runtime_controller_imu_prediction_window_mode = false;
   double runtime_controller_imu_prediction_window_ms = 500.0;
+  double runtime_controller_imu_max_prediction_path_m = 0.65;
   bool runtime_controller_imu_lever_arm_mode = false;
   double runtime_controller_imu_lever_arm_left_x_m = 0.0;
   double runtime_controller_imu_lever_arm_left_y_m = 0.0;
@@ -2801,6 +2802,7 @@ int main(int argc, char** argv) {
   double runtime_body_tracker_max_prediction_velocity_mps = 0.8;
   double runtime_body_tracker_max_prediction_acceleration_mps2 = 0.0;
   double runtime_body_tracker_prediction_damping = 0.35;
+  double runtime_body_tracker_max_prediction_path_m = 0.65;
   bool runtime_body_tracker_prediction_window_mode = false;
   double runtime_body_tracker_prediction_window_ms = 500.0;
   bool runtime_body_tracker_publish_predicted_velocity = false;
@@ -2840,6 +2842,7 @@ int main(int argc, char** argv) {
   double runtime_hand_gate_prediction_damping = 0.5;
   bool runtime_hand_tracking_prediction_window_mode = false;
   double runtime_hand_tracking_prediction_window_ms = 500.0;
+  double runtime_hand_tracking_max_prediction_path_m = 0.65;
   bool runtime_hand_gate_publish_predicted_velocity = false;
   double runtime_hand_gate_reacquire_blend_ms_hand_tracking = 0.0;
   double runtime_hand_gate_reacquire_blend_ms_imu = 0.0;
@@ -3124,6 +3127,8 @@ int main(int argc, char** argv) {
                  "Estimate both IMU-controller anchor velocities from all real optical controller poses in a rolling time window instead of the backend instantaneous velocity");
   app.add_option("--runtime-controller-imu-prediction-window-ms", runtime_controller_imu_prediction_window_ms,
                  "Rolling real optical-pose history duration used by controller IMU prediction-window mode");
+  app.add_option("--runtime-controller-imu-max-prediction-path-m", runtime_controller_imu_max_prediction_path_m,
+                 "Maximum accumulated controller IMU prediction path in metres; 0 disables");
   app.add_option("--runtime-controller-imu-lever-arm-mode", runtime_controller_imu_lever_arm_mode,
                  "Curve controller IMU position prediction around a pivot using live IMU orientation; changes only the trajectory inside the existing Predicting state");
   app.add_option("--runtime-controller-imu-lever-arm-left-x-m", runtime_controller_imu_lever_arm_left_x_m,
@@ -3331,6 +3336,8 @@ int main(int argc, char** argv) {
                  "Cap body tracker prediction velocity change in metres per second squared; <=0 disables acceleration clamp");
   app.add_option("--runtime-body-tracker-prediction-damping", runtime_body_tracker_prediction_damping,
                  "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
+  app.add_option("--runtime-body-tracker-max-prediction-path-m", runtime_body_tracker_max_prediction_path_m,
+                 "Maximum accumulated body tracker prediction path in metres; 0 disables");
   app.add_option("--runtime-body-tracker-prediction-window-mode", runtime_body_tracker_prediction_window_mode,
                  "Estimate body tracker prediction velocity from all real poses in a rolling time window instead of the legacy instantaneous velocity path");
   app.add_option("--runtime-body-tracker-prediction-window-ms", runtime_body_tracker_prediction_window_ms,
@@ -3407,6 +3414,8 @@ int main(int argc, char** argv) {
                  "Estimate HAND_TRACKING lost-pose velocity from all accepted real controller poses in a rolling time window instead of the legacy final-frame delta");
   app.add_option("--runtime-hand-tracking-prediction-window-ms", runtime_hand_tracking_prediction_window_ms,
                  "Rolling real-pose history duration used by HAND_TRACKING prediction-window mode");
+  app.add_option("--runtime-hand-tracking-max-prediction-path-m", runtime_hand_tracking_max_prediction_path_m,
+                 "Maximum accumulated HAND_TRACKING prediction path in metres; 0 disables");
   app.add_option("--runtime-hand-gate-publish-predicted-velocity", runtime_hand_gate_publish_predicted_velocity,
                  "Runtime hand gate: publish decaying linear velocity with predicted hand poses; false avoids downstream double prediction");
   app.add_option("--runtime-hand-gate-reacquire-blend-ms,--runtime-hand-gate-reacquire-blend-ms-hand-tracking",
@@ -3855,6 +3864,15 @@ int main(int argc, char** argv) {
     if (runtime_controller_imu_prediction_window_ms < 0.0) {
       throw std::runtime_error("--runtime-controller-imu-prediction-window-ms must be >= 0");
     }
+    if (runtime_controller_imu_max_prediction_path_m < 0.0) {
+      throw std::runtime_error("--runtime-controller-imu-max-prediction-path-m must be >= 0");
+    }
+    if (runtime_hand_tracking_max_prediction_path_m < 0.0) {
+      throw std::runtime_error("--runtime-hand-tracking-max-prediction-path-m must be >= 0");
+    }
+    if (runtime_body_tracker_max_prediction_path_m < 0.0) {
+      throw std::runtime_error("--runtime-body-tracker-max-prediction-path-m must be >= 0");
+    }
     const double runtime_controller_imu_lever_arm_values[] = {
         runtime_controller_imu_lever_arm_left_x_m,
         runtime_controller_imu_lever_arm_left_y_m,
@@ -3959,6 +3977,7 @@ int main(int argc, char** argv) {
         std::cout << "runtime_body_tracker_max_prediction_velocity_mps: " << runtime_body_tracker_max_prediction_velocity_mps << "\n";
         std::cout << "runtime_body_tracker_max_prediction_acceleration_mps2: " << runtime_body_tracker_max_prediction_acceleration_mps2 << "\n";
         std::cout << "runtime_body_tracker_prediction_damping: " << runtime_body_tracker_prediction_damping << "\n";
+        std::cout << "runtime_body_tracker_max_prediction_path_m: " << runtime_body_tracker_max_prediction_path_m << "\n";
         std::cout << "runtime_body_tracker_prediction_window_mode: " << (runtime_body_tracker_prediction_window_mode ? "true" : "false") << "\n";
         std::cout << "runtime_body_tracker_prediction_window_ms: " << runtime_body_tracker_prediction_window_ms << "\n";
         std::cout << "runtime_body_tracker_publish_predicted_velocity: "
@@ -4016,6 +4035,8 @@ int main(int argc, char** argv) {
               << (runtime_controller_imu_prediction_window_mode ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_prediction_window_ms: "
               << runtime_controller_imu_prediction_window_ms << "\n";
+    std::cout << "runtime_controller_imu_max_prediction_path_m: "
+              << runtime_controller_imu_max_prediction_path_m << "\n";
     std::cout << "runtime_controller_imu_lever_arm_mode: "
               << (runtime_controller_imu_lever_arm_mode ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_lever_arm_left_m: ["
@@ -4133,6 +4154,7 @@ int main(int argc, char** argv) {
       std::cout << "runtime_hand_gate_prediction_damping: " << runtime_hand_gate_prediction_damping << "\n";
       std::cout << "runtime_hand_tracking_prediction_window_mode: " << (runtime_hand_tracking_prediction_window_mode ? "true" : "false") << "\n";
       std::cout << "runtime_hand_tracking_prediction_window_ms: " << runtime_hand_tracking_prediction_window_ms << "\n";
+      std::cout << "runtime_hand_tracking_max_prediction_path_m: " << runtime_hand_tracking_max_prediction_path_m << "\n";
       std::cout << "runtime_hand_gate_publish_predicted_velocity: "
                 << (runtime_hand_gate_publish_predicted_velocity ? "true" : "false") << "\n";
       std::cout << "runtime_hand_gate_reacquire_blend_ms_hand_tracking: " << runtime_hand_gate_reacquire_blend_ms_hand_tracking << "\n";
@@ -4542,6 +4564,7 @@ int main(int argc, char** argv) {
       cfg.stability_gate.max_prediction_velocity_mps = runtime_body_tracker_max_prediction_velocity_mps;
       cfg.stability_gate.max_prediction_acceleration_mps2 = runtime_body_tracker_max_prediction_acceleration_mps2;
       cfg.stability_gate.prediction_damping = runtime_body_tracker_prediction_damping;
+      cfg.stability_gate.max_prediction_path_m = runtime_body_tracker_max_prediction_path_m;
       cfg.stability_gate.prediction_window_mode = runtime_body_tracker_prediction_window_mode;
       cfg.stability_gate.prediction_window_ms = runtime_body_tracker_prediction_window_ms;
       cfg.stability_gate.publish_predicted_velocity = runtime_body_tracker_publish_predicted_velocity;
@@ -4699,6 +4722,8 @@ int main(int argc, char** argv) {
       dst.prediction_window_mode = runtime_controller_imu_prediction_window_mode;
       dst.prediction_window_ms = static_cast<float>(
           std::max(0.0, runtime_controller_imu_prediction_window_ms));
+      dst.max_prediction_path_m = static_cast<float>(
+          std::max(0.0, runtime_controller_imu_max_prediction_path_m));
       dst.lever_arm_enabled = runtime_controller_imu_lever_arm_mode;
       dst.lever_arm_local_m[0] = static_cast<float>(lever_arm_x_m);
       dst.lever_arm_local_m[1] = static_cast<float>(lever_arm_y_m);
@@ -4854,6 +4879,7 @@ int main(int argc, char** argv) {
                                   double reacquire_blend_ms,
                                   bool prediction_window_mode,
                                   double prediction_window_ms,
+                                  double max_prediction_path_m,
                                   std::string debug_csv) {
       hand_filter::HandPoseStabilityFilterConfig cfg;
       cfg.enabled = runtime_hand_stability_gate;
@@ -4867,6 +4893,7 @@ int main(int argc, char** argv) {
       cfg.prediction_damping = runtime_hand_gate_prediction_damping;
       cfg.prediction_window_mode = prediction_window_mode;
       cfg.prediction_window_ms = prediction_window_ms;
+      cfg.max_prediction_path_m = max_prediction_path_m;
       cfg.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       cfg.reacquire_blend_ms = reacquire_blend_ms;
       cfg.debug_csv = std::move(debug_csv);
@@ -4882,6 +4909,7 @@ int main(int argc, char** argv) {
           runtime_hand_gate_reacquire_blend_ms_hand_tracking,
           runtime_hand_tracking_prediction_window_mode,
           runtime_hand_tracking_prediction_window_ms,
+          runtime_hand_tracking_max_prediction_path_m,
           runtime_hand_gate_debug_csv));
       // The IMU controller path owns lost-pose prediction and optical
       // reacquire blending. Keep the IMU hand gate as a validator/confirmation
@@ -4893,6 +4921,7 @@ int main(int argc, char** argv) {
           runtime_hand_gate_predict_lost_ms_imu,
           0.0,
           false,
+          0.0,
           0.0,
           {}));
     }

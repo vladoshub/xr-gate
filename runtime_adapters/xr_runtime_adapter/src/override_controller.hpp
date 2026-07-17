@@ -87,6 +87,9 @@ struct RuntimeControllerImuMotionConfig {
   float predict_lost_ms = 600.0f;
   float max_prediction_velocity_mps = 3.0f;
   float prediction_damping = 1.0f;
+  // Maximum accumulated synthetic controller path during prediction, in metres.
+  // <= 0 disables the path limit.
+  float max_prediction_path_m = 0.65f;
   bool prediction_window_mode = false;
   float prediction_window_ms = 500.0f;
 
@@ -163,6 +166,10 @@ struct RuntimeControllerImuSideRuntimeState {
   float velocity_mps[3] = {};
   float acceleration_position_delta_m[3] = {};
   float acceleration_velocity_delta_mps[3] = {};
+  bool prediction_path_active = false;
+  float prediction_path_m = 0.0f;
+  float prediction_path_last_position_m[3] = {};
+  uint64_t prediction_path_last_timestamp_ns = 0;
   bool lever_arm_angular_history_valid = false;
   uint64_t lever_arm_angular_history_timestamp_ns = 0;
   float lever_arm_previous_angular_velocity_world_rad_s[3] = {};

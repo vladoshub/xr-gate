@@ -937,6 +937,11 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
             std::end(state.acceleration_position_delta_m), 0.0f);
   std::fill(std::begin(state.acceleration_velocity_delta_mps),
             std::end(state.acceleration_velocity_delta_mps), 0.0f);
+  state.prediction_path_active = false;
+  state.prediction_path_m = 0.0f;
+  std::fill(std::begin(state.prediction_path_last_position_m),
+            std::end(state.prediction_path_last_position_m), 0.0f);
+  state.prediction_path_last_timestamp_ns = 0;
   state.lever_arm_angular_history_valid = false;
   state.lever_arm_angular_history_timestamp_ns = 0;
   std::fill(std::begin(state.lever_arm_previous_angular_velocity_world_rad_s),
@@ -1186,6 +1191,11 @@ void update_or_apply_imu_position_prediction(
                   state->anchor_position_m);
         std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
                   state->anchor_velocity_mps);
+        state->prediction_path_active = false;
+        state->prediction_path_m = 0.0f;
+        std::copy(std::begin(state->position_m), std::end(state->position_m),
+                  state->prediction_path_last_position_m);
+        state->prediction_path_last_timestamp_ns = timestamp_ns;
         update_lever_arm_anchor(*state, imu, cfg);
         publish_synthetic_controller_position(
             out, state->position_m, state->velocity_mps, true, true,
@@ -1253,6 +1263,12 @@ void update_or_apply_imu_position_prediction(
               std::end(state->acceleration_position_delta_m), 0.0f);
     std::fill(std::begin(state->acceleration_velocity_delta_mps),
               std::end(state->acceleration_velocity_delta_mps), 0.0f);
+    state->prediction_path_active = true;
+    state->prediction_path_m = 0.0f;
+    std::copy(std::begin(state->anchor_position_m),
+              std::end(state->anchor_position_m),
+              state->prediction_path_last_position_m);
+    state->prediction_path_last_timestamp_ns = state->last_optical_pose_ns;
   }
 
   uint64_t dt_ns = state->last_update_ns != 0 &&
@@ -1330,6 +1346,28 @@ void update_or_apply_imu_position_prediction(
     }
   }
   clamp_v3_length(state->velocity_mps, cfg.max_prediction_velocity_mps);
+
+  const float max_prediction_path_m = cfg.max_prediction_path_m;
+  if (std::isfinite(max_prediction_path_m) && max_prediction_path_m > 0.0f &&
+      state->prediction_path_active &&
+      timestamp_ns > state->prediction_path_last_timestamp_ns) {
+    const float step_delta[3] = {
+        state->position_m[0] - state->prediction_path_last_position_m[0],
+        state->position_m[1] - state->prediction_path_last_position_m[1],
+        state->position_m[2] - state->prediction_path_last_position_m[2],
+    };
+    const float step_m = v3_length(step_delta);
+    if (std::isfinite(step_m) &&
+        state->prediction_path_m + step_m > max_prediction_path_m) {
+      clear_imu_position_loss_state(*state, true);
+      invalidate_runtime_controller_pose(out);
+      return;
+    }
+    if (std::isfinite(step_m)) state->prediction_path_m += step_m;
+    std::copy(std::begin(state->position_m), std::end(state->position_m),
+              state->prediction_path_last_position_m);
+    state->prediction_path_last_timestamp_ns = timestamp_ns;
+  }
 
   publish_synthetic_controller_position(
       out, state->position_m, state->velocity_mps,
@@ -1617,30 +1655,32 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           left ? cfg.left_imu_orientation : cfg.right_imu_orientation;
       const RuntimeControllerImuMotionConfig& imu_motion_cfg =
           left ? cfg.left_imu_motion : cfg.right_imu_motion;
-      RuntimeImuSample physical_imu =
+      const RuntimeImuSample physical_imu =
           runtime_imu_sample(*controller_side, imu_orientation_cfg);
-      // Position prediction uses the selected/gated hand profile. Yaw
-      // correction samples the raw backend hand frame so predicted or held
-      // runtime poses never enter the optical correction window.
-      apply_runtime_yaw_correction(
-          physical_imu, imu_motion_cfg, runtime_state, optical_yaw_hand_side,
-          optical_yaw_frame_sequence, timestamp_ns);
+      RuntimeImuSample presentation_imu = physical_imu;
 
-      // Keep the complete physical IMU sample for position prediction,
+      // Yaw correction is a presentation-only wrist-orientation adjustment.
+      // It samples the raw backend hand frame so predicted or held runtime
+      // poses never enter the optical correction window, but it must not alter
+      // the physical IMU frame used by spatial position prediction.
+      apply_runtime_yaw_correction(
+          presentation_imu, imu_motion_cfg, runtime_state,
+          optical_yaw_hand_side, optical_yaw_frame_sequence, timestamp_ns);
+
+      // Keep the uncorrected physical IMU sample for position prediction,
       // lever-arm trajectory, acceleration world transform and rotational
-      // acceleration compensation. The lost-hand fallback only suppresses IMU
-      // data in the final orientation output.
+      // acceleration compensation. Periodic/reacquire yaw correction therefore
+      // cannot move the controller in space or bend its predicted trajectory.
       update_or_apply_imu_position_prediction(
           out, physical_imu, imu_motion_cfg, runtime_state, hand_side,
           timestamp_ns, hand != nullptr ? hand->sequence : 0,
           hand != nullptr ? hand->source_timestamp_ns : 0);
 
       // The lost-hand HMD-relative fallback owns the complete published
-      // orientation. Do not merge any IMU orientation or angular velocity into
-      // that output. Position prediction above still uses the untouched
-      // physical IMU sample, including lever-arm and acceleration data.
+      // orientation. Otherwise publish only the presentation copy with yaw
+      // correction; position above remains based on the raw physical sample.
       if (!using_lost_hand_hmd_relative_pose) {
-        apply_imu_orientation_override(out, physical_imu);
+        apply_imu_orientation_override(out, presentation_imu);
       }
     } else if (runtime_state != nullptr) {
       // The feature is dormant while this side uses hand-tracking fallback.
