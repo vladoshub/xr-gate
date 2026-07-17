@@ -31,9 +31,10 @@ camera:
 
     controls_policy: strict
     controls:
-      brightness: 15
+      brightness: 7
       gain: 32
       exposure_time_absolute: 4000
+      #contrast: 3 FOR Calibration
 
   output:
     left_stream: camera0
