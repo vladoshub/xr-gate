@@ -713,6 +713,59 @@ void apply_runtime_yaw_correction(
   }
 }
 
+bool replace_imu_yaw_with_reference_orientation(
+    RuntimeImuSample& imu,
+    Qf reference_orientation) {
+  if (!imu.orientation_valid) return false;
+
+  const Qf physical_orientation = imu.orientation;
+  const bool physical_angular_velocity_valid = imu.angular_velocity_valid;
+  float physical_angular_velocity_rad_s[3] = {};
+  if (physical_angular_velocity_valid) {
+    std::copy(std::begin(imu.angular_velocity_rad_s),
+              std::end(imu.angular_velocity_rad_s),
+              physical_angular_velocity_rad_s);
+  }
+
+  float imu_yaw = 0.0f;
+  float reference_yaw = 0.0f;
+  if (!yaw_rad_from_q(physical_orientation, imu_yaw) ||
+      !yaw_rad_from_q(reference_orientation, reference_yaw)) {
+    return false;
+  }
+
+  // This helper is used only for the final published fallback orientation.
+  // Prediction, lever-arm motion and acceleration integration keep using the
+  // untouched physical RuntimeImuSample.
+  const Qf imu_without_yaw =
+      q_mul(q_conj(yaw_q(imu_yaw)), physical_orientation);
+  imu.orientation = q_mul(yaw_q(reference_yaw), imu_without_yaw);
+
+  // Downstream runtimes may extrapolate orientation from angular velocity.
+  // Remove only the world-Y component from the output copy, while preserving
+  // pitch/roll angular velocity. Use the physical orientation to obtain the
+  // real world-space gyro, then express the filtered vector in the final
+  // output orientation frame.
+  if (physical_angular_velocity_valid) {
+    float angular_velocity_world[3] = {};
+    float angular_velocity_output_local[3] = {};
+    q_rotate(physical_orientation, physical_angular_velocity_rad_s,
+             angular_velocity_world);
+    angular_velocity_world[1] = 0.0f;
+    q_rotate(q_conj(imu.orientation), angular_velocity_world,
+             angular_velocity_output_local);
+    if (finite_v3(angular_velocity_output_local)) {
+      std::copy(std::begin(angular_velocity_output_local),
+                std::end(angular_velocity_output_local),
+                imu.angular_velocity_rad_s);
+    } else {
+      imu.angular_velocity_valid = false;
+    }
+  }
+
+  return true;
+}
+
 void apply_imu_orientation_override(
     xr_runtime::RuntimeControllerSideStateV1& out,
     const RuntimeImuSample& imu) {
@@ -1601,6 +1654,11 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       break;
   }
 
+  const bool using_lost_hand_hmd_relative_pose =
+      !valid_hand_side && use_hmd_relative_lost_hand_fallback &&
+      (out.source_mask &
+       xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE) != 0u;
+
   if (controller_side != nullptr) {
     fill_inputs_from_controller(out, *controller_side, cfg);
     const RuntimeControllerOrientationSource configured_orientation_source =
@@ -1612,18 +1670,38 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           left ? cfg.left_imu_orientation : cfg.right_imu_orientation;
       const RuntimeControllerImuMotionConfig& imu_motion_cfg =
           left ? cfg.left_imu_motion : cfg.right_imu_motion;
-      RuntimeImuSample imu = runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      RuntimeImuSample physical_imu =
+          runtime_imu_sample(*controller_side, imu_orientation_cfg);
       // Position prediction uses the selected/gated hand profile. Yaw
       // correction samples the raw backend hand frame so predicted or held
       // runtime poses never enter the optical correction window.
       apply_runtime_yaw_correction(
-          imu, imu_motion_cfg, runtime_state, optical_yaw_hand_side,
+          physical_imu, imu_motion_cfg, runtime_state, optical_yaw_hand_side,
           optical_yaw_frame_sequence, timestamp_ns);
+
+      // Keep the complete physical IMU sample for position prediction,
+      // lever-arm trajectory, acceleration world transform and rotational
+      // acceleration compensation. Lost-hand yaw suppression is an output-only
+      // orientation policy and must not alter the predicted position path.
       update_or_apply_imu_position_prediction(
-          out, imu, imu_motion_cfg, runtime_state, hand_side, timestamp_ns,
-          hand != nullptr ? hand->sequence : 0,
+          out, physical_imu, imu_motion_cfg, runtime_state, hand_side,
+          timestamp_ns, hand != nullptr ? hand->sequence : 0,
           hand != nullptr ? hand->source_timestamp_ns : 0);
-      apply_imu_orientation_override(out, imu);
+
+      RuntimeImuSample output_imu = physical_imu;
+      bool lost_fallback_uses_reference_yaw = false;
+      if (using_lost_hand_hmd_relative_pose && output_imu.orientation_valid) {
+        lost_fallback_uses_reference_yaw =
+            replace_imu_yaw_with_reference_orientation(
+                output_imu, q_from_xyzw(out.orientation_xyzw));
+      }
+      apply_imu_orientation_override(out, output_imu);
+      if (lost_fallback_uses_reference_yaw &&
+          (out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
+        // Hybrid orientation: HMD-relative/static fallback supplies yaw while
+        // the controller IMU still supplies pitch/roll.
+        out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_STATIC_ORIENTATION;
+      }
     } else if (runtime_state != nullptr) {
       // The feature is dormant while this side uses hand-tracking fallback.
       // Drop the old optical anchor so a later IMU reconnect cannot resume a
