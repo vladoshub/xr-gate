@@ -5497,14 +5497,16 @@ int main(int argc, char** argv) {
                                        apply_right_hand_orientation_offset);
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
-            // Yaw correction compares optical and IMU orientations. Both must
-            // be expressed in the same final controller frame. Keep this copy
-            // ungated, but apply the same coordinate and mounting offsets.
+            // Yaw correction uses a clean optical reference: apply the normal
+            // backend->runtime coordinate/HMD transforms, but deliberately
+            // exclude hand_orientation_offset. That offset is presentation
+            // alignment for the final visual/controller output and must not be
+            // interpreted as IMU yaw drift.
             apply_hand_frame_transform(*raw_optical_yaw_hand,
                                        hand_transform,
                                        hmd_position_ptr, hmd_orientation_ptr,
-                                       apply_left_hand_orientation_offset,
-                                       apply_right_hand_orientation_offset);
+                                       false,
+                                       false);
           }
         }
 

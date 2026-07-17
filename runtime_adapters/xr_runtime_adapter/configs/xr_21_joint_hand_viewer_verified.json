@@ -92,13 +92,13 @@
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": -60.0
+          "rz_deg": -30.0
         },
         "right": {
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 60.0
+          "rz_deg": 30.0
         }
       }
     },
@@ -348,7 +348,7 @@
           "basis_rotation": {
             "rx_deg": 0.0,
             "ry_deg": 0.0,
-            "rz_deg": 0.0
+            "rz_deg": -30.0
           }
         },
         "orientation_offset": {
@@ -357,7 +357,7 @@
           "rotation_deg": {
             "rx_deg": 0.0,
             "ry_deg": 0.0,
-            "rz_deg": 0.0
+            "rz_deg": 30.0
           }
         }
       },

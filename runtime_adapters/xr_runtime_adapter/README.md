@@ -139,6 +139,13 @@ HAND_ORIENTATION_OFFSET_ONLY_RUNTIME=1
 Set it to `0` to restore the previous behavior and apply the configured hand
 orientation offset unconditionally, even when `override_controller` is absent.
 
+IMU yaw correction deliberately excludes `hand_orientation_offset` and
+`controller_override.imu_orientation.*.orientation_offset` from its comparison.
+It compares coordinate/axis-corrected optical and IMU poses, then applies the
+retained yaw correction to the final IMU output where the configured offsets
+remain active. This prevents presentation/mounting offsets from being learned
+again as yaw drift.
+
 Controller input TCP uses the same packed `ControllerInputV3` payload as SHM
 (`CIV3`, protocol version 3, 1432-byte payload), including the complete per-side
 IMU state and up to four IMU samples.

@@ -269,6 +269,12 @@ struct RuntimeImuSample {
   bool angular_velocity_valid = false;
   bool specific_force_valid = false;
   uint64_t timestamp_ns = 0;
+  // Canonical IMU orientation after axis/basis conversion but before the
+  // configurable presentation/mounting orientation_offset. Yaw correction
+  // compares this clean reference with the equally clean optical reference.
+  Qf yaw_reference_orientation{};
+  // Final IMU orientation used by controller output and acceleration logic.
+  // This includes orientation_offset when configured.
   Qf orientation{};
   float angular_velocity_rad_s[3] = {};
   float specific_force_m_s2[3] = {};
@@ -289,6 +295,10 @@ RuntimeImuSample runtime_imu_sample(
         orientation, cfg.invert_x, cfg.invert_y, cfg.invert_z);
     orientation = apply_basis_transform(basis, orientation);
   }
+  // Keep the axis/basis-corrected pose as the clean yaw reference. The
+  // optional orientation_offset is a final controller presentation/mounting
+  // adjustment and must not be mistaken for IMU yaw drift.
+  out.yaw_reference_orientation = orientation;
   if (cfg.offset_enabled) {
     orientation = cfg.offset_pre_multiply
         ? q_mul(offset, orientation)
@@ -687,7 +697,8 @@ void apply_runtime_yaw_correction(
     return;
   }
   advance_yaw_blend(*runtime_state, timestamp_ns);
-  update_yaw_correction(*runtime_state, motion_cfg, imu.orientation,
+  update_yaw_correction(*runtime_state, motion_cfg,
+                        imu.yaw_reference_orientation,
                         optical_hand_side, optical_frame_sequence, timestamp_ns);
   if (runtime_state->yaw_correction_valid) {
     imu.orientation = q_mul(yaw_q(runtime_state->yaw_correction_rad), imu.orientation);

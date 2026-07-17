@@ -89,7 +89,9 @@ struct RuntimeControllerImuMotionConfig {
   float reacquire_blend_ms = 0.0f;
 
   // Optical hand orientation updates a retained world-yaw offset. Periodic
-  // correction compares the latest optical and IMU orientations. With the
+  // correction compares the latest clean optical and IMU orientations after
+  // coordinate/axis transforms but before hand_orientation_offset and
+  // imu_orientation.orientation_offset. With the
   // trigger filter enabled, the latest residual error must remain above the
   // deadband for trigger_hold_ms and its range during that time must stay
   // within trigger_max_range_deg. The final target is always the latest pose,

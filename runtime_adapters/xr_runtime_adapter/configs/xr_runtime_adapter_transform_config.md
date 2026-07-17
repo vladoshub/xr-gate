@@ -1305,6 +1305,13 @@ When IMU data for a side is unavailable or invalid, that side falls back to
 `HAND_TRACKING_BACKEND`; neither the IMU transform nor the IMU offset is then
 applied.
 
+For IMU yaw correction, `orientation_transform` remains part of the canonical
+IMU reference, but `orientation_offset` is excluded from the yaw comparison.
+The optical reference similarly receives the normal backend-to-runtime/HMD
+coordinate transforms but excludes `hand_orientation_offset`. Both offsets are
+still applied to their final published poses. Therefore the yaw trigger measures
+sensor drift rather than presentation or controller-mount alignment.
+
 ---
 
 ## 11. Common recipes
