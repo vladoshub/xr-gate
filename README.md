@@ -165,6 +165,8 @@ The config will be saved in ~/.config/xr_tracking/override_controller/default.js
 
 **Or if you have VR-PARK controllers you can use this config:**
 
+**Perhaps this setting will work with other similar joysticks (4 unique action buttons + a simple stick for mouse movement)**
+
 
 1. Copy config:
 
