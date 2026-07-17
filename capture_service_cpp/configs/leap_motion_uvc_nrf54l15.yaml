@@ -31,9 +31,9 @@ camera:
 
     controls_policy: strict
     controls:
-      brightness: 10
+      brightness: 15
       gain: 32
-      exposure_time_absolute: 5000
+      exposure_time_absolute: 4000
 
   output:
     left_stream: camera0
