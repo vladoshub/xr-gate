@@ -3,11 +3,30 @@ import argparse
 import json
 import math
 from pathlib import Path
+from typing import Any, Dict, List
 
 import yaml
 
 
-def mat_inv(T):
+def positive_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise argparse.ArgumentTypeError(
+            f"expected a finite value greater than zero, got {value!r}"
+        )
+    return number
+
+
+def nonnegative_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0:
+        raise argparse.ArgumentTypeError(
+            f"expected a finite non-negative value, got {value!r}"
+        )
+    return number
+
+
+def mat_inv(T: List[List[float]]) -> List[List[float]]:
     R = [row[:3] for row in T[:3]]
     t = [T[0][3], T[1][3], T[2][3]]
 
@@ -22,7 +41,7 @@ def mat_inv(T):
     ]
 
 
-def mat_to_quat(R):
+def mat_to_quat(R: List[List[float]]):
     m00, m01, m02 = R[0]
     m10, m11, m12 = R[1]
     m20, m21, m22 = R[2]
@@ -53,11 +72,13 @@ def mat_to_quat(R):
         qy = (m12 + m21) / s
         qz = 0.25 * s
 
-    n = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+    n = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if not math.isfinite(n) or n <= 0.0:
+        raise ValueError("invalid rotation matrix: quaternion norm is zero or non-finite")
     return qx / n, qy / n, qz / n, qw / n
 
 
-def pose_from_T(T):
+def pose_from_T(T: List[List[float]]) -> Dict[str, float]:
     qx, qy, qz, qw = mat_to_quat([row[:3] for row in T[:3]])
     return {
         "px": float(T[0][3]),
@@ -70,73 +91,137 @@ def pose_from_T(T):
     }
 
 
-def camera_intrinsics(cam):
-    fx, fy, cx, cy = cam["intrinsics"]
-    d = list(cam["distortion_coeffs"])
-    while len(d) < 4:
-        d.append(0.0)
+def require_matrix4(name: str, value: Any) -> List[List[float]]:
+    if not isinstance(value, list) or len(value) != 4:
+        raise ValueError(f"{name} must be a 4x4 matrix")
+    matrix = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != 4:
+            raise ValueError(f"{name} must be a 4x4 matrix")
+        matrix.append([float(v) for v in row])
+    return matrix
 
+
+def camera_intrinsics(name: str, cam: Dict[str, Any]) -> Dict[str, Any]:
+    camera_model = cam.get("camera_model")
+    distortion_model = cam.get("distortion_model")
+    if camera_model != "pinhole" or distortion_model != "equidistant":
+        raise ValueError(
+            f"{name}: unsupported Kalibr model {camera_model!r}/{distortion_model!r}; "
+            "the current runtime converter only supports pinhole-equi -> kb4"
+        )
+
+    intrinsics = cam.get("intrinsics")
+    distortion = cam.get("distortion_coeffs")
+    if not isinstance(intrinsics, list) or len(intrinsics) != 4:
+        raise ValueError(
+            f"{name}: expected exactly four pinhole intrinsics [fx, fy, cx, cy]"
+        )
+    if not isinstance(distortion, list) or len(distortion) != 4:
+        raise ValueError(
+            f"{name}: expected exactly four equidistant distortion coefficients"
+        )
+
+    fx, fy, cx, cy = [float(v) for v in intrinsics]
+    d = [float(v) for v in distortion]
     return {
         "camera_type": "kb4",
         "intrinsics": {
-            "fx": float(fx),
-            "fy": float(fy),
-            "cx": float(cx),
-            "cy": float(cy),
-            "k1": float(d[0]),
-            "k2": float(d[1]),
-            "k3": float(d[2]),
-            "k4": float(d[3]),
+            "fx": fx,
+            "fy": fy,
+            "cx": cx,
+            "cy": cy,
+            "k1": d[0],
+            "k2": d[1],
+            "k3": d[2],
+            "k4": d[3],
         },
     }
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--camchain", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--imu-update-rate", required=True, type=positive_float)
+    ap.add_argument("--accel-noise-density", required=True, type=nonnegative_float)
+    ap.add_argument("--accel-random-walk", required=True, type=nonnegative_float)
+    ap.add_argument("--gyro-noise-density", required=True, type=nonnegative_float)
+    ap.add_argument("--gyro-random-walk", required=True, type=nonnegative_float)
     args = ap.parse_args()
 
     camchain_path = Path(args.camchain)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    k = yaml.safe_load(camchain_path.read_text())
-    cams = [k["cam0"], k["cam1"]]
+    loaded = yaml.safe_load(camchain_path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError("camchain root must be a YAML mapping")
+    try:
+        cams = [loaded["cam0"], loaded["cam1"]]
+    except KeyError as exc:
+        raise ValueError(
+            f"camchain is missing required camera entry: {exc.args[0]}"
+        ) from exc
+    if not all(isinstance(cam, dict) for cam in cams):
+        raise ValueError("cam0 and cam1 must be YAML mappings")
 
     T_imu_cam = []
-    for cam in cams:
+    for index, cam in enumerate(cams):
         # Kalibr gives T_cam_imu: imu -> camera.
-        # Basalt JSON field name T_imu_cam historically stores camera pose as T_imu_cam object.
-        # In our previous working Basalt profile we used inverse(T_cam_imu).
-        T_cam_imu = cam["T_cam_imu"]
+        # The existing XR Gate Basalt JSON convention stores inverse(T_cam_imu).
+        T_cam_imu = require_matrix4(
+            f"cam{index}.T_cam_imu", cam.get("T_cam_imu")
+        )
         T_imu_cam.append(pose_from_T(mat_inv(T_cam_imu)))
 
     shifts = [float(cam.get("timeshift_cam_imu", 0.0)) for cam in cams]
+    if not all(math.isfinite(shift) for shift in shifts):
+        raise ValueError("camera-to-IMU time shifts must be finite")
     cam_time_offset_ns = int(round((sum(shifts) / len(shifts)) * 1e9))
+
+    resolution = []
+    for index, cam in enumerate(cams):
+        value = cam.get("resolution")
+        if not isinstance(value, list) or len(value) != 2:
+            raise ValueError(f"cam{index}.resolution must contain [width, height]")
+        width, height = int(value[0]), int(value[1])
+        if width <= 0 or height <= 0:
+            raise ValueError(f"cam{index}.resolution must be positive")
+        resolution.append([width, height])
 
     data = {
         "value0": {
             "T_imu_cam": T_imu_cam,
-            "intrinsics": [camera_intrinsics(c) for c in cams],
-            "resolution": [
-                [int(c["resolution"][0]), int(c["resolution"][1])]
-                for c in cams
+            "intrinsics": [
+                camera_intrinsics(f"cam{i}", cam)
+                for i, cam in enumerate(cams)
             ],
+            "resolution": resolution,
             "calib_accel_bias": [0.0] * 9,
             "calib_gyro_bias": [0.0] * 12,
-            "imu_update_rate": 1000.0,
-            "accel_noise_std": [0.01, 0.01, 0.01],
-            "gyro_noise_std": [0.001, 0.001, 0.001],
-            "accel_bias_std": [0.001, 0.001, 0.001],
-            "gyro_bias_std": [0.0001, 0.0001, 0.0001],
+            "imu_update_rate": float(args.imu_update_rate),
+            "accel_noise_std": [float(args.accel_noise_density)] * 3,
+            "gyro_noise_std": [float(args.gyro_noise_density)] * 3,
+            "accel_bias_std": [float(args.accel_random_walk)] * 3,
+            "gyro_bias_std": [float(args.gyro_random_walk)] * 3,
             "T_mocap_world": {
-                "px": 0.0, "py": 0.0, "pz": 0.0,
-                "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0,
+                "px": 0.0,
+                "py": 0.0,
+                "pz": 0.0,
+                "qx": 0.0,
+                "qy": 0.0,
+                "qz": 0.0,
+                "qw": 1.0,
             },
             "T_imu_marker": {
-                "px": 0.0, "py": 0.0, "pz": 0.0,
-                "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0,
+                "px": 0.0,
+                "py": 0.0,
+                "pz": 0.0,
+                "qx": 0.0,
+                "qy": 0.0,
+                "qz": 0.0,
+                "qw": 1.0,
             },
             "mocap_time_offset_ns": 0,
             "mocap_to_imu_offset_ns": 0,
@@ -156,10 +241,11 @@ def main():
         }
     }
 
-    out_path.write_text(json.dumps(data, indent=4) + "\n")
+    out_path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
 
     print("written:", out_path)
     print("resolution:", data["value0"]["resolution"])
+    print("imu_update_rate:", data["value0"]["imu_update_rate"])
     print("cam_time_offset_ns:", cam_time_offset_ns)
 
 

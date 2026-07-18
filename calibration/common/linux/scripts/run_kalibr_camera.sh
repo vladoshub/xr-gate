@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=load_target.sh
 source "$SCRIPT_DIR/load_target.sh"
 
+BAG_FREQ="${BAG_FREQ:-4.0}"
+APPROX_SYNC="${APPROX_SYNC:-0.005}"
+
 BAG="${BAG:-$(ls -1t "$BAGS_DIR"/$BAG_PATTERN 2>/dev/null | head -n1 || true)}"
 [[ -n "$BAG" ]] || { echo "[camera-calib][ERROR] no bag matching $BAGS_DIR/$BAG_PATTERN" >&2; exit 1; }
 BAG="$(expand_tilde "$BAG")"
@@ -22,6 +25,8 @@ echo "BAG=$BAG"
 echo "TARGET=$TARGET"
 echo "OUT=$OUT"
 echo "MODELS=$CAMERA_MODEL_0 $CAMERA_MODEL_1"
+echo "BAG_FREQ=$BAG_FREQ"
+echo "APPROX_SYNC=$APPROX_SYNC"
 
 docker run --rm -it \
   -v "$HOME:$HOME" \
@@ -36,6 +41,8 @@ docker run --rm -it \
       --topics '$CAM0_TOPIC' '$CAM1_TOPIC' \\
       --models '$CAMERA_MODEL_0' '$CAMERA_MODEL_1' \\
       --target '$TARGET' \\
+      --bag-freq '$BAG_FREQ' \\
+      --approx-sync '$APPROX_SYNC' \\
       --dont-show-report
   "
 

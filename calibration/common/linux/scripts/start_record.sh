@@ -114,7 +114,7 @@ fi
 
 OUT_LOG="/tmp/${CALIB_TARGET_NAME}_guided_record.log"
 rm -f "$OUT_LOG"
-"$PYTHON_BIN" "${args[@]}" 2>&1 | tee "$OUT_LOG" &
+"$PYTHON_BIN" "${args[@]}" > >(tee "$OUT_LOG") 2>&1 &
 REC_PID=$!
 GUIDE_START="$(date +%s)"
 
