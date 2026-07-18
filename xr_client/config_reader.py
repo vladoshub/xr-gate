@@ -454,17 +454,22 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
     }
 
 
-def _load_key_value_env_file(env_path: str, *, required: bool = False) -> int:
-    """Load a simple KEY=VALUE env file without requiring bash.
+def _load_key_value_env_file(
+    env_path: str,
+    *,
+    required: bool = False,
+    label: str = "device",
+) -> int:
+    """Load a simple KEY=VALUE environment layer without requiring bash.
 
     This is intentionally conservative and is used for native Windows runs where
-    bash is not guaranteed to exist. POSIX keeps the existing bash-compatible
-    loader so current Linux xreal_ultra.env behavior is unchanged.
+    bash is not guaranteed to exist. POSIX keeps the bash-compatible loader so
+    current Linux device and tracking profiles can use shell expansion.
     """
     path = Path(expand_path(env_path))
     if not path.exists():
         if required:
-            raise FileNotFoundError(f"device env file not found: {path}")
+            raise FileNotFoundError(f"{label} env file not found: {path}")
         return 0
     changed = 0
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -484,18 +489,23 @@ def _load_key_value_env_file(env_path: str, *, required: bool = False) -> int:
         if os.environ.get(key) != value:
             os.environ[key] = value
             changed += 1
-    log(f"Loaded device env: {path} ({changed} changed/new vars)")
+    log(f"Loaded {label} env: {path} ({changed} changed/new vars)")
     return changed
 
 
-def _load_shell_env_file(env_path: str, *, required: bool = False) -> int:
-    """Load a bash-compatible device env file into this Python process."""
+def _load_shell_env_file(
+    env_path: str,
+    *,
+    required: bool = False,
+    label: str = "device",
+) -> int:
+    """Load a bash-compatible environment layer into this Python process."""
     if not IS_POSIX:
-        return _load_key_value_env_file(env_path, required=required)
+        return _load_key_value_env_file(env_path, required=required, label=label)
     path = Path(expand_path(env_path))
     if not path.exists():
         if required:
-            raise FileNotFoundError(f"device env file not found: {path}")
+            raise FileNotFoundError(f"{label} env file not found: {path}")
         return 0
     before = dict(os.environ)
     cmd = [
@@ -509,11 +519,12 @@ def _load_shell_env_file(env_path: str, *, required: bool = False) -> int:
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     except FileNotFoundError:
         if required:
-            raise RuntimeError("bash is required to load device env files")
+            raise RuntimeError(f"bash is required to load {label} env files")
         return 0
     if proc.returncode != 0:
         raise RuntimeError(
-            f"failed to load device env {path}: {proc.stderr.decode(errors='replace').strip()}"
+            f"failed to load {label} env {path}: "
+            f"{proc.stderr.decode(errors='replace').strip()}"
         )
     after: Dict[str, str] = {}
     for raw in proc.stdout.split(b"\0"):
@@ -526,8 +537,27 @@ def _load_shell_env_file(env_path: str, *, required: bool = False) -> int:
         if before.get(key) != value:
             os.environ[key] = value
             changed += 1
-    log(f"Loaded device env: {path} ({changed} changed/new vars)")
+    log(f"Loaded {label} env: {path} ({changed} changed/new vars)")
     return changed
+
+
+def _load_config_tracking_env(data: Dict[str, Any], root_project: str) -> None:
+    """Load an optional tracking-sensor profile after the display profile."""
+    env_override = os.environ.get("XR_TRACKING_ENV")
+    config_value = data.get("tracking_env")
+    raw = env_override or config_value
+    if raw is None:
+        return
+
+    env_path = expand_path(str(raw), root_project)
+    os.environ["XR_TRACKING_ENV"] = env_path
+
+    if "tracking_env_required" in data:
+        required = bool(data.get("tracking_env_required"))
+    else:
+        required = bool(env_override or config_value)
+
+    _load_shell_env_file(env_path, required=required, label="tracking")
 
 
 def _load_config_device_env(data: Dict[str, Any], initial_root_project: str) -> str:
@@ -540,7 +570,7 @@ def _load_config_device_env(data: Dict[str, Any], initial_root_project: str) -> 
         required = bool(data.get("device_env_required"))
     else:
         required = bool(data.get("device_env"))
-    _load_shell_env_file(env_path, required=required)
+    _load_shell_env_file(env_path, required=required, label="device")
     root_project = expand_path(str(os.environ.get("XR_ROOT_PROJECT", initial_root_project)))
     os.environ.setdefault("XR_ROOT_PROJECT", root_project)
     os.environ.setdefault("ROOT_PROJECT", root_project)
@@ -551,6 +581,27 @@ def _load_config_device_env(data: Dict[str, Any], initial_root_project: str) -> 
     os.environ.setdefault("XR_COMMON_DEVICE_HOME", str(Path(root_project) / "devices" / "common"))
     os.environ.setdefault("XR_COMMON_SCRIPTS_ROOT", str(Path(os.environ["XR_COMMON_DEVICE_HOME"]) / os.environ["XR_DEVICE_SCRIPTS_OS"] / "scripts"))
     os.environ.setdefault("XR_DEVICE_CONFIGS_ROOT", str(Path(os.environ["XR_DEVICE_HOME"]) / "configs"))
+
+    # The display/device profile establishes the runtime and hardware helpers.
+    # The optional tracking profile is loaded second and may override only the
+    # capture, calibration and tracking-backend variables it defines.
+    _load_config_tracking_env(data, root_project)
+
+    tracking_home = (
+        os.environ.get("XR_TRACKING_HOME")
+        or os.environ.get("XR_TRACKING_SENSOR_HOME")
+        or os.environ["XR_DEVICE_HOME"]
+    )
+    os.environ.setdefault("XR_TRACKING_HOME", tracking_home)
+    os.environ.setdefault("XR_TRACKING_SENSOR_HOME", tracking_home)
+    os.environ.setdefault(
+        "XR_TRACKING_CONFIGS_ROOT",
+        str(Path(tracking_home) / "configs"),
+    )
+    os.environ.setdefault(
+        "XR_TRACKING_CALIB_DIR",
+        str(Path(os.environ["XR_TRACKING_CONFIGS_ROOT"]) / "calibration_dataset"),
+    )
     return root_project
 
 def default_linux_config_dict() -> Dict[str, Any]:

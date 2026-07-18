@@ -653,5 +653,7 @@
       }
     }
   },
-  "device_env": "{root}/devices/custom/custom.env"
+  "device_env": "{root}/devices/xreal_ultra/xreal_ultra.env",
+  "tracking_env": "{root}/devices/leap_motion_uvc_nrf54l15/tracking.env",
+  "tracking_env_required": true
 }
