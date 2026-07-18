@@ -28,6 +28,9 @@ add_executable(override_controller
   src/providers/gearvr/gearvr_options.cpp
   src/providers/gearvr/gearvr_protocol.cpp
   src/providers/gearvr/gearvr_touchpad.cpp
+  src/providers/xiao_nrf54l15/xiao_nrf54l15_input_provider.cpp
+  src/providers/xiao_nrf54l15/xiao_nrf54l15_options.cpp
+  src/providers/xiao_nrf54l15/xr_controller_v1_protocol.cpp
   src/platform/input_provider.cpp
   src/platform/composite_input_provider.cpp
 )
@@ -36,15 +39,18 @@ if(WIN32)
   target_sources(override_controller PRIVATE
     src/platform/windows/windows_input_provider.cpp
     src/providers/gearvr/transport/windows_gearvr_ble_transport.cpp
+    src/providers/xiao_nrf54l15/transport/unsupported_xiao_nrf54l15_serial_transport.cpp
   )
 elseif(UNIX AND NOT APPLE)
   target_sources(override_controller PRIVATE
     src/platform/linux/linux_evdev_input_provider.cpp
     src/providers/gearvr/transport/linux_gearvr_ble_transport.cpp
+    src/providers/xiao_nrf54l15/transport/linux_xiao_nrf54l15_serial_transport.cpp
   )
 else()
   target_sources(override_controller PRIVATE
     src/providers/gearvr/transport/unsupported_gearvr_ble_transport.cpp
+    src/providers/xiao_nrf54l15/transport/unsupported_xiao_nrf54l15_serial_transport.cpp
   )
 endif()
 
@@ -103,4 +109,17 @@ if(EXISTS "${OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR}")
     DESTINATION bin/override_controller/configs
     FILES_MATCHING PATTERN "*.json"
   )
+endif()
+
+option(OVERRIDE_CONTROLLER_BUILD_TESTS "Build override_controller protocol tests" OFF)
+if(OVERRIDE_CONTROLLER_BUILD_TESTS)
+  enable_testing()
+  add_executable(xr_controller_v1_protocol_test
+    tests/xr_controller_v1_protocol_test.cpp
+    src/providers/xiao_nrf54l15/xr_controller_v1_protocol.cpp
+  )
+  target_include_directories(xr_controller_v1_protocol_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/src/providers/xiao_nrf54l15"
+  )
+  add_test(NAME xr_controller_v1_protocol_test COMMAND xr_controller_v1_protocol_test)
 endif()

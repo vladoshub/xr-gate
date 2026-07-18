@@ -2,6 +2,7 @@
 
 #include "composite_input_provider.hpp"
 #include "../providers/gearvr/gearvr_input_provider.hpp"
+#include "../providers/xiao_nrf54l15/xiao_nrf54l15_input_provider.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -70,6 +71,12 @@ std::unique_ptr<InputProvider> make_input_provider(const InputProviderOptions& o
     } else if (name == "gearvr_ble" || name == "gearvr") {
       enabled.push_back(std::make_unique<gearvr::GearVrInputProvider>(
           provider_options_for(options, {"gearvr", "gearvr_ble"})));
+    } else if (name == "xiao_nrf54l15" || name == "xiao-nrf54l15" ||
+               name == "xiao_nrf54l15_serial" || name == "xiao") {
+      enabled.push_back(std::make_unique<xiao_nrf54l15::XiaoNrf54l15InputProvider>(
+          provider_options_for(options,
+                               {"xiao", "xiao-nrf54l15", "xiao_nrf54l15_serial",
+                                "xiao_nrf54l15"})));
     } else {
       throw std::runtime_error("unknown Linux input provider: " + name);
     }
@@ -81,6 +88,12 @@ std::unique_ptr<InputProvider> make_input_provider(const InputProviderOptions& o
     } else if (name == "gearvr_ble" || name == "gearvr") {
       enabled.push_back(std::make_unique<gearvr::GearVrInputProvider>(
           provider_options_for(options, {"gearvr", "gearvr_ble"})));
+    } else if (name == "xiao_nrf54l15" || name == "xiao-nrf54l15" ||
+               name == "xiao_nrf54l15_serial" || name == "xiao") {
+      enabled.push_back(std::make_unique<xiao_nrf54l15::XiaoNrf54l15InputProvider>(
+          provider_options_for(options,
+                               {"xiao", "xiao-nrf54l15", "xiao_nrf54l15_serial",
+                                "xiao_nrf54l15"})));
     } else {
       throw std::runtime_error("unknown Windows input provider: " + name);
     }

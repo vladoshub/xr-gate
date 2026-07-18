@@ -5,6 +5,8 @@ Input backend that maps physical controller inputs into the `controller_input` s
 Supported input providers:
 
 - Linux: evdev keyboard/gamepad/Bluetooth HID devices.
+- Linux: XIAO nRF54L15 Sense serial controllers using `xr_controller_v1`.
+- Linux: Samsung Gear VR Controller through native BlueZ BLE.
 - Windows: Raw Input keyboard/mouse/HID devices, XInput gamepads/controllers, plus keyboard polling fallback.
 
 `xr_runtime_adapter` can combine this physical input with hand tracking poses, synthetic fallback poses, or gesture-derived controls.
@@ -92,6 +94,99 @@ Pulse filtering and synthetic hold timings are configured independently in
 `devices[].input`. This allows two identical or mixed controller models to use
 different event timing. Missing settings use zero/disabled defaults; there is no
 global timing fallback from the launcher script.
+
+## XIAO nRF54L15 serial provider
+
+The native `xiao_nrf54l15` provider reads the fixed 64-byte
+`xr_controller_v1` (`XCTL`) stream directly from the board's SAMD11 USB CDC
+serial port. It validates version, embedded packet size, IEEE CRC32 and finite
+IMU values, performs stream resynchronization after corruption, maps the device
+microsecond timestamp into the host monotonic clock, and feeds the shared
+`ControllerImuProcessor`/Madgwick pipeline.
+
+List detected boards:
+
+```bash
+PROVIDERS=xiao_nrf54l15 \
+  override_controller/scripts/linux/start_override_controller.sh \
+  --list-devices
+```
+
+Use it together with normal evdev controllers:
+
+```bash
+PROVIDERS=evdev,xiao_nrf54l15 \
+  override_controller/scripts/linux/start_override_controller.sh
+```
+
+Automatic discovery checks `/dev/serial/by-id/*` first and then `/dev/ttyACM*`.
+For deterministic selection, especially on a development machine with other
+CDC devices, pass one or more comma-separated ports:
+
+```bash
+PROVIDERS=evdev,xiao_nrf54l15 \
+PROVIDER_OPTIONS='xiao_nrf54l15.ports=/dev/serial/by-id/usb-left,/dev/serial/by-id/usb-right' \
+  override_controller/scripts/linux/start_override_controller.sh
+```
+
+Provider options:
+
+| Option | Default | Meaning |
+| --- | ---: | --- |
+| `ports` | automatic | Comma-separated serial paths |
+| `baud_rate` | `230400` | UART line speed |
+| `initial_scan_ms` | `1200` | Initial protocol-detection window |
+| `reconnect_ms` | `1000` | Serial rescan/reopen interval |
+| `stale_ms` | `250` | IMU stale timeout |
+| `axis_flat` | `1024` | Dead zone reported for analog bindings |
+| `madgwick_beta` | `0.04` | Shared 6DoF AHRS gain |
+
+The provider exposes a stable fingerprint with
+`backend=xiao_nrf54l15`. `uniq` prefers the USB serial number, then the
+`/dev/serial/by-id` name, then `/dev/serial/by-path`. Explicit `ports=` entries
+use the supplied path as their stable identity, so stable `/dev/serial/by-id`
+paths are recommended.
+
+Current firmware publishes IMU data with the controls-valid flag clear. Such a
+board appears in `--list-devices` and publishes IMU, but cannot generate a
+training event until GPIO controls are added. Assign it manually in the config:
+
+```json
+{
+  "id": 3,
+  "platform": "linux",
+  "backend": "xiao_nrf54l15",
+  "uniq": "xiao_nrf54l15:serial:BOARD_SERIAL",
+  "imu_side": "left",
+  "orientation_transform": {
+    "enabled": true,
+    "invert_x": false,
+    "invert_y": false,
+    "invert_z": false,
+    "basis_rotation": {
+      "rx_deg": 0.0,
+      "ry_deg": 0.0,
+      "rz_deg": 0.0
+    }
+  }
+}
+```
+
+When future firmware sets `controls valid`, the already-reserved fields are
+published as normal training inputs:
+
+| `xr_controller_v1` control | Provider event |
+| --- | --- |
+| A / B / C | `EV_KEY / XCTL_BUTTON_A/B/C` |
+| Trigger / grip / menu | `EV_KEY / XCTL_TRIGGER/GRIP/MENU` |
+| Stick click | `EV_KEY / XCTL_STICK_CLICK` |
+| D-pad | `EV_KEY / XCTL_DPAD_*` |
+| Thumbstick X/Y | `EV_ABS / XCTL_THUMBSTICK_X/Y` |
+| Analog trigger/grip | `EV_ABS / XCTL_TRIGGER_AXIS/GRIP_AXIS` |
+
+One serial stream must have one reader. Do not point `capture_service_cpp` and
+`override_controller` at the same physical `/dev/ttyACM*` device at the same
+time; select which process owns that controller's serial stream.
 
 ## Samsung Gear VR Controller BLE provider
 

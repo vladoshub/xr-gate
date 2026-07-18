@@ -51,3 +51,24 @@ unchanged.
 
 Protocol attribution and the upstream MIT notice are retained in
 `THIRD_PARTY_NOTICES.md`.
+
+
+## XIAO nRF54L15 serial provider
+
+The implementation is split into:
+
+- `src/providers/xiao_nrf54l15/xiao_nrf54l15_input_provider.cpp`: common device
+  state, input transitions, IMU/AHRS output, stale/lost handling and training
+  integration.
+- `src/providers/xiao_nrf54l15/xr_controller_v1_protocol.cpp`: transport-neutral
+  64-byte `XCTL` decoder, CRC32 validation and resynchronizing stream parser.
+- `src/providers/xiao_nrf54l15/xiao_nrf54l15_options.cpp`: provider-owned CLI and
+  environment configuration.
+- `src/providers/xiao_nrf54l15/xiao_nrf54l15_serial_transport.hpp`: serial
+  transport boundary.
+- `src/providers/xiao_nrf54l15/transport/linux_xiao_nrf54l15_serial_transport.cpp`:
+  Linux termios, stable USB identity, auto-discovery, `poll()` and reconnect.
+
+The transport emits byte chunks rather than decoded packets. This keeps framing,
+CRC and `xr_controller_v1` semantics platform-neutral; a future Windows serial
+transport only needs to enumerate/open COM ports and return byte chunks.
