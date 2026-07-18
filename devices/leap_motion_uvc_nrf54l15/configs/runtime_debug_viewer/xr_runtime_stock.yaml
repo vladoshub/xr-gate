@@ -1,0 +1,114 @@
+viewer:
+  refresh_hz: 30
+  registry_poll_interval_s: 1.0
+  autoscale: false
+  x_lim:
+  - -1.5
+  - 1.5
+  y_lim:
+  - -1.0
+  - 1.5
+  z_lim:
+  - -1.5
+  - 1.5
+streams:
+  hmd:
+    enabled: true
+    registry: /tmp/runtime_tracking_streams.json
+    stream: runtime_hmd_pose
+    stale_ms: 1000
+    coordinate_transform:
+      axis_map:
+      - x
+      - y
+      - z
+      invert_x: false
+      invert_y: false
+      invert_z: false
+      scale: 1.0
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+    hmd_relative:
+      enabled: false
+      mode: none
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+  hand_tracking_21_joint:
+    enabled: true
+    registry: /tmp/runtime_tracking_streams.json
+    stream: runtime_hand_tracking
+    stale_ms: 1000
+    coordinate_transform:
+      axis_map:
+      - x
+      - y
+      - z
+      invert_x: false
+      invert_y: false
+      invert_z: false
+      scale: 1.0
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+    hmd_relative:
+      enabled: false
+      mode: add
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+  hand_skeleton26:
+    enabled: false
+    registry: /tmp/tracking_streams.json
+    stream: hand_skeleton26
+    stale_ms: 1000
+    coordinate_transform:
+      axis_map:
+      - x
+      - y
+      - z
+      invert_x: false
+      invert_y: false
+      invert_z: false
+      scale: 1.0
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+    hmd_relative:
+      enabled: false
+      mode: add
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+  body_trackers:
+    enabled: true
+    registry: /tmp/runtime_tracking_streams.json
+    stream: runtime_body_trackers
+    stale_ms: 1000
+    coordinate_transform:
+      axis_map:
+      - x
+      - y
+      - z
+      invert_x: false
+      invert_y: false
+      invert_z: false
+      scale: 1.0
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+    hmd_relative:
+      enabled: false
+      mode: add
+      offset_m:
+        x: 0.0
+        y: 0.0
+        z: 0.0

@@ -1,0 +1,354 @@
+{
+  "enabled": true,
+  "streams": {
+    "hmd": {
+      "coordinate_transform": {
+        "axis_map": [
+          "x",
+          "z",
+          "y"
+        ],
+        "invert_x": true,
+        "invert_y": false,
+        "invert_z": false,
+        "rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "scale": 1.0,
+        "offset_m": {
+          "x": 0.0,
+          "y": 1.6,
+          "z": 0.0
+        }
+      },
+      "hmd_relative": {
+        "enabled": false,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "orientation_transform": {
+        "enabled": true,
+        "basis_rotation": {
+          "rx_deg": -90.0,
+          "ry_deg": 180.0,
+          "rz_deg": 0.0
+        }
+      }
+    },
+    "hand_tracking_21_joint": {
+      "coordinate_transform": {
+        "axis_map": [
+          "x",
+          "y",
+          "z"
+        ],
+        "invert_x": false,
+        "invert_y": false,
+        "invert_z": false,
+        "rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "scale": 1.0,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "hmd_relative": {
+        "enabled": true,
+        "offset_m": {
+          "x": 0.0,
+          "y": -0.05,
+          "z": -0.15
+        },
+        "rotate_with_hmd_orientation": true
+      },
+      "orientation_transform": {
+        "enabled": false,
+        "basis_rotation": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      },
+      "hand_orientation_offset": {
+        "enabled": true,
+        "multiply_order": "post",
+        "apply_to": {
+          "controller": true,
+          "palm": true,
+          "wrist": true,
+          "joints": false
+        },
+        "left": {
+          "enabled": true,
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        },
+        "right": {
+          "enabled": true,
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
+    },
+    "hand_skeleton26": {
+      "coordinate_transform": {
+        "axis_map": [
+          "x",
+          "z",
+          "y"
+        ],
+        "invert_x": false,
+        "invert_y": true,
+        "invert_z": false,
+        "rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "scale": 1.0,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "hmd_relative": {
+        "enabled": true,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "rotate_with_hmd_orientation": true
+      },
+      "orientation_transform": {
+        "enabled": false,
+        "basis_rotation": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      },
+      "hand_orientation_offset": {
+        "enabled": true,
+        "multiply_order": "post",
+        "apply_to": {
+          "controller": true,
+          "palm": true,
+          "wrist": true,
+          "joints": false
+        },
+        "left": {
+          "enabled": true,
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        },
+        "right": {
+          "enabled": true,
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
+    },
+    "body_trackers": {
+      "coordinate_transform": {
+        "axis_map": [
+          "x",
+          "z",
+          "y"
+        ],
+        "invert_x": false,
+        "invert_y": false,
+        "invert_z": true,
+        "rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "scale": 1.0,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "hmd_relative": {
+        "enabled": false,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "orientation_transform": {
+        "enabled": false,
+        "basis_rotation": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      }
+    },
+    "hmd_3dof": {
+      "coordinate_transform": {
+        "axis_map": [
+          "x",
+          "z",
+          "y"
+        ],
+        "invert_x": true,
+        "invert_y": false,
+        "invert_z": false,
+        "rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "scale": 1.0,
+        "offset_m": {
+          "x": 0.0,
+          "y": 1.6,
+          "z": 0.0
+        }
+      },
+      "hmd_relative": {
+        "enabled": false,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "orientation_transform": {
+        "enabled": true,
+        "basis_rotation": {
+          "rx_deg": -90.0,
+          "ry_deg": 180.0,
+          "rz_deg": 0.0
+        }
+      }
+    },
+    "spatial_proxy_mesh": {
+      "coordinate_transform": {
+        "axis_map": [
+          "x",
+          "z",
+          "y"
+        ],
+        "invert_x": true,
+        "invert_y": false,
+        "invert_z": false,
+        "rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "scale": 1.0,
+        "offset_m": {
+          "x": 0.0,
+          "y": 1.6,
+          "z": 0.0
+        }
+      },
+      "hmd_relative": {
+        "enabled": false,
+        "offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "rotate_with_hmd_orientation": false
+      },
+      "orientation_transform": {
+        "enabled": false,
+        "basis_rotation": {
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
+          "rz_deg": 0.0
+        }
+      },
+      "mesh_runtime": {
+        "triangle_winding": "auto",
+        "extra_rotation_deg": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "extra_offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "runtime_binding": {
+          "enabled": true,
+          "apply_origin_position": true,
+          "apply_origin_orientation": true
+        },
+        "camera_relative_runtime": {
+          "enabled": false,
+          "require_hmd": true,
+          "apply_hmd_position": true,
+          "apply_hmd_orientation": true,
+          "max_hmd_age_ms": 250.0,
+          "offset_m": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          }
+        }
+      }
+    }
+  },
+  "controller_override": {
+    "mode": "hand_tracking_with_button_priority",
+    "hand_gestures": {
+      "left_enabled": true,
+      "right_enabled": true
+    },
+    "runtime_controller_state": {
+      "publish_shm": true,
+      "registry": "/tmp/runtime_tracking_streams.json",
+      "stream": "runtime_controller_state",
+      "shm_name": "runtime_controller_state",
+      "slots": 1024
+    },
+    "synthetic_hmd_relative_pose": {
+      "left_offset_m": {
+        "x": -0.22,
+        "y": -0.22,
+        "z": -0.35
+      },
+      "right_offset_m": {
+        "x": 0.22,
+        "y": -0.22,
+        "z": -0.35
+      }
+    },
+    "static_orientation": {
+      "left_euler_deg": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      },
+      "right_euler_deg": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    }
+  }
+}
