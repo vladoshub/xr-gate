@@ -722,8 +722,9 @@ void validate_runtime_config(RuntimeConfig& cfg) {
     if (cfg.imu.driver == "serial") {
       if (cfg.imu.serial.port.empty()) throw std::runtime_error("imu.serial.port is required for imu.driver=serial");
       if (cfg.imu.serial.baud_rate <= 0) throw std::runtime_error("imu.serial.baud_rate must be positive");
-      if (cfg.imu.serial.protocol != "xr_imu_v1" && cfg.imu.serial.protocol != "csv_f32") {
-        throw std::runtime_error("imu.serial.protocol must be xr_imu_v1 or csv_f32");
+      if (cfg.imu.serial.protocol != "xr_controller_v1" &&
+          cfg.imu.serial.protocol != "xr_imu_v1" && cfg.imu.serial.protocol != "csv_f32") {
+        throw std::runtime_error("imu.serial.protocol must be xr_controller_v1, xr_imu_v1, or csv_f32");
       }
       if (cfg.imu.serial.timestamp_mode != "device" && cfg.imu.serial.timestamp_mode != "host_receive") {
         throw std::runtime_error("imu.serial.timestamp_mode must be device or host_receive");
@@ -732,7 +733,12 @@ void validate_runtime_config(RuntimeConfig& cfg) {
           cfg.imu.serial.protocol == "csv_f32") {
         throw std::runtime_error("imu.raw.payload_size must be >= imu.serial.max_packet_size for csv_f32");
       }
-      if (cfg.imu.raw_enabled && cfg.imu.serial.protocol == "xr_imu_v1" && cfg.imu.raw_payload_size < 48) {
+      if (cfg.imu.raw_enabled && cfg.imu.serial.protocol == "xr_controller_v1" &&
+          cfg.imu.raw_payload_size < 64) {
+        throw std::runtime_error("imu.raw.payload_size must be at least 64 for xr_controller_v1");
+      }
+      if (cfg.imu.raw_enabled && cfg.imu.serial.protocol == "xr_imu_v1" &&
+          cfg.imu.raw_payload_size < 48) {
         throw std::runtime_error("imu.raw.payload_size must be at least 48 for xr_imu_v1");
       }
     }

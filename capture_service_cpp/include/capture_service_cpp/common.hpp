@@ -114,8 +114,8 @@ struct CameraSourceConfig {
 
 struct SerialImuConfig {
   std::string port;
-  int baud_rate = 921600;
-  std::string protocol = "xr_imu_v1";
+  int baud_rate = 230400;
+  std::string protocol = "xr_controller_v1";
   std::string timestamp_mode = "device";  // device | host_receive
   int read_timeout_ms = 50;
   size_t max_packet_size = 256;

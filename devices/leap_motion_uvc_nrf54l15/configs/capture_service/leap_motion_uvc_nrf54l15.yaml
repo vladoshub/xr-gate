@@ -87,8 +87,8 @@ imu:
     port:
       linux: /dev/ttyACM0
       windows: COM5
-    baud_rate: 921600
-    protocol: xr_imu_v1
+    baud_rate: 230400
+    protocol: xr_controller_v1
     timestamp_mode: device
     read_timeout_ms: 50
     max_packet_size: 256

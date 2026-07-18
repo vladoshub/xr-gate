@@ -1,6 +1,7 @@
 #include "capture_service_cpp/sources/imu_source.hpp"
 
 #include "capture_service_cpp/platform/serial_port.hpp"
+#include "capture_service_cpp/protocols/xr_controller_v1.hpp"
 #include "capture_service_cpp/protocols/xr_imu_v1.hpp"
 #include "capture_service_cpp/timing/affine_device_clock_mapper.hpp"
 
@@ -57,8 +58,9 @@ class SerialImuSource final : public IImuSource {
     last_receive_ns_ = steady_ns();
     buffer_.insert(buffer_.end(), chunk.begin(), chunk.begin() + count);
     if (buffer_.size() > 1024 * 1024) {
-      const size_t keep = std::max<size_t>(kXrImuV1PacketSize,
-                                           cfg_.imu.serial.max_packet_size * 4);
+      const size_t keep = std::max<size_t>(
+          std::max(kXrControllerV1PacketSize, kXrImuV1PacketSize),
+          cfg_.imu.serial.max_packet_size * 4);
       buffer_.erase(buffer_.begin(),
                     buffer_.end() - static_cast<std::ptrdiff_t>(std::min(buffer_.size(), keep)));
       ++resync_count_;
@@ -77,7 +79,65 @@ class SerialImuSource final : public IImuSource {
  private:
   bool parse_buffer(ImuReadResult& result) {
     if (cfg_.imu.serial.protocol == "csv_f32") return parse_csv(result);
-    return parse_xr_imu_v1(result);
+    if (cfg_.imu.serial.protocol == "xr_imu_v1") return parse_xr_imu_v1(result);
+    return parse_xr_controller_v1(result);
+  }
+
+  bool parse_xr_controller_v1(ImuReadResult& result) {
+    while (buffer_.size() >= kXrControllerV1Magic.size()) {
+      const auto found = std::search(buffer_.begin(), buffer_.end(),
+                                     kXrControllerV1Magic.begin(), kXrControllerV1Magic.end());
+      if (found != buffer_.begin()) {
+        if (found == buffer_.end()) {
+          const size_t keep = std::min<size_t>(buffer_.size(), kXrControllerV1Magic.size() - 1);
+          buffer_.erase(buffer_.begin(),
+                        buffer_.end() - static_cast<std::ptrdiff_t>(keep));
+          ++resync_count_;
+          return false;
+        }
+        buffer_.erase(buffer_.begin(), found);
+        ++resync_count_;
+      }
+      if (buffer_.size() < kXrControllerV1PacketSize) return false;
+
+      XrControllerV1Sample decoded;
+      XrControllerV1DecodeError error = XrControllerV1DecodeError::None;
+      if (!decode_xr_controller_v1(buffer_.data(), buffer_.size(), decoded, &error)) {
+        buffer_.erase(buffer_.begin());
+        if (error == XrControllerV1DecodeError::BadCrc) {
+          ++crc_fail_count_;
+        } else {
+          ++invalid_count_;
+        }
+        continue;
+      }
+
+      std::vector<uint8_t> packet(
+          buffer_.begin(),
+          buffer_.begin() + static_cast<std::ptrdiff_t>(kXrControllerV1PacketSize));
+      buffer_.erase(
+          buffer_.begin(),
+          buffer_.begin() + static_cast<std::ptrdiff_t>(kXrControllerV1PacketSize));
+
+      result.receive_timestamp_ns = last_receive_ns_ ? last_receive_ns_ : steady_ns();
+      result.sample.gyro_rad_s = decoded.gyro_rad_s;
+      result.sample.accel_m_s2 = decoded.accel_m_s2;
+      result.sample.source_sequence = decoded.sequence;
+      result.sample.source_timestamp_valid =
+          (decoded.flags & kXrControllerV1TimestampValid) != 0;
+      if (cfg_.imu.serial.timestamp_mode == "device" &&
+          result.sample.source_timestamp_valid) {
+        result.sample.timestamp_ns =
+            clock_mapper_.map_us(decoded.device_timestamp_us, result.receive_timestamp_ns);
+      } else {
+        result.sample.timestamp_ns = result.receive_timestamp_ns;
+      }
+      result.raw_packet = std::move(packet);
+      result.has_sample = true;
+      log_progress();
+      return true;
+    }
+    return false;
   }
 
   bool parse_xr_imu_v1(ImuReadResult& result) {

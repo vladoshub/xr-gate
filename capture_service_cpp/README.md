@@ -148,8 +148,8 @@ imu:
     port:
       linux: /dev/ttyACM0
       windows: COM5
-    baud_rate: 921600
-    protocol: xr_imu_v1
+    baud_rate: 230400
+    protocol: xr_controller_v1
     timestamp_mode: device
 ```
 
@@ -295,11 +295,11 @@ Windows: COM*
 Supported protocols:
 
 ```text
-xr_imu_v1  binary fixed-size packet with sequence, device timestamp and CRC32
+xr_controller_v1  64-byte controller/IMU packet with sequence, device timestamp, controls and CRC32
 csv_f32    development text protocol
 ```
 
-See [`docs/serial_imu_protocol.md`](docs/serial_imu_protocol.md). The canonical wire codec is the hardware-independent `protocols/xr_imu_v1` module; the serial driver does not duplicate packet layout or CRC logic.
+See [`docs/serial_imu_protocol.md`](docs/serial_imu_protocol.md). The canonical current wire codec is the hardware-independent `protocols/xr_controller_v1` module; the serial driver does not duplicate packet layout or CRC logic. Legacy `xr_imu_v1` remains accepted for compatibility.
 
 Only complete validated serial samples reset `imu.stall_exit_ms`. Receiving partial packets or arbitrary bytes is tracked as transport activity but does not hide a stalled/corrupt IMU source. Device timestamps are mapped into host steady time with a bounded affine clock model that estimates both offset and oscillator-rate error.
 

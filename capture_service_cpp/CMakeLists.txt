@@ -38,6 +38,7 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/sources/xreal_hid_imu_source.cpp
   src/sources/serial_imu_source.cpp
   src/sources/serial_imu_protocol.cpp
+  src/protocols/xr_controller_v1.cpp
   src/protocols/xr_imu_v1.cpp
   src/timing/affine_device_clock_mapper.cpp
   src/vendor/xreal_camera_decoder.cpp
@@ -134,6 +135,13 @@ if(BUILD_TESTING)
   target_include_directories(interleaved_columns_decoder_smoke PRIVATE include)
   add_test(NAME interleaved_columns_decoder_smoke COMMAND interleaved_columns_decoder_smoke)
 
+  add_executable(xr_controller_v1_smoke
+    tests/xr_controller_v1_smoke.cpp
+    src/protocols/xr_controller_v1.cpp
+  )
+  target_include_directories(xr_controller_v1_smoke PRIVATE include)
+  add_test(NAME xr_controller_v1_smoke COMMAND xr_controller_v1_smoke)
+
   add_executable(xr_imu_v1_smoke
     tests/xr_imu_v1_smoke.cpp
     src/protocols/xr_imu_v1.cpp
@@ -163,6 +171,7 @@ if(BUILD_TESTING)
       tests/serial_imu_transport_activity_linux.cpp
       src/sources/serial_imu_source.cpp
       src/platform/linux/serial_port_linux.cpp
+      src/protocols/xr_controller_v1.cpp
       src/protocols/xr_imu_v1.cpp
       src/timing/affine_device_clock_mapper.cpp
     )

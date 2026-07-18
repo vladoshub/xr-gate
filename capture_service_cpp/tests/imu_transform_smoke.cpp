@@ -46,7 +46,7 @@ xr_capture_cpp::RuntimeConfig parse_config_text(const std::string& name,
            "    enabled: false\n"
            "  serial:\n"
            "    port: /dev/ttyACM0\n"
-           "    protocol: xr_imu_v1\n";
+           "    protocol: xr_controller_v1\n";
   }
 
   std::vector<std::string> storage{"imu_transform_smoke", "--config", path.string()};

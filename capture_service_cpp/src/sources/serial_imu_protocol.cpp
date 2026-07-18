@@ -3,7 +3,7 @@
 namespace xr_capture_cpp {
 
 uint32_t xr_imu_crc32(const uint8_t* data, size_t size) {
-  return xr_imu_v1_crc32(data, size);
+  return xr_controller_v1_crc32(data, size);
 }
 
 }  // namespace xr_capture_cpp
