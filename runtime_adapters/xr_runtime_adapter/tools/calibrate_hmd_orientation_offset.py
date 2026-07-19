@@ -13,7 +13,7 @@ Two modes are available:
 
 The generated runtime block always uses ``multiply_order: pre``. This corrects
 the neutral world orientation without rotating the HMD's local pitch/yaw/roll
-axes. The default write target is both streams.hmd and streams.hmd_3dof.
+axes. When --write is used, only streams.hmd.orientation_offset is updated.
 
 python3 calibrate_hmd_orientation_offset.py \
   --registry /tmp/tracking_streams.json \
@@ -1361,15 +1361,14 @@ def offset_json_block(offset: Quaternion) -> dict:
     }
 
 
-def write_config(path: Path, data: dict, targets: Sequence[str], block: dict) -> Path:
+def write_config(path: Path, data: dict, block: dict) -> Path:
     streams = data.setdefault("streams", {})
     if not isinstance(streams, dict):
         raise RuntimeError("transform config field 'streams' is not an object")
-    for target in targets:
-        stream = streams.get(target)
-        if not isinstance(stream, dict):
-            raise RuntimeError(f"transform config has no stream object: {target}")
-        stream["orientation_offset"] = dict(block)
+    stream = streams.get("hmd")
+    if not isinstance(stream, dict):
+        raise RuntimeError("transform config has no stream object: hmd")
+    stream["orientation_offset"] = dict(block)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup = path.with_name(path.name + f".bak.{timestamp}")
@@ -1403,17 +1402,6 @@ def compact_q(q: Quaternion) -> str:
 def compact_v3(v: Vector3) -> str:
     return "[" + ", ".join(f"{value:+.3f}" for value in v) + "]"
 
-
-def parse_targets(value: str) -> Tuple[str, ...]:
-    targets = tuple(item.strip() for item in value.split(",") if item.strip())
-    if not targets:
-        raise argparse.ArgumentTypeError("--targets cannot be empty")
-    invalid = [target for target in targets if target not in ("hmd", "hmd_3dof")]
-    if invalid:
-        raise argparse.ArgumentTypeError(
-            "--targets supports only hmd,hmd_3dof; invalid: " + ",".join(invalid)
-        )
-    return targets
 
 
 def run_self_test() -> int:
@@ -1459,17 +1447,14 @@ def run_self_test() -> int:
         config_path = Path(temp_dir) / "config.json"
         config = {"enabled": True, "streams": {"hmd": {}, "hmd_3dof": {}}}
         config_path.write_text(json.dumps(config), encoding="utf-8")
-        backup = write_config(
-            config_path, config, ("hmd", "hmd_3dof"), block
-        )
+        backup = write_config(config_path, config, block)
         written = json.loads(config_path.read_text(encoding="utf-8"))
         if not backup.exists():
             raise AssertionError("config backup was not created")
-        if (
-            written["streams"]["hmd"]["orientation_offset"]
-            != written["streams"]["hmd_3dof"]["orientation_offset"]
-        ):
-            raise AssertionError("hmd and hmd_3dof offsets differ after write")
+        if written["streams"]["hmd"].get("orientation_offset") != block:
+            raise AssertionError("hmd orientation_offset was not written")
+        if "orientation_offset" in written["streams"]["hmd_3dof"]:
+            raise AssertionError("hmd_3dof must not be modified")
 
     print("Self-test: OK")
     return 0
@@ -1498,18 +1483,6 @@ def parse_args() -> argparse.Namespace:
             "optional xr_runtime_adapter transform JSON; without it the tool "
             "runs standalone and only prints the calculated quaternion"
         ),
-    )
-    parser.add_argument(
-        "--source-transform",
-        choices=("hmd", "hmd_3dof"),
-        default="hmd",
-        help="stream block whose existing orientation_offset is checked",
-    )
-    parser.add_argument(
-        "--targets",
-        type=parse_targets,
-        default=("hmd", "hmd_3dof"),
-        help="comma-separated orientation_offset blocks to write; default: hmd,hmd_3dof",
     )
     parser.add_argument(
         "--mode",
@@ -1598,20 +1571,14 @@ def main() -> int:
                 f"invalid transform config JSON {config_path}: {exc}"
             ) from exc
 
-        if orientation_transform_enabled(config, args.source_transform):
+        if orientation_transform_enabled(config, "hmd"):
             raise RuntimeError(
-                f"streams.{args.source_transform}.orientation_transform is enabled; "
+                "streams.hmd.orientation_transform is enabled; "
                 "axis/mount normalization must be done in capture_service_cpp. "
                 "Disable the runtime orientation_transform before neutral calibration."
             )
-        for target in args.targets:
-            if orientation_transform_enabled(config, target):
-                raise RuntimeError(
-                    f"streams.{target}.orientation_transform is enabled; disable it to avoid "
-                    "applying a second orientation basis transform in xr_runtime_adapter"
-                )
 
-        existing_offset = load_offset(config, args.source_transform)
+        existing_offset = load_offset(config, "hmd")
         if args.verify and existing_offset.multiply_order not in ("pre", "world"):
             raise RuntimeError(
                 f"verification requires a pre/world orientation_offset; got "
@@ -1623,7 +1590,7 @@ def main() -> int:
             and not args.replace_existing_offset
         ):
             raise RuntimeError(
-                f"streams.{args.source_transform}.orientation_offset is already enabled; "
+                "streams.hmd.orientation_offset is already enabled; "
                 "disable it first or use --replace-existing-offset"
             )
 
@@ -1642,8 +1609,7 @@ def main() -> int:
         else "config:            <standalone; not used>"
     )
     if config_path is not None:
-        print(f"source stream:     {args.source_transform}")
-        print(f"targets:           {','.join(args.targets)}")
+        print("config target:     streams.hmd.orientation_offset")
     print(f"mode:              {args.mode}")
     print("multiply order:    pre (world)")
     print()
@@ -1697,8 +1663,8 @@ def main() -> int:
         "stream": info.stream_id,
         "frame_id": info.frame_id,
         "config": str(config_path) if config_path is not None else None,
-        "source_transform": args.source_transform if config_path is not None else None,
-        "targets": list(args.targets) if config_path is not None else [],
+        "source_transform": "hmd" if config_path is not None else None,
+        "targets": ["hmd"] if config_path is not None else [],
         "mode": args.mode,
         "sample_count": result.sample_count,
         "dropped_sequences": dropped,
@@ -1763,11 +1729,11 @@ def main() -> int:
     elif args.write:
         if config_path is None or config is None:
             raise RuntimeError("internal error: write requested without config")
-        backup = write_config(config_path, config, args.targets, block)
+        backup = write_config(config_path, config, block)
         print("\nCONFIG UPDATED")
         print(f"config: {config_path}")
         print(f"backup: {backup}")
-        print(f"targets: {','.join(args.targets)}")
+        print("target: streams.hmd.orientation_offset")
         print("Restart xr_runtime_adapter to apply the new pre offset.")
     else:
         print("\nCALIBRATION PASSED - use --write to update the config atomically.")

@@ -252,13 +252,13 @@
         }
       },
       "orientation_offset": {
-        "enabled": true,
+        "enabled": false,
         "multiply_order": "pre",
         "quaternion_xyzw": [
-          -0.64876830007,
-          -0.208094145063,
-          -0.122274510094,
-          0.721696240669
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ]
       }
     },
