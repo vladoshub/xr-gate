@@ -13,7 +13,7 @@ expand_tilde() {
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
-BIN_DIR="${BIN_DIR:-$ROOT_PROJECT/out/xrea_ultra/bin/apps/steamvr/video_overlay}"
+BIN_DIR="${BIN_DIR:-$ROOT_PROJECT/out/xr-gate/bin/apps/steamvr/video_overlay}"
 BIN_DIR="$(expand_tilde "$BIN_DIR")"
 
 STEAMVR_VIDEO_OVERLAY_BIN="${STEAMVR_VIDEO_OVERLAY_BIN:-$BIN_DIR/steamvr_video_overlay}"

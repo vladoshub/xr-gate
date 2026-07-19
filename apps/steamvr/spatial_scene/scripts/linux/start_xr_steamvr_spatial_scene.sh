@@ -10,7 +10,7 @@ if [[ -x "$SCRIPT_DIR/../../xr_steamvr_spatial_scene" ]]; then
 else
   APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
   ROOT_PROJECT="${ROOT_PROJECT:-$(cd "$APP_DIR/../../.." && pwd)}"
-  APP_BIN="${APP_BIN:-$ROOT_PROJECT/out/xrea_ultra/bin/apps/steamvr/spatial_scene/xr_steamvr_spatial_scene}"
+  APP_BIN="${APP_BIN:-$ROOT_PROJECT/out/xr-gate/bin/apps/steamvr/spatial_scene/xr_steamvr_spatial_scene}"
   DEFAULT_CONFIG="$APP_DIR/configs/profiles/runtime_shm.env"
 fi
 

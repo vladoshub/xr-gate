@@ -63,6 +63,41 @@ xr_load_device_env() {
   export ROOT_PROJECT="${ROOT_PROJECT:-$XR_ROOT_PROJECT}"
 }
 
+# Load only the hardware-neutral package environment. This is intended for
+# consumers of already-published runtime streams (SteamVR overlays/scenes,
+# standalone controller input, and similar tools) that do not need camera,
+# display, calibration, or tracking settings from a concrete device profile.
+xr_load_common_env() {
+  local root common_env
+  root="${XR_ROOT_PROJECT:-${ROOT_PROJECT:-$(xr_common_repo_root)}}"
+  common_env="$root/devices/common/common.env"
+
+  if [[ ! -f "$common_env" ]]; then
+    xr_common_fatal "common runtime env not found: $common_env"
+  fi
+
+  export XR_ROOT_PROJECT="$root"
+  export ROOT_PROJECT="${ROOT_PROJECT:-$root}"
+  export XR_PACKAGE_ROOT="${XR_PACKAGE_ROOT:-$root}"
+  export XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
+  export XR_DEVICE_TARGET="${XR_DEVICE_TARGET:-$XR_TARGET_DEVICE}"
+  export XR_DEVICE_HOME="${XR_DEVICE_HOME:-$root/devices/common}"
+
+  # shellcheck source=/dev/null
+  source "$common_env"
+}
+
+# Prefer the selected device profile when one is available, but permit
+# hardware-neutral tools to run directly from the packaged runtime.
+xr_load_device_env_or_common() {
+  if xr_resolve_device_env >/dev/null 2>&1; then
+    xr_load_device_env
+  else
+    xr_load_common_env
+    xr_common_log "no device env selected; using hardware-neutral common environment"
+  fi
+}
+
 xr_exec_runtime_script() {
   local label="$1"
   local packaged_relative="$2"
