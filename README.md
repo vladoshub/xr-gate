@@ -525,7 +525,7 @@ XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 XR_TRACKING_MONADO_XCB_RATE_HZ=90 \
-./devices/common/linux/scripts/monado_driver/double_display_fix.sh
+./devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
 ```
 
 After stopping Monado driver with `Ctrl+C`, the main display should be restored.
@@ -559,7 +559,7 @@ cd ~/xr-gate-release/xr-gate
 
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 XR_TRACKING_MAIN_OUTPUT=DP-6 \
-devices/common/linux/scripts/monado_driver/main_display_control.sh off-main
+devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
 ```
 
 Run Monado driver:
