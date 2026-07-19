@@ -12,6 +12,8 @@ class CameraCapture {
 
   bool open(const CameraDeviceConfig& cfg, const std::string& label);
   bool read(cv::Mat& frame);
+  bool grab();
+  bool retrieve(cv::Mat& frame);
   void release();
 
  private:

@@ -90,13 +90,19 @@ class OpenCvStereoCameraSource final : public ICameraSource {
   SourceReadStatus read(StereoFrame& output) override {
     output = {};
     cv::Mat first;
-    if (!primary_.read(first) || first.empty()) return SourceReadStatus::Timeout;
 
     cv::Mat left_raw;
     cv::Mat right_raw;
     if (cfg_.camera.layout == "dual") {
+      // Grab both devices before decoding either image. This does not provide
+      // hardware synchronization, but avoids adding the first frame's decode
+      // time to the delay before requesting the second camera frame.
+      if (!primary_.grab()) return SourceReadStatus::Timeout;
+      if (!secondary_.grab()) return SourceReadStatus::Timeout;
+
       cv::Mat second;
-      if (!secondary_.read(second) || second.empty()) return SourceReadStatus::Timeout;
+      if (!primary_.retrieve(first) || first.empty()) return SourceReadStatus::Timeout;
+      if (!secondary_.retrieve(second) || second.empty()) return SourceReadStatus::Timeout;
       if (cfg_.camera.stereo_order == "right_left") {
         right_raw = to_gray8(first);
         left_raw = to_gray8(second);
@@ -104,26 +110,13 @@ class OpenCvStereoCameraSource final : public ICameraSource {
         left_raw = to_gray8(first);
         right_raw = to_gray8(second);
       }
-    } else if (cfg_.camera.layout == "interleaved_columns") {
-      cv::Mat a;
-      cv::Mat b;
-      decode_interleaved_columns_frame(first, cfg_.camera.output_width, cfg_.camera.output_height, a, b);
-      if (cfg_.camera.stereo_order == "right_left") {
-        right_raw = a;
-        left_raw = b;
-      } else {
-        left_raw = a;
-        right_raw = b;
-      }
     } else {
-      const cv::Mat gray = to_gray8(first);
-      if (cfg_.camera.layout == "side_by_side_horizontal") {
-        if (gray.cols < 2 || gray.cols % 2 != 0) {
-          throw std::runtime_error("horizontal side-by-side frame width must be even");
-        }
-        const int half = gray.cols / 2;
-        cv::Mat a = gray(cv::Rect(0, 0, half, gray.rows));
-        cv::Mat b = gray(cv::Rect(half, 0, half, gray.rows));
+      if (!primary_.read(first) || first.empty()) return SourceReadStatus::Timeout;
+
+      if (cfg_.camera.layout == "interleaved_columns") {
+        cv::Mat a;
+        cv::Mat b;
+        decode_interleaved_columns_frame(first, cfg_.camera.output_width, cfg_.camera.output_height, a, b);
         if (cfg_.camera.stereo_order == "right_left") {
           right_raw = a;
           left_raw = b;
@@ -132,18 +125,35 @@ class OpenCvStereoCameraSource final : public ICameraSource {
           right_raw = b;
         }
       } else {
-        if (gray.rows < 2 || gray.rows % 2 != 0) {
-          throw std::runtime_error("vertical side-by-side frame height must be even");
-        }
-        const int half = gray.rows / 2;
-        cv::Mat a = gray(cv::Rect(0, 0, gray.cols, half));
-        cv::Mat b = gray(cv::Rect(0, half, gray.cols, half));
-        if (cfg_.camera.stereo_order == "right_left") {
-          right_raw = a;
-          left_raw = b;
+        const cv::Mat gray = to_gray8(first);
+        if (cfg_.camera.layout == "side_by_side_horizontal") {
+          if (gray.cols < 2 || gray.cols % 2 != 0) {
+            throw std::runtime_error("horizontal side-by-side frame width must be even");
+          }
+          const int half = gray.cols / 2;
+          cv::Mat a = gray(cv::Rect(0, 0, half, gray.rows));
+          cv::Mat b = gray(cv::Rect(half, 0, half, gray.rows));
+          if (cfg_.camera.stereo_order == "right_left") {
+            right_raw = a;
+            left_raw = b;
+          } else {
+            left_raw = a;
+            right_raw = b;
+          }
         } else {
-          left_raw = a;
-          right_raw = b;
+          if (gray.rows < 2 || gray.rows % 2 != 0) {
+            throw std::runtime_error("vertical side-by-side frame height must be even");
+          }
+          const int half = gray.rows / 2;
+          cv::Mat a = gray(cv::Rect(0, 0, gray.cols, half));
+          cv::Mat b = gray(cv::Rect(0, half, gray.cols, half));
+          if (cfg_.camera.stereo_order == "right_left") {
+            right_raw = a;
+            left_raw = b;
+          } else {
+            left_raw = a;
+            right_raw = b;
+          }
         }
       }
     }

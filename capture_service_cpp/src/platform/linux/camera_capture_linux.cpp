@@ -45,6 +45,14 @@ bool CameraCapture::read(cv::Mat& frame) {
   return cap_.read(frame);
 }
 
+bool CameraCapture::grab() {
+  return cap_.grab();
+}
+
+bool CameraCapture::retrieve(cv::Mat& frame) {
+  return cap_.retrieve(frame);
+}
+
 void CameraCapture::release() {
   cap_.release();
 }
