@@ -65,6 +65,33 @@ env:
 
 jobs:
 
+  dispatch-info:
+    name: workflow dispatch parameters
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    timeout-minutes: 5
+    steps:
+      - name: Print workflow inputs
+        env:
+          TYPED_INPUTS: ${{ toJSON(inputs) }}
+          EVENT_INPUTS: ${{ toJSON(github.event.inputs) }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Workflow dispatch inputs"
+            echo
+            echo "### Typed inputs"
+            echo '```json'
+            echo "$TYPED_INPUTS"
+            echo '```'
+            echo
+            echo "### Event inputs"
+            echo '```json'
+            echo "$EVENT_INPUTS"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   release-unpack-helper:
     name: release unpack helper
     runs-on: ubuntu-24.04
@@ -577,7 +604,18 @@ jobs:
       - release-unpack-helper
       - hand-tracking-models-mercury
       - merge-package
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'workflow_dispatch' &&
+        (
+          inputs.publish_release == true ||
+          github.event.inputs.publish_release == 'true'
+        ) &&
+        needs.release-unpack-helper.result == 'success' &&
+        needs.hand-tracking-models-mercury.result == 'success' &&
+        needs.merge-package.result == 'success'
+      }}
     timeout-minutes: 20
     permissions:
       contents: write
