@@ -265,6 +265,72 @@ package_include_xrizer_helpers() {
   esac
 }
 
+package_project_legal_files() {
+  [[ -f "$XR_ROOT_PROJECT/LICENSE" ]] || fatal "project LICENSE not found: $XR_ROOT_PROJECT/LICENSE"
+  copy_file "$XR_ROOT_PROJECT/LICENSE" "$XR_OUT_ROOT/LICENSE"
+  copy_file "$XR_ROOT_PROJECT/LICENSE" "$XR_OUT_ROOT/LICENSES/MIT.txt"
+  if [[ -f "$XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md" ]]; then
+    copy_file "$XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md" "$XR_OUT_ROOT/THIRD_PARTY_NOTICES.md"
+  fi
+}
+
+package_xrizer_compliance_files() {
+  local xrizer_dir="$XR_OUT_BIN_ROOT/drivers/xrizer"
+  local source_archive
+  local source_archive_name
+
+  if [[ ! -d "$xrizer_dir" ]]; then
+    rm -f "$XR_OUT_ROOT/LICENSES/GPL-3.0-or-later.txt"
+    rm -rf "$XR_OUT_ROOT/SOURCES/xrizer"
+    return 0
+  fi
+
+  [[ -f "$xrizer_dir/LICENSE.GPL-3.0-or-later" ]] || \
+    fatal "xrizer binary is present without GPL license: $xrizer_dir/LICENSE.GPL-3.0-or-later"
+  [[ -f "$xrizer_dir/SOURCE.txt" ]] || \
+    fatal "xrizer binary is present without source metadata: $xrizer_dir/SOURCE.txt"
+  [[ -f "$xrizer_dir/SHA256SUMS.txt" ]] || \
+    fatal "xrizer binary is present without compliance checksums: $xrizer_dir/SHA256SUMS.txt"
+  [[ -d "$xrizer_dir/source" ]] || \
+    fatal "xrizer binary is present without Corresponding Source directory: $xrizer_dir/source"
+
+  source_archive="$(find "$xrizer_dir/source" -maxdepth 1 -type f \
+    -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+  [[ -n "$source_archive" && -f "$source_archive" ]] || \
+    fatal "xrizer binary is present without Corresponding Source archive under $xrizer_dir/source"
+  source_archive_name="$(basename "$source_archive")"
+
+  copy_file \
+    "$xrizer_dir/LICENSE.GPL-3.0-or-later" \
+    "$XR_OUT_ROOT/LICENSES/GPL-3.0-or-later.txt"
+  copy_dir "$xrizer_dir/source" "$XR_OUT_ROOT/SOURCES/xrizer"
+
+  # Keep one canonical source archive in the package. The component-local path
+  # remains valid through a relative symlink, so SOURCE.txt and SHA256SUMS.txt
+  # produced by install_xrizer.sh continue to work without doubling archive size.
+  rm -rf "$xrizer_dir/source"
+  ln -s ../../../SOURCES/xrizer "$xrizer_dir/source"
+
+  sed \
+    "s#Corresponding Source archive: source/#Corresponding Source archive: #" \
+    "$xrizer_dir/SOURCE.txt" > "$XR_OUT_ROOT/SOURCES/xrizer/SOURCE.txt"
+  cat >> "$XR_OUT_ROOT/SOURCES/xrizer/SOURCE.txt" <<EOF_SOURCE_LOCATIONS
+Packaged GPL license: ../../LICENSES/GPL-3.0-or-later.txt
+Packaged Corresponding Source: $source_archive_name
+Component-local source path: ../../bin/drivers/xrizer/source/$source_archive_name
+EOF_SOURCE_LOCATIONS
+
+  (
+    cd "$XR_OUT_ROOT"
+    sha256sum \
+      "LICENSES/GPL-3.0-or-later.txt" \
+      "SOURCES/xrizer/$source_archive_name" \
+      > "SOURCES/xrizer/SHA256SUMS.txt"
+  )
+
+  log "packaged xrizer GPL license and Corresponding Source"
+}
+
 copy_runtime_scripts() {
   # Only underlying component launchers called by devices/common wrappers
   # are copied here. Build/install scripts, CMake files and source trees stay out
@@ -448,6 +514,9 @@ else
   mkdir -p "$XR_OUT_BIN_ROOT"
 fi
 
+package_project_legal_files
+package_xrizer_compliance_files
+
 # Hardware-neutral launchers plus all configured runtime profile bundles.
 copy_common_device_bundle
 copy_device_bundles
@@ -612,6 +681,15 @@ Optional xrizer launchers are included because the xrizer package is present:
 ./run_xrizer_openvr_app_via_monado.sh --print-steam-options
 ./run_xrizer_collect_logs.sh
 ```
+
+xrizer remains licensed under GPL-3.0-or-later. Its license and the exact
+Corresponding Source used for this binary are included at:
+
+```text
+LICENSES/GPL-3.0-or-later.txt
+SOURCES/xrizer/SOURCE.txt
+SOURCES/xrizer/xrizer-corresponding-source-<commit>.tar.gz
+```
 EOF2
 fi
 
@@ -644,6 +722,9 @@ required=(
   "$XR_OUT_BIN_ROOT/python/capture_client/client.py"
   "$XR_OUT_BIN_ROOT/python-runtime/env.sh"
   "$XR_OUT_BIN_ROOT/python-runtime/venv/bin/python"
+  "$XR_OUT_ROOT/LICENSE"
+  "$XR_OUT_ROOT/LICENSES/MIT.txt"
+  "$XR_OUT_ROOT/THIRD_PARTY_NOTICES.md"
   "$XR_OUT_BIN_ROOT"
 )
 for target in ${XR_PACKAGE_DEVICE_TARGETS:-$XR_TARGET_DEVICE}; do
@@ -652,6 +733,17 @@ done
 for profile in ${XR_PACKAGE_CONFIG_PROFILES:-${XR_PACKAGE_PROFILES:-}}; do
   required+=("$XR_OUT_BIN_ROOT/python/xr_client/configs/$profile.json")
 done
+if [[ -d "$XR_OUT_BIN_ROOT/drivers/xrizer" ]]; then
+  required+=(
+    "$XR_OUT_ROOT/LICENSES/GPL-3.0-or-later.txt"
+    "$XR_OUT_ROOT/SOURCES/xrizer/SOURCE.txt"
+    "$XR_OUT_ROOT/SOURCES/xrizer/SHA256SUMS.txt"
+  )
+  packaged_xrizer_source="$(find "$XR_OUT_ROOT/SOURCES/xrizer" -maxdepth 1 -type f \
+    -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+  [[ -n "$packaged_xrizer_source" && -f "$packaged_xrizer_source" ]] || \
+    fatal "packaged xrizer Corresponding Source archive is missing"
+fi
 for p in "${required[@]}"; do
   if [[ ! -e "$p" ]]; then
     if [[ "$XR_PACKAGE_ALLOW_PARTIAL" == "1" ]]; then

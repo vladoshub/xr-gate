@@ -15,7 +15,7 @@ name: XR Gate split build
         required: false
         default: "direct"
       include_xrizer:
-        description: "Build optional xrizer GPL component"
+        description: "Build optional xrizer GPL component with license and Corresponding Source"
         type: boolean
         required: false
         default: false
@@ -146,6 +146,7 @@ jobs:
             devices/common/linux/scripts/build/package_xr_gate_out.sh
             devices/common/linux/scripts/build/build_vendor_components.sh
             devices/common/linux/scripts/build/package_vendor_components.sh
+            drivers/xrizer/scripts/linux/package_xrizer_compliance.sh
             devices/common/linux/scripts/ci/run_act_build.sh
             devices/common/linux/scripts/ci/run_xr_gate_act_build.sh
             devices/common/linux/scripts/release/unpack_device_release.sh
@@ -339,6 +340,83 @@ jobs:
           retention-days: 3
 
 
+  build-xrizer:
+    name: build optional xrizer GPL component
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer == true }}
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Install xrizer build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git git-lfs ca-certificates curl tar gzip rsync coreutils \
+            build-essential pkg-config clang libclang-dev glslc \
+            python3 python3-full python3-venv
+          git lfs install --local
+
+      - name: Build xrizer with GPL compliance material
+        env:
+          XR_BUILD_ONLY: "xrizer"
+          XR_BUILD_XRIZER: "1"
+          XR_PACKAGE_ALLOW_PARTIAL: "1"
+          XRIZER_PACKAGE_COMPLIANCE: "1"
+          XRIZER_VENDOR_CARGO_SOURCES: "1"
+          XRIZER_INSTALL_RUSTUP: "1"
+          CLONE_XRIZER: "1"
+        run: |
+          set -euo pipefail
+          ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+
+          XRIZER_PACKAGE="out/xr-gate/bin/drivers/xrizer"
+          test -d "$XRIZER_PACKAGE/runtime"
+          test -f "$XRIZER_PACKAGE/LICENSE.GPL-3.0-or-later"
+          test -f "$XRIZER_PACKAGE/SOURCE.txt"
+          test -f "$XRIZER_PACKAGE/SHA256SUMS.txt"
+          test -f out/xr-gate/LICENSES/GPL-3.0-or-later.txt
+          test -f out/xr-gate/SOURCES/xrizer/SOURCE.txt
+          test -f out/xr-gate/SOURCES/xrizer/SHA256SUMS.txt
+
+          SOURCE_ARCHIVE="$(find out/xr-gate/SOURCES/xrizer -maxdepth 1 -type f \
+            -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+          test -n "$SOURCE_ARCHIVE"
+          test -f "$SOURCE_ARCHIVE"
+          tar -tzf "$SOURCE_ARCHIVE" > xrizer-source-files.txt
+          grep -Fq '/SOURCE_INFO.txt' xrizer-source-files.txt
+          grep -Fq '/BUILDING_XRIZER.md' xrizer-source-files.txt
+          grep -Fq '/LICENSE' xrizer-source-files.txt
+          grep -Fq '/vendor/' xrizer-source-files.txt
+          (
+            cd "$XRIZER_PACKAGE"
+            sha256sum -c SHA256SUMS.txt
+          )
+
+          tar -C out -czf xr-gate_xrizer.tar.gz xr-gate
+          ls -lh xr-gate_xrizer.tar.gz "$SOURCE_ARCHIVE"
+
+      - name: Upload xrizer merge input
+        uses: actions/upload-artifact@v4
+        with:
+          name: xr-gate-merge-input-xrizer
+          path: xr-gate_xrizer.tar.gz
+          retention-days: 3
+
+      - name: Upload xrizer Corresponding Source
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrizer-corresponding-source
+          path: out/xr-gate/SOURCES/xrizer/xrizer-corresponding-source-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+
   hand-tracking-models-mercury:
     name: hand-tracking models Mercury
     runs-on: ubuntu-24.04
@@ -419,7 +497,10 @@ jobs:
   merge-package:
     name: merge runtime package
     runs-on: ubuntu-24.04
-    needs: build-part
+    needs:
+      - build-part
+      - build-xrizer
+    if: ${{ always() && needs.build-part.result == 'success' && (needs.build-xrizer.result == 'success' || needs.build-xrizer.result == 'skipped') }}
     timeout-minutes: 60
 
     steps:
@@ -449,6 +530,23 @@ jobs:
             test -x merged/xr-gate/bin/xreal_display_helper/xreal_display_helper
           else
             test ! -e merged/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          fi
+          test -f merged/xr-gate/LICENSE
+          test -f merged/xr-gate/LICENSES/MIT.txt
+          test -f merged/xr-gate/THIRD_PARTY_NOTICES.md
+          if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
+            test -d merged/xr-gate/bin/drivers/xrizer/runtime
+            test -f merged/xr-gate/LICENSES/GPL-3.0-or-later.txt
+            test -f merged/xr-gate/SOURCES/xrizer/SOURCE.txt
+            test -f merged/xr-gate/SOURCES/xrizer/SHA256SUMS.txt
+            MERGED_SOURCE="$(find merged/xr-gate/SOURCES/xrizer -maxdepth 1 -type f \
+              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+            test -n "$MERGED_SOURCE"
+            test -f "$MERGED_SOURCE"
+          else
+            test ! -e merged/xr-gate/bin/drivers/xrizer
+            test ! -e merged/xr-gate/LICENSES/GPL-3.0-or-later.txt
+            test ! -e merged/xr-gate/SOURCES/xrizer
           fi
           test -f merged/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
           test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
@@ -504,6 +602,13 @@ jobs:
           name: unpack-xr-gate
           path: release-assets/unpack-helper
 
+      - name: Download xrizer Corresponding Source
+        if: ${{ env.XR_BUILD_XRIZER == '1' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: xrizer-corresponding-source
+          path: release-assets/xrizer-source
+
       - name: Validate release assets
         run: |
           set -euo pipefail
@@ -529,6 +634,26 @@ jobs:
           else
             test ! -e verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
           fi
+          test -f verify/runtime/xr-gate/LICENSE
+          test -f verify/runtime/xr-gate/LICENSES/MIT.txt
+          test -f verify/runtime/xr-gate/THIRD_PARTY_NOTICES.md
+          if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
+            test -d verify/runtime/xr-gate/bin/drivers/xrizer/runtime
+            test -f verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
+            test -f verify/runtime/xr-gate/SOURCES/xrizer/SOURCE.txt
+            test -f verify/runtime/xr-gate/SOURCES/xrizer/SHA256SUMS.txt
+            RUNTIME_SOURCE="$(find verify/runtime/xr-gate/SOURCES/xrizer -maxdepth 1 -type f \
+              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+            RELEASE_SOURCE="$(find release-assets/xrizer-source -maxdepth 2 -type f \
+              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+            test -n "$RUNTIME_SOURCE"
+            test -n "$RELEASE_SOURCE"
+            cmp "$RUNTIME_SOURCE" "$RELEASE_SOURCE"
+          else
+            test ! -e verify/runtime/xr-gate/bin/drivers/xrizer
+            test ! -e verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
+            test ! -e verify/runtime/xr-gate/SOURCES/xrizer
+          fi
           test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
           test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
           test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
@@ -552,6 +677,12 @@ jobs:
             release-assets/models/hand-tracking-models-mercury.tar.gz
             release-assets/unpack-helper/unpack_xr_gate.sh
           )
+          if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
+            XRIZER_SOURCE_ASSET="$(find release-assets/xrizer-source -maxdepth 2 -type f \
+              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+            test -n "$XRIZER_SOURCE_ASSET"
+            ASSETS+=("$XRIZER_SOURCE_ASSET")
+          fi
 
           args=()
           if [[ "$PRERELEASE" == "true" ]]; then

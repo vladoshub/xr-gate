@@ -69,4 +69,4 @@ Third-party source code, upstream patches, downloaded model files, generated bin
 - Use: optional OpenVR-to-OpenXR compatibility tool.
 - License: GPL-3.0-or-later upstream.
 - Default status: not built by default and not part of the core binary release.
-- Packaging note: if redistributing xrizer binaries, provide the corresponding source and comply with GPL-3.0-or-later.
+- Packaging note: when xrizer is built, the package includes the exact upstream GPL license, source metadata, checksums, and a Corresponding Source archive under `LICENSES/` and `SOURCES/xrizer/`. GitHub Actions also publishes the same source archive as a separate release asset.

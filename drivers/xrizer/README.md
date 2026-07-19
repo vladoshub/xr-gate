@@ -31,7 +31,7 @@ cd ~/src/xr_tracking
 devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
 ```
 
-`xrizer` is part of the default XREAL Ultra Linux package build. Build only
+`xrizer` is optional and is not part of the default XR Gate package. Build only
 this component with:
 
 ```bash
@@ -140,3 +140,38 @@ APT package list with `XRIZER_SYSTEM_PACKAGES=...` if a distro needs different
 package names. The installer also exports `LIBCLANG_PATH` and
 `BINDGEN_EXTRA_CLANG_ARGS` when possible so bindgen can find clang resource and
 GCC/system headers such as `stddef.h`.
+
+
+## GPL license and Corresponding Source
+
+When xrizer is built through the XR Gate installer, compliance packaging is
+enabled by default. The installed component contains:
+
+```text
+bin/drivers/xrizer/LICENSE.GPL-3.0-or-later
+bin/drivers/xrizer/SOURCE.txt
+bin/drivers/xrizer/SHA256SUMS.txt
+bin/drivers/xrizer/source/xrizer-corresponding-source-<commit>.tar.gz
+```
+
+The final XR Gate package exposes the same material at:
+
+```text
+LICENSES/GPL-3.0-or-later.txt
+SOURCES/xrizer/SOURCE.txt
+SOURCES/xrizer/SHA256SUMS.txt
+SOURCES/xrizer/xrizer-corresponding-source-<commit>.tar.gz
+```
+
+The source archive contains the exact checked-out xrizer tree, initialized
+submodule working trees, the XR Gate integration build scripts, and vendored
+Cargo dependency sources. Packaging fails if an xrizer binary is present but
+any required GPL compliance material is missing.
+
+For a direct local-only development install, compliance archive creation can be
+explicitly disabled with `XRIZER_PACKAGE_COMPLIANCE=0`. Such an output must not
+be used as a redistributed binary package.
+
+GitHub Actions builds xrizer only when `include_xrizer=true`. In that mode the
+workflow adds the xrizer partial package to the merged runtime and publishes the
+Corresponding Source archive as a separate artifact and release asset.

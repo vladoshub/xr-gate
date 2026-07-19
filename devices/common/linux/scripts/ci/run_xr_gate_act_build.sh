@@ -17,11 +17,19 @@ while [[ $# -gt 0 ]]; do
     --vendor-components)
       forward+=(--input include_vendor_components=true)
       ;;
+    --with-xrizer)
+      forward+=(--input include_xrizer=true)
+      ;;
+    --without-xrizer)
+      forward+=(--input include_xrizer=false)
+      ;;
     -h|--help)
       cat <<'EOF'
 XR Gate act wrapper additions:
   --no-vendor-components  Build without pure vendor components.
   --vendor-components     Explicitly include vendor components (default).
+  --with-xrizer           Build xrizer and package its GPL license and Corresponding Source.
+  --without-xrizer        Explicitly disable xrizer (default).
 
 All other options are forwarded to devices/common/linux/scripts/ci/run_act_build.sh.
 EOF

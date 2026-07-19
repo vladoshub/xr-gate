@@ -43,6 +43,8 @@ XRIZER_INSTALL_CARGO_XBUILD="${XRIZER_INSTALL_CARGO_XBUILD:-1}"
 XRIZER_INSTALL_RUST_SRC="${XRIZER_INSTALL_RUST_SRC:-1}"
 XRIZER_INSTALL_SYSTEM_DEPS="${XRIZER_INSTALL_SYSTEM_DEPS:-1}"
 XRIZER_APT_ASSUME_YES="${XRIZER_APT_ASSUME_YES:-1}"
+XRIZER_PACKAGE_COMPLIANCE="${XRIZER_PACKAGE_COMPLIANCE:-1}"
+XRIZER_VENDOR_CARGO_SOURCES="${XRIZER_VENDOR_CARGO_SOURCES:-1}"
 # Packages needed by xrizer build scripts/bindgen on Ubuntu.
 XRIZER_SYSTEM_PACKAGES="${XRIZER_SYSTEM_PACKAGES:-build-essential pkg-config clang libclang-dev glslc}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
@@ -54,16 +56,25 @@ esac
 
 mkdir -p "$THIRD_PARTY_DIR" "$(dirname "$INSTALL_BIN_DIR")"
 
-if [[ ! -d "$XRIZER_DIR/.git" ]]; then
-  [[ "$CLONE_XRIZER" == "1" ]] || fail "xrizer source missing: $XRIZER_DIR and CLONE_XRIZER=$CLONE_XRIZER"
-  log "cloning xrizer: $XRIZER_REPO -> $XRIZER_DIR"
-  git clone "$XRIZER_REPO" "$XRIZER_DIR"
+if [[ ! -d "$XRIZER_DIR/.git" && ! -f "$XRIZER_DIR/.git" ]]; then
+  if [[ "$CLONE_XRIZER" == "1" ]]; then
+    log "cloning xrizer: $XRIZER_REPO -> $XRIZER_DIR"
+    git clone "$XRIZER_REPO" "$XRIZER_DIR"
+  elif [[ -f "$XRIZER_DIR/Cargo.toml" ]]; then
+    log "using xrizer source snapshot without Git metadata: $XRIZER_DIR"
+  else
+    fail "xrizer source missing: $XRIZER_DIR and CLONE_XRIZER=$CLONE_XRIZER"
+  fi
 fi
 
-log "checking out xrizer ref: $XRIZER_REF"
-git -C "$XRIZER_DIR" fetch --tags origin || true
-git -C "$XRIZER_DIR" checkout "$XRIZER_REF"
-git -C "$XRIZER_DIR" submodule update --init --recursive
+if [[ -d "$XRIZER_DIR/.git" || -f "$XRIZER_DIR/.git" ]]; then
+  log "checking out xrizer ref: $XRIZER_REF"
+  git -C "$XRIZER_DIR" fetch --tags origin || true
+  git -C "$XRIZER_DIR" checkout "$XRIZER_REF"
+  git -C "$XRIZER_DIR" submodule update --init --recursive
+else
+  log "source snapshot mode: checkout and submodule commands are skipped"
+fi
 
 
 ensure_system_deps() {
@@ -204,10 +215,10 @@ log "using clang: $(command -v clang)"
 log "using cargo: $(command -v cargo)"
 log "building xrizer ($XRIZER_BUILD_PROFILE)"
 if [[ "$XRIZER_BUILD_PROFILE" == "release" ]]; then
-  (cd "$XRIZER_DIR" && cargo xbuild --release)
+  (cd "$XRIZER_DIR" && cargo xbuild --locked --release)
   BUILD_OUT="$XRIZER_DIR/target/release"
 else
-  (cd "$XRIZER_DIR" && cargo xbuild)
+  (cd "$XRIZER_DIR" && cargo xbuild --locked)
   BUILD_OUT="$XRIZER_DIR/target/debug"
 fi
 
@@ -232,6 +243,19 @@ export XRIZER_RUNTIME_DIR="\${XRIZER_RUNTIME_DIR:-$INSTALL_BIN_DIR/runtime}"
 export VR_OVERRIDE="\${VR_OVERRIDE:-\$XRIZER_RUNTIME_DIR}"
 EOF_ENV
 chmod +x "$INSTALL_BIN_DIR/env.sh"
+
+if [[ "$XRIZER_PACKAGE_COMPLIANCE" == "1" ]]; then
+  log "packaging GPL license and Corresponding Source"
+  ROOT_PROJECT="$ROOT_PROJECT" \
+  XRIZER_DIR="$XRIZER_DIR" \
+  INSTALL_BIN_DIR="$INSTALL_BIN_DIR" \
+  XRIZER_REPO="$XRIZER_REPO" \
+  XRIZER_REF_REQUESTED="$XRIZER_REF" \
+  XRIZER_VENDOR_CARGO_SOURCES="$XRIZER_VENDOR_CARGO_SOURCES" \
+    bash "$ROOT_PROJECT/drivers/xrizer/scripts/linux/package_xrizer_compliance.sh"
+else
+  log "skip compliance package: XRIZER_PACKAGE_COMPLIANCE=$XRIZER_PACKAGE_COMPLIANCE"
+fi
 
 if ! find "$INSTALL_BIN_DIR/runtime" -maxdepth 2 -type f \( -name 'libopenvr_api.so' -o -name 'openvr_api.dll' -o -name 'vrclient.so' \) | grep -q .; then
   log "warning: did not find common OpenVR runtime library names under $INSTALL_BIN_DIR/runtime"
