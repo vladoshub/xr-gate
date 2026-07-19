@@ -32,10 +32,10 @@ successful calibration the script prints one ready-to-paste YAML block:
 Only one of ``axes`` and ``quaternion_xyzw`` may be present in the config.
 
 Examples:
-  python3 calibrate_capture_imu_axes.py
-  python3 calibrate_capture_imu_axes.py --registry /tmp/capture_service_streams.json
-  python3 calibrate_capture_imu_axes.py --stream imu0 --output /tmp/imu_mount.json
-  python3 calibrate_capture_imu_axes.py --self-test
+  python3 calibrate_imu_axes.py
+  python3 calibrate_imu_axes.py --registry /tmp/capture_service_streams.json
+  python3 calibrate_imu_axes.py --stream imu0 --output /tmp/imu_mount.json
+  python3 calibrate_imu_axes.py --self-test
 """
 
 from __future__ import annotations

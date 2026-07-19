@@ -387,6 +387,9 @@ copy_capture_client_runtime() {
 
 copy_tools_runtime() {
   copy_file "$XR_ROOT_PROJECT/tools/xr_startup_gate.py" "$XR_OUT_BIN_ROOT/python/tools/xr_startup_gate.py"
+  copy_file \
+    "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py" \
+    "$XR_OUT_BIN_ROOT/python/tools/calibrate_hmd_orientation_offset.py"
   copy_file "$XR_ROOT_PROJECT/tools/xr_runtime_gesture_watch_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_runtime_gesture_watch_debug.py"
   copy_file "$XR_ROOT_PROJECT/tools/debug/view_capture_service_shm.py" "$XR_OUT_BIN_ROOT/python/tools/debug/view_capture_service_shm.py"
   copy_runtime_py_dir "$XR_ROOT_PROJECT/tools/runtime_debug_viewer" "$XR_OUT_BIN_ROOT/python/tools/runtime_debug_viewer"
@@ -406,6 +409,7 @@ EOF_LAUNCHER
 }
 
 write_app_launchers() {
+  write_root_launcher "calibrate_hmd_orientation_offset.sh" "bin/python/tools/calibrate_hmd_orientation_offset.py"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"
