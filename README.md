@@ -163,6 +163,7 @@ devices/common/linux/scripts/override_controller/start_override_controller.sh
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
 
 
+
 **Or if you have VR-PARK controllers you can use this config:**
 
 **Perhaps this setting will work with other similar joysticks (4 unique action buttons + a simple stick for mouse movement)**
@@ -187,8 +188,20 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_vrpark.j
 ```
 
 4. Enable auto-start override_controller in client:
+
+**XREAL ULTRA**
 ```bash
-CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/xreal_ultra.json"
+DEVICE_CONFIG=xreal_ultra
+```
+
+**UltraLeapUVC + nRF54L15**
+```bash
+DEVICE_CONFIG=leap_motion_uvc_nrf54l15
+```
+
+   
+```bash
+CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
@@ -274,8 +287,7 @@ DEVICE_CONFIG=xreal_ultra
 
 **UltraLeapUVC + nRF54L15**
 ```bash
-DEVICE_CONFIG=leap_motion_uvc_nrf54l15
-```
+DEVICE_C
 
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
@@ -287,7 +299,7 @@ sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/
 sed -i \
   -e 's|"CONFIG_PATH": "~/.config/xr_tracking/override_controller/default\.json"|"CONFIG_PATH": "~/.config/xr_tracking/override_controller/gearvr.json"|' \
   -e 's|"PROVIDERS": "evdev"|"PROVIDERS": "evdev,gearvr_ble"|' \
-  ~/xr-gate-release/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
+  ~/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json
 ```
 
 
