@@ -267,8 +267,18 @@ PROVIDERS=gearvr_ble GEARVR_INITIAL_SCAN_MS=10000 CONFIG_PATH="$HOME/.config/xr_
 
 4. Enable auto-start override_controller and gearvr in client:
 
+**XREAL ULTRA**
 ```bash
-CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/xreal_ultra.json"
+DEVICE_CONFIG=xreal_ultra
+```
+
+**UltraLeapUVC + nRF54L15**
+```bash
+DEVICE_CONFIG=leap_motion_uvc_nrf54l15
+```
+
+```bash
+CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
