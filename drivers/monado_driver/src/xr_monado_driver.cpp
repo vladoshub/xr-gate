@@ -79,8 +79,21 @@ static struct xrt_binding_input_pair wmr_to_simple_inputs[] = {
     {XRT_INPUT_SIMPLE_AIM_POSE, XRT_INPUT_WMR_AIM_POSE},
 };
 
+static struct xrt_binding_input_pair wmr_to_vive_inputs[] = {
+    {XRT_INPUT_VIVE_SQUEEZE_CLICK, XRT_INPUT_WMR_SQUEEZE_CLICK},
+    {XRT_INPUT_VIVE_MENU_CLICK, XRT_INPUT_WMR_MENU_CLICK},
+    {XRT_INPUT_VIVE_TRIGGER_CLICK, XRT_INPUT_WMR_TRIGGER_VALUE},
+    {XRT_INPUT_VIVE_TRIGGER_VALUE, XRT_INPUT_WMR_TRIGGER_VALUE},
+    {XRT_INPUT_VIVE_TRACKPAD, XRT_INPUT_WMR_TRACKPAD},
+    {XRT_INPUT_VIVE_TRACKPAD_CLICK, XRT_INPUT_WMR_TRACKPAD_CLICK},
+    {XRT_INPUT_VIVE_TRACKPAD_TOUCH, XRT_INPUT_WMR_TRACKPAD_TOUCH},
+    {XRT_INPUT_VIVE_GRIP_POSE, XRT_INPUT_WMR_GRIP_POSE},
+    {XRT_INPUT_VIVE_AIM_POSE, XRT_INPUT_WMR_AIM_POSE},
+};
+
 static struct xrt_binding_profile wmr_binding_profiles[] = {
     {XRT_DEVICE_SIMPLE_CONTROLLER, wmr_to_simple_inputs, ARRAY_SIZE(wmr_to_simple_inputs), nullptr, 0},
+    {XRT_DEVICE_VIVE_WAND, wmr_to_vive_inputs, ARRAY_SIZE(wmr_to_vive_inputs), nullptr, 0},
 };
 
 XrTrackingDevice* from_xdev(struct xrt_device* xdev) {
@@ -551,6 +564,8 @@ bool controller_pose_input_name(enum xrt_input_name name) {
     case XRT_INPUT_GENERIC_AIM_POSE:
     case XRT_INPUT_SIMPLE_GRIP_POSE:
     case XRT_INPUT_SIMPLE_AIM_POSE:
+    case XRT_INPUT_VIVE_GRIP_POSE:
+    case XRT_INPUT_VIVE_AIM_POSE:
       return true;
     default:
       return false;
