@@ -253,10 +253,11 @@ trust AA:BB:CC:DD:EE:FF
 info AA:BB:CC:DD:EE:FF
 ```
 
+Repeat for second controller from pair command
+
 ```bash
 exit
 ```
-Repeat for second controller from pair command
 
 3. Register your controllers:
 
