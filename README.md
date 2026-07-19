@@ -305,9 +305,16 @@ If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the 
 
 It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
 
+**XREAL ULTRA (recommended)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
+```
+
+**UltraLeap + nRF54L15 (experimental)**
+```bash
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config leap_motion_uvc_nrf54l15
 ```
 
 You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
