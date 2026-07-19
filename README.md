@@ -287,7 +287,8 @@ DEVICE_CONFIG=xreal_ultra
 
 **UltraLeapUVC + nRF54L15**
 ```bash
-DEVICE_C
+DEVICE_CONFIG=leap_motion_uvc_nrf54l15
+```
 
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
