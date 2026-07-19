@@ -311,7 +311,7 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-**UltraLeap + nRF54L15 (experimental)**
+**UltraLeapUVC + nRF54L15 (experimental)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config leap_motion_uvc_nrf54l15
