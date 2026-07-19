@@ -310,11 +310,7 @@ If you use an external controller, you can continue to use controller input when
 
 When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
 
-I tested on two identical "vr-park" joystick
 
-In more detail:
-
-[Controller setup](docs/controllers/README.md)
 
 ### 3. Run xr_client
 
