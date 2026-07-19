@@ -67,7 +67,9 @@ CONTROLLER_INPUT_SLOTS="${CONTROLLER_INPUT_SLOTS:-32}"                          
 FIX_REGISTRY_PERMISSIONS="${FIX_REGISTRY_PERMISSIONS:-1}"                                   # fix stale root-owned registry/SHM files before publishing when possible
 
 [[ -d "$ROOT_PROJECT" ]] || fatal "ROOT_PROJECT not found: $ROOT_PROJECT"
-[[ -d "$OVERRIDE_CONTROLLER_DIR" ]] || fatal "override_controller source dir not found: $OVERRIDE_CONTROLLER_DIR"
+if [[ "$AUTO_BUILD" == "1" ]]; then
+  [[ -d "$OVERRIDE_CONTROLLER_DIR" ]] || fatal "override_controller source dir not found: $OVERRIDE_CONTROLLER_DIR"
+fi
 
 print_input_permission_hint_if_needed() {
   [[ ",$PROVIDERS," == *,evdev,* || ",$PROVIDERS," == *,linux_evdev,* ]] || return 0
