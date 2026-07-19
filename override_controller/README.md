@@ -168,6 +168,11 @@ training event until GPIO controls are added. Assign it manually in the config:
       "ry_deg": 0.0,
       "rz_deg": 0.0
     }
+  },
+  "orientation_offset": {
+    "enabled": false,
+    "multiply_order": "post",
+    "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]
   }
 }
 ```
@@ -187,6 +192,50 @@ published as normal training inputs:
 One serial stream must have one reader. Do not point `capture_service_cpp` and
 `override_controller` at the same physical `/dev/ttyACM*` device at the same
 time; select which process owns that controller's serial stream.
+
+
+### Per-controller IMU orientation offset
+
+Each `devices[]` entry may apply a fixed presentation offset after its
+`orientation_transform`:
+
+```json
+"orientation_offset": {
+  "enabled": true,
+  "multiply_order": "post",
+  "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]
+}
+```
+
+`post` is intended for the fixed IMU-to-controller/grip orientation. It changes
+only `orientation_xyzw`; IMU vectors remain in the axes established by
+`orientation_transform`. Calibrate each side with
+`debug/calibrate_controller_orientation_offset.py` while the existing offset is
+disabled, or pass the matching config with `--replace-existing-offset` so the
+tool can remove the currently configured offset from the observed stream.
+
+Standalone calibration, ready-to-copy JSON only:
+
+```bash
+python3 debug/calibrate_controller_orientation_offset.py \
+  --side left \
+  --registry /tmp/tracking_streams.json \
+  --stream controller_input
+```
+
+Calibrate and write the unique `devices[]` entry assigned to the side:
+
+```bash
+python3 debug/calibrate_controller_orientation_offset.py \
+  --side left \
+  --registry /tmp/tracking_streams.json \
+  --stream controller_input \
+  --config ~/.config/xr_tracking/override_controller/default.json \
+  --replace-existing-offset \
+  --write
+```
+
+Restart `override_controller` after writing the config.
 
 ## Samsung Gear VR Controller BLE provider
 

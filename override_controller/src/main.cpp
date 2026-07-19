@@ -1441,8 +1441,9 @@ OutputState compose_state(InputProvider& provider,
 
     const int device_index = resolve_device(config_device.fingerprint);
     if (device_index < 0) continue;
-    const auto candidate_imu = imu::apply_orientation_transform(
-        provider.imu_state(devices[device_index]), config_device.orientation_transform);
+    const auto candidate_imu = imu::apply_orientation_calibration(
+        provider.imu_state(devices[device_index]), config_device.orientation_transform,
+        config_device.orientation_offset);
     if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
     if (xr_runtime::controller_imu_is_present(candidate_imu)) {
       side_devices.insert(hex_u64(devices[device_index].fingerprint.stable_hash));
@@ -1470,8 +1471,9 @@ OutputState compose_state(InputProvider& provider,
       if (imu_device_index >= 0) {
         auto candidate_imu = provider.imu_state(devices[imu_device_index]);
         if (binding_device) {
-          candidate_imu = imu::apply_orientation_transform(
-              candidate_imu, binding_device->orientation_transform);
+          candidate_imu = imu::apply_orientation_calibration(
+              candidate_imu, binding_device->orientation_transform,
+              binding_device->orientation_offset);
         }
         if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
       }
@@ -1983,6 +1985,12 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
               << " orientation_basis_deg=(" << device.orientation_transform.basis_rotation.rx_deg
               << "," << device.orientation_transform.basis_rotation.ry_deg
               << "," << device.orientation_transform.basis_rotation.rz_deg << ")"
+              << " orientation_offset=" << (device.orientation_offset.enabled ? "enabled" : "disabled")
+              << " orientation_offset_order=" << device.orientation_offset.multiply_order
+              << " orientation_offset_xyzw=(" << device.orientation_offset.quaternion_xyzw[0]
+              << "," << device.orientation_offset.quaternion_xyzw[1]
+              << "," << device.orientation_offset.quaternion_xyzw[2]
+              << "," << device.orientation_offset.quaternion_xyzw[3] << ")"
               << " rel_axis_hold_ms=" << input.rel_axis_hold_ms
               << " rel_button_hold_ms=" << input.rel_button_hold_ms
               << " button_hold_ms=" << input.button_hold_ms

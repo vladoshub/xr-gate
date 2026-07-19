@@ -315,6 +315,16 @@
           "ry_deg": 0.0,
           "rz_deg": 0.0
         }
+      },
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "quaternion_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
       }
     },
     {
@@ -358,6 +368,16 @@
           "ry_deg": 0.0,
           "rz_deg": 0.0
         }
+      },
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "quaternion_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
       }
     }
   ],
@@ -384,5 +404,5 @@
     "transport": "shm",
     "unlink_existing": true
   },
-  "version": 4
+  "version": 5
 }

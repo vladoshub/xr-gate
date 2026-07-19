@@ -111,6 +111,22 @@ if(EXISTS "${OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR}")
   )
 endif()
 
+set(OVERRIDE_CONTROLLER_TOOL_FILES
+  "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_imu_axes.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_controller_orientation_offset.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/watch_controller_input_stream.py"
+)
+add_custom_command(TARGET override_controller POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:override_controller>/tools"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+    ${OVERRIDE_CONTROLLER_TOOL_FILES}
+    "$<TARGET_FILE_DIR:override_controller>/tools"
+  COMMENT "Copy override_controller Python tools next to binary"
+)
+install(PROGRAMS ${OVERRIDE_CONTROLLER_TOOL_FILES}
+  DESTINATION bin/override_controller/tools
+)
+
 option(OVERRIDE_CONTROLLER_BUILD_TESTS "Build override_controller protocol tests" OFF)
 if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   enable_testing()
@@ -122,4 +138,14 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
     "${CMAKE_CURRENT_LIST_DIR}/src/providers/xiao_nrf54l15"
   )
   add_test(NAME xr_controller_v1_protocol_test COMMAND xr_controller_v1_protocol_test)
+
+  add_executable(controller_imu_transform_test
+    tests/controller_imu_transform_test.cpp
+    src/imu/controller_imu_transform.cpp
+  )
+  target_include_directories(controller_imu_transform_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/include"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  add_test(NAME controller_imu_transform_test COMMAND controller_imu_transform_test)
 endif()

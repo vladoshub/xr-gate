@@ -423,10 +423,22 @@
         "button_release_ms": 0,
         "button_pulse_startup_ms": 0,
         "button_pulse_startup_release_ms": 0,
-        "button_pulse_startup_types": ["trigger"],
+        "button_pulse_startup_types": [
+          "trigger"
+        ],
         "hold_toggle_debounce_ms": 100
       },
-      "imu_side": "none"
+      "imu_side": "none",
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "quaternion_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
     },
     {
       "backend": "evdev",
@@ -455,10 +467,22 @@
         "button_release_ms": 0,
         "button_pulse_startup_ms": 0,
         "button_pulse_startup_release_ms": 0,
-        "button_pulse_startup_types": ["trigger"],
+        "button_pulse_startup_types": [
+          "trigger"
+        ],
         "hold_toggle_debounce_ms": 100
       },
-      "imu_side": "none"
+      "imu_side": "none",
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "quaternion_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
     }
   ],
   "hold_toggle_bindings": [
@@ -556,5 +580,5 @@
     "transport": "shm",
     "unlink_existing": true
   },
-  "version": 3
+  "version": 5
 }
