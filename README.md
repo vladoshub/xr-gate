@@ -157,7 +157,7 @@ Train your devices:
 
 ```bash
 cd ~/xr-gate-release/xr-gate
-devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
+devices/common/linux/scripts/override_controller/start_override_controller.sh
 ```
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
@@ -231,10 +231,11 @@ default-agent
 scan le
 ```
 
-Wait line:
+Wait controllers:
 
 ```bash
-Device AA:BB:CC:DD:EE:FF Gear VR Controller(17DB)
+Device AA:BB:CC:DD:EE:FF Gear VR Controller(first)
+Device AB:BB:CC:DD:EE:FF Gear VR Controller(second)
 ```
 
 Next:
@@ -255,7 +256,7 @@ info AA:BB:CC:DD:EE:FF
 ```bash
 exit
 ```
-Repeat for second controller
+Repeat for second controller from pair command
 
 3. Register your controllers:
 
