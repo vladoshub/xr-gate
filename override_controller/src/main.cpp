@@ -382,6 +382,161 @@ void assign_imu_side_if_supported(InputProvider& provider,
   }
 }
 
+
+bool config_has_imu_side(const AppConfig& cfg, ControllerSide side) {
+  return std::any_of(cfg.devices.begin(), cfg.devices.end(), [side](const ConfigDevice& device) {
+    return device.imu_side && *device.imu_side == side;
+  });
+}
+
+const ConfigDevice* find_config_device_by_fingerprint(
+    const AppConfig& cfg,
+    const DeviceFingerprint& fingerprint) {
+  for (const auto& device : cfg.devices) {
+    if (fingerprint_same_config_device(device.fingerprint, fingerprint)) return &device;
+  }
+  return nullptr;
+}
+
+struct UnassignedImuDevice {
+  size_t device_index = 0;
+  int config_device_id = 0;
+};
+
+std::vector<UnassignedImuDevice> collect_unassigned_imu_devices(
+    InputProvider& provider,
+    const std::vector<DeviceInfo>& devices,
+    const AppConfig& cfg) {
+  std::vector<UnassignedImuDevice> out;
+  for (size_t index = 0; index < devices.size(); ++index) {
+    const auto& device = devices[index];
+    const auto imu = provider.imu_state(device);
+    if (!xr_runtime::controller_imu_is_present(imu)) continue;
+
+    const ConfigDevice* configured =
+        find_config_device_by_fingerprint(cfg, device.fingerprint);
+    if (configured && configured->imu_side) continue;
+
+    // A composite provider should expose each physical device once, but keep
+    // the prompt deterministic if a backend returns duplicate views.
+    const bool duplicate = std::any_of(
+        out.begin(), out.end(), [&](const UnassignedImuDevice& candidate) {
+          return candidate.device_index < devices.size() &&
+                 fingerprint_same_config_device(
+                     devices[candidate.device_index].fingerprint,
+                     device.fingerprint);
+        });
+    if (duplicate) continue;
+
+    out.push_back({index, configured ? configured->id : 0});
+  }
+  return out;
+}
+
+bool prompt_assign_unassigned_imu_devices(InputProvider& provider,
+                                          std::vector<DeviceInfo>& devices,
+                                          AppConfig& cfg,
+                                          const std::string& context) {
+  const bool left_missing = !config_has_imu_side(cfg, ControllerSide::Left);
+  const bool right_missing = !config_has_imu_side(cfg, ControllerSide::Right);
+  if (!left_missing && !right_missing) return false;
+
+  auto candidates = collect_unassigned_imu_devices(provider, devices, cfg);
+  if (candidates.empty()) return false;
+
+  std::cout << "\n=== Optional IMU-only assignment (" << context << ") ===\n";
+  std::cout << "Detected at least one unassigned IMU device and at least one controller side without IMU.\n";
+  std::cout << "Choose a device by number, or press Enter/type 'skip' to leave that side unchanged.\n";
+
+  bool changed = false;
+  for (const ControllerSide side : {ControllerSide::Left, ControllerSide::Right}) {
+    if (config_has_imu_side(cfg, side)) continue;
+
+    candidates = collect_unassigned_imu_devices(provider, devices, cfg);
+    if (candidates.empty()) break;
+
+    std::cout << "\nAvailable unassigned IMU devices for " << to_string(side) << ":\n";
+    for (size_t option = 0; option < candidates.size(); ++option) {
+      const auto& candidate = candidates[option];
+      const auto& device = devices[candidate.device_index];
+      std::cout << "  [" << (option + 1) << "] "
+                << short_device_label(device.fingerprint);
+      if (candidate.config_device_id > 0) {
+        std::cout << " existing device_id=" << candidate.config_device_id;
+      } else {
+        std::cout << " new config device";
+      }
+      std::cout << "\n";
+    }
+
+    while (true) {
+      std::cout << "Assign IMU to " << to_string(side)
+                << " [1-" << candidates.size()
+                << ", Enter=skip]: " << std::flush;
+      std::string line;
+      if (!std::getline(std::cin, line)) line.clear();
+      line = trim_copy(line);
+      std::string lower = line;
+      std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+
+      if (line.empty() || lower == "skip" || lower == "s" || lower == "0") {
+        std::cout << "  skipped; " << to_string(side)
+                  << " IMU config was not changed.\n";
+        break;
+      }
+
+      const bool numeric = !line.empty() &&
+          std::all_of(line.begin(), line.end(), [](unsigned char c) {
+            return std::isdigit(c) != 0;
+          });
+      if (!numeric) {
+        std::cout << "  enter a device number or press Enter to skip.\n";
+        continue;
+      }
+
+      size_t selected = 0;
+      try {
+        selected = static_cast<size_t>(std::stoul(line));
+      } catch (...) {
+        selected = 0;
+      }
+      if (selected < 1 || selected > candidates.size()) {
+        std::cout << "  selection is outside the available range.\n";
+        continue;
+      }
+
+      const auto& candidate = candidates[selected - 1];
+      const auto& physical = devices[candidate.device_index];
+      int config_device_id = candidate.config_device_id;
+      if (config_device_id <= 0) {
+        config_device_id = ensure_config_device(cfg, physical.fingerprint);
+      }
+      ConfigDevice* config_device = find_config_device(cfg, config_device_id);
+      if (!config_device) {
+        throw std::runtime_error("failed to create/find config device for selected IMU");
+      }
+      if (config_device->imu_side) {
+        std::cout << "  device became assigned while selecting; choose another device.\n";
+        candidates = collect_unassigned_imu_devices(provider, devices, cfg);
+        if (candidates.empty()) break;
+        continue;
+      }
+
+      config_device->fingerprint = physical.fingerprint;
+      config_device->imu_side = side;
+      config_device->imu_side_explicit = true;
+      changed = true;
+      std::cout << "  assigned device_id=" << config_device_id
+                << " imu_side=" << to_string(side)
+                << " device=" << short_device_label(physical.fingerprint) << "\n";
+      break;
+    }
+  }
+  return changed;
+}
+
 void sync_binding_device_from_registry(AppConfig& cfg, BindingConfig& b) {
   if (b.device_id <= 0) {
     b.device_id = ensure_config_device(cfg, b.device);
@@ -915,6 +1070,11 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
                                "alternative layout",
                                reserved_switch);
   }
+
+  // Button training cannot discover an IMU-only device by waiting for an
+  // input event. Offer explicit per-side assignment from the detected IMU list
+  // only when both an unassigned IMU and a side without IMU exist.
+  (void)prompt_assign_unassigned_imu_devices(provider, devices, cfg, "training");
 
   sync_devices_from_registry(cfg);
 
@@ -1763,6 +1923,20 @@ bool binding_device_mapping_changed(const std::vector<RuntimeBinding>& a,
 }
 
 
+bool config_device_has_button_usage(const AppConfig& cfg, int device_id) {
+  auto uses_device = [device_id](const std::vector<BindingConfig>& bindings) {
+    return std::any_of(bindings.begin(), bindings.end(),
+                       [device_id](const BindingConfig& binding) {
+                         return binding.device_id == device_id;
+                       });
+  };
+  return uses_device(cfg.bindings) ||
+         uses_device(cfg.hold_toggle_bindings) ||
+         uses_device(cfg.alternative_bindings) ||
+         uses_device(cfg.alternative_hold_toggle_bindings) ||
+         (cfg.layout_switch.enabled && cfg.layout_switch.device_id == device_id);
+}
+
 std::string configured_device_usage(const AppConfig& cfg, int device_id) {
   std::set<ControllerSide> sides;
   bool has_switch = false;
@@ -1841,38 +2015,47 @@ void connect_config_devices(InputProvider& provider, AppConfig& cfg, const fs::p
   auto devices = provider.scan_devices(true);
   print_devices(devices);
   if (cfg.devices.empty()) {
-    std::cout << "[override_controller] config has no devices to reconnect.\n";
-    return;
+    std::cout << "[override_controller] config has no button devices to reconnect.\n";
   }
 
-  std::cout << "\nConfigured devices in config:\n";
-  std::vector<int> ids;
-  for (const auto& d : cfg.devices) {
-    ids.push_back(d.id);
-  }
-  std::sort(ids.begin(), ids.end());
-  for (const int id : ids) {
-    const ConfigDevice* d = find_config_device(cfg, id);
-    if (!d) continue;
-    std::cout << "  device_id=" << id << " " << short_device_label(d->fingerprint)
-              << " " << configured_device_usage(cfg, id) << "\n";
-  }
+  if (!cfg.devices.empty()) {
+    std::cout << "\nConfigured devices in config:\n";
+    std::vector<int> ids;
+    for (const auto& d : cfg.devices) {
+      ids.push_back(d.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    for (const int id : ids) {
+      const ConfigDevice* d = find_config_device(cfg, id);
+      if (!d) continue;
+      std::cout << "  device_id=" << id << " " << short_device_label(d->fingerprint)
+                << " " << configured_device_usage(cfg, id) << "\n";
+    }
 
-  std::cout << "\nReconnect each configured device. For each prompt, press any button/move any control on that physical device.\n";
-  for (const int id : ids) {
-    ConfigDevice* d = find_config_device(cfg, id);
-    if (!d) continue;
-    const std::string usage = configured_device_usage(cfg, id);
-    std::cout << "\nConfig device_id=" << id << " currently " << short_device_label(d->fingerprint)
-              << " " << usage << "\n";
-    if (!ask_yes_no("Update this device now?", true)) continue;
-    DeviceFingerprint captured;
-    if (capture_device_fingerprint(provider, devices, captured,
-                                   "[connect-devices] Press any button on config device_id=" +
-                                       std::to_string(id) + " " + usage + ".")) {
-      d->fingerprint = captured;
+    std::cout << "\nReconnect each configured button device. For each prompt, press any button/move any control on that physical device.\n";
+    for (const int id : ids) {
+      ConfigDevice* d = find_config_device(cfg, id);
+      if (!d) continue;
+      const std::string usage = configured_device_usage(cfg, id);
+      std::cout << "\nConfig device_id=" << id << " currently " << short_device_label(d->fingerprint)
+                << " " << usage << "\n";
+      if (!config_device_has_button_usage(cfg, id) && d->imu_side) {
+        std::cout << "  IMU-only config device; button-based reconnect is skipped.\n";
+        continue;
+      }
+      if (!ask_yes_no("Update this device now?", true)) continue;
+      DeviceFingerprint captured;
+      if (capture_device_fingerprint(provider, devices, captured,
+                                     "[connect-devices] Press any button on config device_id=" +
+                                         std::to_string(id) + " " + usage + ".")) {
+        d->fingerprint = captured;
+      }
     }
   }
+
+  // This final step does not require buttons. It appears only when a currently
+  // detected IMU is unassigned and at least one side still has no IMU.
+  (void)prompt_assign_unassigned_imu_devices(provider, devices, cfg, "connect-devices");
 
   sync_devices_from_registry(cfg);
   save_config_file(cfg, config_path);

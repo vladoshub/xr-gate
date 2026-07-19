@@ -59,8 +59,12 @@ Config schema version 5 stores IMU routing, per-device orientation conversion/of
 
 `imu_side` accepts `left`, `right`, or `none`. IMU routing is independent from
 button bindings, so an IMU-only provider may be assigned to a controller side.
-During Gear VR training it is filled automatically. Legacy Gear VR configs are
-migrated from their unambiguous binding side and saved as schema version 5.
+When a binding is captured from an IMU-capable controller, it is filled
+automatically. At the end of `--train` and `--connect-devices`, detected
+unassigned IMU devices are offered for each side that still has no IMU. The
+prompt accepts a device number or Enter/`skip`; skip leaves the side unchanged
+and does not add a new `devices[]` entry. Legacy Gear VR configs are migrated
+from their unambiguous binding side and saved as schema version 5.
 
 `orientation_transform` is applied to all selected device IMU vectors and to the
 orientation basis before publishing. It is independent for each physical controller,

@@ -86,7 +86,11 @@ To update device fingerprints after Bluetooth reconnects, event path changes, or
 ./override_controller --config ~/.config/xr_tracking/override_controller/default.json --connect-devices
 ```
 
-The command lists currently readable input devices, shows the devices used by the config with their `left` / `right` usage, and asks you to press any button on each configured physical device. It then writes the refreshed device fingerprints back to the config.
+The command lists currently readable input devices, shows the devices used by the config with their `left` / `right` usage, and asks you to press any button on each configured physical button device. Pure IMU-only entries are not sent through the button-capture prompt.
+
+At the end of both `--train` and `--connect-devices`, the tool checks for detected IMU-capable devices that are not assigned to either side. The optional IMU assignment step is shown only when at least one such device exists and at least one controller side has no IMU. For each missing side, choose a listed IMU device or press Enter/type `skip`; skipping leaves that side unchanged and does not create a config device. The resulting fingerprint is stored in `devices[]` with `imu_side: left` or `imu_side: right`, so the IMU does not need to expose any buttons.
+
+The command then writes the refreshed device fingerprints and any accepted IMU assignments back to the config.
 
 ## Per-device pulse and hold settings
 
@@ -343,8 +347,11 @@ the top-level device entry:
 ```
 
 `imu_side` accepts `left`, `right`, or `none` and is independent from button
-bindings. Gear VR training assigns it automatically. This also allows a future
-MPU-6050 provider to publish IMU-only data without exposing any buttons.
+bindings. An IMU on a controller used during normal binding training is assigned
+automatically. Unused/buttonless IMU devices are offered in the final optional
+IMU assignment step for `--train` and `--connect-devices`; Enter/`skip` preserves
+the current side configuration. This allows serial/BLE IMU-only providers to
+publish controller orientation without exposing any buttons.
 
 The runtime adapter still requires the matching side to use:
 
