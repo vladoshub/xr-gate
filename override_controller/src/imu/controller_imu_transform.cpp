@@ -13,6 +13,32 @@ struct Mat3 {
   double v[3][3]{};
 };
 
+struct Quaternion {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+  double w = 1.0;
+};
+
+Quaternion normalize_quaternion(Quaternion q) {
+  const double norm = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  if (!(norm > 1.0e-12) || !std::isfinite(norm)) return {};
+  q.x /= norm;
+  q.y /= norm;
+  q.z /= norm;
+  q.w /= norm;
+  return q;
+}
+
+Quaternion multiply_quaternion(const Quaternion& a, const Quaternion& b) {
+  return normalize_quaternion({
+      a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+      a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+      a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+      a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  });
+}
+
 Mat3 identity() {
   Mat3 out{};
   out.v[0][0] = 1.0;
@@ -191,6 +217,42 @@ xr_runtime::ControllerImuStateV1 apply_orientation_transform(
     matrix_to_quaternion(transformed, state.orientation_xyzw);
   }
   return state;
+}
+
+xr_runtime::ControllerImuStateV1 apply_orientation_offset(
+    xr_runtime::ControllerImuStateV1 state,
+    const OrientationOffsetConfig& config) {
+  if (!config.enabled ||
+      (state.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) == 0u) {
+    return state;
+  }
+
+  const Quaternion orientation = normalize_quaternion({
+      state.orientation_xyzw[0], state.orientation_xyzw[1],
+      state.orientation_xyzw[2], state.orientation_xyzw[3]});
+  const Quaternion offset = normalize_quaternion({
+      config.quaternion_xyzw[0], config.quaternion_xyzw[1],
+      config.quaternion_xyzw[2], config.quaternion_xyzw[3]});
+
+  Quaternion output{};
+  if (config.multiply_order == "pre" || config.multiply_order == "world") {
+    output = multiply_quaternion(offset, orientation);
+  } else {
+    output = multiply_quaternion(orientation, offset);
+  }
+  state.orientation_xyzw[0] = static_cast<float>(output.x);
+  state.orientation_xyzw[1] = static_cast<float>(output.y);
+  state.orientation_xyzw[2] = static_cast<float>(output.z);
+  state.orientation_xyzw[3] = static_cast<float>(output.w);
+  return state;
+}
+
+xr_runtime::ControllerImuStateV1 apply_orientation_calibration(
+    xr_runtime::ControllerImuStateV1 state,
+    const OrientationTransformConfig& transform,
+    const OrientationOffsetConfig& offset) {
+  state = apply_orientation_transform(state, transform);
+  return apply_orientation_offset(state, offset);
 }
 
 }  // namespace xr_override_controller::imu

@@ -112,7 +112,8 @@ def _path_placeholders(root_project: Optional[str] = None) -> Dict[str, str]:
     root = root_project or os.environ.get("XR_ROOT_PROJECT") or os.environ.get("ROOT_PROJECT") or ""
     device_home = os.environ.get("XR_DEVICE_HOME")
     if not device_home and root:
-        device_home = str(Path(root) / "devices" / "xreal_ultra")
+        target = os.environ.get("XR_TARGET_DEVICE") or os.environ.get("XR_DEVICE_TARGET") or "generic"
+        device_home = str(Path(root) / "devices" / target)
     bin_root = os.environ.get("XR_BIN_ROOT")
     if not bin_root and root:
         bin_root = str(Path(root) / "bin")

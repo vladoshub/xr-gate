@@ -29,6 +29,7 @@ Common options:
                         --matrix name:NAME. Example: --matrix steamvr
   --workflow PATH       Workflow file. Default:
                         value from XR_ACT_DEFAULT_WORKFLOW
+  --input NAME=VALUE    Pass a workflow_dispatch input to act. Repeatable.
   --clean-artifacts     Remove /tmp/xr_tracking_act_artifacts before running.
   --offline-actions     Pass --action-offline-mode to act. Use only after act
                         has already cached actions locally.
@@ -72,6 +73,7 @@ CLEAN_ARTIFACTS=0
 LIST_ONLY=0
 JOB=""
 MATRIX_NAME=""
+ACT_INPUT_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -92,6 +94,12 @@ while [[ $# -gt 0 ]]; do
     --workflow)
       [[ $# -ge 2 ]] || fatal "--workflow requires a value"
       WORKFLOW="$2"
+      shift
+      ;;
+    --input)
+      [[ $# -ge 2 ]] || fatal "--input requires NAME=VALUE"
+      [[ "$2" == *=* ]] || fatal "--input requires NAME=VALUE, got: $2"
+      ACT_INPUT_ARGS+=(--input "$2")
       shift
       ;;
     --clean-artifacts) CLEAN_ARTIFACTS=1 ;;
@@ -237,6 +245,9 @@ if [[ -n "$MATRIX_NAME" ]]; then
   else
     ACT_ARGS+=(--matrix "name:$MATRIX_NAME")
   fi
+fi
+if [[ ${#ACT_INPUT_ARGS[@]} -gt 0 ]]; then
+  ACT_ARGS+=("${ACT_INPUT_ARGS[@]}")
 fi
 
 cd "$XR_ROOT_PROJECT"

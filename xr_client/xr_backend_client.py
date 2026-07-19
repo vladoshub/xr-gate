@@ -1327,7 +1327,7 @@ class Launcher:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Start XR capture/host apps, wait for startup gate, then start backends/runtime.")
-    ap.add_argument("--config", help="JSON config; omitted means built-in SHM cascade")
+    ap.add_argument("--config", help="JSON config path or packaged profile name, for example xreal_ultra")
     ap.add_argument("--config-path", help="Directory with JSON configs; shows an interactive menu when more than one config exists")
     ap.add_argument("--root", help="Override root_project")
     ap.add_argument("--print-default-config", action="store_true", help="Print default JSON config and exit")

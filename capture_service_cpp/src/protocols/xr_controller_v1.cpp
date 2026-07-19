@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstring>
+#include <cctype>
+#include <iomanip>
+#include <sstream>
 
 namespace xr_capture_cpp {
 namespace {
@@ -81,6 +84,82 @@ uint32_t xr_controller_v1_crc32(const uint8_t* data, size_t size) {
     }
   }
   return ~crc;
+}
+
+
+bool encode_xr_controller_identity_v1(const XrControllerIdentityV1& identity,
+                                      uint8_t* output,
+                                      size_t output_size) {
+  if (!output || output_size < kXrControllerIdentityV1PacketSize ||
+      identity.device_uid_size > kXrControllerDeviceUidMaxSize) {
+    return false;
+  }
+  std::memset(output, 0, kXrControllerIdentityV1PacketSize);
+  std::memcpy(output, kXrControllerIdentityV1Magic.data(),
+              kXrControllerIdentityV1Magic.size());
+  output[4] = kXrControllerIdentityV1Version;
+  output[5] = identity.flags;
+  write_u16_le(output + 6,
+               static_cast<uint16_t>(kXrControllerIdentityV1PacketSize));
+  output[8] = static_cast<uint8_t>(identity.device_uid_size);
+  output[9] = identity.controller_protocol_version;
+  std::memcpy(output + 12, identity.device_uid.data(), identity.device_uid_size);
+  write_u32_le(output + kXrControllerIdentityV1CrcOffset,
+               xr_controller_v1_crc32(output,
+                                      kXrControllerIdentityV1CrcOffset));
+  return true;
+}
+
+bool decode_xr_controller_identity_v1(const uint8_t* data,
+                                      size_t size,
+                                      XrControllerIdentityV1& identity) {
+  if (!data || size < kXrControllerIdentityV1PacketSize) return false;
+  if (std::memcmp(data, kXrControllerIdentityV1Magic.data(),
+                  kXrControllerIdentityV1Magic.size()) != 0) {
+    return false;
+  }
+  if (data[4] != kXrControllerIdentityV1Version ||
+      read_u16_le(data + 6) != kXrControllerIdentityV1PacketSize) {
+    return false;
+  }
+  if (read_u32_le(data + kXrControllerIdentityV1CrcOffset) !=
+      xr_controller_v1_crc32(data, kXrControllerIdentityV1CrcOffset)) {
+    return false;
+  }
+  const size_t uid_size = data[8];
+  if (uid_size > kXrControllerDeviceUidMaxSize) return false;
+  XrControllerIdentityV1 decoded;
+  decoded.flags = data[5];
+  decoded.controller_protocol_version = data[9];
+  decoded.device_uid_size = uid_size;
+  std::memcpy(decoded.device_uid.data(), data + 12, uid_size);
+  identity = decoded;
+  return true;
+}
+
+std::string xr_controller_device_uid_hex(const XrControllerIdentityV1& identity) {
+  if ((identity.flags & kXrControllerIdentityV1DeviceUidValid) == 0 ||
+      identity.device_uid_size == 0) {
+    return {};
+  }
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (size_t i = 0; i < identity.device_uid_size; ++i) {
+    out << std::setw(2) << static_cast<unsigned>(identity.device_uid[i]);
+  }
+  return out.str();
+}
+
+std::string normalize_xr_controller_device_uid(std::string value) {
+  constexpr const char* kPrefix = "xiao_nrf54l15:uid:";
+  if (value.rfind(kPrefix, 0) == 0) value.erase(0, std::strlen(kPrefix));
+  std::string out;
+  out.reserve(value.size());
+  for (unsigned char ch : value) {
+    if (std::isxdigit(ch)) out.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  if (!out.empty() && (out.size() % 2) != 0) return {};
+  return out;
 }
 
 bool encode_xr_controller_v1(const XrControllerV1Sample& sample,

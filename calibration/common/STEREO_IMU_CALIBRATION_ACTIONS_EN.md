@@ -430,15 +430,32 @@ The supported camera conversion is:
 Kalibr pinhole-equi → runtime kb4
 ```
 
+The command creates three runtime files in the final profile directory:
+
+```text
+basalt_calib_<profile>.json
+mercury_calib_<profile>.json
+basalt_vio_config_<target-specific-name>.json
+```
+
+The VIO file is copied from the shared algorithm template; it is not derived
+from Kalibr camera/IMU measurements. Existing VIO tuning is preserved. Use
+`FORCE_BASALT_VIO_CONFIG=1` only when the file should be reset to the template.
+
 Verify:
 
 ```bash
+FINAL="$HOME/xr_calib/$CALIB_TARGET/final"
+
 jq '
   .value0.resolution,
   .value0.imu_update_rate,
   .value0.cam_time_offset_ns,
   .value0.T_imu_cam
-' "$HOME/xr_calib/$CALIB_TARGET"/final/*/*/*/basalt_calib_*.json
+' "$FINAL"/*/*/*/basalt_calib_*.json
+
+jq -e '.value0 | type == "object" and length > 0' \
+  "$FINAL"/*/*/*/basalt_vio_config_*.json
 ```
 
 ---
@@ -465,9 +482,12 @@ install -m 0644 \
   "$DST/mercury_calib_640x480.json"
 
 install -m 0644 \
-  /path/to/basalt_vio_config_640x480.json \
+  /path/to/generated/basalt_vio_config_640x480.json \
   "$DST/basalt_vio_config_640x480.json"
 ```
+
+All three source files are now produced by `convert-runtime`; no separate VIO
+config creation step is required.
 
 Point the runtime environment to:
 

@@ -47,5 +47,40 @@ int main() {
   assert(resynchronized->sequence == decoded->sequence);
   assert(!stream.pop());
 
+
+  std::array<uint8_t, kXrControllerIdentityV1PacketSize> identity{};
+  identity[0] = 'X'; identity[1] = 'C'; identity[2] = 'I'; identity[3] = 'D';
+  identity[4] = kXrControllerIdentityV1Version;
+  identity[5] = kIdentityFlagDeviceUidValid;
+  identity[6] = static_cast<uint8_t>(kXrControllerIdentityV1PacketSize);
+  identity[7] = 0;
+  identity[8] = 8;
+  identity[9] = kXrControllerV1Version;
+  const std::array<uint8_t, 8> uid{{0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef}};
+  std::copy(uid.begin(), uid.end(), identity.begin() + 12);
+  const uint32_t identity_crc = xr_controller_crc32_ieee(
+      identity.data(), kXrControllerIdentityV1CrcOffset);
+  for (size_t i = 0; i < 4; ++i) {
+    identity[kXrControllerIdentityV1CrcOffset + i] =
+        static_cast<uint8_t>(identity_crc >> (8 * i));
+  }
+  const auto decoded_identity = decode_xr_controller_identity_v1(
+      identity.data(), identity.size());
+  assert(decoded_identity);
+  assert(xr_controller_device_uid_hex(*decoded_identity) ==
+         "0123456789abcdef");
+
+  XrControllerV1StreamDecoder mixed_stream;
+  mixed_stream.append(identity.data(), 11);
+  assert(!mixed_stream.pop());
+  mixed_stream.append(identity.data() + 11, identity.size() - 11);
+  mixed_stream.append(canonical.data(), canonical.size());
+  const auto mixed_packet = mixed_stream.pop();
+  assert(mixed_packet && mixed_packet->sequence == decoded->sequence);
+  const auto mixed_identity = mixed_stream.pop_identity();
+  assert(mixed_identity);
+  assert(xr_controller_device_uid_hex(*mixed_identity) ==
+         "0123456789abcdef");
+
   return 0;
 }

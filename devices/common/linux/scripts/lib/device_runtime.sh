@@ -19,7 +19,7 @@ xr_common_repo_root() {
 xr_resolve_device_env() {
   local root target candidate
   root="${XR_ROOT_PROJECT:-${ROOT_PROJECT:-$(xr_common_repo_root)}}"
-  target="${XR_TARGET_DEVICE:-xreal_ultra}"
+  target="${XR_TARGET_DEVICE:-${XR_DEVICE_TARGET:-generic}}"
 
   if [[ -n "${XR_DEVICE_ENV:-}" ]]; then
     printf '%s\n' "$XR_DEVICE_ENV"
@@ -29,8 +29,7 @@ xr_resolve_device_env() {
   if [[ -n "${XR_DEVICE_HOME:-}" ]]; then
     for candidate in \
       "$XR_DEVICE_HOME/device.env" \
-      "$XR_DEVICE_HOME/$target.env" \
-      "$XR_DEVICE_HOME/xreal_ultra.env"; do
+      "$XR_DEVICE_HOME/$target.env"; do
       if [[ -f "$candidate" ]]; then
         printf '%s\n' "$candidate"
         return 0
@@ -40,8 +39,7 @@ xr_resolve_device_env() {
 
   for candidate in \
     "$root/devices/$target/device.env" \
-    "$root/devices/$target/$target.env" \
-    "$root/devices/xreal_ultra/xreal_ultra.env"; do
+    "$root/devices/$target/$target.env"; do
     if [[ -f "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return 0

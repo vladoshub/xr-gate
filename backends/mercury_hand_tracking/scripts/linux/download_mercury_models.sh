@@ -5,7 +5,7 @@ set -euo pipefail
 # Default destination in source builds:
 #   $ROOT_PROJECT/bin/hand-tracking-models/mercury
 # Device/package wrappers override this to:
-#   out/xreal_ultra/bin/hand-tracking-models/mercury
+#   out/xr-gate/bin/hand-tracking-models/mercury
 
 expand_tilde() {
   local value="$1"

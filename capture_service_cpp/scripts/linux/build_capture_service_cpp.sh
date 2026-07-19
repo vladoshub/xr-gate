@@ -79,6 +79,10 @@ if [[ -d "$BACKEND_DIR/configs" ]]; then
   rm -rf "$INSTALL_BIN_DIR/configs"
   cp -a "$BACKEND_DIR/configs" "$INSTALL_BIN_DIR/configs"
 fi
+mkdir -p "$INSTALL_BIN_DIR/tools"
+cp "$BACKEND_DIR/tools/list_xr_controller_devices.py" \
+  "$INSTALL_BIN_DIR/tools/list_xr_controller_devices.py"
+chmod +x "$INSTALL_BIN_DIR/tools/list_xr_controller_devices.py"
 
 cat > "$INSTALL_BIN_DIR/README.md" <<'README'
 # capture_service_cpp runtime
@@ -95,3 +99,4 @@ README
 
 echo "[build_capture_service_cpp] installed: $INSTALL_BIN_DIR/capture_service_cpp"
 echo "[build_capture_service_cpp] installed: $INSTALL_BIN_DIR/capture_tcp_probe"
+echo "[build_capture_service_cpp] installed: $INSTALL_BIN_DIR/tools/list_xr_controller_devices.py"

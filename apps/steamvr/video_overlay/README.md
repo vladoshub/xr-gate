@@ -7,13 +7,13 @@ It is separate from the OpenVR driver. The driver owns HMD/controllers/display i
 ## Package path
 
 ```text
-out/xreal_ultra/bin/apps/steamvr/video_overlay/
+out/xr-gate/bin/apps/steamvr/video_overlay/
 ```
 
 ## Run from package
 
 ```bash
-cd out/xreal_ultra
+cd out/xr-gate
 devices/xreal_ultra/linux/scripts/steamvr_video_overlay/start_steamvr_video_overlay.sh
 ```
 

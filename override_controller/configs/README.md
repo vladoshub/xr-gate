@@ -12,7 +12,7 @@ Runtime launch wrappers may point `CONFIG_PATH` to the selected mapping file.
 
 ## Per-device input timing
 
-Config schema version 4 stores IMU routing, per-device orientation conversion, and pulse/hold behavior inside each physical device:
+Config schema version 5 stores IMU routing, per-device orientation conversion/offset, and pulse/hold behavior inside each physical device:
 
 ```json
 {
@@ -31,6 +31,11 @@ Config schema version 4 stores IMU routing, per-device orientation conversion, a
           "ry_deg": 0.0,
           "rz_deg": 0.0
         }
+      },
+      "orientation_offset": {
+        "enabled": false,
+        "multiply_order": "post",
+        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]
       },
       "input": {
         "rel_axis_hold_ms": 0,
@@ -54,12 +59,22 @@ Config schema version 4 stores IMU routing, per-device orientation conversion, a
 
 `imu_side` accepts `left`, `right`, or `none`. IMU routing is independent from
 button bindings, so an IMU-only provider may be assigned to a controller side.
-During Gear VR training it is filled automatically. Legacy Gear VR configs are
-migrated from their unambiguous binding side and saved as schema version 4.
+When a binding is captured from an IMU-capable controller, it is filled
+automatically. At the end of `--train` and `--connect-devices`, detected
+unassigned IMU devices are offered for each side that still has no IMU. The
+prompt accepts a device number or Enter/`skip`; skip leaves the side unchanged
+and does not add a new `devices[]` entry. Legacy Gear VR configs are migrated
+from their unambiguous binding side and saved as schema version 5.
 
-`orientation_transform` is applied to the selected device IMU before publishing.
-It is independent for each physical controller, so left and right may use different
-axis inversions or basis rotations. Missing fields keep the identity transform.
+`orientation_transform` is applied to all selected device IMU vectors and to the
+orientation basis before publishing. It is independent for each physical controller,
+so left and right may use different axis inversions or basis rotations.
+
+`orientation_offset` is applied afterwards to the published orientation quaternion only.
+Use `post` (the default) for a fixed controller/grip presentation offset:
+`q_output = q_transformed * q_offset`. `pre` is also accepted for a world-space correction.
+The offset does not rotate angular velocity, acceleration, or magnetic-field vectors.
+Missing fields keep the identity offset.
 
 Gear VR touch coordinates and the physical pad click are separate inputs. The
 provider publishes capacitive contact as `BTN_TOUCH`/`thumbstick_touch`; legacy
@@ -69,4 +84,4 @@ physically clicking the pad.
 
 Every missing timing field defaults to `0`; `pulse_mode` defaults to `false`,
 and `button_pulse_startup_types` defaults to an empty list. The old timing
-fields under the top-level `input` object are not used by schema version 4.
+fields under the top-level `input` object are not used by schema version 5.

@@ -1,6 +1,6 @@
 # XR Client Configuration Guide
 
-This document explains how to configure `default_shm.json` for `xr_client`.
+This document explains how to configure `xreal_ultra.json` for `xr_client`.
 
 The file controls the complete startup and runtime orchestration flow for the XREAL/XR tracking stack:
 
@@ -23,37 +23,37 @@ manual backend controls
 The config is usually stored here in the portable package:
 
 ```text
-devices/xreal_ultra/configs/xr_client/default_shm.json
+devices/xreal_ultra/configs/xr_client/xreal_ultra.json
 ```
 
 In the development tree it may also exist here:
 
 ```text
-xr_client/configs/default_shm.json
+xr_client/configs/xreal_ultra.json
 ```
 
 The normal package-mode launch is:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
-./run_xr_client.sh
+cd ~/src/xr_tracking/out/xr-gate
+./run_xr_client.sh --config xreal_ultra
 ```
 
 or directly:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 PYTHONPATH="$PWD/bin/python" \
 python3 bin/python/xr_client/xr_backend_client.py \
-  --config devices/xreal_ultra/configs/xr_client/default_shm.json
+  --config devices/xreal_ultra/configs/xr_client/xreal_ultra.json
 ```
 
 ---
 
-## 1. Purpose of `default_shm.json`
+## 1. Purpose of `xreal_ultra.json`
 
-`default_shm.json` is the orchestration config for `xr_backend_client.py`.
+`xreal_ultra.json` is the orchestration config for `xr_backend_client.py`.
 
 It answers these questions:
 
@@ -145,7 +145,7 @@ In source-tree development mode this points to the repo root:
 In package mode the launcher may run from:
 
 ```text
-~/src/xr_tracking/out/xreal_ultra
+~/src/xr_tracking/out/xr-gate
 ```
 
 The final path resolution also depends on `device_env`.
@@ -162,7 +162,7 @@ Use this field as the base for `{root}` placeholder expansion.
 
 Shell-style ENV file loaded by `xr_client`.
 
-This is the main bridge between `default_shm.json` and the portable package layout.
+This is the main bridge between `xreal_ultra.json` and the portable package layout.
 
 It should define or help derive:
 
@@ -181,20 +181,20 @@ XR_CALIB_DIR
 In package mode these should resolve to:
 
 ```text
-XR_PACKAGE_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra
-XR_BIN_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/bin
-XR_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra
-XR_COMMON_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common
-XR_COMMON_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common/linux/scripts
-XR_DEVICE_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra/linux/scripts
-XR_DEVICE_CONFIGS_ROOT=/home/vlados/src/xr_tracking/out/xreal_ultra/devices/xreal_ultra/configs
+XR_PACKAGE_ROOT=/home/vlados/src/xr_tracking/out/xr-gate
+XR_BIN_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/bin
+XR_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xr-gate/devices/xreal_ultra
+XR_COMMON_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xr-gate/devices/common
+XR_COMMON_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/devices/common/linux/scripts
+XR_DEVICE_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/devices/xreal_ultra/linux/scripts
+XR_DEVICE_CONFIGS_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/devices/xreal_ultra/configs
 ```
 
 Recommended rule:
 
 ```text
 All device-specific paths should come from device_env.
-Do not hardcode machine-specific paths in default_shm.json unless unavoidable.
+Do not hardcode machine-specific paths in xreal_ultra.json unless unavoidable.
 ```
 
 ---
@@ -347,30 +347,30 @@ Expected meaning:
 
 {bin}
   binary/runtime root.
-  In package mode: out/xreal_ultra/bin
+  In package mode: out/xr-gate/bin
 
 {device}
   device profile root.
-  In package mode: out/xreal_ultra/devices/xreal_ultra
+  In package mode: out/xr-gate/devices/xreal_ultra
 
 {common_device}
   hardware-neutral device runtime root.
-  In package mode: out/xreal_ultra/devices/common
+  In package mode: out/xr-gate/devices/common
 
 {common_scripts}
   hardware-neutral capture/backend/runtime wrappers.
-  In package mode: out/xreal_ultra/devices/common/linux/scripts
+  In package mode: out/xr-gate/devices/common/linux/scripts
 
 {device_scripts}
   selected hardware profile helpers.
-  In package mode: out/xreal_ultra/devices/xreal_ultra/linux/scripts
+  In package mode: out/xr-gate/devices/xreal_ultra/linux/scripts
 
 {scripts}
   backward-compatible alias for {device_scripts}.
 
 {configs}
   device configs.
-  In package mode: out/xreal_ultra/devices/xreal_ultra/configs
+  In package mode: out/xr-gate/devices/xreal_ultra/configs
 
 {python}
   Python interpreter used by xr_client.
@@ -387,7 +387,7 @@ Example:
 In package mode this should resolve to something like:
 
 ```text
-/home/vlados/src/xr_tracking/out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
+/home/vlados/src/xr_tracking/out/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service.sh
 ```
 
 Recommended rule:
@@ -999,7 +999,7 @@ xr_startup_gate.py
 Temporarily disable with:
 
 ```bash
-STARTUP_GATE=0 ./run_xr_client.sh
+STARTUP_GATE=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 Recommended default:
@@ -1504,7 +1504,7 @@ Usually keep:
 and enable manually when needed:
 
 ```bash
-RUN_VIEWER=1 ./run_xr_client.sh
+RUN_VIEWER=1 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ---
@@ -1538,7 +1538,7 @@ Top-level:
 Temporarily disable:
 
 ```bash
-RUN_IMU_TAP_CONTROLS=0 ./run_xr_client.sh
+RUN_IMU_TAP_CONTROLS=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 Enable debug logs:
@@ -1996,14 +1996,14 @@ Keep cooldown high enough to prevent accidental repeated restarts.
 In package mode, the important roots are:
 
 ```text
-out/xreal_ultra/
+out/xr-gate/
   bin/
   devices/common/
   devices/xreal_ultra/
   run_xr_client.sh
 ```
 
-`default_shm.json` should use:
+`xreal_ultra.json` should use:
 
 ```text
 {common_scripts}/...   hardware-neutral launchers
@@ -2081,13 +2081,13 @@ Set:
 or run:
 
 ```bash
-RUN_BASALT=0 ./run_xr_client.sh
+RUN_BASALT=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 If you still need HMD pose, start 3DoF:
 
 ```bash
-RUN_IMU_3DOF_BACKEND=1 ./run_xr_client.sh
+RUN_IMU_3DOF_BACKEND=1 ./run_xr_client.sh --config xreal_ultra
 ```
 
 and make sure `imu_3dof_backend` is started manually or `start_on_launch=true`.
@@ -2107,7 +2107,7 @@ If Basalt is also enabled, runtime adapter priority decides which pose source is
 For 3DoF-only mode, disable Basalt:
 
 ```bash
-RUN_BASALT=0 ./run_xr_client.sh
+RUN_BASALT=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ---
@@ -2117,7 +2117,7 @@ RUN_BASALT=0 ./run_xr_client.sh
 Temporary:
 
 ```bash
-RUN_HAND_TRACKING=0 ./run_xr_client.sh
+RUN_HAND_TRACKING=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 Permanent:
@@ -2192,7 +2192,7 @@ and set `camera_relative_runtime.enabled=true` in the runtime adapter transform 
 Temporary:
 
 ```bash
-STARTUP_GATE=0 ./run_xr_client.sh
+STARTUP_GATE=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 Permanent:
@@ -2247,13 +2247,13 @@ Do not set unlimited restarts without logs, because it can hide real failures.
 ### 18.1 Validate JSON syntax
 
 ```bash
-python3 -m json.tool devices/xreal_ultra/configs/xr_client/default_shm.json >/tmp/default_shm_check.json
+python3 -m json.tool devices/xreal_ultra/configs/xr_client/xreal_ultra.json >/tmp/default_shm_check.json
 ```
 
 or:
 
 ```bash
-jq . devices/xreal_ultra/configs/xr_client/default_shm.json >/tmp/default_shm_check.json
+jq . devices/xreal_ultra/configs/xr_client/xreal_ultra.json >/tmp/default_shm_check.json
 ```
 
 ---
@@ -2263,12 +2263,12 @@ jq . devices/xreal_ultra/configs/xr_client/default_shm.json >/tmp/default_shm_ch
 From package root:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 PYTHONPATH="$PWD/bin/python" python3 - <<'PY'
 from xr_client.config_reader import load_config
 
-cfg = load_config("devices/xreal_ultra/configs/xr_client/default_shm.json")
+cfg = load_config("devices/xreal_ultra/configs/xr_client/xreal_ultra.json")
 
 print("root:", cfg.root_project)
 print("device_env:", getattr(cfg, "device_env", None))
@@ -2284,9 +2284,9 @@ PY
 Expected package-mode commands should resolve to:
 
 ```text
-out/xreal_ultra/devices/common/linux/scripts/...
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/...
-out/xreal_ultra/bin/...
+out/xr-gate/devices/common/linux/scripts/...
+out/xr-gate/devices/xreal_ultra/linux/scripts/xreal_display_helper/...
+out/xr-gate/bin/...
 ```
 
 They should not resolve to source-tree service paths unless you are intentionally running in dev mode.
@@ -2533,7 +2533,7 @@ If left/right is reversed, this may require code-side side interpretation or cha
 1. Validate JSON after every edit.
 
 ```bash
-python3 -m json.tool default_shm.json >/tmp/default_shm_check.json
+python3 -m json.tool xreal_ultra.json >/tmp/default_shm_check.json
 ```
 
 2. Change one service at a time.
@@ -2561,31 +2561,31 @@ python3 -m json.tool default_shm.json >/tmp/default_shm_check.json
 ### Disable Basalt
 
 ```bash
-RUN_BASALT=0 ./run_xr_client.sh
+RUN_BASALT=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ### Disable hand tracking
 
 ```bash
-RUN_HAND_TRACKING=0 ./run_xr_client.sh
+RUN_HAND_TRACKING=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ### Disable startup gate
 
 ```bash
-STARTUP_GATE=0 ./run_xr_client.sh
+STARTUP_GATE=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ### Disable tap controls
 
 ```bash
-RUN_IMU_TAP_CONTROLS=0 ./run_xr_client.sh
+RUN_IMU_TAP_CONTROLS=0 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ### Enable runtime debug viewer
 
 ```bash
-RUN_VIEWER=1 ./run_xr_client.sh
+RUN_VIEWER=1 ./run_xr_client.sh --config xreal_ultra
 ```
 
 ### Start 60Hz display helper without prompt

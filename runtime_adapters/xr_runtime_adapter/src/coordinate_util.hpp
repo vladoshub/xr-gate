@@ -52,6 +52,18 @@ struct OrientationTransformConfig {
   Qd basis_q{};
 };
 
+// Constant orientation correction applied after the stream basis conversion.
+// The default post/local multiplication represents a rigid sensor -> rendered
+// object mounting transform:
+//   q_world_object = q_world_sensor * q_sensor_object
+struct OrientationOffsetConfig {
+  bool enabled = false;
+  bool pre_multiply = false;
+  V3d rotation_deg{};
+  V3d rotation_rad{};
+  Qd q{};
+};
+
 struct HmdRelativeConfig {
   bool enabled = false;
   V3d offset_m{};
@@ -114,6 +126,7 @@ struct SpatialMeshRuntimeConfig {
 struct StreamTransformConfig {
   CoordinateTransformConfig coordinate_transform{};
   OrientationTransformConfig orientation_transform{};
+  OrientationOffsetConfig orientation_offset{};
   HmdRelativeConfig hmd_relative{};
   HandOrientationOffsetConfig hand_orientation_offset{};
   SpatialMeshRuntimeConfig spatial_mesh{};

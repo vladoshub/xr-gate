@@ -2,12 +2,14 @@
 #include "capture_service_cpp/protocols/xr_controller_v1.hpp"
 
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <fcntl.h>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unistd.h>
 
 namespace xr_capture_cpp {
@@ -26,14 +28,40 @@ int main() {
   const char* slave = ptsname(master);
   assert(slave != nullptr);
 
+  xr_capture_cpp::XrControllerIdentityV1 identity;
+  identity.flags = xr_capture_cpp::kXrControllerIdentityV1DeviceUidValid;
+  identity.controller_protocol_version = xr_capture_cpp::kXrControllerV1Version;
+  identity.device_uid_size = 8;
+  identity.device_uid = {0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
+  std::array<uint8_t, xr_capture_cpp::kXrControllerIdentityV1PacketSize>
+      identity_packet{};
+  assert(xr_capture_cpp::encode_xr_controller_identity_v1(
+      identity, identity_packet.data(), identity_packet.size()));
+
   xr_capture_cpp::RuntimeConfig cfg;
   cfg.imu.driver = "serial";
   cfg.imu.serial.port = slave;
   cfg.imu.serial.baud_rate = 230400;
   cfg.imu.serial.protocol = "xr_controller_v1";
+  cfg.imu.serial.protocol_device_uid = "0123456789abcdef";
   cfg.imu.serial.read_timeout_ms = 20;
   auto source = xr_capture_cpp::make_serial_imu_source(cfg);
+
+  std::atomic<bool> probing{true};
+  std::thread identity_writer([&]() {
+    while (probing.load()) {
+      (void)write(master, identity_packet.data(), identity_packet.size());
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  });
   source->open();
+  probing.store(false);
+  identity_writer.join();
+  xr_capture_cpp::ImuReadResult result;
+  assert(write(master, identity_packet.data(), identity_packet.size()) ==
+         static_cast<ssize_t>(identity_packet.size()));
+  assert(source->read(result) == xr_capture_cpp::SourceReadStatus::TransportActivity);
+  assert(!result.has_sample);
 
   xr_capture_cpp::XrControllerV1Sample sample;
   sample.flags = xr_capture_cpp::kXrControllerV1TimestampValid;
@@ -46,7 +74,6 @@ int main() {
   assert(xr_capture_cpp::encode_xr_controller_v1(sample, packet.data(), packet.size()));
 
   assert(write(master, packet.data(), 10) == 10);
-  xr_capture_cpp::ImuReadResult result;
   assert(source->read(result) == xr_capture_cpp::SourceReadStatus::TransportActivity);
   assert(!result.has_sample);
 

@@ -58,12 +58,12 @@ copy_if_exists() {
   fi
 }
 
-copy_device_bundle() {
-  local src="$XR_DEVICE_SOURCE_HOME"
-  local dst="$XR_OUT_DEVICE_HOME"
+copy_device_bundle_for() {
+  local target="$1"
+  local src="$XR_ROOT_PROJECT/devices/$target"
+  local dst="$XR_OUT_ROOT/devices/$target"
   if [[ ! -d "$src" ]]; then
-    log "skip missing device bundle: $src"
-    return 0
+    fatal "configured runtime profile bundle not found: $src"
   fi
   mkdir -p "$dst"
   rsync -a --delete \
@@ -78,6 +78,15 @@ copy_device_bundle() {
     --exclude='*.pyc' \
     --exclude='*.pyo' \
     "$src/" "$dst/"
+}
+
+copy_device_bundles() {
+  local target
+  local targets="${XR_PACKAGE_DEVICE_TARGETS:-$XR_TARGET_DEVICE}"
+  [[ -n "$targets" ]] || fatal "XR_PACKAGE_DEVICE_TARGETS is empty"
+  for target in $targets; do
+    copy_device_bundle_for "$target"
+  done
 }
 
 copy_common_device_bundle() {
@@ -100,44 +109,33 @@ copy_common_device_bundle() {
 write_monado_openxr_runtime_manifest() {
   local monado_bin_dir="$XR_OUT_BIN_ROOT/drivers/monado_driver"
   local openxr_lib="$monado_bin_dir/libopenxr_monado.so"
-  local script_dir="$XR_OUT_DEVICE_HOME/linux/scripts/monado_driver"
-  local manifest="$script_dir/openxr_monado_xrgate.json"
-  local env_script="$script_dir/openxr_runtime_env.sh"
-  local relative_lib="../../../../../bin/drivers/monado_driver/libopenxr_monado.so"
+  local manifest="$monado_bin_dir/openxr_monado_xrgate.json"
+  local env_script="$monado_bin_dir/openxr_runtime_env.sh"
 
   if [[ ! -e "$openxr_lib" ]]; then
     log "skip Monado OpenXR runtime manifest: lib not present: $openxr_lib"
     return 0
   fi
 
-  mkdir -p "$script_dir"
-
-  cat > "$manifest" <<EOF
+  mkdir -p "$monado_bin_dir"
+  cat > "$manifest" <<'EOF'
 {
   "file_format_version": "1.0.0",
   "runtime": {
     "name": "XR Gate Monado",
-    "library_path": "$relative_lib"
+    "library_path": "./libopenxr_monado.so"
   }
 }
 EOF
 
   cat > "$env_script" <<'EOF'
 #!/usr/bin/env bash
-# Source this file to force OpenXR applications to use the XR Gate packaged Monado runtime:
-#   source devices/<target>/linux/scripts/monado_driver/openxr_runtime_env.sh
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
-
   chmod 0755 "$env_script"
-
-  [[ -f "$manifest" ]] || fatal "failed to write Monado OpenXR manifest: $manifest"
-  [[ -x "$env_script" ]] || fatal "failed to write Monado OpenXR env helper: $env_script"
-
   log "wrote Monado OpenXR runtime manifest: $manifest"
-  log "wrote Monado OpenXR env helper: $env_script"
 }
 
 copy_runtime_py_dir() {
@@ -389,6 +387,9 @@ copy_capture_client_runtime() {
 
 copy_tools_runtime() {
   copy_file "$XR_ROOT_PROJECT/tools/xr_startup_gate.py" "$XR_OUT_BIN_ROOT/python/tools/xr_startup_gate.py"
+  copy_file \
+    "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py" \
+    "$XR_OUT_BIN_ROOT/python/tools/calibrate_hmd_orientation_offset.py"
   copy_file "$XR_ROOT_PROJECT/tools/xr_runtime_gesture_watch_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_runtime_gesture_watch_debug.py"
   copy_file "$XR_ROOT_PROJECT/tools/debug/view_capture_service_shm.py" "$XR_OUT_BIN_ROOT/python/tools/debug/view_capture_service_shm.py"
   copy_runtime_py_dir "$XR_ROOT_PROJECT/tools/runtime_debug_viewer" "$XR_OUT_BIN_ROOT/python/tools/runtime_debug_viewer"
@@ -408,6 +409,7 @@ EOF_LAUNCHER
 }
 
 write_app_launchers() {
+  write_root_launcher "calibrate_hmd_orientation_offset.sh" "bin/python/tools/calibrate_hmd_orientation_offset.py"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"
@@ -446,9 +448,9 @@ else
   mkdir -p "$XR_OUT_BIN_ROOT"
 fi
 
-# Hardware-neutral launchers plus target-specific env/config/helpers.
+# Hardware-neutral launchers plus all configured runtime profile bundles.
 copy_common_device_bundle
-copy_device_bundle
+copy_device_bundles
 write_monado_openxr_runtime_manifest
 
 # Runtime Python entrypoints. They are required at runtime, so keep them under
@@ -460,12 +462,39 @@ copy_runtime_scripts
 prepare_python_runtime
 write_app_launchers
 
+package_vendor_components_enabled() {
+  case "${XR_PACKAGE_VENDOR_COMPONENTS:-${XR_BUILD_VENDOR_COMPONENTS:-1}}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+remove_disabled_vendor_outputs() {
+  local relative
+  for relative in ${XR_VENDOR_PACKAGE_PATHS:-}; do
+    case "$relative" in
+      ""|/*|*".."*) fatal "unsafe XR_VENDOR_PACKAGE_PATHS entry: $relative" ;;
+    esac
+    if [[ -e "$XR_OUT_ROOT/$relative" || -L "$XR_OUT_ROOT/$relative" ]]; then
+      log "remove disabled/stale vendor output: $relative"
+      rm -rf -- "$XR_OUT_ROOT/$relative"
+    fi
+  done
+}
+
 if [[ -n "${XR_DEVICE_PACKAGE_HOOK:-}" ]]; then
-  if [[ ! -x "$XR_DEVICE_PACKAGE_HOOK" ]]; then
-    fatal "device package hook is not executable: $XR_DEVICE_PACKAGE_HOOK"
+  if package_vendor_components_enabled; then
+    if [[ ! -x "$XR_DEVICE_PACKAGE_HOOK" ]]; then
+      fatal "vendor package hook is not executable: $XR_DEVICE_PACKAGE_HOOK"
+    fi
+    log "run vendor package hook: $XR_DEVICE_PACKAGE_HOOK"
+    "$XR_DEVICE_PACKAGE_HOOK"
+  else
+    log "skip vendor package hook: XR_PACKAGE_VENDOR_COMPONENTS=${XR_PACKAGE_VENDOR_COMPONENTS:-0}"
+    remove_disabled_vendor_outputs
   fi
-  log "run device package hook: $XR_DEVICE_PACKAGE_HOOK"
-  "$XR_DEVICE_PACKAGE_HOOK"
+elif ! package_vendor_components_enabled; then
+  remove_disabled_vendor_outputs
 fi
 
 # Optional driver runtime metadata/resources. Do not copy driver source trees.
@@ -502,91 +531,75 @@ fi
 find "$XR_OUT_ROOT" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$XR_OUT_ROOT" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
-cat > "$XR_OUT_ROOT/run_xr_client.sh" <<EOF_RUNNER
+cat > "$XR_OUT_ROOT/run_xr_client.sh" <<'EOF_RUNNER'
 #!/usr/bin/env bash
 set -euo pipefail
-PACKAGE_ROOT="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-PY_RUNTIME_ENV="\$PACKAGE_ROOT/bin/python-runtime/env.sh"
-if [[ ! -f "\$PY_RUNTIME_ENV" ]]; then
-  echo "[run_xr_client][ERROR] package Python runtime env not found: \$PY_RUNTIME_ENV" >&2
-  echo "[run_xr_client][ERROR] Rebuild the $XR_DEVICE_DISPLAY_NAME package." >&2
+PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_RUNTIME_ENV="$PACKAGE_ROOT/bin/python-runtime/env.sh"
+if [[ ! -f "$PY_RUNTIME_ENV" ]]; then
+  echo "[run_xr_client][ERROR] package Python runtime env not found: $PY_RUNTIME_ENV" >&2
+  echo "[run_xr_client][ERROR] Rebuild the XR Gate package." >&2
   exit 1
 fi
 # shellcheck source=/dev/null
-source "\$PY_RUNTIME_ENV"
-export XR_TARGET_DEVICE="\${XR_TARGET_DEVICE:-$XR_TARGET_DEVICE}"
-export XR_DEVICE_ENV="\${XR_DEVICE_ENV:-\$PACKAGE_ROOT/devices/$XR_TARGET_DEVICE/$XR_DEVICE_ENV_NAME}"
-export XR_COMMON_SCRIPTS_ROOT="\${XR_COMMON_SCRIPTS_ROOT:-\$PACKAGE_ROOT/devices/common/linux/scripts}"
-if [[ ! -x "\$PYTHON" ]]; then
-  echo "[run_xr_client][ERROR] package Python not found: \$PYTHON" >&2
+source "$PY_RUNTIME_ENV"
+export XR_ROOT_PROJECT="${XR_ROOT_PROJECT:-$PACKAGE_ROOT}"
+export ROOT_PROJECT="${ROOT_PROJECT:-$XR_ROOT_PROJECT}"
+export XR_COMMON_SCRIPTS_ROOT="${XR_COMMON_SCRIPTS_ROOT:-$PACKAGE_ROOT/devices/common/linux/scripts}"
+export XR_CLIENT_CONFIG_DIR="${XR_CLIENT_CONFIG_DIR:-$XR_PYTHON_ROOT/xr_client/configs}"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "[run_xr_client][ERROR] package Python not found: $PYTHON" >&2
   exit 1
 fi
-exec "\$PYTHON" "\$XR_PYTHON_ROOT/xr_client/xr_backend_client.py" \
-  --config "\$XR_PYTHON_ROOT/xr_client/configs/default_shm.json" "\$@"
+if [[ $# -eq 0 ]]; then
+  echo "Usage: ./run_xr_client.sh --config <profile> [xr_client options]" >&2
+  echo "Examples:" >&2
+  echo "  ./run_xr_client.sh --config xreal_ultra" >&2
+  echo "  ./run_xr_client.sh --config leap_motion_uvc_nrf54l15" >&2
+  echo "Available profiles:" >&2
+  find "$XR_CLIENT_CONFIG_DIR" -maxdepth 1 -type f -name '*.json' -printf '  %f\n' 2>/dev/null | sort >&2 || true
+  exit 2
+fi
+exec "$PYTHON" "$XR_PYTHON_ROOT/xr_client/xr_backend_client.py" "$@"
 EOF_RUNNER
 chmod +x "$XR_OUT_ROOT/run_xr_client.sh"
 
-cat > "$XR_OUT_ROOT/README_RUN.md" <<EOF2
-# $XR_DEVICE_DISPLAY_NAME runtime package
+cat > "$XR_OUT_ROOT/README_RUN.md" <<'EOF2'
+# XR Gate Linux runtime package
 
-This directory is intended to be copied to another Linux machine with matching
-system dependencies/drivers installed.
+This package contains hardware-neutral runtime components and multiple device/
+tracking profiles. Select the active stack explicitly through the xr_client
+config; the package itself is not tied to XREAL Ultra.
 
-Run:
+Examples:
 
-\`\`\`bash
-cd "$XR_OUT_ROOT"
-./run_xr_client.sh
-\`\`\`
+```bash
+./run_xr_client.sh --config xreal_ultra
+./run_xr_client.sh --config leap_motion_uvc_nrf54l15
+```
 
-Device settings are configured in:
+Config names are resolved from `bin/python/xr_client/configs`; an explicit JSON
+path is also accepted. Device and tracking environments referenced by a config
+are loaded from `devices/<profile>/`.
 
-\`\`\`bash
-devices/$XR_TARGET_DEVICE/$XR_DEVICE_ENV_NAME
-\`\`\`
+Included runtime profiles are controlled at package-build time with
+`XR_PACKAGE_PROFILES`; advanced builds may override `XR_PACKAGE_DEVICE_TARGETS`
+and `XR_PACKAGE_CONFIG_PROFILES` separately. Pure vendor binaries/helpers are
+built by default and can be disabled with:
 
-Key variables:
+```bash
+XR_BUILD_VENDOR_COMPONENTS=0 \
+  ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
 
-- XR_ROOT_PROJECT: package root, defaults to this directory.
-- XR_BIN_ROOT: runtime binary root, defaults to \$XR_ROOT_PROJECT/bin.
-- XR_DEVICE_HOME: device profile root, defaults to \$XR_ROOT_PROJECT/devices/$XR_TARGET_DEVICE.
-- XR_COMMON_SCRIPTS_ROOT: hardware-neutral launch wrapper root.
-- XR_DEVICE_SCRIPTS_ROOT: target-specific helper root.
-- XR_DEVICE_CONFIGS_ROOT: target configs/calibration root.
+The generic dependency installer is:
 
-The package intentionally does not include C++ source trees, CMake projects or
-build scripts. It includes only runtime binaries/libraries/assets, common launch
-scripts, target-specific helpers/configs, and executed Python modules.
+```bash
+./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+```
 
-Mercury hand-tracking ONNX models are optional and are not downloaded during the
-default build. To install them into \`bin/hand-tracking-models/mercury\`, run:
-
-\`\`\`bash
-./download_mercury_models.sh
-\`\`\`
-
-Python runtime note: this package creates a thin local venv at
-\$XR_ROOT_PROJECT/bin/python-runtime/venv and uses project Python files from
-\$XR_ROOT_PROJECT/bin/python. The venv is created with --system-site-packages and
-intentionally does not bundle heavy native packages. Install GStreamer, PyGObject,
-OpenCV, NumPy and HID runtime dependencies through apt on the target system.
-
-Check Python visibility with:
-
-\`\`\`bash
-bin/python-runtime/check_python_runtime.sh
-\`\`\`
-
-capture_service note: capture_service_cpp is the runtime capture backend in this
-package. The old Python/GStreamer capture_service is not included in core builds.
-
-Convenience app launchers from this package root:
-
-\`\`\`bash
-./run_steamvr_video_overlay.sh
-./run_steamvr_spatial_overlay.sh
-./run_steamvr_spatial_scene.sh
-\`\`\`
+Mercury hand-tracking models remain a separately distributed optional artifact.
+Install them into `bin/hand-tracking-models/mercury`.
 EOF2
 
 if package_include_xrizer_helpers; then
@@ -594,11 +607,11 @@ if package_include_xrizer_helpers; then
 
 Optional xrizer launchers are included because the xrizer package is present:
 
-\`\`\`bash
+```bash
 ./run_xrizer_register.sh
 ./run_xrizer_openvr_app_via_monado.sh --print-steam-options
 ./run_xrizer_collect_logs.sh
-\`\`\`
+```
 EOF2
 fi
 
@@ -622,7 +635,6 @@ done
 # Quick package sanity checks.
 required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
-  "$XR_OUT_DEVICE_HOME/$XR_DEVICE_ENV_NAME"
   "$XR_OUT_ROOT/devices/common/common.env"
   "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
@@ -634,6 +646,12 @@ required=(
   "$XR_OUT_BIN_ROOT/python-runtime/venv/bin/python"
   "$XR_OUT_BIN_ROOT"
 )
+for target in ${XR_PACKAGE_DEVICE_TARGETS:-$XR_TARGET_DEVICE}; do
+  required+=("$XR_OUT_ROOT/devices/$target")
+done
+for profile in ${XR_PACKAGE_CONFIG_PROFILES:-${XR_PACKAGE_PROFILES:-}}; do
+  required+=("$XR_OUT_BIN_ROOT/python/xr_client/configs/$profile.json")
+done
 for p in "${required[@]}"; do
   if [[ ! -e "$p" ]]; then
     if [[ "$XR_PACKAGE_ALLOW_PARTIAL" == "1" ]]; then

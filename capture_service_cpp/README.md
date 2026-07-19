@@ -150,6 +150,7 @@ imu:
       windows: COM5
     baud_rate: 230400
     protocol: xr_controller_v1
+    protocol_device_uid: ""  # set a UID for stable auto-selection; empty uses port
     timestamp_mode: device
 ```
 
@@ -295,9 +296,11 @@ Windows: COM*
 Supported protocols:
 
 ```text
-xr_controller_v1  64-byte controller/IMU packet with sequence, device timestamp, controls and CRC32
-csv_f32    development text protocol
+xr_controller_v1  unchanged 64-byte XCTL samples plus optional periodic 32-byte XCID hardware identity
+csv_f32           development text protocol
 ```
+
+Use `python3 tools/list_xr_controller_devices.py` to print attached `device_uid`/port pairs.
 
 See [`docs/serial_imu_protocol.md`](docs/serial_imu_protocol.md). The canonical current wire codec is the hardware-independent `protocols/xr_controller_v1` module; the serial driver does not duplicate packet layout or CRC logic. Legacy `xr_imu_v1` remains accepted for compatibility.
 

@@ -7,7 +7,7 @@ It reads synchronized stereo frames from `capture_service` and republishes them 
 ## Package output
 
 ```text
-out/xreal_ultra/bin/backends/xr_video/
+out/xr-gate/bin/backends/xr_video/
 ```
 
 ## Typical path

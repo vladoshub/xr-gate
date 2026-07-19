@@ -20,7 +20,7 @@ def _setup_capture_client_import_path() -> None:
     # Source-tree layout:
     #   <repo>/capture_client/debug/xreal_slam_viewer.py
     # Packaged layout:
-    #   out/xreal_ultra/bin/python/capture_client/debug/xreal_slam_viewer.py
+    #   out/xr-gate/bin/python/capture_client/debug/xreal_slam_viewer.py
     # In both cases Python needs the parent directory that contains the
     # capture_client package, not capture_client/ itself.
     candidates: list[Path] = []
@@ -45,12 +45,15 @@ def _setup_capture_client_import_path() -> None:
         ])
 
     default_src = Path.home() / "src/xr_tracking"
-    default_pkg = default_src / "out/xreal_ultra"
+    default_pkg = default_src / "out/xr-gate"
+    legacy_pkg = default_src / "out/xreal_ultra"
     candidates.extend([
         default_src,
         default_src / "capture_client",
         default_pkg / "bin/python",
         default_pkg / "bin/python/capture_client",
+        legacy_pkg / "bin/python",
+        legacy_pkg / "bin/python/capture_client",
     ])
 
     for candidate in candidates:

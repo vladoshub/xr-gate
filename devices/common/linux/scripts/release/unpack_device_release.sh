@@ -10,6 +10,7 @@ fi
 XR_RELEASE_DEVICE_TARGET="${XR_RELEASE_DEVICE_TARGET:-${_DETECTED_TARGET:-generic}}"
 XR_RELEASE_DEVICE_DISPLAY_NAME="${XR_RELEASE_DEVICE_DISPLAY_NAME:-$XR_RELEASE_DEVICE_TARGET}"
 XR_RELEASE_DEVICE_ENV_NAME="${XR_RELEASE_DEVICE_ENV_NAME:-$XR_RELEASE_DEVICE_TARGET.env}"
+XR_RELEASE_REQUIRE_DEVICE="${XR_RELEASE_REQUIRE_DEVICE:-1}"
 XR_RELEASE_TARGET_HYPHEN="${XR_RELEASE_DEVICE_TARGET//_/-}"
 
 log() { echo "[unpack_device_release:$XR_RELEASE_DEVICE_TARGET] $*" >&2; }
@@ -33,7 +34,7 @@ Options:
 
 Environment:
   XR_RELEASE_DEVICE_TARGET       Device directory name. Current: $XR_RELEASE_DEVICE_TARGET
-  XR_RELEASE_DEVICE_ENV_NAME     Device env filename. Current: $XR_RELEASE_DEVICE_ENV_NAME
+  XR_RELEASE_REQUIRE_DEVICE      If 1, require devices/<target>. Current: $XR_RELEASE_REQUIRE_DEVICE
   MAIN_ARCHIVE / MAIN_ZIP        Main archive override.
   MODELS_ARCHIVE / MODELS_ZIP    Models archive override.
   DEST_DIR, FORCE, KEEP_TMP       Equivalent option defaults.
@@ -221,10 +222,12 @@ detect_package_root() {
   local d
 
   while IFS= read -r -d '' d; do
-    if [[ -d "$d/bin" && -d "$d/devices/$XR_RELEASE_DEVICE_TARGET" ]]; then
-      printf '%s\n' "$d"
-      return 0
+    [[ -d "$d/bin" && -d "$d/devices/common" ]] || continue
+    if [[ "$XR_RELEASE_REQUIRE_DEVICE" == "1" && ! -d "$d/devices/$XR_RELEASE_DEVICE_TARGET" ]]; then
+      continue
     fi
+    printf '%s\n' "$d"
+    return 0
   done < <(find "$root" -type d -print0)
 
   return 1
@@ -234,7 +237,7 @@ SRC_PACKAGE_DIR="$(detect_package_root "$TMP_DIR/main_probe" || true)"
 [[ -n "${SRC_PACKAGE_DIR:-}" ]] || {
   log "main tar content preview:"
   tar -tzf "$MAIN_TAR" | head -120 >&2 || true
-  fatal "could not detect package root. Expected directory containing bin/ and devices/$XR_RELEASE_DEVICE_TARGET/"
+  fatal "could not detect package root. Expected directory containing bin/ and devices/common/"
 }
 
 REL_PACKAGE_DIR="${SRC_PACKAGE_DIR#"$TMP_DIR/main_probe"/}"
@@ -258,7 +261,10 @@ log "extract main runtime package into: $DEST_DIR"
 tar -C "$DEST_DIR" -xzf "$MAIN_TAR"
 
 [[ -d "$XR_PACKAGE_DIR/bin" ]] || fatal "extracted package missing bin directory: $XR_PACKAGE_DIR/bin"
-[[ -d "$XR_PACKAGE_DIR/devices/$XR_RELEASE_DEVICE_TARGET" ]] || fatal "extracted package missing devices/$XR_RELEASE_DEVICE_TARGET"
+[[ -d "$XR_PACKAGE_DIR/devices/common" ]] || fatal "extracted package missing devices/common"
+if [[ "$XR_RELEASE_REQUIRE_DEVICE" == "1" ]]; then
+  [[ -d "$XR_PACKAGE_DIR/devices/$XR_RELEASE_DEVICE_TARGET" ]] || fatal "extracted package missing devices/$XR_RELEASE_DEVICE_TARGET"
+fi
 
 log "extract Mercury hand-tracking models to temp"
 tar -C "$TMP_DIR/models_extract" -xzf "$MODELS_TAR"
@@ -306,4 +312,4 @@ ls -lh "$DST_MERCURY_DIR"
 echo
 echo "Next:"
 echo "  cd \"$XR_PACKAGE_DIR\""
-echo "  ./devices/$XR_RELEASE_DEVICE_TARGET/linux/scripts/install_runtime_deps_ubuntu24.sh"
+echo "  ./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh"

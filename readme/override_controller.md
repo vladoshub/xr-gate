@@ -6,7 +6,7 @@ Use Bluetooth controllers, USB keyboards, or joysticks as runtime controller inp
 
 ```bash
 cd ~/src/xr_tracking
-out/xreal_ultra/bin/scripts/override_controller/start_override_controller.sh
+out/xr-gate/bin/scripts/override_controller/start_override_controller.sh
 ```
 
 Finish the training flow in the terminal.

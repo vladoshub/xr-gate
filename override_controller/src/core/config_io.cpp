@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
@@ -229,12 +230,70 @@ nlohmann::json orientation_transform_to_json(const OrientationTransformConfig& t
   };
 }
 
+OrientationOffsetConfig orientation_offset_from_json(const nlohmann::json& device_json) {
+  OrientationOffsetConfig out;
+  if (!device_json.contains("orientation_offset") ||
+      !device_json.at("orientation_offset").is_object()) {
+    return out;
+  }
+  const auto& offset = device_json.at("orientation_offset");
+  out.enabled = offset.value("enabled", false);
+  out.multiply_order = offset.value("multiply_order", std::string("post"));
+  if (out.multiply_order != "post" && out.multiply_order != "local" &&
+      out.multiply_order != "pre" && out.multiply_order != "world") {
+    throw std::runtime_error(
+        "invalid devices[].orientation_offset.multiply_order '" +
+        out.multiply_order + "'; expected post/local or pre/world");
+  }
+  if (offset.contains("quaternion_xyzw")) {
+    const auto& q = offset.at("quaternion_xyzw");
+    if (!q.is_array() || q.size() != 4) {
+      throw std::runtime_error(
+          "devices[].orientation_offset.quaternion_xyzw must contain four numbers");
+    }
+    double norm2 = 0.0;
+    for (size_t i = 0; i < 4; ++i) {
+      if (!q.at(i).is_number()) {
+        throw std::runtime_error(
+            "devices[].orientation_offset.quaternion_xyzw must contain four numbers");
+      }
+      out.quaternion_xyzw[i] = q.at(i).get<double>();
+      if (!std::isfinite(out.quaternion_xyzw[i])) {
+        throw std::runtime_error(
+            "devices[].orientation_offset.quaternion_xyzw contains a non-finite value");
+      }
+      norm2 += out.quaternion_xyzw[i] * out.quaternion_xyzw[i];
+    }
+    if (!(norm2 > 1.0e-20)) {
+      throw std::runtime_error(
+          "devices[].orientation_offset.quaternion_xyzw cannot be zero");
+    }
+    const double inv_norm = 1.0 / std::sqrt(norm2);
+    for (double& value : out.quaternion_xyzw) value *= inv_norm;
+  }
+  return out;
+}
+
+nlohmann::json orientation_offset_to_json(const OrientationOffsetConfig& offset) {
+  return {
+      {"enabled", offset.enabled},
+      {"multiply_order",
+       (offset.multiply_order == "pre" || offset.multiply_order == "world")
+           ? "pre" : "post"},
+      {"quaternion_xyzw", {
+          offset.quaternion_xyzw[0], offset.quaternion_xyzw[1],
+          offset.quaternion_xyzw[2], offset.quaternion_xyzw[3],
+      }},
+  };
+}
+
 nlohmann::json config_device_to_json(const ConfigDevice& d) {
   nlohmann::json j = fp_to_json(d.fingerprint);
   j["id"] = d.id;
   j["input"] = device_input_to_json(d.input);
   j["imu_side"] = d.imu_side ? to_string(*d.imu_side) : "none";
   j["orientation_transform"] = orientation_transform_to_json(d.orientation_transform);
+  j["orientation_offset"] = orientation_offset_to_json(d.orientation_offset);
   return j;
 }
 
@@ -244,6 +303,7 @@ ConfigDevice config_device_from_json(const nlohmann::json& j, int fallback_id) {
   d.fingerprint = fp_from_json(j);
   d.input = device_input_from_json(j);
   d.orientation_transform = orientation_transform_from_json(j);
+  d.orientation_offset = orientation_offset_from_json(j);
   d.imu_side_explicit = j.contains("imu_side");
   const std::string imu_side = json_string_or(j, "imu_side", "none");
   if (imu_side == "left" || imu_side == "right") {
@@ -397,17 +457,25 @@ AppConfig load_config_file(const fs::path& path) {
   cfg.input.event_wait_max_ms = input.value("event_wait_max_ms", 20u);
 
   bool missing_orientation_transform = false;
+  bool missing_orientation_offset = false;
   int fallback_device_id = 1;
   for (const auto& dj : j.value("devices", nlohmann::json::array())) {
     if (!dj.contains("orientation_transform") ||
         !dj.at("orientation_transform").is_object()) {
       missing_orientation_transform = true;
     }
+    if (!dj.contains("orientation_offset") ||
+        !dj.at("orientation_offset").is_object()) {
+      missing_orientation_offset = true;
+    }
     ConfigDevice d = config_device_from_json(dj, fallback_device_id++);
     if (d.id > 0) cfg.devices.push_back(std::move(d));
   }
   if (missing_orientation_transform) {
     cfg.pending_migrations.push_back("devices[].orientation_transform");
+  }
+  if (missing_orientation_offset) {
+    cfg.pending_migrations.push_back("devices[].orientation_offset");
   }
 
   const auto binding_from_json = [&](const nlohmann::json& bj) {
@@ -452,7 +520,7 @@ AppConfig load_config_file(const fs::path& path) {
 
 void save_config_file(const AppConfig& cfg, const fs::path& path) {
   nlohmann::json j;
-  j["version"] = 4;
+  j["version"] = 5;
   j["name"] = cfg.name;
   j["publish"] = {
       {"transport", cfg.publish.transport},

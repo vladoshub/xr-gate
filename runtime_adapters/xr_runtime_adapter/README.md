@@ -64,6 +64,59 @@ runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.s
 
 The script is controlled mostly through environment variables, so individual runtime features can be enabled without changing code.
 
+## HMD mounting orientation calibration
+
+`orientation_transform` converts the source quaternion into the runtime
+coordinate basis. A separate per-stream `orientation_offset` applies the fixed
+sensor-to-HMD mounting correction after that conversion.
+
+For a new external sensor, use the guided calibration. It records a neutral
+pose followed by one-way pitch-up, yaw-right, and roll-right motions. This
+recovers the complete local sensor-to-HMD rotation and detects sign errors that
+a single neutral pose cannot observe:
+
+```bash
+runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py \
+  --config devices/leap_motion_uvc_nrf54l15/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json \
+  --mode guided \
+  --replace-existing-offset \
+  --write
+```
+
+During every motion phase, rotate once in the requested direction and hold that
+pose. Return to the same straight neutral pose only when the next neutral phase
+starts. Guided mode writes only `orientation_offset`; it does not modify
+`orientation_transform` or positional axis mapping.
+
+The default target list is `hmd,hmd_3dof`. The script creates a timestamped
+backup and atomically writes the same post-multiply quaternion to both blocks.
+Use `--targets hmd` or `--targets hmd_3dof` when the streams come from different
+physical sensors.
+
+Packaged builds expose the same tool as:
+
+```bash
+./calibrate_hmd_orientation_offset.sh \
+  --config devices/leap_motion_uvc_nrf54l15/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json \
+  --mode guided \
+  --replace-existing-offset \
+  --write
+```
+
+After writing the config, restart `xr_runtime_adapter`. Verify the stored offset
+and all three rotation directions without changing the file:
+
+```bash
+./calibrate_hmd_orientation_offset.sh \
+  --config devices/leap_motion_uvc_nrf54l15/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json \
+  --mode guided \
+  --verify
+```
+
+The older `--mode level` and `--mode full-neutral` modes remain available for a
+quick static neutral correction. They cannot determine pitch/yaw/roll signs and
+therefore are not sufficient as the only calibration for a new sensor mount.
+
 ## Hand tracking stability
 
 Hand stability gate can smooth short tracking losses and reject unstable reacquire jumps.

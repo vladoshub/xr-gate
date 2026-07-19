@@ -7,7 +7,7 @@ Assumptions:
 
 ```text
 repo:        ~/src/xr_tracking
-package:     ~/src/xr_tracking/out/xreal_ultra
+package:     ~/src/xr_tracking/out/xr-gate
 streams:     camera0, camera1, imu0
 transport:   shm on Linux, tcp when explicitly requested
 resolution:  480x640 GRAY8
@@ -62,7 +62,7 @@ SECONDS_TOTAL=90 \
 Alternative: start the full XR stack/package separately, then record from existing SHM streams.
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ./run_xr_client.sh
 
 # new terminal

@@ -10,6 +10,49 @@ expand_tilde() {
   esac
 }
 
+validate_basalt_json_object() {
+  local label="$1"
+  local path="$2"
+  local json_python="${PYTHON:-python3}"
+
+  if [[ ! -s "$path" ]]; then
+    echo "[start_basalt][ERROR] $label JSON is missing or empty: $path" >&2
+    return 1
+  fi
+
+  if ! command -v "$json_python" >/dev/null 2>&1; then
+    echo "[start_basalt][ERROR] Python interpreter not found for JSON validation: $json_python" >&2
+    return 1
+  fi
+
+  "$json_python" - "$label" "$path" <<'PY_JSON_CHECK'
+import json
+import sys
+
+label, path = sys.argv[1:]
+try:
+    with open(path, "r", encoding="utf-8") as stream:
+        document = json.load(stream)
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"[start_basalt][ERROR] invalid {label} JSON: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+if not isinstance(document, dict):
+    print(
+        f"[start_basalt][ERROR] invalid {label} JSON: top-level value must be an object: {path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if not isinstance(document.get("value0"), dict):
+    print(
+        f"[start_basalt][ERROR] invalid {label} JSON: 'value0' must be an object: {path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY_JSON_CHECK
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-${XR:-$HOME/src/xr_tracking}}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
@@ -80,6 +123,9 @@ BASALT_CALIB="${BASALT_CALIB:-$FINAL_PROFILE_DIR/basalt_calib_unified_480_ccw90.
 BASALT_VIO_CONFIG="${BASALT_VIO_CONFIG:-$FINAL_PROFILE_DIR/basalt_vio_config_unified_480_ccw90.json}"
 BASALT_CALIB="$(expand_tilde "$BASALT_CALIB")"
 BASALT_VIO_CONFIG="$(expand_tilde "$BASALT_VIO_CONFIG")"
+
+validate_basalt_json_object "camera calibration" "$BASALT_CALIB"
+validate_basalt_json_object "VIO config" "$BASALT_VIO_CONFIG"
 
 OUT_DIR="${OUT_DIR:-/tmp/xr_basalt_unified_live}"
 XR_BACKEND_CONTROL_FILE="${XR_BACKEND_CONTROL_FILE:-/tmp/xr_backend_control.json}"

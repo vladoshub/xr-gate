@@ -20,7 +20,7 @@ Supported input providers:
 ## Package output
 
 ```text
-out/xreal_ultra/bin/override_controller/
+out/xr-gate/bin/override_controller/
 ```
 
 ## User configs
@@ -86,7 +86,11 @@ To update device fingerprints after Bluetooth reconnects, event path changes, or
 ./override_controller --config ~/.config/xr_tracking/override_controller/default.json --connect-devices
 ```
 
-The command lists currently readable input devices, shows the devices used by the config with their `left` / `right` usage, and asks you to press any button on each configured physical device. It then writes the refreshed device fingerprints back to the config.
+The command lists currently readable input devices, shows the devices used by the config with their `left` / `right` usage, and asks you to press any button on each configured physical button device. Pure IMU-only entries are not sent through the button-capture prompt.
+
+At the end of both `--train` and `--connect-devices`, the tool checks for detected IMU-capable devices that are not assigned to either side. The optional IMU assignment step is shown only when at least one such device exists and at least one controller side has no IMU. For each missing side, choose a listed IMU device or press Enter/type `skip`; skipping leaves that side unchanged and does not create a config device. The resulting fingerprint is stored in `devices[]` with `imu_side: left` or `imu_side: right`, so the IMU does not need to expose any buttons.
+
+The command then writes the refreshed device fingerprints and any accepted IMU assignments back to the config.
 
 ## Per-device pulse and hold settings
 
@@ -97,9 +101,9 @@ global timing fallback from the launcher script.
 
 ## XIAO nRF54L15 serial provider
 
-The native `xiao_nrf54l15` provider reads the fixed 64-byte
-`xr_controller_v1` (`XCTL`) stream directly from the board's SAMD11 USB CDC
-serial port. It validates version, embedded packet size, IEEE CRC32 and finite
+The native `xiao_nrf54l15` provider reads unchanged 64-byte
+`xr_controller_v1` (`XCTL`) IMU samples and periodic 32-byte `XCID` identity
+frames directly from the board's SAMD11 USB CDC serial port. It validates version, embedded packet size, IEEE CRC32 and finite
 IMU values, performs stream resynchronization after corruption, maps the device
 microsecond timestamp into the host monotonic clock, and feeds the shared
 `ControllerImuProcessor`/Madgwick pipeline.
@@ -142,21 +146,25 @@ Provider options:
 | `madgwick_beta` | `0.04` | Shared 6DoF AHRS gain |
 
 The provider exposes a stable fingerprint with
-`backend=xiao_nrf54l15`. `uniq` prefers the USB serial number, then the
-`/dev/serial/by-id` name, then `/dev/serial/by-path`. Explicit `ports=` entries
-use the supplied path as their stable identity, so stable `/dev/serial/by-id`
-paths are recommended.
+`backend=xiao_nrf54l15`. After receiving `XCID`, `uniq` is
+`xiao_nrf54l15:uid:<hardware-uid>` and remains stable across USB ports and
+`ttyACM` numbering. Older firmware without `XCID` keeps the previous fallback:
+USB serial number, `/dev/serial/by-id`, `/dev/serial/by-path`, then the explicit
+port.
 
 Current firmware publishes IMU data with the controls-valid flag clear. Such a
 board appears in `--list-devices` and publishes IMU, but cannot generate a
-training event until GPIO controls are added. Assign it manually in the config:
+button-training event until GPIO controls are added. The final optional step of
+`--train` and `--connect-devices` lists these unassigned IMU-only devices and can
+assign one to `left` or `right` without requiring a button press. The stored
+config entry has the following form:
 
 ```json
 {
   "id": 3,
   "platform": "linux",
   "backend": "xiao_nrf54l15",
-  "uniq": "xiao_nrf54l15:serial:BOARD_SERIAL",
+  "uniq": "xiao_nrf54l15:uid:0123456789abcdef",
   "imu_side": "left",
   "orientation_transform": {
     "enabled": true,
@@ -168,6 +176,11 @@ training event until GPIO controls are added. Assign it manually in the config:
       "ry_deg": 0.0,
       "rz_deg": 0.0
     }
+  },
+  "orientation_offset": {
+    "enabled": false,
+    "multiply_order": "post",
+    "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]
   }
 }
 ```
@@ -187,6 +200,50 @@ published as normal training inputs:
 One serial stream must have one reader. Do not point `capture_service_cpp` and
 `override_controller` at the same physical `/dev/ttyACM*` device at the same
 time; select which process owns that controller's serial stream.
+
+
+### Per-controller IMU orientation offset
+
+Each `devices[]` entry may apply a fixed presentation offset after its
+`orientation_transform`:
+
+```json
+"orientation_offset": {
+  "enabled": true,
+  "multiply_order": "post",
+  "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]
+}
+```
+
+`post` is intended for the fixed IMU-to-controller/grip orientation. It changes
+only `orientation_xyzw`; IMU vectors remain in the axes established by
+`orientation_transform`. Calibrate each side with
+`debug/calibrate_controller_orientation_offset.py` while the existing offset is
+disabled, or pass the matching config with `--replace-existing-offset` so the
+tool can remove the currently configured offset from the observed stream.
+
+Standalone calibration, ready-to-copy JSON only:
+
+```bash
+python3 debug/calibrate_controller_orientation_offset.py \
+  --side left \
+  --registry /tmp/tracking_streams.json \
+  --stream controller_input
+```
+
+Calibrate and write the unique `devices[]` entry assigned to the side:
+
+```bash
+python3 debug/calibrate_controller_orientation_offset.py \
+  --side left \
+  --registry /tmp/tracking_streams.json \
+  --stream controller_input \
+  --config ~/.config/xr_tracking/override_controller/default.json \
+  --replace-existing-offset \
+  --write
+```
+
+Restart `override_controller` after writing the config.
 
 ## Samsung Gear VR Controller BLE provider
 
@@ -294,8 +351,11 @@ the top-level device entry:
 ```
 
 `imu_side` accepts `left`, `right`, or `none` and is independent from button
-bindings. Gear VR training assigns it automatically. This also allows a future
-MPU-6050 provider to publish IMU-only data without exposing any buttons.
+bindings. An IMU on a controller used during normal binding training is assigned
+automatically. Unused/buttonless IMU devices are offered in the final optional
+IMU assignment step for `--train` and `--connect-devices`; Enter/`skip` preserves
+the current side configuration. This allows serial/BLE IMU-only providers to
+publish controller orientation without exposing any buttons.
 
 The runtime adapter still requires the matching side to use:
 

@@ -19,11 +19,11 @@ find_package_or_project_root() {
   local d
   d="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
   while [[ "$d" != "/" && -n "$d" ]]; do
-    if [[ -f "$d/devices/xreal_ultra/xreal_ultra.env" && -d "$d/bin" ]]; then
+    if [[ -d "$d/devices/common" && -d "$d/bin" ]]; then
       printf '%s\n' "$d"
       return 0
     fi
-    if [[ -d "$d/drivers/xrizer" && -d "$d/devices/xreal_ultra" ]]; then
+    if [[ -d "$d/drivers/xrizer" && -d "$d/devices/common" ]]; then
       printf '%s\n' "$d"
       return 0
     fi
@@ -57,6 +57,8 @@ XRIZER_RUNTIME_DIR="$(expand_path "${XRIZER_RUNTIME_DIR:-$XR_BIN_ROOT/drivers/xr
 
 if [[ -z "${XR_RUNTIME_JSON:-}" ]]; then
   candidates=(
+    "$XR_BIN_ROOT/drivers/monado_driver/openxr_monado_xrgate.json"
+    "$ROOT_PROJECT/bin/drivers/monado_driver/openxr_monado_xrgate.json"
     "$ROOT_PROJECT/third_party/monado_driver/build/xr_tracking_relwithdebinfo/openxr_monado-dev.json"
     "$ROOT_PROJECT/bin/drivers/monado_driver/openxr_monado-dev.json"
     "$XR_BIN_ROOT/drivers/monado_driver/openxr_monado-dev.json"

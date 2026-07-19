@@ -118,6 +118,7 @@ Each stream can have some or all of these blocks:
 coordinate_transform
 hmd_relative
 orientation_transform
+orientation_offset
 hand_orientation_offset
 mesh_runtime
 ```
@@ -485,14 +486,13 @@ For `hmd` and `hmd_3dof`, the verified profile enables this block and applies:
 }
 ```
 
-Use this block when:
+Use this block for coordinate-frame conversion when yaw, pitch, or roll are
+mapped to the wrong runtime axes. Keep it mathematically consistent with the
+position `axis_map`/sign transform.
 
-```text
-- HMD looks in the wrong direction
-- yaw/pitch/roll are mapped incorrectly
-- 3DoF orientation is rotated by 90 or 180 degrees
-- SteamVR sees the headset as tilted or facing backwards
-```
+Do not use `basis_rotation` to compensate a sensor that is physically mounted at
+a fixed angle on the HMD. Use `orientation_offset` for that local mounting
+correction.
 
 Important rule:
 
@@ -501,6 +501,112 @@ hmd and hmd_3dof should usually use compatible orientation_transform settings.
 ```
 
 Otherwise switching between 6DoF and 3DoF may cause a sudden orientation jump.
+
+---
+
+## 6.1 `orientation_offset`
+
+Example:
+
+```json
+"orientation_offset": {
+  "enabled": true,
+  "multiply_order": "post",
+  "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]
+}
+```
+
+This is a constant mounting/presentation correction applied after
+`orientation_transform` has converted the source quaternion into the runtime
+coordinate basis.
+
+For the recommended `post`/`local` order:
+
+```text
+q_runtime_object = q_runtime_sensor * q_sensor_object
+```
+
+Use this block for a sensor that is rigidly mounted at a fixed angle relative to
+the physical HMD. Do not use `basis_rotation` for this purpose: changing the
+basis can remap or invert yaw, pitch, and roll instead of applying a local mount
+correction.
+
+`quaternion_xyzw` is the preferred representation. A manual Euler form is also
+accepted:
+
+```json
+"orientation_offset": {
+  "enabled": true,
+  "multiply_order": "post",
+  "rotation_deg": {
+    "rx_deg": 90.0,
+    "ry_deg": 0.0,
+    "rz_deg": 0.0
+  }
+}
+```
+
+Specify only one of `quaternion_xyzw` and `rotation_deg`.
+
+For a single physical tracking sensor feeding both 6DoF and 3DoF, keep the same
+offset in:
+
+```text
+streams.hmd.orientation_offset
+streams.hmd_3dof.orientation_offset
+```
+
+Different offsets are allowed when the two streams come from different physical
+sensors. The adapter logs a warning when both offsets are enabled and differ by
+more than 5 degrees because switching sources may then cause a visible jump.
+
+The preferred calibration for a new sensor is guided mode:
+
+```bash
+runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py \
+  --config devices/leap_motion_uvc_nrf54l15/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json \
+  --mode guided \
+  --replace-existing-offset \
+  --write
+```
+
+It records four neutral/hold windows and three one-way motions:
+
+```text
+pitch up   -> runtime local +X
+yaw right  -> runtime local -Y
+roll right -> runtime local -Z
+```
+
+For a post-multiply offset `O`, the local relative rotations satisfy:
+
+```text
+r_hmd = inverse(O) * r_sensor * O
+```
+
+The guided fit uses the measured motion axes to solve the complete
+sensor-to-HMD rotation `O`, then validates neutral tilt, motion-axis signs,
+orthogonality, motion amplitude, and stillness. This removes the 180-degree
+ambiguity of a single neutral pose, where the HMD can face forward while pitch
+and roll remain inverted.
+
+Guided mode changes only `orientation_offset`. It intentionally does not rewrite
+`orientation_transform`, `coordinate_transform`, or position mappings. Those
+blocks describe coordinate conventions rather than the physical sensor mount.
+
+Use the same guided sequence with `--verify` after restarting the adapter:
+
+```bash
+runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py \
+  --config devices/leap_motion_uvc_nrf54l15/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json \
+  --mode guided \
+  --verify
+```
+
+The static `--mode level` mode keeps the current yaw while leveling one neutral
+pose, and `--mode full-neutral` also forces yaw to identity. These modes are
+useful for diagnostics or known-good axis conventions, but they cannot verify
+pitch/yaw/roll signs.
 
 ---
 
@@ -1591,7 +1697,7 @@ If a stream is missing from logs, check:
 From package root:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 source devices/xreal_ultra/xreal_ultra.env
 echo "$TRACKING_TRANSFORM_CONFIG"
@@ -1600,7 +1706,7 @@ echo "$TRACKING_TRANSFORM_CONFIG"
 The path should point to the config under:
 
 ```text
-out/xreal_ultra/devices/xreal_ultra/configs/...
+out/xr-gate/devices/xreal_ultra/configs/...
 ```
 
 ---
@@ -1639,8 +1745,9 @@ Recommended order:
 2. coordinate_transform.invert_x/y/z
 3. coordinate_transform.offset_m
 4. orientation_transform
-5. hand_orientation_offset
-6. mesh_runtime.extra_*
+5. orientation_offset
+6. hand_orientation_offset
+7. mesh_runtime.extra_*
 ```
 
 ### 13.3 Keep `hmd` and `hmd_3dof` consistent
@@ -1705,14 +1812,16 @@ streams.hmd_3dof.orientation_transform.basis_rotation.ry_deg
 
 ### Switching 3DoF/6DoF rotates the view
 
-Compare:
+Compare both the basis and mount correction:
 
 ```text
 streams.hmd.orientation_transform
 streams.hmd_3dof.orientation_transform
+streams.hmd.orientation_offset
+streams.hmd_3dof.orientation_offset
 ```
 
-They should be compatible.
+They should be compatible for streams produced by the same physical sensor.
 
 ### Hands are glued to the face
 

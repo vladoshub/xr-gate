@@ -13,7 +13,7 @@ It consumes stereo camera and IMU streams from `capture_service`, runs Basalt VI
 ## Package output
 
 ```text
-out/xreal_ultra/bin/backends/basalt_vio/
+out/xr-gate/bin/backends/basalt_vio/
 ```
 
 ## Notes

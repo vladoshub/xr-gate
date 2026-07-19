@@ -17,7 +17,7 @@ The driver is intentionally thin. It does not read cameras, IMU, Basalt, Mercury
 Historical XREAL packages keep their existing names, for example:
 
 ```text
-out/xreal_ultra/bin/drivers/openvr_driver_60HZ/xr_tracking/
+out/xr-gate/bin/drivers/openvr_driver_60HZ/xr_tracking/
 ```
 
 Custom device profiles are namespaced, for example:

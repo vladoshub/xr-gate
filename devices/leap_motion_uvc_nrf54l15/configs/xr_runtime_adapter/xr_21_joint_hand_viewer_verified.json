@@ -8,9 +8,9 @@
           "z",
           "y"
         ],
-        "invert_x": true,
+        "invert_x": false,
         "invert_y": false,
-        "invert_z": false,
+        "invert_z": true,
         "rotation_deg": {
           "x": 0.0,
           "y": 0.0,
@@ -32,12 +32,22 @@
         }
       },
       "orientation_transform": {
-        "enabled": true,
+        "enabled": false,
         "basis_rotation": {
-          "rx_deg": -90.0,
-          "ry_deg": 180.0,
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
           "rz_deg": 0.0
         }
+      },
+      "orientation_offset": {
+        "enabled": true,
+        "multiply_order": "pre",
+        "quaternion_xyzw": [
+          -0.64876830007,
+          -0.208094145063,
+          -0.122274510094,
+          0.721696240669
+        ]
       }
     },
     "hand_tracking_21_joint": {
@@ -210,9 +220,9 @@
           "z",
           "y"
         ],
-        "invert_x": true,
+        "invert_x": false,
         "invert_y": false,
-        "invert_z": false,
+        "invert_z": true,
         "rotation_deg": {
           "x": 0.0,
           "y": 0.0,
@@ -234,12 +244,22 @@
         }
       },
       "orientation_transform": {
-        "enabled": true,
+        "enabled": false,
         "basis_rotation": {
-          "rx_deg": -90.0,
-          "ry_deg": 180.0,
+          "rx_deg": 0.0,
+          "ry_deg": 0.0,
           "rz_deg": 0.0
         }
+      },
+      "orientation_offset": {
+        "enabled": true,
+        "multiply_order": "pre",
+        "quaternion_xyzw": [
+          -0.64876830007,
+          -0.208094145063,
+          -0.122274510094,
+          0.721696240669
+        ]
       }
     },
     "spatial_proxy_mesh": {

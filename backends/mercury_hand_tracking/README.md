@@ -17,7 +17,7 @@ Stable controller-like hand poses, left/right hand assignment, basic pinch/grab 
 ## Package output
 
 ```text
-out/xreal_ultra/bin/backends/mercury_hand_tracking/
+out/xr-gate/bin/backends/mercury_hand_tracking/
 ```
 
 Upstream Monado/Mercury changes should be kept as patches under this backend, not as copied upstream source trees.

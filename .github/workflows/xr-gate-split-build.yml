@@ -1,4 +1,4 @@
-name: XREAL Ultra split build
+name: XR Gate split build
 
 "on":
   push:
@@ -19,6 +19,11 @@ name: XREAL Ultra split build
         type: boolean
         required: false
         default: false
+      include_vendor_components:
+        description: "Build pure vendor components such as xreal_display_helper"
+        type: boolean
+        required: false
+        default: true
       upload_partial_artifacts:
         description: "Upload each partial out package, not only the merged package"
         type: boolean
@@ -44,7 +49,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: xreal-ultra-split-build-${{ github.ref }}
+  group: xr-gate-split-build-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -54,6 +59,7 @@ env:
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
   XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer && '1' || '0' }}
+  XR_BUILD_VENDOR_COMPONENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.include_vendor_components == false && '0' || '1' }}
   XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
   XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
 
@@ -70,30 +76,30 @@ jobs:
       - name: Validate and build standalone unpack helper
         run: |
           set -euo pipefail
-          test -x devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          test -x devices/common/linux/scripts/release/unpack_xr_gate.sh
           test -x devices/common/linux/scripts/release/unpack_device_release.sh
-          bash -n devices/xreal_ultra/linux/scripts/unpack_xreal_ultra.sh
+          bash -n devices/common/linux/scripts/release/unpack_xr_gate.sh
           bash -n devices/common/linux/scripts/release/unpack_device_release.sh
 
           mkdir -p release-helper
           {
             printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
             printf '%s\n' \
-              'export XR_RELEASE_DEVICE_TARGET="xreal_ultra"' \
-              'export XR_RELEASE_DEVICE_DISPLAY_NAME="XREAL Ultra"' \
-              'export XR_RELEASE_DEVICE_ENV_NAME="xreal_ultra.env"'
+              'export XR_RELEASE_DEVICE_TARGET="xr-gate"' \
+              'export XR_RELEASE_DEVICE_DISPLAY_NAME="XR Gate"' \
+              'export XR_RELEASE_REQUIRE_DEVICE="0"'
             tail -n +3 devices/common/linux/scripts/release/unpack_device_release.sh
-          } > release-helper/unpack_xreal_ultra.sh
-          chmod +x release-helper/unpack_xreal_ultra.sh
-          bash -n release-helper/unpack_xreal_ultra.sh
-          release-helper/unpack_xreal_ultra.sh --help | grep -F 'XREAL Ultra'
-          ls -lh release-helper/unpack_xreal_ultra.sh
+          } > release-helper/unpack_xr_gate.sh
+          chmod +x release-helper/unpack_xr_gate.sh
+          bash -n release-helper/unpack_xr_gate.sh
+          release-helper/unpack_xr_gate.sh --help | grep -F 'XR Gate'
+          ls -lh release-helper/unpack_xr_gate.sh
 
       - name: Upload unpack helper
         uses: actions/upload-artifact@v4
         with:
-          name: unpack-xreal-ultra
-          path: release-helper/unpack_xreal_ultra.sh
+          name: unpack-xr-gate
+          path: release-helper/unpack_xr_gate.sh
           if-no-files-found: error
           retention-days: 7
 
@@ -133,10 +139,17 @@ jobs:
           set -euo pipefail
           scripts=(
             devices/common/linux/scripts/build/device_out_env.sh
+            devices/common/linux/scripts/build/xr_gate_out_env.sh
             devices/common/linux/scripts/build/install_device_out.sh
+            devices/common/linux/scripts/build/install_xr_gate_out.sh
             devices/common/linux/scripts/build/package_device_out.sh
+            devices/common/linux/scripts/build/package_xr_gate_out.sh
+            devices/common/linux/scripts/build/build_vendor_components.sh
+            devices/common/linux/scripts/build/package_vendor_components.sh
             devices/common/linux/scripts/ci/run_act_build.sh
+            devices/common/linux/scripts/ci/run_xr_gate_act_build.sh
             devices/common/linux/scripts/release/unpack_device_release.sh
+            devices/common/linux/scripts/release/unpack_xr_gate.sh
             devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
             devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
             devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
@@ -195,20 +208,26 @@ jobs:
           CLONE_MONADO: "1"
         run: |
           df -h
-          ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-          du -sh out/xreal_ultra || true
-          find out/xreal_ultra -maxdepth 4 -type f | sort | sed -n '1,200p'
+          ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+          du -sh out/xr-gate || true
+          find out/xr-gate -maxdepth 4 -type f | sort | sed -n '1,200p'
 
       - name: Validate capture launchers and TCP metadata probe
         if: ${{ matrix.name == 'capture' }}
         run: |
           set -euo pipefail
-          test -x out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
-          test -x out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
-          test -x out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
-          bash -n out/xreal_ultra/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
-          bash -n out/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
-          out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+          test -x out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+          test -x out/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
+          test -x out/xr-gate/bin/capture_service_cpp/capture_tcp_probe
+          bash -n out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+          bash -n out/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service_cpp.sh
+          out/xr-gate/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+
+          if [[ "$XR_BUILD_VENDOR_COMPONENTS" == "1" ]]; then
+            test -x out/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          else
+            test ! -e out/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          fi
 
           READY_FILE="$(mktemp)"
           rm -f "$READY_FILE"
@@ -242,7 +261,7 @@ jobs:
             sleep 0.1
           done
           test -f "$READY_FILE"
-          PROFILE="$(out/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe \
+          PROFILE="$(out/xr-gate/bin/capture_service_cpp/capture_tcp_probe \
             --host 127.0.0.1 \
             --port 45679 \
             --timeout-ms 2000 \
@@ -260,40 +279,40 @@ jobs:
         if: ${{ matrix.name == 'runtime' }}
         run: |
           set -euo pipefail
-          test -x out/xreal_ultra/devices/common/linux/scripts/basalt_vio/start_basalt.sh
-          test -x out/xreal_ultra/devices/common/linux/scripts/mercury_hand_tracking/start_hand_tracking.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
-          test -x out/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
-          test -x out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
-          test ! -e out/xreal_ultra/devices/common/linux/scripts/build
-          test ! -e out/xreal_ultra/devices/common/linux/scripts/ci
-          test ! -e out/xreal_ultra/devices/common/linux/scripts/release
-          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
-          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/basalt_vio
-          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
-          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
-          test ! -e out/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_video
+          test -x out/xr-gate/devices/common/linux/scripts/basalt_vio/start_basalt.sh
+          test -x out/xr-gate/devices/common/linux/scripts/mercury_hand_tracking/start_hand_tracking.sh
+          test -x out/xr-gate/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          test -x out/xr-gate/devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
+          test -x out/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x out/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test -x out/xr-gate/devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
+          test ! -e out/xr-gate/devices/common/linux/scripts/build
+          test ! -e out/xr-gate/devices/common/linux/scripts/ci
+          test ! -e out/xr-gate/devices/common/linux/scripts/release
+          test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
+          test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/basalt_vio
+          test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
+          test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/xr_video
 
       - name: Validate xr_spatial SHM/TCP launchers
         if: ${{ matrix.name == 'spatial' }}
         run: |
           set -euo pipefail
-          test -x out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend
-          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
-          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
-          test -x out/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
-          test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
-          test -x out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
-          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
-          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
-          bash -n out/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
-          bash -n out/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x out/xr-gate/bin/backends/xr_spatial/xr_spatial_backend
+          test -x out/xr-gate/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xr-gate/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          test -x out/xr-gate/bin/scripts/backends/xr_spatial/capture_profile.sh
+          test -x out/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_shm.sh
+          test -x out/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xr-gate/bin/scripts/backends/xr_spatial/start_xr_spatial_shm.sh
+          bash -n out/xr-gate/bin/scripts/backends/xr_spatial/start_xr_spatial_tcp.sh
+          bash -n out/xr-gate/bin/scripts/backends/xr_spatial/capture_profile.sh
+          bash -n out/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
           HELP_FILE="$(mktemp)"
           trap 'rm -f "$HELP_FILE"' EXIT
-          out/xreal_ultra/bin/backends/xr_spatial/xr_spatial_backend \
+          out/xr-gate/bin/backends/xr_spatial/xr_spatial_backend \
             --help >"$HELP_FILE" 2>&1
           grep -Fq -- '--capture-transport' "$HELP_FILE"
           grep -Fq -- '--capture-tcp-host' "$HELP_FILE"
@@ -301,22 +320,22 @@ jobs:
 
       - name: Archive partial package
         run: |
-          tar -C out -czf xreal_ultra_${{ matrix.name }}.tar.gz xreal_ultra
-          ls -lh xreal_ultra_${{ matrix.name }}.tar.gz
+          tar -C out -czf xr-gate_${{ matrix.name }}.tar.gz xr-gate
+          ls -lh xr-gate_${{ matrix.name }}.tar.gz
 
       - name: Upload partial package
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_partial_artifacts == true }}
         uses: actions/upload-artifact@v4
         with:
-          name: xreal-ultra-part-${{ matrix.name }}
-          path: xreal_ultra_${{ matrix.name }}.tar.gz
+          name: xr-gate-part-${{ matrix.name }}
+          path: xr-gate_${{ matrix.name }}.tar.gz
           retention-days: 3
 
       - name: Upload merge input
         uses: actions/upload-artifact@v4
         with:
-          name: xreal-ultra-merge-input-${{ matrix.name }}
-          path: xreal_ultra_${{ matrix.name }}.tar.gz
+          name: xr-gate-merge-input-${{ matrix.name }}
+          path: xr-gate_${{ matrix.name }}.tar.gz
           retention-days: 3
 
 
@@ -350,9 +369,9 @@ jobs:
           RESET_MERCURY_DRIVER_TREE: "1"
         run: |
           df -h
-          ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 
-          MODEL_DIR="out/xreal_ultra/bin/hand-tracking-models/mercury"
+          MODEL_DIR="out/xr-gate/bin/hand-tracking-models/mercury"
           test -f "$MODEL_DIR/grayscale_detection_160x160.onnx"
           test -f "$MODEL_DIR/grayscale_keypoint_jan18.onnx"
 
@@ -377,8 +396,8 @@ jobs:
             the MIT license of the xr_tracking project. They remain under their
             upstream terms. Keep this notice with redistributed copies.
 
-          Install into a downloaded XREAL Ultra runtime package:
-            tar -C out/xreal_ultra/bin -xzf hand-tracking-models-mercury.tar.gz
+          Install into a downloaded XR Gate runtime package:
+            tar -C out/xr-gate/bin -xzf hand-tracking-models-mercury.tar.gz
           EOF
 
           (
@@ -407,41 +426,49 @@ jobs:
       - name: Download partial packages
         uses: actions/download-artifact@v4
         with:
-          pattern: xreal-ultra-merge-input-*
+          pattern: xr-gate-merge-input-*
           path: partials
           merge-multiple: false
 
       - name: Merge partial packages
         run: |
           mkdir -p merged
-          find partials -type f -name 'xreal_ultra_*.tar.gz' -print -exec ls -lh {} \;
-          for archive in $(find partials -type f -name 'xreal_ultra_*.tar.gz' | sort); do
+          find partials -type f -name 'xr-gate_*.tar.gz' -print -exec ls -lh {} \;
+          for archive in $(find partials -type f -name 'xr-gate_*.tar.gz' | sort); do
             echo "merge $archive"
             tar -xzf "$archive" -C merged
           done
-          test -d merged/xreal_ultra/bin
-          test -x merged/xreal_ultra/run_xr_client.sh
-          test -x merged/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
-          test -x merged/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
-          test -x merged/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
-          test -x merged/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
-          test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
-          test -x merged/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
-          test -x merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
-          test ! -e merged/xreal_ultra/devices/common/linux/scripts/build
-          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
-          test ! -e merged/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
-          du -sh merged/xreal_ultra
-          find merged/xreal_ultra -maxdepth 4 -type f | sort | sed -n '1,300p'
-          tar -C merged -czf xreal_ultra_linux_x64.tar.gz xreal_ultra
-          ls -lh xreal_ultra_linux_x64.tar.gz
+          test -d merged/xr-gate/bin
+          test -x merged/xr-gate/run_xr_client.sh
+          test -x merged/xr-gate/bin/capture_service_cpp/capture_tcp_probe
+          test -x merged/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service.sh
+          test -x merged/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x merged/xr-gate/bin/scripts/backends/xr_spatial/capture_profile.sh
+          test -x merged/xr-gate/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          if [[ "$XR_BUILD_VENDOR_COMPONENTS" == "1" ]]; then
+            test -x merged/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          else
+            test ! -e merged/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          fi
+          test -f merged/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
+          test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
+          test -d merged/xr-gate/devices/leap_motion_uvc_nrf54l15
+          test -x merged/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x merged/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test ! -e merged/xr-gate/devices/common/linux/scripts/build
+          test ! -e merged/xr-gate/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e merged/xr-gate/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e merged/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
+          du -sh merged/xr-gate
+          find merged/xr-gate -maxdepth 4 -type f | sort | sed -n '1,300p'
+          tar -C merged -czf xr-gate-linux-x64.tar.gz xr-gate
+          ls -lh xr-gate-linux-x64.tar.gz
 
       - name: Upload merged package
         uses: actions/upload-artifact@v4
         with:
-          name: xreal-ultra-linux-x64
-          path: xreal_ultra_linux_x64.tar.gz
+          name: xr-gate-linux-x64
+          path: xr-gate-linux-x64.tar.gz
           retention-days: 7
 
 
@@ -462,7 +489,7 @@ jobs:
       - name: Download merged runtime package
         uses: actions/download-artifact@v4
         with:
-          name: xreal-ultra-linux-x64
+          name: xr-gate-linux-x64
           path: release-assets/runtime
 
       - name: Download Mercury hand-tracking models
@@ -474,7 +501,7 @@ jobs:
       - name: Download unpack helper
         uses: actions/download-artifact@v4
         with:
-          name: unpack-xreal-ultra
+          name: unpack-xr-gate
           path: release-assets/unpack-helper
 
       - name: Validate release assets
@@ -483,26 +510,34 @@ jobs:
 
           find release-assets -maxdepth 5 -type f -print -exec ls -lh {} \;
 
-          test -f release-assets/runtime/xreal_ultra_linux_x64.tar.gz
+          test -f release-assets/runtime/xr-gate-linux-x64.tar.gz
           test -f release-assets/models/hand-tracking-models-mercury.tar.gz
-          test -f release-assets/unpack-helper/unpack_xreal_ultra.sh
+          test -f release-assets/unpack-helper/unpack_xr_gate.sh
 
           mkdir -p verify/runtime
-          tar -xzf release-assets/runtime/xreal_ultra_linux_x64.tar.gz -C verify/runtime
+          tar -xzf release-assets/runtime/xr-gate-linux-x64.tar.gz -C verify/runtime
 
-          test -d verify/runtime/xreal_ultra/bin
-          test -x verify/runtime/xreal_ultra/run_xr_client.sh
-          test -x verify/runtime/xreal_ultra/bin/capture_service_cpp/capture_tcp_probe
-          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/capture_service/start_capture_service.sh
-          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
-          test -x verify/runtime/xreal_ultra/bin/scripts/backends/xr_spatial/capture_profile.sh
-          test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
-          test -x verify/runtime/xreal_ultra/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
-          test -x verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
-          test ! -e verify/runtime/xreal_ultra/devices/common/linux/scripts/build
-          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/capture_service
-          test ! -e verify/runtime/xreal_ultra/devices/xreal_ultra/linux/scripts/xr_spatial
+          test -d verify/runtime/xr-gate/bin
+          test -x verify/runtime/xr-gate/run_xr_client.sh
+          test -x verify/runtime/xr-gate/bin/capture_service_cpp/capture_tcp_probe
+          test -x verify/runtime/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service.sh
+          test -x verify/runtime/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+          test -x verify/runtime/xr-gate/bin/scripts/backends/xr_spatial/capture_profile.sh
+          test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+          if [[ "$XR_BUILD_VENDOR_COMPONENTS" == "1" ]]; then
+            test -x verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          else
+            test ! -e verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
+          fi
+          test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
+          test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
+          test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
+          test -x verify/runtime/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+          test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+          test ! -e verify/runtime/xr-gate/devices/common/linux/scripts/build
+          test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+          test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/capture_service
+          test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
 
       - name: Create or update GitHub Release
         env:
@@ -513,9 +548,9 @@ jobs:
           set -euo pipefail
 
           ASSETS=(
-            release-assets/runtime/xreal_ultra_linux_x64.tar.gz
+            release-assets/runtime/xr-gate-linux-x64.tar.gz
             release-assets/models/hand-tracking-models-mercury.tar.gz
-            release-assets/unpack-helper/unpack_xreal_ultra.sh
+            release-assets/unpack-helper/unpack_xr_gate.sh
           )
 
           args=()
@@ -531,6 +566,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "XR Gate $TAG" \
-              --notes "Automated XR Gate Linux x64 release artifact." \
+              --notes "Automated multi-profile XR Gate Linux x64 release artifact." \
               "${args[@]}"
           fi

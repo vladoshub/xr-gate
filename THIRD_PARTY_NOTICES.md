@@ -60,7 +60,7 @@ Third-party source code, upstream patches, downloaded model files, generated bin
 - Upstream: https://github.com/moshimeow/mercury_steamvr_driver
 - Use: optional source for `grayscale_detection_160x160.onnx` and `grayscale_keypoint_jan18.onnx`.
 - Default status: not included in the core repository/release and not downloaded by the default build.
-- Download path when explicitly requested: `out/xreal_ultra/bin/hand-tracking-models/mercury/`.
+- Download path when explicitly requested: `out/xr-gate/bin/hand-tracking-models/mercury/`.
 - Packaging note: model files are published only as a separate optional archive, `hand-tracking-models-mercury.tar.gz`, and remain under their upstream terms. They are not covered by the project MIT license.
 
 ### xrizer

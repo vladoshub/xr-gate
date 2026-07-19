@@ -612,6 +612,7 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_string(y, {platform_key("imu.serial.port"), "imu.serial.port"}, cfg.imu.serial.port);
   set_int(y, {"imu.serial.baud_rate", "imu.serial.baud"}, cfg.imu.serial.baud_rate);
   set_string(y, {"imu.serial.protocol"}, cfg.imu.serial.protocol);
+  set_string(y, {"imu.serial.protocol_device_uid"}, cfg.imu.serial.protocol_device_uid);
   set_string(y, {"imu.serial.timestamp_mode"}, cfg.imu.serial.timestamp_mode);
   set_int(y, {"imu.serial.read_timeout_ms"}, cfg.imu.serial.read_timeout_ms);
   set_size(y, {"imu.serial.max_packet_size"}, cfg.imu.serial.max_packet_size);
@@ -677,6 +678,7 @@ void validate_runtime_config(RuntimeConfig& cfg) {
   cfg.imu.driver = lowercase(trim(cfg.imu.driver));
   cfg.imu.serial.protocol = lowercase(trim(cfg.imu.serial.protocol));
   cfg.imu.serial.timestamp_mode = lowercase(trim(cfg.imu.serial.timestamp_mode));
+  cfg.imu.serial.protocol_device_uid = trim(cfg.imu.serial.protocol_device_uid);
   cfg.profile_name = trim(cfg.profile_name);
 
   if (!cfg.profile_name.empty()) {
@@ -720,8 +722,16 @@ void validate_runtime_config(RuntimeConfig& cfg) {
       throw std::runtime_error("imu.xreal_hid.read_timeout_ms must be positive");
     }
     if (cfg.imu.driver == "serial") {
-      if (cfg.imu.serial.port.empty()) throw std::runtime_error("imu.serial.port is required for imu.driver=serial");
+      if (cfg.imu.serial.port.empty() && cfg.imu.serial.protocol_device_uid.empty()) {
+        throw std::runtime_error(
+            "imu.serial.port or imu.serial.protocol_device_uid is required for imu.driver=serial");
+      }
       if (cfg.imu.serial.baud_rate <= 0) throw std::runtime_error("imu.serial.baud_rate must be positive");
+      if (!cfg.imu.serial.protocol_device_uid.empty() &&
+          cfg.imu.serial.protocol != "xr_controller_v1") {
+        throw std::runtime_error(
+            "imu.serial.protocol_device_uid is supported only for xr_controller_v1");
+      }
       if (cfg.imu.serial.protocol != "xr_controller_v1" &&
           cfg.imu.serial.protocol != "xr_imu_v1" && cfg.imu.serial.protocol != "csv_f32") {
         throw std::runtime_error("imu.serial.protocol must be xr_controller_v1, xr_imu_v1, or csv_f32");

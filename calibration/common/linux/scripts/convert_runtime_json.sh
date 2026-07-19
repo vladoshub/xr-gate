@@ -9,15 +9,20 @@ source "$SCRIPT_DIR/load_target.sh"
 CAMCHAIN="$(expand_tilde "${CAMCHAIN:-$FINAL_PROFILE_DIR/camchain-imucam.yaml}")"
 BASALT_OUT="$(expand_tilde "${BASALT_OUT:-$FINAL_PROFILE_DIR/basalt_calib_${CALIB_PROFILE_NAME}.json}")"
 MERCURY_OUT="$(expand_tilde "${MERCURY_OUT:-$FINAL_PROFILE_DIR/mercury_calib_${CALIB_PROFILE_NAME}.json}")"
+BASALT_VIO_OUT="$(expand_tilde "${BASALT_VIO_OUT:-$FINAL_PROFILE_DIR/$BASALT_VIO_CONFIG_NAME}")"
+FORCE_BASALT_VIO_CONFIG="${FORCE_BASALT_VIO_CONFIG:-0}"
 
 [[ -f "$CONVERTER_TO_RUNTIME" ]] || { echo "[convert-runtime][ERROR] converter missing: $CONVERTER_TO_RUNTIME" >&2; exit 1; }
 [[ -f "$CAMCHAIN" ]] || { echo "[convert-runtime][ERROR] camchain missing: $CAMCHAIN" >&2; exit 1; }
+[[ -f "$BASALT_VIO_CONFIG_TEMPLATE" ]] || { echo "[convert-runtime][ERROR] Basalt VIO config template missing: $BASALT_VIO_CONFIG_TEMPLATE" >&2; exit 1; }
 mkdir -p "$FINAL_PROFILE_DIR"
 
 print_target_summary
 echo "CAMCHAIN=$CAMCHAIN"
 echo "BASALT_OUT=$BASALT_OUT"
 echo "MERCURY_OUT=$MERCURY_OUT"
+echo "BASALT_VIO_CONFIG_TEMPLATE=$BASALT_VIO_CONFIG_TEMPLATE"
+echo "BASALT_VIO_OUT=$BASALT_VIO_OUT"
 echo "IMU_UPDATE_RATE=$IMU_UPDATE_RATE"
 echo "IMU_ACCEL_NOISE_DENSITY=$IMU_ACCEL_NOISE_DENSITY"
 echo "IMU_ACCEL_RANDOM_WALK=$IMU_ACCEL_RANDOM_WALK"
@@ -63,8 +68,35 @@ PY
 
 cp "$BASALT_OUT" "$MERCURY_OUT"
 
-echo "[OK] runtime calibration JSON files created"
-ls -lh "$BASALT_OUT" "$MERCURY_OUT"
+if [[ ! -e "$BASALT_VIO_OUT" || "$FORCE_BASALT_VIO_CONFIG" == "1" ]]; then
+  install -Dm0644 "$BASALT_VIO_CONFIG_TEMPLATE" "$BASALT_VIO_OUT"
+  echo "[convert-runtime] installed Basalt VIO config: $BASALT_VIO_OUT"
+else
+  echo "[convert-runtime] preserving existing Basalt VIO config: $BASALT_VIO_OUT"
+  echo "[convert-runtime] set FORCE_BASALT_VIO_CONFIG=1 to replace it from the template"
+fi
+
+python3 - "$BASALT_VIO_OUT" <<'PY_VIO'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"[convert-runtime][ERROR] invalid Basalt VIO config {path}: {exc}")
+if not isinstance(data, dict) or not isinstance(data.get("value0"), dict):
+    raise SystemExit(
+        f"[convert-runtime][ERROR] Basalt VIO config must contain an object at value0: {path}"
+    )
+if not data["value0"]:
+    raise SystemExit(f"[convert-runtime][ERROR] Basalt VIO config value0 is empty: {path}")
+print(f"[convert-runtime] validated {path}")
+PY_VIO
+
+echo "[OK] runtime calibration and Basalt VIO JSON files created"
+ls -lh "$BASALT_OUT" "$MERCURY_OUT" "$BASALT_VIO_OUT"
 if command -v jq >/dev/null 2>&1; then
   jq '.value0.resolution,
       .value0.imu_update_rate,

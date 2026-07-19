@@ -16,7 +16,7 @@ spatial_proxy_mesh_udp_debug_receiver
 ## Package output
 
 ```text
-out/xreal_ultra/bin/bridges/
+out/xr-gate/bin/bridges/
 ```
 
 Use these for diagnostics, remote streaming, and UDP validation without changing the core runtime pipeline.

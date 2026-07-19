@@ -149,6 +149,71 @@ void parse_orientation_transform(const nlohmann::json& j, OrientationTransformCo
   out.basis_q = q_from_euler_basis_xyz(out.basis_rotation_rad);
 }
 
+Qd json_quaternion_xyzw(const nlohmann::json& j) {
+  if (!j.is_array() || j.size() != 4) {
+    throw std::runtime_error(
+        "orientation_offset.quaternion_xyzw must be an array [x, y, z, w]");
+  }
+
+  const double x = j.at(0).get<double>();
+  const double y = j.at(1).get<double>();
+  const double z = j.at(2).get<double>();
+  const double w = j.at(3).get<double>();
+  const double norm2 = w*w + x*x + y*y + z*z;
+  if (!std::isfinite(norm2) || norm2 <= 1e-18) {
+    throw std::runtime_error(
+        "orientation_offset.quaternion_xyzw must contain a finite non-zero quaternion");
+  }
+  return normalize_q({w, x, y, z});
+}
+
+void parse_orientation_offset(const nlohmann::json& j, OrientationOffsetConfig& out) {
+  if (!j.is_object()) return;
+  out.enabled = j.value("enabled", out.enabled);
+
+  const std::string multiply_order = j.value("multiply_order", std::string("post"));
+  if (multiply_order == "pre" || multiply_order == "world") {
+    out.pre_multiply = true;
+  } else if (multiply_order == "post" || multiply_order == "local") {
+    out.pre_multiply = false;
+  } else {
+    throw std::runtime_error(
+        "orientation_offset.multiply_order must be 'post'/'local' or 'pre'/'world'");
+  }
+
+  const bool has_quaternion = j.contains("quaternion_xyzw");
+  const bool has_rotation = j.contains("rotation_deg") || j.contains("rotation");
+  if (has_quaternion && has_rotation) {
+    throw std::runtime_error(
+        "orientation_offset must contain only one of quaternion_xyzw or rotation_deg");
+  }
+
+  if (has_quaternion) {
+    out.q = json_quaternion_xyzw(j.at("quaternion_xyzw"));
+    if (!j.contains("enabled")) out.enabled = true;
+    return;
+  }
+
+  if (has_rotation) {
+    if (j.contains("rotation_deg")) {
+      out.rotation_deg = json_basis_rotation_deg(j.at("rotation_deg"), out.rotation_deg);
+    } else {
+      out.rotation_deg = json_basis_rotation_deg(j.at("rotation"), out.rotation_deg);
+    }
+    out.rotation_rad = {out.rotation_deg.x * kPi / 180.0,
+                        out.rotation_deg.y * kPi / 180.0,
+                        out.rotation_deg.z * kPi / 180.0};
+    if (!std::isfinite(out.rotation_rad.x) ||
+        !std::isfinite(out.rotation_rad.y) ||
+        !std::isfinite(out.rotation_rad.z)) {
+      throw std::runtime_error(
+          "orientation_offset.rotation_deg must contain finite rx_deg/ry_deg/rz_deg values");
+    }
+    out.q = q_from_euler_basis_xyz(out.rotation_rad);
+    if (!j.contains("enabled")) out.enabled = true;
+  }
+}
+
 void parse_hmd_relative(const nlohmann::json& j, HmdRelativeConfig& out) {
   if (!j.is_object()) return;
   out.enabled = j.value("enabled", out.enabled);
@@ -299,6 +364,9 @@ void parse_stream_transform(const nlohmann::json& j, StreamTransformConfig& out)
   }
   if (j.contains("orientation_transform")) {
     parse_orientation_transform(j.at("orientation_transform"), out.orientation_transform);
+  }
+  if (j.contains("orientation_offset")) {
+    parse_orientation_offset(j.at("orientation_offset"), out.orientation_offset);
   }
   if (j.contains("hmd_relative")) {
     parse_hmd_relative(j.at("hmd_relative"), out.hmd_relative);
@@ -659,6 +727,29 @@ TrackingTransformConfig load_tracking_transform_config(const std::string& path) 
       parse_stream_transform(streams.at("spatial_proxy_mesh"), cfg.spatial_proxy_mesh);
     }
   }
+
+  const auto& hmd_offset = cfg.hmd.orientation_offset;
+  const auto& hmd_3dof_offset = cfg.hmd_3dof.orientation_offset;
+  if (hmd_offset.enabled != hmd_3dof_offset.enabled) {
+    std::cerr << "[xr_runtime_adapter] warning: orientation_offset is enabled for only one of "
+                 "hmd/hmd_3dof; switching pose source may cause an orientation jump\n";
+  } else if (hmd_offset.enabled && hmd_3dof_offset.enabled) {
+    if (hmd_offset.pre_multiply != hmd_3dof_offset.pre_multiply) {
+      std::cerr << "[xr_runtime_adapter] warning: hmd and hmd_3dof orientation offsets use "
+                   "different multiply_order values; switching pose source may cause an "
+                   "orientation jump\n";
+    }
+    const Qd a = normalize_q(hmd_offset.q);
+    const Qd b = normalize_q(hmd_3dof_offset.q);
+    const double dot = std::clamp(
+        std::abs(a.w*b.w + a.x*b.x + a.y*b.y + a.z*b.z), 0.0, 1.0);
+    const double difference_deg = 2.0 * std::acos(dot) * 180.0 / kPi;
+    if (difference_deg > 5.0) {
+      std::cerr << "[xr_runtime_adapter] warning: hmd and hmd_3dof orientation offsets differ by "
+                << difference_deg
+                << " deg; switching pose source may cause an orientation jump\n";
+    }
+  }
   return cfg;
 }
 
@@ -682,6 +773,13 @@ Qd apply_stream_orientation_transform(const StreamTransformConfig& cfg,
   Qd out = cfg.orientation_transform.enabled
       ? apply_basis_quat_transform(cfg.orientation_transform.basis_q, in)
       : normalize_q(in);
+
+  if (cfg.orientation_offset.enabled) {
+    const Qd offset = normalize_q(cfg.orientation_offset.q);
+    out = cfg.orientation_offset.pre_multiply
+        ? q_mul(offset, normalize_q(out))
+        : q_mul(normalize_q(out), offset);
+  }
 
   // If this stream is true HMD/camera-local, positions are rotated by the
   // post-origin HMD orientation in apply_hmd_relative(). Rotate orientations by
@@ -775,6 +873,12 @@ void log_stream_transform(const char* name, const StreamTransformConfig& cfg, bo
             << cfg.orientation_transform.basis_rotation_deg.y << ","
             << cfg.orientation_transform.basis_rotation_deg.z << ")"
             << " orientation_enabled=" << (cfg.orientation_transform.enabled ? "true" : "false")
+            << " orientation_offset_enabled=" << (cfg.orientation_offset.enabled ? "true" : "false")
+            << " orientation_offset_order=" << (cfg.orientation_offset.pre_multiply ? "pre" : "post")
+            << " orientation_offset_q_xyzw=(" << cfg.orientation_offset.q.x << ","
+            << cfg.orientation_offset.q.y << ","
+            << cfg.orientation_offset.q.z << ","
+            << cfg.orientation_offset.q.w << ")"
             << " hmd_relative=" << (cfg.hmd_relative.enabled ? "true" : "false")
             << " hmd_rotate_with_hmd=" << (cfg.hmd_relative.rotate_with_hmd_orientation ? "true" : "false")
             << " hmd_offset_m=(" << cfg.hmd_relative.offset_m.x << ","

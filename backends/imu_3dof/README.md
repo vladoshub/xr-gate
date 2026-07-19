@@ -21,5 +21,5 @@ It reads `imu0` from `capture_service`, runs a gyro+accelerometer AHRS filter, a
 ## Package output
 
 ```text
-out/xreal_ultra/bin/backends/imu_3dof/
+out/xr-gate/bin/backends/imu_3dof/
 ```

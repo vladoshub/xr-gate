@@ -63,6 +63,7 @@ imu:
       windows: COM5
     baud_rate: 230400
     protocol: xr_controller_v1
+    protocol_device_uid: ""  # optional stable hardware UID; empty uses port
     timestamp_mode: device
     read_timeout_ms: 50
     max_packet_size: 256

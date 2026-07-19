@@ -136,7 +136,7 @@ Raw-radian FOV variables remain compatibility overrides.
 For the historical XREAL target:
 
 ```text
-out/xreal_ultra/bin/drivers/monado_driver/
+out/xr-gate/bin/drivers/monado_driver/
 ```
 
 For another target, replace `xreal_ultra` with its package name.

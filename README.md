@@ -58,7 +58,7 @@ Current focus areas:
 - Stereo video streaming and optional SteamVR video overlay experiments.
 - Live depth grid / spatial proxy mesh / primitive scan output.
 - Gestures, movement prediction
-- Portable Linux runtime package under `out/xreal_ultra`.
+- Portable Linux runtime package under `out/xr-gate`.
 
 
 ## Why this project is interesting
@@ -87,7 +87,7 @@ For **Python/C++ / AR/VR/XR systems** work, it shows cross-language runtime engi
 - C++ backends for capture, runtime adaptation, drivers, and low-latency paths;
 - Python SDK and tools for stream reading, recording, calibration, and debug workflows;
 - OpenVR/SteamVR and Monado/OpenXR integration points;
-- device-specific package scripts with a portable `out/xreal_ultra` layout.
+- device-specific package scripts with a portable `out/xr-gate` layout.
 
 ## Safety and experimental software notice
 
@@ -112,33 +112,33 @@ Download these artifacts:
 
 https://github.com/vladoshub/xr-gate/releases/latest
 
-1. xreal-ultra-linux-x64.tar.gz
+1. xr-gate-linux-x64.tar.gz
 
 2. hand-tracking-models-mercury.tar.gz
 
-3. unpack-xreal-ultra.sh
+3. unpack_xr_gate.sh
 
 Mercury ONNX models are distributed separately in hand-tracking-models-mercury.tar.gz. They are not included in the core runtime package and are not downloaded by the default build.
 
-Download unpack_xreal_ultra.sh and place it next to:
-xreal-ultra-linux-x64.tar.gz
+Download unpack_xr_gate.sh and place it next to:
+xr-gate-linux-x64.tar.gz
 hand-tracking-models-mercury.tar.gz
 
 
 Unpack the runtime package and install the Mercury models:
 ```bash
-chmod +x unpack_xreal_ultra.sh
-./unpack_xreal_ultra.sh --dest ~/xr-gate-release
+chmod +x unpack_xr_gate.sh
+./unpack_xr_gate.sh --dest ~/xr-gate-release
 ```
 
 
 After extraction, the runtime package will be available under:
 
-~/xr-gate-release/xreal_ultra/...
+~/xr-gate-release/xr-gate/...
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
-./devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+cd ~/xr-gate-release/xr-gate
+./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
 ```
 
 Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups.
@@ -156,7 +156,7 @@ You can use 2 identical Bluetooth controllers.
 Train your devices:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
 ```
 
@@ -173,7 +173,7 @@ The config will be saved in ~/.config/xr_tracking/override_controller/default.js
 ```bash
 mkdir -p "$HOME/.config/xr_tracking/override_controller"
 
-cp "$HOME/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpark.json" \
+cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_vrpark.json" \
    "$HOME/.config/xr_tracking/override_controller/default.json"
 ```
 
@@ -181,14 +181,14 @@ cp "$HOME/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_vrpa
 
 3. Register your controllers:
 ```bash
-~/xr-gate-release/xreal_ultra/bin/override_controller/override_controller \
+~/xr-gate-release/xr-gate/bin/override_controller/override_controller \
   --config "$HOME/.config/xr_tracking/override_controller/default.json" \
   --connect-devices
 ```
 
 4. Enable auto-start override_controller in client:
 ```bash
-CFG="$HOME/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json"
+CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/xreal_ultra.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
@@ -199,7 +199,7 @@ sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/
 ```bash
 mkdir -p "$HOME/.config/xr_tracking/override_controller"
 
-cp "$HOME/xr-gate-release/xreal_ultra/bin/override_controller/configs/empty_gearvr.json" \
+cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.json" \
    "$HOME/.config/xr_tracking/override_controller/gearvr.json"
 ```
 
@@ -260,13 +260,13 @@ Repeat for second controller
 3. Register your controllers:
 
 ```bash
-PROVIDERS=gearvr_ble GEARVR_INITIAL_SCAN_MS=10000 CONFIG_PATH="$HOME/.config/xr_tracking/override_controller/gearvr.json" VERBOSE=1 ~/xr-gate-release/xreal_ultra/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
+PROVIDERS=gearvr_ble GEARVR_INITIAL_SCAN_MS=10000 CONFIG_PATH="$HOME/.config/xr_tracking/override_controller/gearvr.json" VERBOSE=1 ~/xr-gate-release/xr-gate/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
 ```
 
 4. Enable auto-start override_controller and gearvr in client:
 
 ```bash
-CFG="$HOME/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json"
+CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/xreal_ultra.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
@@ -275,7 +275,7 @@ sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/
 sed -i \
   -e 's|"CONFIG_PATH": "~/.config/xr_tracking/override_controller/default\.json"|"CONFIG_PATH": "~/.config/xr_tracking/override_controller/gearvr.json"|' \
   -e 's|"PROVIDERS": "evdev"|"PROVIDERS": "evdev,gearvr_ble"|' \
-  ~/xr-gate-release/xreal_ultra/bin/python/xr_client/configs/default_shm.json
+  ~/xr-gate-release/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
 ```
 
 
@@ -304,8 +304,8 @@ If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the 
 It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
-./run_xr_client.sh
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config xreal_ultra
 ```
 
 You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
@@ -345,8 +345,8 @@ Steam and SteamVR must be installed from the Steam website, not from Snap. Use a
 
 Run xr_client
 ```bash
-cd ~/xr-gate-release/xreal_ultra
-./run_xr_client.sh
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config xreal_ultra
 ```
 
 ### 1. Register OpenVR driver (once)
@@ -355,7 +355,7 @@ For direct USB4/iGPU path, tested with HX370 iGPU:
 
 90HZ
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 XR_TARGET_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
@@ -365,7 +365,7 @@ XR_OPENVR_DISPLAY_MODE=direct \
 
 60HZ
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 XR_TARGET_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
@@ -376,7 +376,7 @@ XR_OPENVR_DISPLAY_MODE=direct \
 For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, 60 Hz is the safer default:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 XR_OPENVR_REGISTER_METHOD=manual \
 XR_OPENVR_RUNTIME_MODE=steamvr \
 XR_TARGET_DEVICE=xreal_ultra \
@@ -424,7 +424,7 @@ DP-6 = main monitor
 
 Run direct mode (tested on Nvidia):
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 XR_OPENVR_DGPU_GPU_VENDOR=nvidia \
 XR_OPENVR_DGPU_OUTPUT=DP-4 \
 XR_OPENVR_LAUNCH_MODE=steam \
@@ -440,7 +440,7 @@ Start SteamVR. After you can start SteamVR apps/games.
 After finishing the work, I recommend restoring the glasses to their normal state to avoid problems during future launches or if you have an issue with xr_client or the SteamVR driver:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 XR_STEAMVR_RESTORE_OUTPUT=DP-4 \
 XR_STEAMVR_RESTORE_MAIN_OUTPUT=DP-6 \
@@ -451,7 +451,7 @@ XR_STEAMVR_RESTORE_LAYOUT=right-of \
 ## Some demo
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 ```
 
 
@@ -474,8 +474,8 @@ Use an X11/Xorg session.
 
 Run xr_client
 ```bash
-cd ~/xr-gate-release/xreal_ultra
-./run_xr_client.sh
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config xreal_ultra
 ```
 
 ## Choose monitor mode
@@ -485,7 +485,7 @@ cd ~/xr-gate-release/xreal_ultra
 Example for 90 Hz XREAL Ultra:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
@@ -523,7 +523,7 @@ DP-6 = main display
 Disable main display:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 XR_TRACKING_MAIN_OUTPUT=DP-6 \
@@ -533,7 +533,7 @@ devices/common/linux/scripts/monado_driver/main_display_control.sh off-main
 Run Monado driver:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
@@ -546,7 +546,7 @@ devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 Enable main display again:
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 XR_TRACKING_MAIN_OUTPUT=DP-6 \
 devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
@@ -558,7 +558,7 @@ devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
 ```bash
 sudo apt install xdotool wmctrl
 
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
@@ -571,7 +571,7 @@ XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 ## D. Monado without main monitor in system
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
@@ -583,9 +583,9 @@ devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ## Start OpenXR demo
 
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 sudo apt install libopenxr-utils
-XR_RUNTIME_JSON=~/xr-gate-release/xreal_ultra/bin/drivers/monado_driver/openxr_monado_xrgate.json \
+XR_RUNTIME_JSON=~/xr-gate-release/xr-gate/bin/drivers/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
 
@@ -607,42 +607,75 @@ git clone https://github.com/vladoshub/xr-gate.git xr_tracking
 cd xr_tracking
 ```
 
-Build:
+Build the complete multi-profile package (vendor components included by default):
 ```bash
-devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
+
+Build only hardware-neutral components and omit pure vendor binaries such as
+`xreal_display_helper`:
+
+```bash
+XR_BUILD_VENDOR_COMPONENTS=0 \
+  ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+The compatibility entrypoint
+`devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh` now delegates to
+this command and also writes `out/xr-gate`.
 
 Or clean build with ACT:
 
 ```bash
-devices/xreal_ultra/linux/scripts/run_xreal_ultra_act_build.sh --clean-artifacts
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --clean-artifacts
 ```
 
-
-Run it:
+ACT build without pure vendor components:
 
 ```bash
-cd out/xreal_ultra
-./run_xr_client.sh
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh \
+  --no-vendor-components \
+  --clean-artifacts
 ```
+
+
+Run it by selecting the runtime profile explicitly:
+
+```bash
+cd out/xr-gate
+
+# XREAL Ultra cameras + XREAL Ultra IMU
+./run_xr_client.sh --config xreal_ultra
+
+# XREAL display/runtime + Leap Motion UVC cameras + nRF54L15 IMU
+./run_xr_client.sh --config leap_motion_uvc_nrf54l15
+```
+
+`run_xr_client.sh` intentionally has no implicit hardware profile. Calling it
+without `--config` prints the packaged profile list and exits.
 
 ## Runtime package
 
 The portable runtime package is built under:
 
 ```text
-out/xreal_ultra/
-  bin/                  binaries, libraries, runtime Python, scripts, apps, drivers
-  devices/xreal_ultra/  device ENV, launch wrappers, configs, calibration
-  run_xr_client.sh      package entrypoint
+out/xr-gate/
+  bin/                                 shared binaries, libraries, Python, apps, drivers
+  devices/common/                      hardware-neutral runtime launchers
+  devices/xreal_ultra/                 XREAL display/device profile and vendor helpers
+  devices/leap_motion_uvc_nrf54l15/    Leap Motion + nRF54L15 tracking profile
+  run_xr_client.sh                     config-selected package entrypoint
 ```
 
+The default profile set is controlled by `XR_PACKAGE_PROFILES`. For advanced
+packaging, `XR_PACKAGE_DEVICE_TARGETS` and `XR_PACKAGE_CONFIG_PROFILES` can be
+overridden independently.
 
 ## Main components
 
 ### `capture_service_cpp`
 
-C++ camera/IMU capture backend for XREAL Ultra. It publishes synchronized stereo and IMU streams through SHM/TCP and is the default capture path.
+C++ camera/IMU capture backend. The active camera, layout, IMU, and transport settings come from the selected runtime profile.
 
 ### `capture_client`
 
@@ -676,8 +709,10 @@ bridges/                        network/UDP bridge tools
 apps/steamvr/                   optional SteamVR applications
 drivers/                        OpenVR, Monado, and optional xrizer integration
 override_controller/            input backend that maps physical controller devices
-devices/xreal_ultra/            device-specific package config/scripts
-xr_client/                      process orchestrator
+devices/common/                 shared runtime/build/package scripts
+devices/xreal_ultra/            XREAL display/device profile and vendor helpers
+devices/leap_motion_uvc_nrf54l15/ Leap Motion + nRF54L15 tracking profile
+xr_client/                      process orchestrator and runtime configs
 readme/                         additional documentation
 ```
 
@@ -693,7 +728,7 @@ Build it explicitly:
 
 ```bash
 cd ~/src/xr_tracking
-XR_BUILD_ONLY=xrizer ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+XR_BUILD_ONLY=xrizer ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
 See `readme/xrizer.md`.

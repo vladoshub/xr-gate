@@ -32,9 +32,9 @@ if ([string]::IsNullOrWhiteSpace($WslProjectRoot)) {
 }
 if ([string]::IsNullOrWhiteSpace($RuntimeSourceRoot)) {
   # This is expected to be a Linux runtime package copied to Windows, e.g.
-  # C:\src\xr_tracking\out\xreal_ultra.  Its contents are mirrored into
+  # C:\src\xr_tracking\out\xr-gate.  Its contents are mirrored into
   # WSL2 under ~/src/xr_tracking/out/<leaf-name>.
-  $RuntimeSourceRoot = Join-Path $Root "out\xreal_ultra"
+  $RuntimeSourceRoot = Join-Path $Root "out\xr-gate"
 }
 $RuntimeSourceRoot = (Resolve-Path $RuntimeSourceRoot).Path
 if ([string]::IsNullOrWhiteSpace($WslOutName)) {

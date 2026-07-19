@@ -9,13 +9,166 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <chrono>
+#include <filesystem>
+#include <set>
+#include <thread>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
 
 namespace xr_capture_cpp {
 namespace {
+
+
+namespace fs = std::filesystem;
+
+bool magic_at(const std::vector<uint8_t>& buffer,
+              size_t offset,
+              const std::array<uint8_t, 4>& magic) {
+  return offset + magic.size() <= buffer.size() &&
+         std::equal(magic.begin(), magic.end(),
+                    buffer.begin() + static_cast<std::ptrdiff_t>(offset));
+}
+
+size_t next_xr_controller_magic(const std::vector<uint8_t>& buffer) {
+  for (size_t offset = 0; offset + 4 <= buffer.size(); ++offset) {
+    if (magic_at(buffer, offset, kXrControllerV1Magic) ||
+        magic_at(buffer, offset, kXrControllerIdentityV1Magic)) {
+      return offset;
+    }
+  }
+  return std::string::npos;
+}
+
+std::optional<std::string> identity_uid_from_buffer(std::vector<uint8_t>& buffer) {
+  while (buffer.size() >= 4) {
+    const size_t offset = next_xr_controller_magic(buffer);
+    if (offset == std::string::npos) {
+      const size_t keep = std::min<size_t>(buffer.size(), 3);
+      buffer.erase(buffer.begin(),
+                   buffer.end() - static_cast<std::ptrdiff_t>(keep));
+      return std::nullopt;
+    }
+    if (offset > 0) {
+      buffer.erase(buffer.begin(),
+                   buffer.begin() + static_cast<std::ptrdiff_t>(offset));
+    }
+    if (magic_at(buffer, 0, kXrControllerV1Magic)) {
+      if (buffer.size() < kXrControllerV1PacketSize) return std::nullopt;
+      buffer.erase(buffer.begin(),
+                   buffer.begin() + static_cast<std::ptrdiff_t>(kXrControllerV1PacketSize));
+      continue;
+    }
+    if (buffer.size() < kXrControllerIdentityV1PacketSize) return std::nullopt;
+    XrControllerIdentityV1 identity;
+    if (!decode_xr_controller_identity_v1(
+            buffer.data(), kXrControllerIdentityV1PacketSize, identity)) {
+      buffer.erase(buffer.begin());
+      continue;
+    }
+    buffer.erase(buffer.begin(),
+                 buffer.begin() + static_cast<std::ptrdiff_t>(
+                     kXrControllerIdentityV1PacketSize));
+    return xr_controller_device_uid_hex(identity);
+  }
+  return std::nullopt;
+}
+
+std::vector<std::string> serial_uid_candidates(const std::string& configured_port) {
+  std::vector<std::string> out;
+  std::set<std::string> seen;
+  auto add = [&](const std::string& path) {
+    if (path.empty()) return;
+    std::error_code ec;
+    fs::path canonical = fs::weakly_canonical(path, ec);
+    const std::string key = ec ? path : canonical.string();
+    if (seen.insert(key).second) out.push_back(path);
+  };
+  add(configured_port);
+#ifndef _WIN32
+  std::error_code ec;
+  for (const char* directory : {"/dev/serial/by-id", "/dev"}) {
+    if (!fs::exists(directory, ec)) continue;
+    for (const auto& entry : fs::directory_iterator(directory, ec)) {
+      if (ec) break;
+      const std::string name = entry.path().filename().string();
+      if (std::string(directory) == "/dev" && name.rfind("ttyACM", 0) != 0) {
+        continue;
+      }
+      add(entry.path().string());
+    }
+  }
+#else
+  for (int index = 1; index <= 32; ++index) add("COM" + std::to_string(index));
+#endif
+  return out;
+}
+
+std::optional<std::string> probe_xr_controller_uid(const std::string& port,
+                                                   int baud_rate,
+                                                   int timeout_ms) {
+  SerialPort serial;
+  try {
+    serial.open(port, baud_rate);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  std::vector<uint8_t> buffer;
+  buffer.reserve(4096);
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(timeout_ms);
+  std::array<uint8_t, 1024> chunk{};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const int remaining = static_cast<int>(std::chrono::duration_cast<
+        std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
+    const int count = serial.read_timeout(chunk.data(), chunk.size(),
+                                          std::max(1, std::min(100, remaining)));
+    if (count < 0) break;
+    if (count > 0) {
+      buffer.insert(buffer.end(), chunk.begin(), chunk.begin() + count);
+      if (auto uid = identity_uid_from_buffer(buffer)) {
+        serial.close();
+        return uid;
+      }
+    }
+  }
+  serial.close();
+  return std::nullopt;
+}
+
+std::string resolve_xr_controller_port(const SerialImuConfig& serial_cfg) {
+  const std::string expected =
+      normalize_xr_controller_device_uid(serial_cfg.protocol_device_uid);
+  if (serial_cfg.protocol_device_uid.empty()) return serial_cfg.port;
+  if (expected.empty() || expected.size() > kXrControllerDeviceUidMaxSize * 2) {
+    throw std::runtime_error(
+        "imu.serial.protocol_device_uid must be an even-length hexadecimal UID");
+  }
+
+  std::vector<std::string> attempted;
+  for (const std::string& candidate : serial_uid_candidates(serial_cfg.port)) {
+    attempted.push_back(candidate);
+    const auto uid = probe_xr_controller_uid(candidate,
+                                             serial_cfg.baud_rate,
+                                             1500);
+    if (uid && *uid == expected) return candidate;
+  }
+
+  std::ostringstream message;
+  message << "xr_controller_v1 device_uid=" << expected
+          << " was not found";
+  if (!attempted.empty()) {
+    message << "; probed ports=";
+    for (size_t i = 0; i < attempted.size(); ++i) {
+      if (i) message << ',';
+      message << attempted[i];
+    }
+  }
+  throw std::runtime_error(message.str());
+}
 
 class SerialImuSource final : public IImuSource {
  public:
@@ -40,10 +193,19 @@ class SerialImuSource final : public IImuSource {
 
   void open() override {
     clock_mapper_.reset();
-    serial_.open(cfg_.imu.serial.port, cfg_.imu.serial.baud_rate);
-    std::cerr << "[capture_service_cpp] imu source=serial port=" << cfg_.imu.serial.port
+    expected_device_uid_ = normalize_xr_controller_device_uid(
+        cfg_.imu.serial.protocol_device_uid);
+    resolved_port_ = cfg_.imu.serial.protocol == "xr_controller_v1"
+                         ? resolve_xr_controller_port(cfg_.imu.serial)
+                         : cfg_.imu.serial.port;
+    serial_.open(resolved_port_, cfg_.imu.serial.baud_rate);
+    std::cerr << "[capture_service_cpp] imu source=serial port=" << resolved_port_
               << " baud=" << cfg_.imu.serial.baud_rate
-              << " protocol=" << cfg_.imu.serial.protocol << std::endl;
+              << " protocol=" << cfg_.imu.serial.protocol;
+    if (!expected_device_uid_.empty()) {
+      std::cerr << " protocol_device_uid=" << expected_device_uid_;
+    }
+    std::cerr << std::endl;
   }
 
   SourceReadStatus read(ImuReadResult& result) override {
@@ -84,25 +246,59 @@ class SerialImuSource final : public IImuSource {
   }
 
   bool parse_xr_controller_v1(ImuReadResult& result) {
-    while (buffer_.size() >= kXrControllerV1Magic.size()) {
-      const auto found = std::search(buffer_.begin(), buffer_.end(),
-                                     kXrControllerV1Magic.begin(), kXrControllerV1Magic.end());
-      if (found != buffer_.begin()) {
-        if (found == buffer_.end()) {
-          const size_t keep = std::min<size_t>(buffer_.size(), kXrControllerV1Magic.size() - 1);
-          buffer_.erase(buffer_.begin(),
-                        buffer_.end() - static_cast<std::ptrdiff_t>(keep));
-          ++resync_count_;
-          return false;
-        }
-        buffer_.erase(buffer_.begin(), found);
+    while (buffer_.size() >= 4) {
+      const size_t magic_offset = next_xr_controller_magic(buffer_);
+      if (magic_offset == std::string::npos) {
+        const size_t keep = std::min<size_t>(buffer_.size(), 3);
+        buffer_.erase(buffer_.begin(),
+                      buffer_.end() - static_cast<std::ptrdiff_t>(keep));
+        ++resync_count_;
+        return false;
+      }
+      if (magic_offset > 0) {
+        buffer_.erase(buffer_.begin(),
+                      buffer_.begin() + static_cast<std::ptrdiff_t>(magic_offset));
         ++resync_count_;
       }
-      if (buffer_.size() < kXrControllerV1PacketSize) return false;
 
+      if (magic_at(buffer_, 0, kXrControllerIdentityV1Magic)) {
+        if (buffer_.size() < kXrControllerIdentityV1PacketSize) return false;
+        XrControllerIdentityV1 identity;
+        if (!decode_xr_controller_identity_v1(
+                buffer_.data(), kXrControllerIdentityV1PacketSize, identity)) {
+          buffer_.erase(buffer_.begin());
+          ++invalid_count_;
+          continue;
+        }
+        buffer_.erase(buffer_.begin(),
+                      buffer_.begin() + static_cast<std::ptrdiff_t>(
+                          kXrControllerIdentityV1PacketSize));
+        const std::string uid = xr_controller_device_uid_hex(identity);
+        if (!uid.empty()) {
+          if (!expected_device_uid_.empty() && uid != expected_device_uid_) {
+            throw std::runtime_error(
+                "xr_controller_v1 UID changed or mismatched on port " +
+                resolved_port_ + ": expected=" + expected_device_uid_ +
+                " observed=" + uid);
+          }
+          if (observed_device_uid_ != uid) {
+            observed_device_uid_ = uid;
+            std::cerr << "[capture_service_cpp] xr_controller_v1 device_uid="
+                      << uid << " port=" << resolved_port_ << std::endl;
+          }
+        } else if (!expected_device_uid_.empty()) {
+          throw std::runtime_error(
+              "xr_controller_v1 identity frame on port " + resolved_port_ +
+              " does not contain a hardware device UID");
+        }
+        continue;
+      }
+
+      if (buffer_.size() < kXrControllerV1PacketSize) return false;
       XrControllerV1Sample decoded;
       XrControllerV1DecodeError error = XrControllerV1DecodeError::None;
-      if (!decode_xr_controller_v1(buffer_.data(), buffer_.size(), decoded, &error)) {
+      if (!decode_xr_controller_v1(buffer_.data(), kXrControllerV1PacketSize,
+                                   decoded, &error)) {
         buffer_.erase(buffer_.begin());
         if (error == XrControllerV1DecodeError::BadCrc) {
           ++crc_fail_count_;
@@ -128,7 +324,8 @@ class SerialImuSource final : public IImuSource {
       if (cfg_.imu.serial.timestamp_mode == "device" &&
           result.sample.source_timestamp_valid) {
         result.sample.timestamp_ns =
-            clock_mapper_.map_us(decoded.device_timestamp_us, result.receive_timestamp_ns);
+            clock_mapper_.map_us(decoded.device_timestamp_us,
+                                 result.receive_timestamp_ns);
       } else {
         result.sample.timestamp_ns = result.receive_timestamp_ns;
       }
@@ -276,6 +473,9 @@ class SerialImuSource final : public IImuSource {
   std::vector<uint8_t> buffer_;
   AffineDeviceClockMapper clock_mapper_;
   uint64_t last_receive_ns_ = 0;
+  std::string resolved_port_;
+  std::string expected_device_uid_;
+  std::string observed_device_uid_;
   uint32_t generated_sequence_ = 0;
   uint64_t sample_count_ = 0;
   uint64_t crc_fail_count_ = 0;

@@ -145,6 +145,16 @@ else
   log "skip bundled configs: $CONFIGS_SRC_DIR not found"
 fi
 
+TOOLS_SRC_DIR="$BACKEND_DIR/debug"
+mkdir -p "$INSTALL_BIN_DIR/tools"
+for tool in   calibrate_imu_axes.py   calibrate_controller_orientation_offset.py   watch_controller_input_stream.py; do
+  if [[ -f "$TOOLS_SRC_DIR/$tool" ]]; then
+    cp -f "$TOOLS_SRC_DIR/$tool" "$INSTALL_BIN_DIR/tools/$tool"
+    chmod +x "$INSTALL_BIN_DIR/tools/$tool"
+    log "installed tool: $INSTALL_BIN_DIR/tools/$tool"
+  fi
+done
+
 cat <<EOF2
 
 [OK] override_controller built:

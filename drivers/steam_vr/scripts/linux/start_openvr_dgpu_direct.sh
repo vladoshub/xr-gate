@@ -52,6 +52,11 @@ resolve_package_root() {
     printf '%s\n' "$root"
     return 0
   fi
+  if [[ -d "$root/out/xr-gate/bin/drivers" ]]; then
+    printf '%s\n' "$root/out/xr-gate"
+    return 0
+  fi
+  # Compatibility with packages produced before the generic out/xr-gate layout.
   if [[ -d "$root/out/xreal_ultra/bin/drivers" ]]; then
     printf '%s\n' "$root/out/xreal_ultra"
     return 0
@@ -76,6 +81,7 @@ resolve_register_script() {
   for candidate in \
     "$package_root/bin/scripts/drivers/openvr_driver/register_driver.sh" \
     "$project_root/drivers/openvr_driver/scripts/register_driver.sh" \
+    "$project_root/out/xr-gate/bin/scripts/drivers/openvr_driver/register_driver.sh" \
     "$project_root/out/xreal_ultra/bin/scripts/drivers/openvr_driver/register_driver.sh"; do
     if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
@@ -128,7 +134,7 @@ OPENVR_FREQ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_OPENVR_DGPU_FREQ_HZ:-${F
 OPENVR_FREQ="$(normalize_hz "$OPENVR_FREQ_RAW")"
 XR_RATE="${XR_OPENVR_DGPU_RATE_HZ:-$OPENVR_FREQ}"
 OPENVR_MODE="${XR_OPENVR_DISPLAY_MODE:-direct}"
-OPENVR_DEVICE="${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-xreal_ultra}}}"
+OPENVR_DEVICE="${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}"
 DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-openvr_driver_${OPENVR_FREQ}HZ}"
 STOP_STEAM="${XR_OPENVR_STOP_STEAM:-auto}"
 STOP_STEAM="${STOP_STEAM,,}"

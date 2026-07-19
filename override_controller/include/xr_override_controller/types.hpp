@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -131,11 +132,19 @@ struct OrientationTransformConfig {
   OrientationBasisRotationConfig basis_rotation;
 };
 
+struct OrientationOffsetConfig {
+  bool enabled = false;
+  // post/local: q_out = q_in * offset; pre/world: q_out = offset * q_in.
+  std::string multiply_order = "post";
+  std::array<double, 4> quaternion_xyzw{{0.0, 0.0, 0.0, 1.0}};
+};
+
 struct ConfigDevice {
   int id = 0;
   DeviceFingerprint fingerprint;
   DeviceInputConfig input;
   OrientationTransformConfig orientation_transform;
+  OrientationOffsetConfig orientation_offset;
 
   // Explicit IMU routing is independent from button/axis bindings. This lets
   // an IMU-only provider (for example MPU-6050) feed one controller side
