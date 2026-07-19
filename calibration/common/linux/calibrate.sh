@@ -21,7 +21,7 @@ Commands:
   camera            Run stereo camera calibration
   save-camera       Install latest camera-only result into target profile directory
   imu-camera        Run camera-IMU calibration
-  convert-runtime   Convert final Kalibr camchain to Basalt/Mercury JSON
+  convert-runtime   Convert Kalibr camchain and install Basalt/Mercury/VIO JSON
 USAGE
 }
 

@@ -63,6 +63,32 @@ unsupported Kalibr camera models. The current converter supports only the
 `pinhole-equi` Kalibr model (`pinhole` + `equidistant` in camchain YAML), which
 is emitted as a runtime `kb4` camera.
 
+The same command also installs a Basalt VIO algorithm config into the final
+profile directory. The default template is:
+
+```text
+calibration/common/linux/templates/basalt_vio_config_default.json
+```
+
+Each target may override the output name with `BASALT_VIO_CONFIG_NAME`. Current
+outputs are:
+
+```text
+leap_motion_uvc_nrf54l15 -> basalt_vio_config_640x480.json
+xreal_ultra               -> basalt_vio_config_unified_480_ccw90.json
+```
+
+An existing VIO config is preserved so target-specific tuning is not lost. To
+replace it from the template explicitly:
+
+```bash
+FORCE_BASALT_VIO_CONFIG=1 \
+  ./calibration/common/linux/calibrate.sh --target <target> convert-runtime
+```
+
+A different source template or destination can be selected with
+`BASALT_VIO_CONFIG_TEMPLATE` and `BASALT_VIO_OUT`.
+
 After changing an existing target's IMU settings, regenerate its IMU YAML:
 
 ```bash
