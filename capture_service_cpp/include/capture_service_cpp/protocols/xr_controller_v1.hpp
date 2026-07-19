@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace xr_capture_cpp {
 
@@ -18,6 +19,13 @@ constexpr uint8_t kXrControllerV1Version = 1;
 constexpr uint8_t kXrControllerV1TimestampValid = 0x01;
 constexpr uint8_t kXrControllerV1ControlsValid = 0x02;
 constexpr uint8_t kXrControllerV1BatteryValid = 0x04;
+
+constexpr std::array<uint8_t, 4> kXrControllerIdentityV1Magic{{'X', 'C', 'I', 'D'}};
+constexpr size_t kXrControllerIdentityV1PacketSize = 32;
+constexpr size_t kXrControllerIdentityV1CrcOffset = 28;
+constexpr size_t kXrControllerDeviceUidMaxSize = 16;
+constexpr uint8_t kXrControllerIdentityV1Version = 1;
+constexpr uint8_t kXrControllerIdentityV1DeviceUidValid = 0x01;
 
 enum XrControllerV1Button : uint32_t {
   XrControllerV1ButtonA = 1u << 0,
@@ -38,6 +46,13 @@ enum XrControllerV1Axis : size_t {
   XrControllerV1AxisThumbstickY = 1,
   XrControllerV1AxisTrigger = 2,
   XrControllerV1AxisGrip = 3,
+};
+
+struct XrControllerIdentityV1 {
+  uint8_t flags = 0;
+  uint8_t controller_protocol_version = 0;
+  std::array<uint8_t, kXrControllerDeviceUidMaxSize> device_uid{};
+  size_t device_uid_size = 0;
 };
 
 struct XrControllerV1Sample {
@@ -63,6 +78,17 @@ enum class XrControllerV1DecodeError {
 };
 
 uint32_t xr_controller_v1_crc32(const uint8_t* data, size_t size);
+
+bool encode_xr_controller_identity_v1(const XrControllerIdentityV1& identity,
+                                      uint8_t* output,
+                                      size_t output_size);
+
+bool decode_xr_controller_identity_v1(const uint8_t* data,
+                                      size_t size,
+                                      XrControllerIdentityV1& identity);
+
+std::string xr_controller_device_uid_hex(const XrControllerIdentityV1& identity);
+std::string normalize_xr_controller_device_uid(std::string value);
 
 bool encode_xr_controller_v1(const XrControllerV1Sample& sample,
                              uint8_t* output,

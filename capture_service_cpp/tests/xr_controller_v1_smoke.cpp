@@ -46,6 +46,28 @@ int main() {
   assert(!decode_xr_controller_v1(packet.data(), packet.size(), decoded, &error));
   assert(error == XrControllerV1DecodeError::BadCrc);
 
+
+  XrControllerIdentityV1 identity;
+  identity.flags = kXrControllerIdentityV1DeviceUidValid;
+  identity.controller_protocol_version = kXrControllerV1Version;
+  identity.device_uid_size = 8;
+  identity.device_uid = {0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
+  std::array<uint8_t, kXrControllerIdentityV1PacketSize> identity_packet{};
+  assert(encode_xr_controller_identity_v1(
+      identity, identity_packet.data(), identity_packet.size()));
+  XrControllerIdentityV1 decoded_identity;
+  assert(decode_xr_controller_identity_v1(
+      identity_packet.data(), identity_packet.size(), decoded_identity));
+  assert(decoded_identity.device_uid_size == 8);
+  assert(xr_controller_device_uid_hex(decoded_identity) ==
+         "0123456789abcdef");
+  assert(normalize_xr_controller_device_uid(
+             "xiao_nrf54l15:uid:01-23-45-67-89-AB-CD-EF") ==
+         "0123456789abcdef");
+  identity_packet[12] ^= 0x01;
+  assert(!decode_xr_controller_identity_v1(
+      identity_packet.data(), identity_packet.size(), decoded_identity));
+
   input.gyro_rad_s[0] = std::numeric_limits<float>::quiet_NaN();
   assert(!encode_xr_controller_v1(input, packet.data(), packet.size()));
   return 0;

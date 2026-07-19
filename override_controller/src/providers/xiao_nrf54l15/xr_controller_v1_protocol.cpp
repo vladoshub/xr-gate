@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
 
 namespace xr_override_controller::xiao_nrf54l15 {
 namespace {
@@ -39,10 +41,17 @@ float get_f32_le(const uint8_t* data) {
   return value;
 }
 
-bool has_magic_at(const std::vector<uint8_t>& buffer, size_t offset) {
-  return offset + kXrControllerV1Magic.size() <= buffer.size() &&
-         std::equal(kXrControllerV1Magic.begin(), kXrControllerV1Magic.end(),
+bool has_magic_at(const std::vector<uint8_t>& buffer,
+                  size_t offset,
+                  const std::array<uint8_t, 4>& magic) {
+  return offset + magic.size() <= buffer.size() &&
+         std::equal(magic.begin(), magic.end(),
                     buffer.begin() + static_cast<std::ptrdiff_t>(offset));
+}
+
+bool has_any_magic_at(const std::vector<uint8_t>& buffer, size_t offset) {
+  return has_magic_at(buffer, offset, kXrControllerV1Magic) ||
+         has_magic_at(buffer, offset, kXrControllerIdentityV1Magic);
 }
 
 }  // namespace
@@ -94,6 +103,45 @@ std::optional<XrControllerV1Packet> decode_xr_controller_v1(
   return packet;
 }
 
+std::optional<XrControllerIdentityV1Packet> decode_xr_controller_identity_v1(
+    const uint8_t* data, size_t size) {
+  if (!data || size != kXrControllerIdentityV1PacketSize) return std::nullopt;
+  if (!std::equal(kXrControllerIdentityV1Magic.begin(),
+                  kXrControllerIdentityV1Magic.end(), data)) {
+    return std::nullopt;
+  }
+  if (data[4] != kXrControllerIdentityV1Version) return std::nullopt;
+  if (get_u16_le(data + 6) != kXrControllerIdentityV1PacketSize) {
+    return std::nullopt;
+  }
+  if (get_u32_le(data + kXrControllerIdentityV1CrcOffset) !=
+      xr_controller_crc32_ieee(data, kXrControllerIdentityV1CrcOffset)) {
+    return std::nullopt;
+  }
+  const size_t uid_size = data[8];
+  if (uid_size > kXrControllerDeviceUidMaxSize) return std::nullopt;
+  XrControllerIdentityV1Packet identity;
+  identity.flags = data[5];
+  identity.controller_protocol_version = data[9];
+  identity.device_uid_size = uid_size;
+  std::copy(data + 12, data + 12 + uid_size, identity.device_uid.begin());
+  return identity;
+}
+
+std::string xr_controller_device_uid_hex(
+    const XrControllerIdentityV1Packet& identity) {
+  if ((identity.flags & kIdentityFlagDeviceUidValid) == 0 ||
+      identity.device_uid_size == 0) {
+    return {};
+  }
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (size_t i = 0; i < identity.device_uid_size; ++i) {
+    out << std::setw(2) << static_cast<unsigned>(identity.device_uid[i]);
+  }
+  return out.str();
+}
+
 void XrControllerV1StreamDecoder::append(const uint8_t* data, size_t size) {
   if (!data || size == 0) return;
   constexpr size_t kMaxBufferedBytes = kXrControllerV1PacketSize * 64;
@@ -110,35 +158,57 @@ void XrControllerV1StreamDecoder::append(const uint8_t* data, size_t size) {
 }
 
 std::optional<XrControllerV1Packet> XrControllerV1StreamDecoder::pop() {
-  while (buffer_.size() >= kXrControllerV1Magic.size()) {
+  while (buffer_.size() >= 4) {
     size_t magic_offset = 0;
-    while (magic_offset + kXrControllerV1Magic.size() <= buffer_.size() &&
-           !has_magic_at(buffer_, magic_offset)) {
+    while (magic_offset + 4 <= buffer_.size() &&
+           !has_any_magic_at(buffer_, magic_offset)) {
       ++magic_offset;
     }
     if (magic_offset > 0) {
       buffer_.erase(buffer_.begin(),
                     buffer_.begin() + static_cast<std::ptrdiff_t>(magic_offset));
     }
-    if (buffer_.size() < kXrControllerV1PacketSize) return std::nullopt;
+    if (buffer_.size() < 4) return std::nullopt;
 
+    if (has_magic_at(buffer_, 0, kXrControllerIdentityV1Magic)) {
+      if (buffer_.size() < kXrControllerIdentityV1PacketSize) return std::nullopt;
+      auto identity = decode_xr_controller_identity_v1(
+          buffer_.data(), kXrControllerIdentityV1PacketSize);
+      if (identity) {
+        identities_.push_back(*identity);
+        buffer_.erase(buffer_.begin(),
+                      buffer_.begin() + static_cast<std::ptrdiff_t>(
+                          kXrControllerIdentityV1PacketSize));
+        continue;
+      }
+      buffer_.erase(buffer_.begin());
+      continue;
+    }
+
+    if (buffer_.size() < kXrControllerV1PacketSize) return std::nullopt;
     auto packet = decode_xr_controller_v1(buffer_.data(), kXrControllerV1PacketSize);
     if (packet) {
       buffer_.erase(buffer_.begin(),
-                    buffer_.begin() + static_cast<std::ptrdiff_t>(kXrControllerV1PacketSize));
+                    buffer_.begin() + static_cast<std::ptrdiff_t>(
+                        kXrControllerV1PacketSize));
       return packet;
     }
-
-    // The bytes start with XCTL but fail version/size/CRC/finite validation.
-    // Drop one byte instead of the full frame so a valid overlapping frame can
-    // still be recovered after corruption or a partial serial reconnect.
     buffer_.erase(buffer_.begin());
   }
   return std::nullopt;
 }
 
+std::optional<XrControllerIdentityV1Packet>
+XrControllerV1StreamDecoder::pop_identity() {
+  if (identities_.empty()) return std::nullopt;
+  XrControllerIdentityV1Packet identity = identities_.front();
+  identities_.pop_front();
+  return identity;
+}
+
 void XrControllerV1StreamDecoder::reset() {
   buffer_.clear();
+  identities_.clear();
 }
 
 }  // namespace xr_override_controller::xiao_nrf54l15

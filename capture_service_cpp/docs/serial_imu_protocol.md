@@ -4,7 +4,7 @@
 IMU and input state. Values are encoded explicitly in little-endian order; no
 packed C/C++ structure is transmitted.
 
-Every packet is exactly 64 bytes:
+Every `XCTL` IMU packet remains exactly 64 bytes:
 
 | Offset | Type | Field |
 |---:|---|---|
@@ -21,6 +21,28 @@ Every packet is exactly 64 bytes:
 | 56 | `uint16` | Battery voltage in millivolts |
 | 58 | `uint16` | Controller status bitmap; reserved in v1 |
 | 60 | `uint32` | IEEE CRC32 over bytes `[0, 60)` |
+
+
+## Periodic hardware identity frame
+
+Firmware may interleave a separate 32-byte `XCID` v1 frame with the unchanged
+208 Hz `XCTL` stream. `XCID` is normally emitted once per second, so it does not
+replace IMU samples or change their sequence/timestamps.
+
+| Offset | Type | Field |
+|---:|---|---|
+| 0 | `char[4]` | Magic: `XCID` |
+| 4 | `uint8` | Identity version: `1` |
+| 5 | `uint8` | Flags; bit 0 means hardware UID valid |
+| 6 | `uint16` | Packet size: `32` |
+| 8 | `uint8` | Hardware UID size, `0..16` |
+| 9 | `uint8` | Associated `XCTL` protocol version |
+| 10 | `uint16` | Reserved |
+| 12 | `uint8[16]` | Opaque Zephyr `hwinfo_get_device_id()` bytes, zero padded |
+| 28 | `uint32` | IEEE CRC32 over bytes `[0, 28)` |
+
+`capture_service_cpp` consumes `XCID` as transport metadata and continues to
+publish only validated `XCTL` samples as normalized IMU data.
 
 The current `capture_service_cpp` serial IMU source consumes gyro,
 accelerometer, sequence and acquisition timestamp. It preserves the complete
@@ -44,8 +66,12 @@ For compatibility, `protocol: xr_imu_v1` remains accepted for the legacy
 
 ```yaml
 serial:
+  port:
+    linux: /dev/ttyACM0
+    windows: COM5
   baud_rate: 230400
   protocol: xr_controller_v1
+  protocol_device_uid: ""  # optional; empty means use configured port
   timestamp_mode: device
 ```
 
@@ -64,3 +90,17 @@ timestamp_us,sequence,gx,gy,gz,ax,ay,az
 Only complete packets that pass magic, version, size, CRC and finite-value
 validation count as valid IMU activity. Partial packets and arbitrary transport
 bytes do not reset `imu.stall_exit_ms`.
+
+## Stable device selection
+
+When `imu.serial.protocol_device_uid` is non-empty, startup probes the configured
+port first and then common serial candidates until the matching `XCID` UID is
+found. This keeps the selected IMU stable when `/dev/ttyACM0` and
+`/dev/ttyACM1` swap. When the field is empty or omitted, the configured
+`imu.serial.port` is used exactly as before.
+
+List attached UID/port pairs on Linux:
+
+```bash
+python3 tools/list_xr_controller_devices.py
+```

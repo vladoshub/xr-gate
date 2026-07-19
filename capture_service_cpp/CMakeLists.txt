@@ -84,6 +84,7 @@ endif()
 
 install(TARGETS capture_service_cpp capture_tcp_probe RUNTIME DESTINATION .)
 install(DIRECTORY configs/ DESTINATION configs OPTIONAL)
+install(PROGRAMS tools/list_xr_controller_devices.py DESTINATION tools)
 
 include(CTest)
 if(BUILD_TESTING)

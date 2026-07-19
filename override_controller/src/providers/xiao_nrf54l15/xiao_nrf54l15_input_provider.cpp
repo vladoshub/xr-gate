@@ -139,6 +139,7 @@ struct XiaoNrf54l15InputProvider::Impl {
     bool connected = false;
     bool ever_connected = false;
     bool protocol_seen = false;
+    std::string protocol_device_uid;
     bool controls_valid = false;
     bool have_sequence = false;
     uint32_t previous_sequence = 0;
@@ -171,7 +172,9 @@ struct XiaoNrf54l15InputProvider::Impl {
     fp.by_path = snapshot.by_path;
     fp.name = snapshot.name.empty() ? "XIAO nRF54L15 Controller" : snapshot.name;
     fp.phys = snapshot.phys;
-    fp.uniq = snapshot.stable_id;
+    fp.uniq = session.protocol_device_uid.empty()
+                  ? snapshot.stable_id
+                  : "xiao_nrf54l15:uid:" + session.protocol_device_uid;
     fp.bustype = codes::kBusUsb;
     fp.vendor = snapshot.vendor;
     fp.product = snapshot.product;
@@ -364,6 +367,24 @@ struct XiaoNrf54l15InputProvider::Impl {
     session.have_sequence = false;
   }
 
+  void handle_identity(Session& session,
+                       const XrControllerIdentityV1Packet& identity) {
+    const std::string uid = xr_controller_device_uid_hex(identity);
+    if (uid.empty()) return;
+    if (!session.protocol_device_uid.empty() &&
+        session.protocol_device_uid != uid) {
+      std::cerr << "[xiao_nrf54l15] warning: protocol device UID changed on "
+                << session.snapshot.port_path << " from "
+                << session.protocol_device_uid << " to " << uid << std::endl;
+    }
+    if (session.protocol_device_uid != uid) {
+      session.protocol_device_uid = uid;
+      update_fingerprint(session);
+      std::cerr << "[xiao_nrf54l15] device_uid=" << uid
+                << " port=" << session.snapshot.port_path << std::endl;
+    }
+  }
+
   void handle_packet(Session& session,
                      const XrControllerV1Packet& packet,
                      uint64_t receive_timestamp_ns) {
@@ -457,7 +478,12 @@ struct XiaoNrf54l15InputProvider::Impl {
       session.decoder.append(bytes.bytes.data(), bytes.bytes.size());
 
       std::vector<XrControllerV1Packet> packets;
-      while (auto packet = session.decoder.pop()) {
+      while (true) {
+        auto packet = session.decoder.pop();
+        while (auto identity = session.decoder.pop_identity()) {
+          handle_identity(session, *identity);
+        }
+        if (!packet) break;
         packets.push_back(*packet);
       }
       if (packets.empty()) continue;
@@ -511,8 +537,11 @@ struct XiaoNrf54l15InputProvider::Impl {
 
   size_t device_index_for_stable_id(const std::vector<DeviceInfo>& devices,
                                     const std::string& stable_id) const {
+    const auto session_it = sessions.find(stable_id);
+    if (session_it == sessions.end()) return std::numeric_limits<size_t>::max();
+    const std::string& uniq = session_it->second->fingerprint.uniq;
     for (size_t index = 0; index < devices.size(); ++index) {
-      if (devices[index].fingerprint.uniq == stable_id) return index;
+      if (devices[index].fingerprint.uniq == uniq) return index;
     }
     return std::numeric_limits<size_t>::max();
   }
@@ -541,6 +570,28 @@ struct XiaoNrf54l15InputProvider::Impl {
     });
   }
 
+  bool all_protocol_devices_have_uid() const {
+    bool found = false;
+    for (const auto& [transport_id, session] : sessions) {
+      (void)transport_id;
+      if (!session->protocol_seen) continue;
+      found = true;
+      if (session->protocol_device_uid.empty()) return false;
+    }
+    return found;
+  }
+
+
+  const Session* session_for_device_uniq(const std::string& uniq) const {
+    const auto direct = sessions.find(uniq);
+    if (direct != sessions.end()) return direct->second.get();
+    for (const auto& [transport_id, session] : sessions) {
+      (void)transport_id;
+      if (session->fingerprint.uniq == uniq) return session.get();
+    }
+    return nullptr;
+  }
+
   std::vector<DeviceInfo> make_device_views() const {
     std::vector<DeviceInfo> result;
     for (const auto& [id, session] : sessions) {
@@ -563,12 +614,12 @@ struct XiaoNrf54l15InputProvider::Impl {
 
   void update_device_views(std::vector<DeviceInfo>& devices) const {
     for (auto& device : devices) {
-      const auto it = sessions.find(device.fingerprint.uniq);
-      if (it == sessions.end() || !visible(*it->second)) {
+      const Session* session_ptr = session_for_device_uniq(device.fingerprint.uniq);
+      if (!session_ptr || !visible(*session_ptr)) {
         device.readable = false;
         continue;
       }
-      const Session& session = *it->second;
+      const Session& session = *session_ptr;
       const size_t provider_slot = device.provider_slot;
       const size_t provider_device_index = device.provider_device_index;
       device.fingerprint = session.fingerprint;
@@ -602,20 +653,27 @@ std::vector<DeviceInfo> XiaoNrf54l15InputProvider::scan_devices(
   (void)open_readable;
   impl_->pump(0, false);
   auto current = impl_->make_device_views();
-  if (impl_->has_protocol_device()) return current;
 
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(impl_->options.initial_scan_ms);
   std::optional<std::chrono::steady_clock::time_point> first_protocol_seen;
+  if (impl_->has_protocol_device()) {
+    first_protocol_seen = std::chrono::steady_clock::now();
+  }
   do {
     impl_->pump(25, false);
     current = impl_->make_device_views();
     const auto now = std::chrono::steady_clock::now();
     if (impl_->has_protocol_device()) {
       if (!first_protocol_seen) first_protocol_seen = now;
-      // Allow a second identical controller to finish opening and publish its
-      // first frame before the trainer freezes the initial device list.
-      if (now >= *first_protocol_seen + std::chrono::milliseconds(200)) break;
+      // Allow all serial devices to publish both XCTL and the periodic XCID
+      // identity before the trainer freezes fingerprints. Older firmware
+      // without XCID simply uses the full initial_scan_ms window and retains
+      // the existing port-based fallback.
+      if (impl_->all_protocol_devices_have_uid() &&
+          now >= *first_protocol_seen + std::chrono::milliseconds(200)) {
+        break;
+      }
     }
   } while (std::chrono::steady_clock::now() < deadline);
   return current;
@@ -693,9 +751,12 @@ InputBindingSpec XiaoNrf54l15InputProvider::make_input_spec(
 
 xr_runtime::ControllerImuStateV1 XiaoNrf54l15InputProvider::imu_state(
     const DeviceInfo& device) const {
-  const auto it = impl_->sessions.find(device.fingerprint.uniq);
-  return it == impl_->sessions.end() ? xr_runtime::ControllerImuStateV1{}
-                                      : it->second->imu;
+  for (const auto& [transport_id, session] : impl_->sessions) {
+    if (session->fingerprint.uniq == device.fingerprint.uniq) {
+      return session->imu;
+    }
+  }
+  return xr_runtime::ControllerImuStateV1{};
 }
 
 void XiaoNrf54l15InputProvider::close_devices(

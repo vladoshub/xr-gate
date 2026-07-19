@@ -101,9 +101,9 @@ global timing fallback from the launcher script.
 
 ## XIAO nRF54L15 serial provider
 
-The native `xiao_nrf54l15` provider reads the fixed 64-byte
-`xr_controller_v1` (`XCTL`) stream directly from the board's SAMD11 USB CDC
-serial port. It validates version, embedded packet size, IEEE CRC32 and finite
+The native `xiao_nrf54l15` provider reads unchanged 64-byte
+`xr_controller_v1` (`XCTL`) IMU samples and periodic 32-byte `XCID` identity
+frames directly from the board's SAMD11 USB CDC serial port. It validates version, embedded packet size, IEEE CRC32 and finite
 IMU values, performs stream resynchronization after corruption, maps the device
 microsecond timestamp into the host monotonic clock, and feeds the shared
 `ControllerImuProcessor`/Madgwick pipeline.
@@ -146,21 +146,25 @@ Provider options:
 | `madgwick_beta` | `0.04` | Shared 6DoF AHRS gain |
 
 The provider exposes a stable fingerprint with
-`backend=xiao_nrf54l15`. `uniq` prefers the USB serial number, then the
-`/dev/serial/by-id` name, then `/dev/serial/by-path`. Explicit `ports=` entries
-use the supplied path as their stable identity, so stable `/dev/serial/by-id`
-paths are recommended.
+`backend=xiao_nrf54l15`. After receiving `XCID`, `uniq` is
+`xiao_nrf54l15:uid:<hardware-uid>` and remains stable across USB ports and
+`ttyACM` numbering. Older firmware without `XCID` keeps the previous fallback:
+USB serial number, `/dev/serial/by-id`, `/dev/serial/by-path`, then the explicit
+port.
 
 Current firmware publishes IMU data with the controls-valid flag clear. Such a
 board appears in `--list-devices` and publishes IMU, but cannot generate a
-training event until GPIO controls are added. Assign it manually in the config:
+button-training event until GPIO controls are added. The final optional step of
+`--train` and `--connect-devices` lists these unassigned IMU-only devices and can
+assign one to `left` or `right` without requiring a button press. The stored
+config entry has the following form:
 
 ```json
 {
   "id": 3,
   "platform": "linux",
   "backend": "xiao_nrf54l15",
-  "uniq": "xiao_nrf54l15:serial:BOARD_SERIAL",
+  "uniq": "xiao_nrf54l15:uid:0123456789abcdef",
   "imu_side": "left",
   "orientation_transform": {
     "enabled": true,

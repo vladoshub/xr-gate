@@ -46,7 +46,8 @@ xr_capture_cpp::RuntimeConfig parse_config_text(const std::string& name,
            "    enabled: false\n"
            "  serial:\n"
            "    port: /dev/ttyACM0\n"
-           "    protocol: xr_controller_v1\n";
+           "    protocol: xr_controller_v1\n"
+           "    protocol_device_uid: 0123456789abcdef\n";
   }
 
   std::vector<std::string> storage{"imu_transform_smoke", "--config", path.string()};
@@ -82,6 +83,8 @@ int main() {
   const RuntimeConfig identity = parse_config_text("imu_transform_identity.yaml", "");
   require(identity.imu.transform.mode == ImuTransformMode::Identity,
           "omitted transform must remain identity");
+  require(identity.imu.serial.protocol_device_uid == "0123456789abcdef",
+          "protocol_device_uid was not parsed");
   ImuSample identity_sample;
   identity_sample.gyro_rad_s = {{1.0F, 2.0F, 3.0F}};
   identity_sample.accel_m_s2 = {{4.0F, 5.0F, 6.0F}};
