@@ -8,7 +8,7 @@ set -euo pipefail
 #   bin/drivers/monado_driver/start.sh
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-xreal_ultra}}}}"
+XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}}"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE,,}"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE//-/_}"
 case "$XR_MONADO_DEVICE" in

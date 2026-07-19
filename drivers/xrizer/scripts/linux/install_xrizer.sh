@@ -19,7 +19,7 @@ find_project_root() {
   local d
   d="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
   while [[ "$d" != "/" && -n "$d" ]]; do
-    if [[ -d "$d/drivers/xrizer" && -d "$d/devices/xreal_ultra" ]]; then
+    if [[ -d "$d/drivers/xrizer" && -d "$d/devices/common" ]]; then
       printf '%s\n' "$d"
       return 0
     fi

@@ -24,7 +24,7 @@ Example layout on vr-park:
 
 To set up controller emulation, follow these steps:
 ```bash
-cd ~/xr-gate-release/xreal_ultra
+cd ~/xr-gate-release/xr-gate
 
 devices/xreal_ultra/linux/scripts/override_controller/start_override_controller.sh
 ```

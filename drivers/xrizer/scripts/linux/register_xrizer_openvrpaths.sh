@@ -19,11 +19,11 @@ find_package_or_project_root() {
   local d
   d="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
   while [[ "$d" != "/" && -n "$d" ]]; do
-    if [[ -f "$d/devices/xreal_ultra/xreal_ultra.env" && -d "$d/bin" ]]; then
+    if [[ -d "$d/devices/common" && -d "$d/bin" ]]; then
       printf '%s\n' "$d"
       return 0
     fi
-    if [[ -d "$d/drivers/xrizer" && -d "$d/devices/xreal_ultra" ]]; then
+    if [[ -d "$d/drivers/xrizer" && -d "$d/devices/common" ]]; then
       printf '%s\n' "$d"
       return 0
     fi

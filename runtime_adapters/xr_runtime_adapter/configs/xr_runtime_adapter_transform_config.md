@@ -1591,7 +1591,7 @@ If a stream is missing from logs, check:
 From package root:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 source devices/xreal_ultra/xreal_ultra.env
 echo "$TRACKING_TRANSFORM_CONFIG"
@@ -1600,7 +1600,7 @@ echo "$TRACKING_TRANSFORM_CONFIG"
 The path should point to the config under:
 
 ```text
-out/xreal_ultra/devices/xreal_ultra/configs/...
+out/xr-gate/devices/xreal_ultra/configs/...
 ```
 
 ---

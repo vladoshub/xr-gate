@@ -26,7 +26,7 @@ def _prepend_sys_path(path: Path) -> None:
 
 def _setup_capture_client_import_path() -> None:
     # Package mode keeps runtime Python modules under:
-    #   out/xreal_ultra/bin/python/capture_client
+    #   out/xr-gate/bin/python/capture_client
     # Source-tree mode keeps them under:
     #   capture_client
     candidates = []
@@ -50,11 +50,13 @@ def _setup_capture_client_import_path() -> None:
                 parent,
             ])
 
-    default_pkg = Path.home() / "src/xr_tracking/out/xreal_ultra"
+    default_pkg = Path.home() / "src/xr_tracking/out/xr-gate"
+    legacy_pkg = Path.home() / "src/xr_tracking/out/xreal_ultra"
     default_src = Path.home() / "src/xr_tracking"
     candidates.extend([
         default_pkg / "bin/python/capture_service",
         default_pkg / "bin/python",
+        legacy_pkg / "bin/python",
         default_src / "capture_service",
         default_src,
     ])
@@ -243,11 +245,11 @@ def default_package_root() -> Path:
     if (cwd / "devices/xreal_ultra").exists() and (cwd / "bin").exists():
         return cwd
 
-    candidate = Path.home() / "src/xr_tracking/out/xreal_ultra"
+    candidate = Path.home() / "src/xr_tracking/out/xr-gate"
     if candidate.exists():
         return candidate.resolve()
 
-    return Path.home() / "src/xr_tracking/out/xreal_ultra"
+    return Path.home() / "src/xr_tracking/out/xr-gate"
 
 
 def start_capture_service_if_requested(args: argparse.Namespace) -> Optional[subprocess.Popen]:
@@ -404,7 +406,7 @@ def main() -> int:
 
     ap.add_argument("--start-capture-service", action="store_true", help="start package capture_service before recording")
     ap.add_argument("--stop-capture-service", action="store_true", help="stop capture_service started by this script on exit")
-    ap.add_argument("--package-root", default="", help="out/xreal_ultra package root; auto-detected by default")
+    ap.add_argument("--package-root", default="", help="out/xr-gate package root; auto-detected by default")
     ap.add_argument("--capture-service-impl", choices=["cpp", "python"], default="cpp")
     ap.add_argument("--publish", default="shm", help="capture_service publish mode: shm, tcp, or shm,tcp")
     ap.add_argument("--capture-service-log", default="/tmp/xreal_record_capture_service.log")

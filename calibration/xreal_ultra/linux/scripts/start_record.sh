@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CALIB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
-PACKAGE_ROOT="${PACKAGE_ROOT:-$ROOT_PROJECT/out/xreal_ultra}"
+PACKAGE_ROOT="${PACKAGE_ROOT:-$ROOT_PROJECT/out/xr-gate}"
 PACKAGE_ROOT="$(expand_tilde "$PACKAGE_ROOT")"
 
 RECORDER="${RECORDER:-$CALIB_DIR/record_unified_kalibr_dataset.py}"

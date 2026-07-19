@@ -65,7 +65,7 @@ BIN_DIR="$(expand_path "${BIN_DIR:-$ROOT_PROJECT/bin/drivers/monado_driver}")"
 # Device target for packaging/wrapper scripts. The Monado runtime driver itself
 # consumes generic runtime streams, but the packaged launch/display helpers live
 # under devices/<target>/... and may be device-specific.
-XR_MONADO_DEVICE_RAW="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-xreal_ultra}}}}"
+XR_MONADO_DEVICE_RAW="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}}"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE_RAW,,}"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE//-/_}"
 case "$XR_MONADO_DEVICE" in
@@ -77,8 +77,8 @@ fi
 
 # Runtime package helper scripts are installed under the device tree inside the
 # package root, for example:
-#   out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/
-# When XR_BIN_ROOT points at out/xreal_ultra/bin, infer package root from it.
+#   out/xr-gate/devices/xreal_ultra/linux/scripts/monado_driver/
+# When XR_BIN_ROOT points at out/xr-gate/bin, infer package root from it.
 default_package_root() {
   if [[ -n "${XR_PACKAGE_ROOT:-}" ]]; then
     expand_path "$XR_PACKAGE_ROOT"
@@ -617,15 +617,9 @@ install_openxr_runtime_manifest() {
   local lib_name="libopenxr_monado.so"
 
   # Canonical, device-independent runtime manifest. This is the preferred path
-  # for new packages and does not require a devices/<target> wrapper tree.
+  # for multi-profile packages and does not require a devices/<target> wrapper.
   local canonical_manifest="$BIN_DIR/openxr_monado_xrgate.json"
   local canonical_env_script="$BIN_DIR/openxr_runtime_env.sh"
-
-  # Keep the historical device-local paths as compatibility aliases for the
-  # existing XREAL package and for callers that already source them.
-  local device_manifest="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_monado_xrgate.json"
-  local device_env_script="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_runtime_env.sh"
-  local device_relative_lib="../../../../../bin/drivers/monado_driver/$lib_name"
 
   openxr_lib="$(find "$BUILD_DIR" -type f \( -name 'libopenxr_monado.so' -o -name 'libopenxr_monado.so.*' \) -print 2>/dev/null | sort | head -n1 || true)"
 
@@ -633,7 +627,7 @@ install_openxr_runtime_manifest() {
     fail "libopenxr_monado.so was not found under build dir; cannot generate XR_RUNTIME_JSON manifest"
   fi
 
-  mkdir -p "$BIN_DIR" "$DEVICE_MONADO_SCRIPT_OUT_DIR"
+  mkdir -p "$BIN_DIR"
 
   install -m 0755 "$openxr_lib" "$BIN_DIR/$(basename "$openxr_lib")"
 
@@ -660,7 +654,35 @@ echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
   chmod 0755 "$canonical_env_script"
 
-  cat > "$device_manifest" <<EOF
+  [[ -f "$canonical_manifest" ]] || fail "OpenXR runtime manifest was not generated: $canonical_manifest"
+  [[ -x "$canonical_env_script" ]] || fail "OpenXR runtime env helper was not generated: $canonical_env_script"
+  [[ -e "$BIN_DIR/$lib_name" ]] || fail "OpenXR runtime library symlink/copy was not installed: $BIN_DIR/$lib_name"
+
+  log "installed OpenXR runtime library: $BIN_DIR/$lib_name"
+  log "installed canonical OpenXR runtime manifest: $canonical_manifest"
+  log "installed canonical OpenXR env helper: $canonical_env_script"
+
+  # Device-local aliases are compatibility-only. Auto mode creates them only
+  # for a concrete device build that actually provides a device helper tree;
+  # the generic XR Gate build therefore remains free of devices/generic.
+  local compat_mode="${XR_MONADO_INSTALL_DEVICE_COMPAT:-auto}"
+  local install_compat=0
+  case "$compat_mode" in
+    1|true|TRUE|yes|YES|on|ON) install_compat=1 ;;
+    0|false|FALSE|no|NO|off|OFF) install_compat=0 ;;
+    auto)
+      [[ -d "$DEVICE_MONADO_SCRIPT_SRC_DIR" ]] && install_compat=1
+      ;;
+    *) fail "unsupported XR_MONADO_INSTALL_DEVICE_COMPAT=$compat_mode; expected auto, 0 or 1" ;;
+  esac
+
+  if [[ "$install_compat" == "1" ]]; then
+    local device_manifest="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_monado_xrgate.json"
+    local device_env_script="$DEVICE_MONADO_SCRIPT_OUT_DIR/openxr_runtime_env.sh"
+    local device_relative_lib="../../../../../bin/drivers/monado_driver/$lib_name"
+    mkdir -p "$DEVICE_MONADO_SCRIPT_OUT_DIR"
+
+    cat > "$device_manifest" <<EOF
 {
   "file_format_version": "1.0.0",
   "runtime": {
@@ -670,27 +692,22 @@ EOF
 }
 EOF
 
-  cat > "$device_env_script" <<'EOF'
+    cat > "$device_env_script" <<'EOF'
 #!/usr/bin/env bash
-# Compatibility path for existing device packages. New callers may source:
+# Compatibility path. New callers should source:
 #   bin/drivers/monado_driver/openxr_runtime_env.sh
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
-  chmod 0755 "$device_env_script"
-
-  [[ -f "$canonical_manifest" ]] || fail "OpenXR runtime manifest was not generated: $canonical_manifest"
-  [[ -x "$canonical_env_script" ]] || fail "OpenXR runtime env helper was not generated: $canonical_env_script"
-  [[ -f "$device_manifest" ]] || fail "Device compatibility manifest was not generated: $device_manifest"
-  [[ -x "$device_env_script" ]] || fail "Device compatibility env helper was not generated: $device_env_script"
-  [[ -e "$BIN_DIR/$lib_name" ]] || fail "OpenXR runtime library symlink/copy was not installed: $BIN_DIR/$lib_name"
-
-  log "installed OpenXR runtime library: $BIN_DIR/$lib_name"
-  log "installed canonical OpenXR runtime manifest: $canonical_manifest"
-  log "installed canonical OpenXR env helper: $canonical_env_script"
-  log "installed device compatibility manifest: $device_manifest"
-  log "installed device compatibility env helper: $device_env_script"
+    chmod 0755 "$device_env_script"
+    [[ -f "$device_manifest" ]] || fail "Device compatibility manifest was not generated: $device_manifest"
+    [[ -x "$device_env_script" ]] || fail "Device compatibility env helper was not generated: $device_env_script"
+    log "installed device compatibility manifest: $device_manifest"
+    log "installed device compatibility env helper: $device_env_script"
+  else
+    log "skip device-local OpenXR manifest aliases for XR_MONADO_DEVICE=$XR_MONADO_DEVICE"
+  fi
 }
 
 install_runtime_binaries() {

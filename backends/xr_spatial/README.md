@@ -21,7 +21,7 @@ SPATIAL_POSE_INPUT=none  # camera-relative live passthrough / 3DoF debug mode
 ## Package output
 
 ```text
-out/xreal_ultra/bin/backends/xr_spatial/
+out/xr-gate/bin/backends/xr_spatial/
 ```
 
 `xr_spatial` is optional and must not sit between tracking backends and `xr_runtime_adapter`.

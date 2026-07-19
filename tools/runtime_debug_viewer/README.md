@@ -7,7 +7,7 @@ It reads registry files, attaches to runtime streams, and draws simple 2D projec
 ## Package path
 
 ```text
-out/xreal_ultra/bin/python/tools/runtime_debug_viewer/
+out/xr-gate/bin/python/tools/runtime_debug_viewer/
 ```
 
 ## Typical use

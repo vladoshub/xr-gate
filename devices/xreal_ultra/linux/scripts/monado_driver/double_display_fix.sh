@@ -10,7 +10,7 @@ set -Eeuo pipefail
 #   4. Restores the main monitor after Monado exits or Ctrl+C is pressed.
 #
 # Typical packaged usage:
-#   cd ~/src/xr_tracking/out/xreal_ultra
+#   cd ~/src/xr_tracking/out/xr-gate
 #   XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
 #   XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
 #     devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh

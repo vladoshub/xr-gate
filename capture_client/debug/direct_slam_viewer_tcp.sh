@@ -13,7 +13,7 @@ expand_tilde() {
 ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 
-XR_PACKAGE_ROOT="${XR_PACKAGE_ROOT:-$ROOT_PROJECT/out/xreal_ultra}"
+XR_PACKAGE_ROOT="${XR_PACKAGE_ROOT:-$ROOT_PROJECT/out/xr-gate}"
 XR_PACKAGE_ROOT="$(expand_tilde "$XR_PACKAGE_ROOT")"
 
 if [[ -n "${CAPTURE_CLIENT_ROOT:-}" ]]; then
@@ -34,6 +34,8 @@ if [[ -n "${XR_PYTHON_BIN:-}" ]]; then
   PYTHON_BIN="$(expand_tilde "$XR_PYTHON_BIN")"
 elif [[ -x "$XR_PACKAGE_ROOT/bin/python-runtime/venv/bin/python" ]]; then
   PYTHON_BIN="$XR_PACKAGE_ROOT/bin/python-runtime/venv/bin/python"
+elif [[ -x "$ROOT_PROJECT/out/xr-gate/bin/python-runtime/venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT_PROJECT/out/xr-gate/bin/python-runtime/venv/bin/python"
 elif [[ -x "$ROOT_PROJECT/out/xreal_ultra/bin/python-runtime/venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT_PROJECT/out/xreal_ultra/bin/python-runtime/venv/bin/python"
 else

@@ -9,13 +9,13 @@ This is useful for passthrough/debug visualization over SteamVR content. It is n
 ## Package path
 
 ```text
-out/xreal_ultra/bin/apps/steamvr/spatial_overlay/
+out/xr-gate/bin/apps/steamvr/spatial_overlay/
 ```
 
 ## Run from package
 
 ```bash
-cd out/xreal_ultra
+cd out/xr-gate
 devices/xreal_ultra/linux/scripts/steamvr_spatial_overlay/start_xr_steamvr_spatial_overlay.sh
 ```
 

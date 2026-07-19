@@ -76,7 +76,7 @@ XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
 
 # Detect whether this is the deploy package root or a source checkout root.
 PACKAGE_MODE=0
-if [[ -d "$XR_PACKAGE_ROOT/bin" && -d "$XR_PACKAGE_ROOT/devices/$XR_TARGET_DEVICE" ]]; then
+if [[ -d "$XR_PACKAGE_ROOT/bin" && -d "$XR_PACKAGE_ROOT/devices/common" ]]; then
   PACKAGE_MODE=1
 fi
 

@@ -46,7 +46,7 @@ KALIBR_RUNS_DIR="$(expand_tilde "${KALIBR_RUNS_DIR:-$CALIB_WORK_DIR/kalibr_runs}
 CAMERA_PROFILE_DIR="$(expand_tilde "${CAMERA_PROFILE_DIR:-$CALIB_WORK_DIR/camera/$CALIB_PROFILE_NAME}")"
 FINAL_PROFILE_DIR="$(expand_tilde "${FINAL_PROFILE_DIR:-$CALIB_WORK_DIR/final/$CALIB_DEVICE_NAME/$CALIB_UNIT_ID/$CALIB_PROFILE_NAME}")"
 
-PACKAGE_ROOT="$(expand_tilde "${PACKAGE_ROOT:-$ROOT_PROJECT/out/xreal_ultra}")"
+PACKAGE_ROOT="$(expand_tilde "${PACKAGE_ROOT:-$ROOT_PROJECT/out/xr-gate}")"
 CAPTURE_START_SCRIPT="$(expand_tilde "${CAPTURE_START_SCRIPT:-$PACKAGE_ROOT/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh}")"
 CAPTURE_CONFIG="$(expand_tilde "${CAPTURE_CONFIG:-}")"
 CAPTURE_CONFIG_CAMERA_ONLY="$(expand_tilde "${CAPTURE_CONFIG_CAMERA_ONLY:-$CAPTURE_CONFIG}")"

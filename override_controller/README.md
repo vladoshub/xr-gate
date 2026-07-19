@@ -20,7 +20,7 @@ Supported input providers:
 ## Package output
 
 ```text
-out/xreal_ultra/bin/override_controller/
+out/xr-gate/bin/override_controller/
 ```
 
 ## User configs

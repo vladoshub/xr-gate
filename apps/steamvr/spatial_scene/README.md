@@ -7,13 +7,13 @@ Unlike `spatial_overlay`, this app is a foreground OpenVR scene app and submits 
 ## Package path
 
 ```text
-out/xreal_ultra/bin/apps/steamvr/spatial_scene/
+out/xr-gate/bin/apps/steamvr/spatial_scene/
 ```
 
 ## Run from package
 
 ```bash
-cd out/xreal_ultra
+cd out/xr-gate
 devices/xreal_ultra/linux/scripts/steamvr_spatial_scene/start_xr_steamvr_spatial_scene.sh
 ```
 

@@ -80,5 +80,5 @@ cmake --build build/xreal_display_helper/windows_relwithdebinfo --config RelWith
 ## Package output
 
 ```text
-out/xreal_ultra_windows/bin/xreal_display_helper/ (Windows package) or out/xreal_ultra/bin/xreal_display_helper/ (Linux package)
+out/xreal_ultra_windows/bin/xreal_display_helper/ (Windows package) or out/xr-gate/bin/xreal_display_helper/ (Linux package)
 ```

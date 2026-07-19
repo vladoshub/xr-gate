@@ -5,7 +5,7 @@
 Main runtime package:
 
 ```bash
-out/xreal_ultra
+out/xr-gate
 ```
 
 Windows runtime package:
@@ -57,14 +57,14 @@ XR_DEVICE_TARGET=xreal_ultra \
 Mercury ONNX models are not included in the core repository/release and are not downloaded by the default build. Download them explicitly when needed:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ./download_mercury_models.sh
 ```
 
 The files are placed under:
 
 ```text
-out/xreal_ultra/bin/hand-tracking-models/mercury/
+out/xr-gate/bin/hand-tracking-models/mercury/
 ```
 
 ### Partial builds
@@ -194,7 +194,7 @@ XR_DISPLAY_FREQUENCY_HZ=90
 ## 4. Run XR backend client
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ./run_xr_client.sh
 ```
 
@@ -232,7 +232,7 @@ XR_OPENVR_DISPLAY_MODE=direct \
 Example for RTX6000 with DisplayPort -> Type-C adapter. This mode sets `non-desktop=1` for glasses.
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 XR_OPENVR_DGPU_OUTPUT=DP-4 \
 XR_OPENVR_LAUNCH_MODE=steam \
@@ -246,7 +246,7 @@ XR_DISPLAY_FREQUENCY_HZ=60 \
 ## SteamVR dev apps
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ```
 
 Stereo video overlay:
@@ -272,7 +272,7 @@ Simple spatial overlay:
 ## Restore glasses desktop
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 XR_STEAMVR_RESTORE_OUTPUT=DP-4 \
 XR_STEAMVR_RESTORE_MAIN_OUTPUT=DP-6 \
@@ -360,7 +360,7 @@ After stopping Monado driver with `Ctrl+C`, the main display should be restored.
 ```bash
 sudo apt install xdotool wmctrl
 
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
@@ -401,7 +401,7 @@ cd ~/src/xr_tracking
 
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
 XR_TRACKING_MAIN_OUTPUT=DP-6 \
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
+out/xr-gate/devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
 ```
 
 Run Monado driver:
@@ -413,7 +413,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+out/xr-gate/devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
 Run simple OpenXR app:
@@ -428,7 +428,7 @@ Enable main display again:
 ```bash
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \
 XR_TRACKING_MAIN_OUTPUT=DP-6 \
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
+out/xr-gate/devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
 ```
 
 ---
@@ -442,7 +442,7 @@ XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=90 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-out/xreal_ultra/devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
+out/xr-gate/devices/xreal_ultra/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
 Run simple OpenXR app:

@@ -563,7 +563,10 @@ def _load_config_tracking_env(data: Dict[str, Any], root_project: str) -> None:
 def _load_config_device_env(data: Dict[str, Any], initial_root_project: str) -> str:
     raw = os.environ.get("XR_DEVICE_ENV") or data.get("device_env")
     if raw is None:
-        raw = str(Path(initial_root_project) / "devices" / "xreal_ultra" / "xreal_ultra.env")
+        raise RuntimeError(
+            "no device_env selected; pass --config <profile> "
+            "(for example --config xreal_ultra or --config leap_motion_uvc_nrf54l15)"
+        )
     env_path = expand_path(str(raw), initial_root_project)
     os.environ.setdefault("XR_DEVICE_ENV", env_path)
     if "device_env_required" in data:
@@ -575,7 +578,8 @@ def _load_config_device_env(data: Dict[str, Any], initial_root_project: str) -> 
     os.environ.setdefault("XR_ROOT_PROJECT", root_project)
     os.environ.setdefault("ROOT_PROJECT", root_project)
     os.environ.setdefault("XR_BIN_ROOT", str(Path(root_project) / "bin"))
-    os.environ.setdefault("XR_DEVICE_HOME", str(Path(root_project) / "devices" / "xreal_ultra"))
+    target_device = os.environ.get("XR_TARGET_DEVICE") or os.environ.get("XR_DEVICE_TARGET") or "generic"
+    os.environ.setdefault("XR_DEVICE_HOME", str(Path(root_project) / "devices" / target_device))
     os.environ.setdefault("XR_DEVICE_SCRIPTS_OS", default_scripts_os())
     os.environ.setdefault("XR_DEVICE_SCRIPTS_ROOT", str(Path(os.environ["XR_DEVICE_HOME"]) / os.environ["XR_DEVICE_SCRIPTS_OS"] / "scripts"))
     os.environ.setdefault("XR_COMMON_DEVICE_HOME", str(Path(root_project) / "devices" / "common"))
@@ -611,7 +615,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
     runtime_registry = os.environ.get("RUNTIME_REGISTRY", "/tmp/runtime_tracking_streams.json")
     config = {
         "root_project": root,
-        "device_env": os.environ.get("XR_DEVICE_ENV", "{root}/devices/xreal_ultra/xreal_ultra.env"),
+        "device_env": os.environ.get("XR_DEVICE_ENV"),
         "log_dir": os.environ.get("LOG_DIR", "/tmp/xr_backend_client_logs"),
         "clean_registries": env_truthy("CLEAN_REGISTRIES", True),
         "registries_to_clean": [capture_registry, tracking_registry, runtime_registry],
@@ -846,7 +850,7 @@ def default_windows_config_dict() -> Dict[str, Any]:
     tcp_port = os.environ.get("CAPTURE_TCP_PORT", "45660")
     config: Dict[str, Any] = {
         "root_project": root,
-        "device_env": os.environ.get("XR_DEVICE_ENV", "{root}/devices/xreal_ultra/xreal_ultra.windows.env"),
+        "device_env": os.environ.get("XR_DEVICE_ENV"),
         "device_env_required": False,
         "log_dir": default_log_dir(),
         "clean_registries": False,
@@ -1162,13 +1166,44 @@ def choose_config_with_arrow_menu(configs: Sequence[Path]) -> Path:
             raise SystemExit(130)
 
 
+def resolve_named_config(config_value: str) -> str:
+    """Resolve a config path or a profile name from the packaged config directory."""
+    expanded = Path(expand_path(config_value))
+    if expanded.is_file():
+        return str(expanded)
+
+    # Only treat a simple token as a profile name. Paths that do not exist are
+    # returned unchanged so the normal file-open error remains precise.
+    if any(sep in config_value for sep in ("/", "\\")):
+        return config_value
+
+    filename = config_value if config_value.lower().endswith(".json") else f"{config_value}.json"
+    search_dirs: List[Path] = []
+    env_dir = os.environ.get("XR_CLIENT_CONFIG_DIR")
+    if env_dir:
+        search_dirs.append(Path(expand_path(env_dir)))
+    search_dirs.append(Path(__file__).resolve().parent / "configs")
+
+    seen = set()
+    for directory in search_dirs:
+        key = str(directory)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate = directory / filename
+        if candidate.is_file():
+            log(f"Resolved config profile {config_value!r}: {candidate}")
+            return str(candidate)
+    return config_value
+
+
 def resolve_config_argument(args: argparse.Namespace) -> Optional[str]:
     if args.config and args.config_path:
         print("[xr_backend_client][ERROR] Use either --config or --config-path, not both.", file=sys.stderr, flush=True)
         wait_for_enter()
         raise SystemExit(2)
     if not args.config_path:
-        return args.config
+        return resolve_named_config(args.config) if args.config else None
 
     configs = find_config_files(args.config_path)
     if not configs:

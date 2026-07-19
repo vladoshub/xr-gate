@@ -48,11 +48,13 @@ def _setup_capture_client_import_path() -> None:
                 parent,
             ])
 
-    default_pkg = Path.home() / "src/xr_tracking/out/xreal_ultra"
+    default_pkg = Path.home() / "src/xr_tracking/out/xr-gate"
+    legacy_pkg = Path.home() / "src/xr_tracking/out/xreal_ultra"
     default_src = Path.home() / "src/xr_tracking"
     candidates.extend([
         default_pkg / "bin/python/capture_service",
         default_pkg / "bin/python",
+        legacy_pkg / "bin/python",
         default_src / "capture_service",
         default_src,
     ])
@@ -221,7 +223,7 @@ def default_package_root() -> Path:
         root = expand_path(env)
         if (root / "bin").exists():
             return root
-    candidate = Path.home() / "src/xr_tracking/out/xreal_ultra"
+    candidate = Path.home() / "src/xr_tracking/out/xr-gate"
     return candidate.resolve()
 
 

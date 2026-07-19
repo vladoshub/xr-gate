@@ -559,7 +559,7 @@ remove_registered_driver_if_present() {
 
 # Register exactly one OpenVR package. Remove every previously registered
 # xr_tracking package reported by vrpathreg plus known source/out/build variants.
-# This handles both source-tree builds and out/xreal_ultra packaged builds, and
+# This handles both source-tree builds and out/xr-gate packaged builds, and
 # avoids the duplicate "xr_tracking : ...openvr_driver_90HZ..." + "xr_tracking :
 # ...openvr_driver_60HZ..." state.
 shopt -s nullglob
@@ -572,10 +572,13 @@ STALE_DRIVER_PACKAGES=(
   "$PROJECT_ROOT/drivers/openvr_driver/build/xr_tracking"
   "$PROJECT_ROOT/bin/drivers/openvr_driver/xr_tracking"
   "$PROJECT_ROOT"/bin/drivers/openvr_driver_*HZ*/xr_tracking
+  "$PROJECT_ROOT/out/xr-gate/bin/drivers/openvr_driver/xr_tracking"
   "$PROJECT_ROOT/out/xreal_ultra/bin/drivers/openvr_driver/xr_tracking"
   "$PROJECT_ROOT"/out/*/bin/drivers/openvr_driver_*HZ*/xr_tracking
+  "$HOME/src/xr_tracking/out/xr-gate/bin/drivers/openvr_driver/xr_tracking"
   "$HOME/src/xr_tracking/out/xreal_ultra/bin/drivers/openvr_driver/xr_tracking"
   "$HOME/src/xr_tracking"/out/*/bin/drivers/openvr_driver_*HZ*/xr_tracking
+  "$HOME/src/xreal_tracking/out/xr-gate/bin/drivers/openvr_driver/xr_tracking"
   "$HOME/src/xreal_tracking/out/xreal_ultra/bin/drivers/openvr_driver/xr_tracking"
   "$HOME/src/xreal_tracking"/out/*/bin/drivers/openvr_driver_*HZ*/xr_tracking
 )

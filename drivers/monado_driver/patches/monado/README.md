@@ -67,8 +67,8 @@ For a fast rebuild without apt/submodule work:
 ```bash
 cd ~/src/xr_tracking
 
-BIN_DIR="$PWD/out/xreal_ultra/bin/drivers/monado_driver" \
-XR_BIN_ROOT="$PWD/out/xreal_ultra/bin" \
+BIN_DIR="$PWD/out/xr-gate/bin/drivers/monado_driver" \
+XR_BIN_ROOT="$PWD/out/xr-gate/bin" \
 BUILD_DIR="$PWD/third_party/monado_driver/build/xr_tracking_relwithdebinfo" \
 CLONE_MONADO=0 \
 FETCH_MONADO=0 \
@@ -114,7 +114,7 @@ grep -n "oxr_sanitize_locate_views_relation" \
 Start the Monado runtime driver through the packaged XREAL Ultra script:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 XR_TRACKING_RUNTIME_ENABLE=1 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
@@ -145,7 +145,7 @@ active X11 framebuffer. Use the wrapper script that temporarily switches the dis
 layout and restores the main monitor on exit:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
 XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1-1 \

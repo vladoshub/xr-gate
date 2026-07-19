@@ -1,42 +1,48 @@
 # XREAL Ultra Linux scripts
 
-This directory contains only XREAL-specific display/device helpers and thin
-entrypoints that configure the generic tooling under `devices/common`.
+This directory now contains only XREAL-specific runtime helpers, device access
+setup, and backward-compatible entrypoints. The actual Linux build/package
+entrypoints are hardware-neutral and live under `devices/common`.
 
-Hardware-neutral service/backend launchers live under:
+Preferred build:
 
-```text
-devices/common/linux/scripts/
+```bash
+./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-Shared build/package implementations live under:
+Result:
 
 ```text
-devices/common/linux/scripts/build/
-devices/common/linux/scripts/ci/
-devices/common/linux/scripts/release/
-devices/common/linux/scripts/runtime/
+out/xr-gate/
 ```
 
-The XREAL directory retains:
+The package contains both `xreal_ultra` and `leap_motion_uvc_nrf54l15` runtime
+profiles. Select one at launch:
 
-- `xreal_display_helper/`;
-- XREAL/Monado display helpers under `monado_driver/`;
-- XREAL naming/profile wrappers (`install_xreal_ultra_out.sh`,
-  `package_xreal_ultra_out.sh`, `run_xreal_ultra_act_build.sh`,
-  `unpack_xreal_ultra.sh`, `xreal_ultra_out_env.sh`);
-- XREAL-only build/package hooks for `xreal_display_helper` and desktop restore;
-- XREAL user-group and udev setup.
+```bash
+out/xr-gate/run_xr_client.sh --config xreal_ultra
+out/xr-gate/run_xr_client.sh --config leap_motion_uvc_nrf54l15
+```
 
-The public XREAL commands remain unchanged, for example:
+Pure vendor components such as `xreal_display_helper` are enabled by default.
+Disable their build and package hooks with:
+
+```bash
+XR_BUILD_VENDOR_COMPONENTS=0 \
+  ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+For a local GitHub Actions build without vendor components:
+
+```bash
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --no-vendor-components
+```
+
+The old commands remain compatibility wrappers and now produce the same generic
+package:
 
 ```bash
 ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
 ./devices/xreal_ultra/linux/scripts/package_xreal_ultra_out.sh
-```
-
-Typical packaged runtime launch remains:
-
-```bash
-./run_xr_client.sh
+./devices/xreal_ultra/linux/scripts/run_xreal_ultra_act_build.sh
 ```

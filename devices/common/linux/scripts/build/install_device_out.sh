@@ -133,13 +133,24 @@ else
   log "skip capture_service_python: legacy Python/GStreamer capture_service removed; capture_service_cpp is the default"
 fi
 
+vendor_components_enabled() {
+  case "${XR_BUILD_VENDOR_COMPONENTS:-1}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if [[ -n "${XR_DEVICE_BUILD_HOOK:-}" ]]; then
-  if [[ ! -x "$XR_DEVICE_BUILD_HOOK" ]]; then
-    log "device build hook is not executable: $XR_DEVICE_BUILD_HOOK"
-    exit 2
+  if vendor_components_enabled; then
+    if [[ ! -x "$XR_DEVICE_BUILD_HOOK" ]]; then
+      log "vendor build hook is not executable: $XR_DEVICE_BUILD_HOOK"
+      exit 2
+    fi
+    log "== vendor components: ${XR_VENDOR_COMPONENTS:-$XR_TARGET_DEVICE} =="
+    "$XR_DEVICE_BUILD_HOOK"
+  else
+    log "skip vendor components: XR_BUILD_VENDOR_COMPONENTS=${XR_BUILD_VENDOR_COMPONENTS:-0}"
   fi
-  log "== device-specific components: $XR_TARGET_DEVICE =="
-  "$XR_DEVICE_BUILD_HOOK"
 fi
 
 run_step basalt_vio env \

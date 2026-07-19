@@ -58,13 +58,13 @@ bin/drivers/xrizer/runtime
 For packaged output it is normally:
 
 ```text
-out/xreal_ultra/bin/drivers/xrizer/runtime
+out/xr-gate/bin/drivers/xrizer/runtime
 ```
 
 ## Register as OpenVR runtime
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ./run_xrizer_register.sh
 ```
 
@@ -81,7 +81,7 @@ and places the xrizer runtime path at the front of the `runtime` array.
 Print launch options for a Steam game:
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ./run_xrizer_openvr_app_via_monado.sh --print-steam-options
 ```
 
@@ -100,7 +100,7 @@ Start Monado first, then launch the game with those options.
 ## Logs
 
 ```bash
-cd ~/src/xr_tracking/out/xreal_ultra
+cd ~/src/xr_tracking/out/xr-gate
 ./run_xrizer_collect_logs.sh
 ```
 

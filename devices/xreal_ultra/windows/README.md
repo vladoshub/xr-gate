@@ -18,7 +18,7 @@ Native Windows artifacts are installed under:
 <root>\out\xreal_ultra_windows\bin
 ```
 
-This intentionally does not reuse Linux package output `out/xreal_ultra`, so Linux and Windows deploy trees can coexist in the same checkout.
+This intentionally does not reuse Linux package output `out/xr-gate`, so Linux and Windows deploy trees can coexist in the same checkout.
 
 Build native Windows artifacts (`capture_service_cpp`, `xreal_display_helper`, `override_controller`, `openvr_driver`):
 
@@ -74,13 +74,13 @@ devices/xreal_ultra/windows/configs/windows_wsl2_network.env
 
 Prepare or refresh the WSL2 runtime by copying a prebuilt Linux runtime package
 from Windows into the WSL2 checkout.  For example, if Linux binaries were copied
-to `C:\src\xr_tracking\out\xreal_ultra`, this mirrors the contents into
-`~/src/xr_tracking/out/xreal_ultra` inside WSL2:
+to `C:\src\xr_tracking\out\xr-gate`, this mirrors the contents into
+`~/src/xr_tracking/out/xr-gate` inside WSL2:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\devices\xreal_ultra\windows\scripts\wsl2\install_wsl2_ubuntu24_runtime.ps1 `
   -Root C:\src\xr_tracking `
-  -RuntimeSourceRoot C:\src\xr_tracking\out\xreal_ultra `
+  -RuntimeSourceRoot C:\src\xr_tracking\out\xr-gate `
   -Distro Ubuntu-24.04
 ```
 
