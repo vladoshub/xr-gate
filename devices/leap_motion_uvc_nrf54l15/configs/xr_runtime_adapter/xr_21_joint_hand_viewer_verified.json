@@ -293,16 +293,6 @@
         },
         "rotate_with_hmd_orientation": false
       },
-      "orientation_offset": {
-        "enabled": true,
-        "multiply_order": "pre",
-        "quaternion_xyzw": [
-          -0.641745993585,
-          0.040729231192,
-          -0.160617859121,
-          0.748802452437
-        ]
-      },
       "orientation_transform": {
         "enabled": false,
         "basis_rotation": {
