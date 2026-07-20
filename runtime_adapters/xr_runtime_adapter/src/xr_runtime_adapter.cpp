@@ -3170,9 +3170,9 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-imu-max-prediction-speed-mps", runtime_controller_imu_max_prediction_speed_mps,
                  "Maximum speed of the final controller IMU predicted position after acceleration and lever arm; 0 disables");
   app.add_option("--runtime-controller-imu-max-prediction-path-m", runtime_controller_imu_max_prediction_path_m,
-                 "Maximum accumulated controller IMU prediction path in metres; 0 disables");
+                 "Maximum accumulated controller IMU prediction path before position freeze in metres; 0 disables");
   app.add_option("--runtime-controller-imu-max-distance-m", runtime_controller_imu_max_distance_m,
-                 "Maximum distance from the adjusted transformed HMD reference to an IMU-controller predicted position in metres; 0 disables");
+                 "Maximum distance from the adjusted transformed HMD reference before IMU-controller position freeze in metres; 0 disables");
   app.add_option("--runtime-controller-imu-distance-reference-axis", runtime_controller_imu_distance_reference_axis,
                  "Optional runtime HMD-reference offset axis for IMU-controller distance limiting: none, x, y, z");
   app.add_option("--runtime-controller-imu-distance-reference-offset-m", runtime_controller_imu_distance_reference_offset_m,
@@ -3385,9 +3385,9 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-body-tracker-prediction-damping", runtime_body_tracker_prediction_damping,
                  "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
   app.add_option("--runtime-body-tracker-max-prediction-path-m", runtime_body_tracker_max_prediction_path_m,
-                 "Maximum accumulated body tracker prediction path in metres; 0 disables");
+                 "Maximum accumulated body tracker prediction path before position freeze in metres; 0 disables");
   app.add_option("--runtime-body-tracker-max-distance-m", runtime_body_tracker_max_distance_m,
-                 "Maximum distance from the adjusted transformed HMD reference to a predicted body tracker in metres; 0 disables");
+                 "Maximum distance from the adjusted transformed HMD reference before body-tracker position freeze in metres; 0 disables");
   app.add_option("--runtime-body-tracker-distance-reference-axis", runtime_body_tracker_distance_reference_axis,
                  "Optional runtime HMD-reference offset axis for body tracker distance limiting: none, x, y, z");
   app.add_option("--runtime-body-tracker-distance-reference-offset-m", runtime_body_tracker_distance_reference_offset_m,
@@ -3469,9 +3469,9 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-hand-tracking-prediction-window-ms", runtime_hand_tracking_prediction_window_ms,
                  "Rolling real-pose history duration used by HAND_TRACKING prediction-window mode");
   app.add_option("--runtime-hand-tracking-max-prediction-path-m", runtime_hand_tracking_max_prediction_path_m,
-                 "Maximum accumulated HAND_TRACKING prediction path in metres; 0 disables");
+                 "Maximum accumulated HAND_TRACKING prediction path before position freeze in metres; 0 disables");
   app.add_option("--runtime-hand-tracking-max-distance-m", runtime_hand_tracking_max_distance_m,
-                 "Maximum distance from the adjusted transformed HMD reference to a predicted HAND_TRACKING controller position in metres; 0 disables");
+                 "Maximum distance from the adjusted transformed HMD reference before HAND_TRACKING position freeze in metres; 0 disables");
   app.add_option("--runtime-hand-tracking-distance-reference-axis", runtime_hand_tracking_distance_reference_axis,
                  "Optional runtime HMD-reference offset axis for HAND_TRACKING distance limiting: none, x, y, z");
   app.add_option("--runtime-hand-tracking-distance-reference-offset-m", runtime_hand_tracking_distance_reference_offset_m,

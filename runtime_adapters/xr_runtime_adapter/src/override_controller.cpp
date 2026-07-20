@@ -931,6 +931,7 @@ void clear_imu_position_loss_state(RuntimeControllerImuSideRuntimeState& state,
                                    bool clear_anchor) {
   state.prediction_active = false;
   state.prediction_started = false;
+  state.prediction_frozen = false;
   state.reacquire_blend_active = false;
   state.reacquire_blend_start_ns = 0;
   state.last_update_ns = 0;
@@ -1125,6 +1126,35 @@ void publish_synthetic_controller_position(
   out.last_pose_ns = pose_timestamp_ns;
 }
 
+void publish_frozen_imu_controller_position(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const RuntimeImuSample& imu,
+    RuntimeControllerImuSideRuntimeState& state,
+    uint64_t timestamp_ns) {
+  if (state.prediction_output_history_active) {
+    std::copy(std::begin(state.prediction_output_last_position_m),
+              std::end(state.prediction_output_last_position_m),
+              state.position_m);
+  } else {
+    std::copy(std::begin(state.anchor_position_m),
+              std::end(state.anchor_position_m),
+              state.position_m);
+  }
+  std::fill(std::begin(state.velocity_mps),
+            std::end(state.velocity_mps), 0.0f);
+  state.prediction_frozen = true;
+  state.prediction_active = true;
+  state.prediction_started = true;
+  state.last_update_ns = timestamp_ns;
+  state.prediction_output_history_active = true;
+  std::copy(std::begin(state.position_m), std::end(state.position_m),
+            state.prediction_output_last_position_m);
+  state.prediction_output_last_timestamp_ns = timestamp_ns;
+  publish_synthetic_controller_position(
+      out, state.position_m, state.velocity_mps, false, true,
+      imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
+}
+
 void update_or_apply_imu_position_prediction(
     xr_runtime::RuntimeControllerSideStateV1& out,
     const RuntimeImuSample& imu,
@@ -1274,6 +1304,14 @@ void update_or_apply_imu_position_prediction(
     publish_synthetic_controller_position(
         out, state->position_m, state->velocity_mps, false, false,
         imu.timestamp_ns != 0 ? imu.timestamp_ns : timestamp_ns);
+    return;
+  }
+
+  // A path/distance limit latches the last safe synthetic position until the
+  // normal predict_lost_ms timeout. Orientation has already been synthesized
+  // from the current IMU sample and therefore continues updating.
+  if (state->prediction_frozen) {
+    publish_frozen_imu_controller_position(out, imu, *state, timestamp_ns);
     return;
   }
 
@@ -1431,8 +1469,7 @@ void update_or_apply_imu_position_prediction(
     const float step_m = v3_length(step_delta);
     if (std::isfinite(step_m) &&
         state->prediction_path_m + step_m > max_prediction_path_m) {
-      clear_imu_position_loss_state(*state, true);
-      invalidate_runtime_controller_pose(out);
+      publish_frozen_imu_controller_position(out, imu, *state, timestamp_ns);
       return;
     }
     if (std::isfinite(step_m)) state->prediction_path_m += step_m;
@@ -1457,8 +1494,7 @@ void update_or_apply_imu_position_prediction(
     };
     if (prediction_distance::exceeds(
             controller_position, hmd_position, cfg.prediction_distance)) {
-      clear_imu_position_loss_state(*state, true);
-      invalidate_runtime_controller_pose(out);
+      publish_frozen_imu_controller_position(out, imu, *state, timestamp_ns);
       return;
     }
   }

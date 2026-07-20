@@ -48,8 +48,8 @@ struct HandPoseStabilityFilterConfig {
   double predict_lost_ms = 0.0;
   double max_prediction_velocity_mps = 2.0;
   double prediction_damping = 0.5;
-  // Maximum accumulated synthetic controller path during prediction, in metres.
-  // <= 0 disables the path limit.
+  // Maximum accumulated synthetic controller path before position freeze, in metres.
+  // The frozen pose remains valid until predict_lost_ms; <= 0 disables.
   double max_prediction_path_m = 0.65;
   prediction_distance::Config prediction_distance{};
   bool prediction_window_mode = false;
@@ -171,32 +171,72 @@ class HandPoseStabilityFilter {
       const std::optional<std::array<double, 3>>& transformed_hmd_position,
       bool apply_left = true,
       bool apply_right = true) {
-    if (!cfg_.enabled || !transformed_hmd_position ||
-        !prediction_distance::enabled(cfg_.prediction_distance)) {
-      return;
-    }
+    if (!cfg_.enabled) return;
 
     const auto apply_side = [&](xr_runtime::HandSideF32V2& side,
                                 HandStateV2& state,
                                 bool enabled) {
+      if (!enabled) return;
+
       uint64_t prediction_elapsed_ns = 0;
-      if (!enabled || state.prediction_path_exhausted ||
-          !prediction_elapsed_v2(state, frame.source_timestamp_ns, cfg_,
+      if (!prediction_elapsed_v2(state, frame.source_timestamp_ns, cfg_,
                                  prediction_elapsed_ns)) {
-        return;
-      }
-      const Vec3 p = controller_v2(side);
-      const std::array<double, 3> position = {p.x, p.y, p.z};
-      if (!prediction_distance::exceeds(
-              position, *transformed_hmd_position,
-              cfg_.prediction_distance)) {
+        // Keep the latest transformed real/hold pose as the safe position for
+        // a limit reached on the very first prediction frame.
+        const Vec3 current = controller_v2(side);
+        if (finite_pose(current) && nonzero_pose(current)) {
+          state.last_runtime_prediction = side;
+          state.has_last_runtime_prediction = true;
+        }
         return;
       }
 
-      state.prediction_path_exhausted = true;
-      state.has_last_prediction = false;
-      state.blend_active = false;
-      clear_side_v2(side);
+      if (state.prediction_frozen) {
+        if (state.has_frozen_runtime_prediction) {
+          side = state.frozen_runtime_prediction;
+        } else {
+          freeze_side_v2(side);
+          state.frozen_runtime_prediction = side;
+          state.has_frozen_runtime_prediction = true;
+        }
+        return;
+      }
+
+      bool exceeds_distance = false;
+      if (transformed_hmd_position &&
+          prediction_distance::enabled(cfg_.prediction_distance)) {
+        const Vec3 p = controller_v2(side);
+        const std::array<double, 3> position = {p.x, p.y, p.z};
+        exceeds_distance = prediction_distance::exceeds(
+            position, *transformed_hmd_position, cfg_.prediction_distance);
+      }
+
+      if (exceeds_distance) {
+        state.prediction_frozen = true;
+
+        // The filter has already remembered the current pre-transform
+        // candidate. Roll that state back to the previous safe prediction so
+        // a later reacquire blend starts from the frozen pose as well.
+        if (state.has_previous_prediction) {
+          state.last_prediction = state.previous_prediction;
+        } else if (state.has_last_good) {
+          state.last_prediction = state.last_good;
+        }
+        state.has_last_prediction = state.has_last_good ||
+                                    state.has_previous_prediction;
+        if (state.has_last_prediction) freeze_side_v2(state.last_prediction);
+
+        if (state.has_last_runtime_prediction) {
+          side = state.last_runtime_prediction;
+        }
+        freeze_side_v2(side);
+        state.frozen_runtime_prediction = side;
+        state.has_frozen_runtime_prediction = true;
+        return;
+      }
+
+      state.last_runtime_prediction = side;
+      state.has_last_runtime_prediction = true;
     };
 
     apply_side(frame.left, left_v2_, apply_left);
@@ -284,9 +324,18 @@ class HandPoseStabilityFilter {
 
     bool has_last_prediction = false;
     xr_runtime::HandSideF32V2 last_prediction{};
+    bool has_previous_prediction = false;
+    xr_runtime::HandSideF32V2 previous_prediction{};
+
+    // A path/distance safety limit freezes the last published prediction but
+    // keeps the side valid until the ordinary predict_lost_ms timeout.
+    bool prediction_frozen = false;
+    bool has_frozen_runtime_prediction = false;
+    xr_runtime::HandSideF32V2 frozen_runtime_prediction{};
+    bool has_last_runtime_prediction = false;
+    xr_runtime::HandSideF32V2 last_runtime_prediction{};
 
     bool prediction_path_active = false;
-    bool prediction_path_exhausted = false;
     double prediction_path_m = 0.0;
     Vec3 prediction_path_last_position{};
     uint64_t prediction_path_last_source_ts = 0;
@@ -433,7 +482,7 @@ class HandPoseStabilityFilter {
   static bool within_lost_output_window_v2(const HandStateV2& state,
                                            uint64_t source_ts,
                                            const HandPoseStabilityFilterConfig& cfg) {
-    if (state.prediction_path_exhausted) return false;
+    // Frozen predictions remain valid until predict_lost_ms expires.
     uint64_t elapsed_ns = 0;
     if (!elapsed_since_last_good_v2(state, source_ts, elapsed_ns)) return false;
     return elapsed_ns <= lost_output_ns_v2(cfg);
@@ -639,20 +688,36 @@ class HandPoseStabilityFilter {
   static void reset_prediction_path_v2(HandStateV2& state,
                                        const Vec3& anchor,
                                        uint64_t source_ts) {
+    state.prediction_frozen = false;
+    state.has_frozen_runtime_prediction = false;
+    state.has_last_runtime_prediction = false;
+    state.has_previous_prediction = false;
     state.prediction_path_active = false;
-    state.prediction_path_exhausted = false;
     state.prediction_path_m = 0.0;
     state.prediction_path_last_position = anchor;
     state.prediction_path_last_source_ts = source_ts;
+  }
+
+  static void freeze_side_v2(xr_runtime::HandSideF32V2& side) {
+    side.status = kHandStatusDegraded;
+    side.flags |= xr_runtime::HAND_POSE_VALID;
+    side.vx = 0.0f;
+    side.vy = 0.0f;
+    side.vz = 0.0f;
+    side.wx = 0.0f;
+    side.wy = 0.0f;
+    side.wz = 0.0f;
+    side.flags &= ~(xr_runtime::HAND_LINEAR_VELOCITY_VALID |
+                    xr_runtime::HAND_ANGULAR_VELOCITY_VALID);
   }
 
   static bool prediction_path_allows_v2(HandStateV2& state,
                                          const xr_runtime::HandSideF32V2& predicted,
                                          uint64_t source_ts,
                                          const HandPoseStabilityFilterConfig& cfg) {
+    if (state.prediction_frozen) return true;
     const double max_path_m = cfg.max_prediction_path_m;
     if (!std::isfinite(max_path_m) || max_path_m <= 0.0) return true;
-    if (state.prediction_path_exhausted) return false;
 
     const Vec3 predicted_position = controller_v2(predicted);
     if (!state.prediction_path_active) {
@@ -666,8 +731,7 @@ class HandPoseStabilityFilter {
     const double step_m = distance_m(predicted_position,
                                      state.prediction_path_last_position);
     if (std::isfinite(step_m) && state.prediction_path_m + step_m > max_path_m) {
-      state.prediction_path_exhausted = true;
-      state.has_last_prediction = false;
+      state.prediction_frozen = true;
       return false;
     }
     if (std::isfinite(step_m)) state.prediction_path_m += step_m;
@@ -681,12 +745,28 @@ class HandPoseStabilityFilter {
                                       const HandPoseStabilityFilterConfig& cfg,
                                       uint64_t prediction_elapsed_ns,
                                       xr_runtime::HandSideF32V2& out) {
+    if (state.prediction_frozen) {
+      out = state.has_last_prediction ? state.last_prediction : state.last_good;
+      freeze_side_v2(out);
+      return true;
+    }
+
     out = predicted_side_v2(state, source_ts, cfg, prediction_elapsed_ns);
-    return prediction_path_allows_v2(state, out, source_ts, cfg);
+    if (prediction_path_allows_v2(state, out, source_ts, cfg)) return true;
+
+    // Freeze at the last pose that was actually published, rather than at the
+    // candidate that crossed MAX_PREDICTION_PATH_M.
+    out = state.has_last_prediction ? state.last_prediction : state.last_good;
+    freeze_side_v2(out);
+    return true;
   }
 
   static void remember_prediction_v2(HandStateV2& state,
                                      const xr_runtime::HandSideF32V2& predicted) {
+    if (state.has_last_prediction) {
+      state.has_previous_prediction = true;
+      state.previous_prediction = state.last_prediction;
+    }
     state.has_last_prediction = true;
     state.last_prediction = predicted;
   }
@@ -831,12 +911,14 @@ class HandPoseStabilityFilter {
         if (!make_predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns, d.side)) {
           clear_side_v2(d.side);
           d.gated_active = false;
-          d.mode = "reject_velocity_prediction_path_exhausted";
+          d.mode = "reject_velocity_prediction_frozen";
           return d;
         }
         remember_prediction_v2(state, d.side);
         d.gated_active = true;
-        d.mode = "reject_velocity_predict";
+        d.mode = state.prediction_frozen
+            ? "reject_velocity_prediction_frozen"
+            : "reject_velocity_predict";
         d.has_output = true;
         d.output = controller_v2(d.side);
         stat_gated_active(hand_name)++;
@@ -1170,12 +1252,14 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           if (!make_predicted_side_v2(state, source_ts, cfg_, prediction_elapsed_ns, d.side)) {
             clear_side_v2(d.side);
             d.gated_active = false;
-            d.mode = "reject_jump_prediction_path_exhausted";
+            d.mode = "reject_jump_prediction_frozen";
             return d;
           }
           remember_prediction_v2(state, d.side);
           d.gated_active = true;
-          d.mode = "reject_jump_predict";
+          d.mode = state.prediction_frozen
+              ? "reject_jump_prediction_frozen"
+              : "reject_jump_predict";
           d.has_output = true;
           d.output = controller_v2(d.side);
           stat_gated_active(hand_name)++;
@@ -1220,12 +1304,12 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           state.raw_inactive_since_last_accept = raw_inactive_since_last_accept;
           clear_side_v2(d.side);
           d.gated_active = false;
-          d.mode = "prediction_path_exhausted";
+          d.mode = "prediction_frozen";
           return d;
         }
         remember_prediction_v2(state, d.side);
         d.gated_active = true;
-        d.mode = "predict_lost";
+        d.mode = state.prediction_frozen ? "prediction_frozen" : "predict_lost";
         d.has_output = true;
         d.output = controller_v2(d.side);
         stat_gated_active(hand_name)++;

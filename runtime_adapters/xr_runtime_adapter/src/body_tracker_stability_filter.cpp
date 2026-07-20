@@ -400,6 +400,7 @@ void BodyTrackerStabilityFilter::update_state(const xr_tracking::BodyTrackerF32V
   state.last_good = tracker;
   state.last_good_ns = sample_ns;
   state.active = true;
+  state.prediction_frozen = false;
   state.prediction_path_active = false;
   state.prediction_path_m = 0.0;
   state.prediction_path_last_position = observed_position;
@@ -422,6 +423,7 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
   if (elapsed_ns > hold_ns + predict_ns) {
     state.active = false;
     state.has_last_prediction = false;
+    state.prediction_frozen = false;
     state.blend_active = false;
     state.prediction_path_active = false;
     state.prediction_path_m = 0.0;
@@ -437,8 +439,30 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
                xr_tracking::BODY_TRACKER_FLAG_ORIENTATION_VALID |
                xr_tracking::BODY_TRACKER_FLAG_CONNECTED;
 
+  const auto freeze_output = [&](xr_tracking::BodyTrackerF32V1 frozen) {
+    frozen.status = cfg_.predicted_status;
+    frozen.flags |= xr_tracking::BODY_TRACKER_FLAG_POSE_VALID |
+                    xr_tracking::BODY_TRACKER_FLAG_POSITION_VALID |
+                    xr_tracking::BODY_TRACKER_FLAG_ORIENTATION_VALID |
+                    xr_tracking::BODY_TRACKER_FLAG_CONNECTED;
+    frozen.pose.vx = 0.0f;
+    frozen.pose.vy = 0.0f;
+    frozen.pose.vz = 0.0f;
+    frozen.pose.wx = 0.0f;
+    frozen.pose.wy = 0.0f;
+    frozen.pose.wz = 0.0f;
+    frozen.flags &= ~xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+    state.prediction_frozen = true;
+    state.has_last_prediction = true;
+    state.last_prediction = frozen;
+    return frozen;
+  };
+
   const uint64_t prediction_elapsed_ns = elapsed_ns > hold_ns ? (elapsed_ns - hold_ns) : 0;
-  if (prediction_elapsed_ns > 0 && predict_ns > 0 && state.has_velocity) {
+  if (prediction_elapsed_ns > 0 && state.prediction_frozen &&
+      state.has_last_prediction) {
+    out = freeze_output(state.last_prediction);
+  } else if (prediction_elapsed_ns > 0 && predict_ns > 0 && state.has_velocity) {
     const uint64_t dt_ns = std::min<uint64_t>(prediction_elapsed_ns, predict_ns);
     const double dt_s = static_cast<double>(dt_ns) / 1e9;
     const double damping = std::clamp(cfg_.prediction_damping, 0.0, 1.0);
@@ -468,17 +492,14 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
                                        state.prediction_path_last_position));
         if (std::isfinite(step_m) &&
             state.prediction_path_m + step_m > max_path_m) {
-          state.active = false;
-          state.has_last_prediction = false;
-          state.blend_active = false;
-          state.prediction_path_active = false;
-          state.prediction_path_m = 0.0;
-          state.prediction_path_last_ns = 0;
-          return std::nullopt;
+          out = freeze_output(state.has_last_prediction
+                                  ? state.last_prediction
+                                  : state.last_good);
+        } else {
+          if (std::isfinite(step_m)) state.prediction_path_m += step_m;
+          state.prediction_path_last_position = predicted_position;
+          state.prediction_path_last_ns = now_ns;
         }
-        if (std::isfinite(step_m)) state.prediction_path_m += step_m;
-        state.prediction_path_last_position = predicted_position;
-        state.prediction_path_last_ns = now_ns;
       }
     }
 
@@ -486,7 +507,7 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
     // runtime consumer cannot extrapolate it a second time.  When explicitly
     // enabled, publish the instantaneous velocity of the decelerating
     // trajectory above.  It reaches zero at the end of the prediction window.
-    if (cfg_.publish_predicted_velocity) {
+    if (!state.prediction_frozen && cfg_.publish_predicted_velocity) {
       const Vec3 predicted_v = scale(v, damping * (1.0 - progress));
       out.pose.vx = static_cast<float>(predicted_v.x);
       out.pose.vy = static_cast<float>(predicted_v.y);
@@ -503,8 +524,6 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
     out.pose.wx = 0.0f;
     out.pose.wy = 0.0f;
     out.pose.wz = 0.0f;
-    state.has_last_prediction = true;
-    state.last_prediction = out;
   } else {
     out.pose.vx = 0.0f;
     out.pose.vy = 0.0f;
@@ -526,14 +545,15 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
     };
     if (prediction_distance::exceeds(
             position, *runtime_hmd_position_, cfg_.prediction_distance)) {
-      state.active = false;
-      state.has_last_prediction = false;
-      state.blend_active = false;
-      state.prediction_path_active = false;
-      state.prediction_path_m = 0.0;
-      state.prediction_path_last_ns = 0;
-      return std::nullopt;
+      out = freeze_output(state.has_last_prediction
+                              ? state.last_prediction
+                              : state.last_good);
     }
+  }
+
+  if (prediction_elapsed_ns > 0) {
+    state.has_last_prediction = true;
+    state.last_prediction = out;
   }
 
   const double total_ns = static_cast<double>(std::max<uint64_t>(hold_ns + predict_ns, 1));

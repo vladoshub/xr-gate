@@ -92,8 +92,8 @@ struct RuntimeControllerImuMotionConfig {
   // lever-arm displacement. <= 0 disables this additional limit.
   float max_prediction_speed_mps = 2.0f;
   float prediction_damping = 1.0f;
-  // Maximum accumulated synthetic controller path during prediction, in metres.
-  // <= 0 disables the path limit.
+  // Maximum accumulated synthetic controller path before position freeze, in metres.
+  // The frozen pose remains valid until predict_lost_ms; <= 0 disables.
   float max_prediction_path_m = 0.65f;
   prediction_distance::Config prediction_distance{};
   bool prediction_window_mode = false;
@@ -146,6 +146,9 @@ struct RuntimeControllerImuSideRuntimeState {
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
+  // Path/distance limits freeze only the synthetic position. Live IMU
+  // orientation continues until the normal predict_lost_ms timeout.
+  bool prediction_frozen = false;
   bool reacquire_blend_active = false;
   bool yaw_correction_valid = false;
   bool yaw_correction_requested = false;
