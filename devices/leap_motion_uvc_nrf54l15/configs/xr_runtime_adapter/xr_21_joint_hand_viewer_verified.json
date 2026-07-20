@@ -43,10 +43,10 @@
         "enabled": true,
         "multiply_order": "pre",
         "quaternion_xyzw": [
-          -0.64876830007,
-          -0.208094145063,
-          -0.122274510094,
-          0.721696240669
+          -0.641745993585,
+          0.040729231192,
+          -0.160617859121,
+          0.748802452437
         ]
       }
     },
@@ -292,6 +292,16 @@
           "z": 0.0
         },
         "rotate_with_hmd_orientation": false
+      },
+      "orientation_offset": {
+        "enabled": true,
+        "multiply_order": "pre",
+        "quaternion_xyzw": [
+          -0.641745993585,
+          0.040729231192,
+          -0.160617859121,
+          0.748802452437
+        ]
       },
       "orientation_transform": {
         "enabled": false,

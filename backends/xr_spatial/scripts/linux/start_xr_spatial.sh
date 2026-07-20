@@ -20,6 +20,7 @@ echo "[start_xr_spatial] DEPTH rate=$DEPTH_RATE_HZ disparities=$NUM_DISPARITIES 
 echo "[start_xr_spatial] DEPTH_ROI x=$DEPTH_ROI_X_MIN-$DEPTH_ROI_X_MAX y=$DEPTH_ROI_Y_MIN-$DEPTH_ROI_Y_MAX"
 echo "[start_xr_spatial] QUALITY_GATE enabled=$QUALITY_GATE_ENABLED min_raw=$QUALITY_MIN_RAW_POINTS min_filtered=$QUALITY_MIN_FILTERED_POINTS far=$QUALITY_FAR_DEPTH_M/$QUALITY_MAX_FAR_POINT_FRACTION pose_delta=$QUALITY_MAX_POSE_DELTA_M/$QUALITY_MAX_POSE_DELTA_DEG csv=$QUALITY_WRITE_CSV"
 echo "[start_xr_spatial] PROXY_MESH enabled=$SPATIAL_PROXY_MESH_ENABLED stream=$SPATIAL_PROXY_MESH_STREAM voxel=$SPATIAL_PROXY_MESH_VOXEL_SIZE_M rate=$SPATIAL_PROXY_MESH_RATE_HZ max_vertices=$SPATIAL_PROXY_MESH_MAX_VERTICES max_triangles=$SPATIAL_PROXY_MESH_MAX_TRIANGLES"
+echo "depth: min_disparity=$MIN_DISPARITY num_disparities=$NUM_DISPARITIES"
 
 args=(
   --mode runtime
@@ -46,6 +47,7 @@ args=(
   --depth-frame-id "$DEPTH_FRAME_ID"
   --fisheye-balance "$FISHEYE_BALANCE"
   --depth-rate-hz "$DEPTH_RATE_HZ"
+  --min-disparity "$MIN_DISPARITY"
   --num-disparities "$NUM_DISPARITIES"
   --block-size "$BLOCK_SIZE"
   --uniqueness-ratio "$UNIQUENESS_RATIO"

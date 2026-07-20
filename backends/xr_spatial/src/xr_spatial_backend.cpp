@@ -756,6 +756,7 @@ int main(int argc, char** argv) {
 
   app.add_option("--depth-rate-hz", cfg.depth.target_rate_hz, "Target stereo depth processing rate");
   app.add_option("--num-disparities", cfg.depth.num_disparities, "SGBM num disparities, rounded to multiple of 16");
+  app.add_option("--min-disparity", cfg.depth.min_disparity, "SGBM minimum disparity; negative values are supported");
   app.add_option("--block-size", cfg.depth.block_size, "SGBM block size, odd >=3");
   app.add_option("--uniqueness-ratio", cfg.depth.uniqueness_ratio, "SGBM uniqueness ratio");
   app.add_option("--speckle-window-size", cfg.depth.speckle_window_size, "SGBM speckle window size");

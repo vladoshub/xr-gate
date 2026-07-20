@@ -125,7 +125,12 @@ StereoDepthResult StereoDepthProcessor::compute(const capture_client::ImageFrame
 
       const float disp = drow[x];
       const cv::Vec3f p = row[x];
-      if (!std::isfinite(disp) || disp <= float(config_.min_disparity)) {
+      const float invalid_disparity =
+          static_cast<float>(config_.min_disparity - 1);
+
+      if (!std::isfinite(disp) ||
+          disp <= invalid_disparity ||
+          std::abs(disp) < 1e-6f) {
         ++out.rejected_disparity_pixels;
         continue;
       }
@@ -182,8 +187,17 @@ void StereoDepthProcessor::maybe_save_debug(const StereoDepthResult& result) {
   cv::imwrite((fs::path(config_.debug_dir) / "right_rect.png").string(), result.right_rect);
 
   cv::Mat disp_vis;
-  const double max_disp = std::max(1, config_.num_disparities);
-  result.disparity_float.convertTo(disp_vis, CV_8U, 255.0 / max_disp);
+  const double disparity_span =
+      static_cast<double>(std::max(1, config_.num_disparities));
+  const double scale = 255.0 / disparity_span;
+  const double shift =
+      -static_cast<double>(config_.min_disparity) * scale;
+
+  result.disparity_float.convertTo(
+      disp_vis,
+      CV_8U,
+      scale,
+      shift);
   cv::imwrite((fs::path(config_.debug_dir) / "disparity_preview.png").string(), disp_vis);
   debug_saved_ = true;
 }
