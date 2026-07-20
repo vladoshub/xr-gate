@@ -31,20 +31,39 @@ echo "APPROX_SYNC=$APPROX_SYNC"
 docker run --rm -it \
   -v "$HOME:$HOME" \
   -w "$OUT" \
+  -e BAG="$BAG" \
+  -e TARGET="$TARGET" \
+  -e CAM0_TOPIC="$CAM0_TOPIC" \
+  -e CAM1_TOPIC="$CAM1_TOPIC" \
+  -e CAMERA_MODEL_0="$CAMERA_MODEL_0" \
+  -e CAMERA_MODEL_1="$CAMERA_MODEL_1" \
+  -e BAG_FREQ="$BAG_FREQ" \
+  -e APPROX_SYNC="$APPROX_SYNC" \
+  -e ROS_SETUP="$ROS_SETUP" \
   "$DOCKER_IMAGE" \
-  bash -lc "
+  bash -lc '
     set -e
     export MPLBACKEND=Agg
-    source '$ROS_SETUP'
-    kalibr_calibrate_cameras \\
-      --bag '$BAG' \\
-      --topics '$CAM0_TOPIC' '$CAM1_TOPIC' \\
-      --models '$CAMERA_MODEL_0' '$CAMERA_MODEL_1' \\
-      --target '$TARGET' \\
-      --bag-freq '$BAG_FREQ' \\
-      --approx-sync '$APPROX_SYNC' \\
+    source "$ROS_SETUP"
+
+    args=(
+      --bag "$BAG"
+      --topics "$CAM0_TOPIC" "$CAM1_TOPIC"
+      --models "$CAMERA_MODEL_0" "$CAMERA_MODEL_1"
+      --target "$TARGET"
+      --approx-sync "$APPROX_SYNC"
       --dont-show-report
-  "
+    )
+
+    # This Kalibr image does not support --bag-freq. Do not probe with
+    # `kalibr_calibrate_cameras --help`: its catkin wrapper forwards the
+    # argument into setup.bash and can generate an invalid /tmp/setup.sh.*.
+    if [[ -n "${BAG_FREQ:-}" ]]; then
+      echo "[camera-calib][WARN] --bag-freq is unsupported; BAG_FREQ=$BAG_FREQ is ignored" >&2
+    fi
+
+    kalibr_calibrate_cameras "${args[@]}"
+  '
 
 CAMCHAIN="$(find "$OUT" -maxdepth 1 -name 'camchain-*.yaml' | head -n1)"
 [[ -n "$CAMCHAIN" ]] || { echo "[camera-calib][ERROR] camchain not produced in $OUT" >&2; exit 1; }

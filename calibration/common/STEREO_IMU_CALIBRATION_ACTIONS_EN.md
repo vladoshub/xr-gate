@@ -12,9 +12,102 @@ imu0    — gyro in rad/s, accelerometer in m/s²
 
 The stereo camera and IMU must be rigidly mounted.
 
+
+Build 
+
+```bash
+./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+## 1. Calibrate the IMU mount axes
+
+Prepare device_profile (see others in ~/xr-gate/capture_service_cpp/configs/)
+
+Temporarily remove any existing:
+
+```yaml
+imu:
+  transform:
+```
+
+Start `capture_service_cpp`.
+
+capture_service_cpp bin unpacked in ~/xr-gate/out
+
+```bash
+CONFIG_PATH=~/xr-gate/devices/<device>/configs/capture_service/<device>.yaml ~/xr-gate/out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+Example:
+
+```bash
+CONFIG_PATH=~/xr-gate/devices/leap_motion_uvc_nrf54l15/configs/capture_service/leap_motion_uvc_nrf54l15.yaml ~/xr-gate/out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+Open new terminal
+
+Find the calibration tool:
+
+```bash
+ROOT="$HOME/xr-gate"
+AXIS_TOOL="$(find "$ROOT" -type f \
+  -path '*/capture_service_cpp/tools/calibrate_imu_axes.py' \
+  | head -n1)"
+```
+
+Run:
+
+```bash
+python3 "$AXIS_TOOL" \
+  --registry /tmp/capture_service_streams.json \
+  --stream imu0 \
+  --output "/tmp/${CALIB_TARGET}_${CALIB_UNIT_ID}_imu_mount.json"
+```
+
+Perform the guided movements:
+
+```text
+still
+roll
+pitch
+yaw
+still
+```
+
+Save IMU rate
+
+Example:
+
+```bash
+estimated_sample_rate_hz=208.0
+```
+
+Apply the generated result:
+
+```yaml
+imu:
+  transform:
+    axes: [x, -z, y]
+```
+
+or:
+
+```yaml
+imu:
+  transform:
+    quaternion_xyzw: [qx, qy, qz, qw]
+```
+
+Restart capture and run the tool again.
+
+The verification result should be close to identity. Do not apply the verification result as another transform.
+
+Keep this transform unchanged during recording, Kalibr calibration, and runtime operation.
+
+
 ---
 
-## 1. Create a target profile
+## 2. Create a target profile
 
 Create:
 
@@ -23,6 +116,9 @@ calibration/common/linux/profiles/<target>.env
 ```
 
 Example:
+```text
+calibration/common/linux/profiles/my_stereo_imu.env
+```
 
 ```bash
 CALIB_TARGET_NAME="my_stereo_imu"
@@ -32,12 +128,21 @@ CALIB_DEVICE_NAME="my_stereo_imu"
 CALIB_UNIT_ID="${CALIB_UNIT_ID:-mount_v1_unit_001}"
 CALIB_PROFILE_NAME="${CALIB_PROFILE_NAME:-stereo_640x480_none}"
 
+#GET FROM config in capture_service_cpp
 EXPECT_WIDTH=640
 EXPECT_HEIGHT=480
 RECORD_PREFIX="my_stereo_imu_640x480_calib"
 
+#Example:
+#CAPTURE_CONFIG_CAMERA_ONLY="${CAPTURE_CONFIG_CAMERA_ONLY:-$ROOT_PROJECT/devices/leap_motion_uvc_nrf54l15/configs/capture_service/leap_motion_uvc_nrf54l15.yaml}"
+
 CAPTURE_CONFIG_CAMERA_ONLY="${CAPTURE_CONFIG_CAMERA_ONLY:-$ROOT_PROJECT/devices/my_device/configs/capture_service/my_camera_only.yaml}"
+
+#Exmaple:
+#CAPTURE_CONFIG_STEREO_IMU="${CAPTURE_CONFIG_STEREO_IMU:-$ROOT_PROJECT/devices/leap_motion_uvc_nrf54l15/configs/capture_service/leap_motion_uvc_nrf54l15.yaml}"
+
 CAPTURE_CONFIG_STEREO_IMU="${CAPTURE_CONFIG_STEREO_IMU:-$ROOT_PROJECT/devices/my_device/configs/capture_service/my_stereo_imu.yaml}"
+
 CAPTURE_CONFIG="$CAPTURE_CONFIG_STEREO_IMU"
 
 CAMERA_MODEL_0="pinhole-equi"
@@ -45,8 +150,8 @@ CAMERA_MODEL_1="pinhole-equi"
 
 IMU_YAML_NAME="imu_my_sensor.yaml"
 
-# Replace with the measured published imu0 rate.
-IMU_UPDATE_RATE=200.0
+# Replace with the measured published imu0 rate estimated_sample_rate_hz from 1 step!
+IMU_UPDATE_RATE=208.0
 
 # Initial values. Replace with measured values when available.
 IMU_ACCEL_NOISE_DENSITY=0.01
@@ -148,87 +253,8 @@ update_rate: <actual published rate>
 
 ---
 
-## 4. Calibrate the IMU mount axes
+## 5. Set the real IMU rate
 
-Temporarily remove any existing:
-
-```yaml
-imu:
-  transform:
-```
-
-Start `capture_service_cpp`.
-
-Find the calibration tool:
-
-```bash
-AXIS_TOOL="$(find "$ROOT" -type f \
-  -path '*/capture_service_cpp/tools/calibrate_imu_axes.py' \
-  | head -n1)"
-```
-
-Run:
-
-```bash
-python3 "$AXIS_TOOL" \
-  --registry /tmp/capture_service_streams.json \
-  --stream imu0 \
-  --output "/tmp/${CALIB_TARGET}_${CALIB_UNIT_ID}_imu_mount.json"
-```
-
-Perform the guided movements:
-
-```text
-still
-roll
-pitch
-yaw
-still
-```
-
-Apply the generated result:
-
-```yaml
-imu:
-  transform:
-    axes: [x, -z, y]
-```
-
-or:
-
-```yaml
-imu:
-  transform:
-    quaternion_xyzw: [qx, qy, qz, qw]
-```
-
-Restart capture and run the tool again.
-
-The verification result should be close to identity. Do not apply the verification result as another transform.
-
-Keep this transform unchanged during recording, Kalibr calibration, and runtime operation.
-
----
-
-## 5. Measure and set the real IMU rate
-
-Use an existing `imu.csv` or make a short test recording.
-
-```bash
-DS="/path/to/dataset"
-
-N=$(( $(wc -l < "$DS/imu.csv") - 1 ))
-FIRST_NS="$(awk -F, 'NR==2 {print $1}' "$DS/imu.csv")"
-LAST_NS="$(awk -F, 'END {print $1}' "$DS/imu.csv")"
-
-python3 - <<PY
-n = int("$N")
-duration = (int("$LAST_NS") - int("$FIRST_NS")) / 1e9
-print("measured_hz:", (n - 1) / duration)
-PY
-```
-
-Set the measured nominal rate in the target profile:
 
 ```bash
 IMU_UPDATE_RATE=208.0
@@ -270,6 +296,8 @@ tagSpacing: <gap divided by tag size>
 
 Use one recording for both stereo calibration and camera–IMU calibration:
 
+Before starting, you must stop all running capture_service_cpp
+
 ```bash
 RECORD_MODE=stereo_imu \
 START_CAPTURE_SERVICE=1 \
@@ -277,6 +305,12 @@ SECONDS_TOTAL=90 \
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
   record
+```
+
+After start and press enter run parallel in new terminal for check camera:
+
+```bash
+./xr-gate/capture_client/debug/direct_slam_viewer_shm.sh
 ```
 
 Keep the AprilGrid still and move the entire camera+IMU assembly.
