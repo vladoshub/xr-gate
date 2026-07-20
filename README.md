@@ -2,7 +2,7 @@
 
 Experimental open-source XR runtime stack for **AR glasses**, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
 
-XR Tracking currently provides a working end-to-end XR stack for XREAL Ultra, with a modular architecture intended to make support for other AR/XR glasses, tracking backends, and input devices possible over time.
+XR Tracking currently provides a working end-to-end XR stack with a modular architecture intended to make support for other AR/XR glasses and sensors, tracking backends, and input devices possible over time.
 
 It already supports 6DoF/3DoF spatial tracking, ML-based hand tracking, VR controller emulation from hand poses and physical input devices, and working SteamVR/OpenVR and Monado/OpenXR driver integration, as well as standalone tools. The stack captures stereo grayscale video and IMU data directly, synchronizes the streams, and feeds the resulting tracking and input state into real XR runtimes and applications.
 
@@ -14,7 +14,7 @@ The goal is to keep the project useful in two directions at once:
 
 **For installation and usage instructions, see:**
 
-[Quick Start — XREAL Ultra on Linux](#quick-start--xreal-ultra-on-linux)
+[Quick Start](#quick-start)
 
 ## Half-Life Alyx on HX370 with XREAL Ultra 
 
@@ -102,7 +102,7 @@ Do not use this project in unsafe environments. Make sure you have enough free s
 XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
 
 
-## Quick start — XREAL Ultra on Linux
+## Quick start
 Tested on Ubuntu 24.04
 
 ### 1. Install (once)
