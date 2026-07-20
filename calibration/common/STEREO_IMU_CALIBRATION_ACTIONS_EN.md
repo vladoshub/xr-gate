@@ -499,24 +499,32 @@ jq -e '.value0 | type == "object" and length > 0' \
 Create a runtime profile directory:
 
 ```bash
-DST="$ROOT/devices/<device>/configs/calibration_dataset/final/$CALIB_TARGET/$CALIB_UNIT_ID/$CALIB_PROFILE_NAME"
+ROOT="$HOME/xr-gate"
+
+SRC="$HOME/xr_calib/$CALIB_TARGET/final/$CALIB_TARGET/$CALIB_UNIT_ID/$CALIB_PROFILE_NAME"
+
+
+DST="$ROOT/devices/<device_config>/configs/calibration_dataset/final/$CALIB_TARGET/$CALIB_UNIT_ID/$CALIB_PROFILE_NAME"
+#Example
+#DST="$ROOT/devices/leap_motion_uvc_nrf54l15/configs/calibration_dataset/final/$CALIB_TARGET/$CALIB_UNIT_ID/$CALIB_PROFILE_NAME"
 
 mkdir -p "$DST"
+
 ```
 
 Install:
 
 ```bash
 install -m 0644 \
-  /path/to/basalt_calib_<profile>.json \
+  "$SRC/basalt_calib_${CALIB_PROFILE_NAME}.json" \
   "$DST/basalt_calib_640x480.json"
 
 install -m 0644 \
-  /path/to/mercury_calib_<profile>.json \
+  "$SRC/mercury_calib_${CALIB_PROFILE_NAME}.json" \
   "$DST/mercury_calib_640x480.json"
 
 install -m 0644 \
-  /path/to/generated/basalt_vio_config_640x480.json \
+  "$SRC/basalt_vio_config_${CALIB_PROFILE_NAME}.json" \
   "$DST/basalt_vio_config_640x480.json"
 ```
 
@@ -524,13 +532,71 @@ All three source files are now produced by `convert-runtime`; no separate VIO
 config creation step is required.
 
 Point the runtime environment to:
+Create 
 
 ```bash
-FINAL_PROFILE_DIR="$DST"
-BASALT_CALIB="$DST/basalt_calib_640x480.json"
-BASALT_VIO_CONFIG="$DST/basalt_vio_config_640x480.json"
-MERCURY_CALIB="$DST/mercury_calib_640x480.json"
-CAPTURE_SERVICE_CONFIG_PATH="/path/to/my_stereo_imu.yaml"
+ROOT="$HOME/xr-gate"
+
+TRACKING_SENSOR="device"
+
+#Example
+#TRACKING_SENSOR="leap_motion_uvc_nrf54l15"
+CALIB_TARGET="my_stereo_imu"
+CALIB_UNIT_ID="mount_v1_unit_001"
+CALIB_PROFILE_NAME="stereo_640x480_none"
+
+CAPTURE_NAMESPACE="tracker"
+#Example
+#CAPTURE_NAMESPACE="leap_uvc_test"
+
+CAPTURE_CONFIG_NAME="device_profile.yaml"
+#Example
+#CAPTURE_CONFIG_NAME="leap_motion_uvc_nrf54l15.yaml"
+
+TRACKING_ENV="$ROOT/devices/$TRACKING_SENSOR/tracking.env"
+
+mkdir -p "$(dirname "$TRACKING_ENV")"
+
+cat > "$TRACKING_ENV" <<EOF
+#!/usr/bin/env bash
+# Tracking-sensor layer for $TRACKING_SENSOR.
+# Loaded after the display device environment by xr_client.
+
+_XR_TRACKING_ENV_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+
+export XR_TRACKING_SENSOR="$TRACKING_SENSOR"
+export XR_TRACKING_HOME="\$_XR_TRACKING_ENV_DIR"
+export XR_TRACKING_SENSOR_HOME="\$XR_TRACKING_HOME"
+export XR_TRACKING_CONFIGS_ROOT="\$XR_TRACKING_HOME/configs"
+export XR_TRACKING_CALIB_DIR="\$XR_TRACKING_CONFIGS_ROOT/calibration_dataset"
+
+# Existing backend launchers use XR_CALIB_DIR as their calibration root.
+export XR_CALIB_DIR="\$XR_TRACKING_CALIB_DIR"
+
+export CAPTURE_REGISTRY_NAMESPACE="$CAPTURE_NAMESPACE"
+export CAPTURE_SERVICE_CONFIG_PATH="\$XR_TRACKING_CONFIGS_ROOT/capture_service/$CAPTURE_CONFIG_NAME"
+
+export XR_TRACKING_CALIB_TARGET="\${XR_TRACKING_CALIB_TARGET:-$CALIB_TARGET}"
+export XR_TRACKING_UNIT_ID="\${XR_TRACKING_UNIT_ID:-$CALIB_UNIT_ID}"
+export XR_TRACKING_CALIB_PROFILE="\${XR_TRACKING_CALIB_PROFILE:-$CALIB_PROFILE_NAME}"
+
+export FINAL_PROFILE_DIR="\$XR_TRACKING_CALIB_DIR/final/\$XR_TRACKING_CALIB_TARGET/\$XR_TRACKING_UNIT_ID/\$XR_TRACKING_CALIB_PROFILE"
+
+export BASALT_CALIB="\${XR_TRACKING_BASALT_CALIB:-\$FINAL_PROFILE_DIR/basalt_calib_640x480.json}"
+export BASALT_VIO_CONFIG="\${XR_TRACKING_BASALT_VIO_CONFIG:-\$FINAL_PROFILE_DIR/basalt_vio_config_640x480.json}"
+export MERCURY_CALIB="\${XR_TRACKING_MERCURY_CALIB:-\$FINAL_PROFILE_DIR/mercury_calib_640x480.json}"
+
+export TRACKING_TRANSFORM_CONFIG="\$XR_TRACKING_CONFIGS_ROOT/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json"
+export XR_SPATIAL_PROFILE_DIR="\$XR_TRACKING_CONFIGS_ROOT/xr_spatial/profiles"
+export XR_RUNTIME_DEBUG_VIEWER_CONFIG="\$XR_TRACKING_CONFIGS_ROOT/runtime_debug_viewer/xr_runtime_stock.yaml"
+
+unset _XR_TRACKING_ENV_DIR
+EOF
+
+chmod 0644 "$TRACKING_ENV"
+bash -n "$TRACKING_ENV"
+
+echo "[OK] created: $TRACKING_ENV"
 ```
 
 Start `capture_service_cpp` and Basalt first.
