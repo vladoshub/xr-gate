@@ -34,6 +34,11 @@ void BodyTrackerStabilityFilter::reset() {
   last_synthetic_publish_ns_ = 0;
 }
 
+void BodyTrackerStabilityFilter::set_runtime_hmd_position(
+    std::optional<std::array<double, 3>> position) {
+  runtime_hmd_position_ = position;
+}
+
 xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observed(
     xr_tracking::BodyTrackerSetFrameF32V1 frame,
     uint64_t now_ns) {
@@ -508,6 +513,27 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
     out.pose.wy = 0.0f;
     out.pose.wz = 0.0f;
     out.flags &= ~xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+  }
+
+  // The distance limit applies throughout the prediction phase, including a
+  // zero-velocity prediction. Hold-lost remains unchanged.
+  if (prediction_elapsed_ns > 0 && runtime_hmd_position_) {
+    const Vec3 predicted_position = pose_position(out);
+    const std::array<double, 3> position = {
+        predicted_position.x,
+        predicted_position.y,
+        predicted_position.z,
+    };
+    if (prediction_distance::exceeds(
+            position, *runtime_hmd_position_, cfg_.prediction_distance)) {
+      state.active = false;
+      state.has_last_prediction = false;
+      state.blend_active = false;
+      state.prediction_path_active = false;
+      state.prediction_path_m = 0.0;
+      state.prediction_path_last_ns = 0;
+      return std::nullopt;
+    }
   }
 
   const double total_ns = static_cast<double>(std::max<uint64_t>(hold_ns + predict_ns, 1));

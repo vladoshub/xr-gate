@@ -57,6 +57,7 @@ namespace hand_filter = ::xr_runtime_adapter::hand_filter;
 namespace hmd_filter = ::xr_runtime_adapter::hmd_filter;
 namespace jitter_filter = ::xr_runtime_adapter::jitter_filter;
 namespace body_tracker_filter = ::xr_runtime_adapter::body_tracker_filter;
+namespace prediction_distance = ::xr_runtime_adapter::prediction_distance;
 
 using ::xr_runtime_adapter::body_tracker_filter::BodyTrackerStabilityFilter;
 using ::xr_runtime_adapter::body_tracker_filter::BodyTrackerStabilityGateConfig;
@@ -1287,7 +1288,7 @@ struct SpatialProxyMeshInputConfig {
   double offset_m_z = 0.0;
 };
 
-struct RuntimeHmdPoseSnapshotForSpatialMesh {
+struct RuntimeHmdPoseSnapshot {
   bool valid = false;
   V3d p{};
   Qd q{};
@@ -1340,7 +1341,7 @@ class SpatialProxyMeshInputThread {
     origin_snapshot_ = std::move(origin);
   }
 
-  void set_runtime_hmd_snapshot(RuntimeHmdPoseSnapshotForSpatialMesh hmd) {
+  void set_runtime_hmd_snapshot(RuntimeHmdPoseSnapshot hmd) {
     std::lock_guard<std::mutex> lock(mu_);
     runtime_hmd_snapshot_ = std::move(hmd);
   }
@@ -1557,7 +1558,7 @@ class SpatialProxyMeshInputThread {
     const bool extra_rotation = xr_spatial_proxy_has_extra_rotation(cfg_.rotate_deg_x, cfg_.rotate_deg_y, cfg_.rotate_deg_z);
     const bool extra_offset = xr_spatial_proxy_has_extra_offset(cfg_.offset_m_x, cfg_.offset_m_y, cfg_.offset_m_z);
     RuntimeOriginSnapshot origin;
-    RuntimeHmdPoseSnapshotForSpatialMesh runtime_hmd;
+    RuntimeHmdPoseSnapshot runtime_hmd;
     {
       std::lock_guard<std::mutex> lock(mu_);
       origin = origin_snapshot_;
@@ -1696,7 +1697,7 @@ class SpatialProxyMeshInputThread {
   mutable std::mutex mu_;
   SpatialProxyMeshInputSnapshot snapshot_;
   RuntimeOriginSnapshot origin_snapshot_;
-  RuntimeHmdPoseSnapshotForSpatialMesh runtime_hmd_snapshot_;
+  RuntimeHmdPoseSnapshot runtime_hmd_snapshot_;
   std::unique_ptr<xr_spatial::RuntimeSpatialProxyMeshShmPublisher> publisher_;
   bool triangle_winding_logged_ = false;
   bool last_camera_relative_hmd_used_ = false;
@@ -2357,6 +2358,11 @@ class BodyTrackerInputThread {
     origin_snapshot_ = std::move(origin);
   }
 
+  void set_runtime_hmd_snapshot(RuntimeHmdPoseSnapshot hmd) {
+    std::lock_guard<std::mutex> lock(mu_);
+    runtime_hmd_snapshot_ = std::move(hmd);
+  }
+
  private:
   void run() {
     while (!stop_) {
@@ -2438,12 +2444,22 @@ class BodyTrackerInputThread {
     // origin/recenter as HMD so FBT and HMD share one runtime coordinate frame.
     apply_body_tracker_frame_transform(frame, cfg_.transform, nullptr);
     RuntimeOriginSnapshot origin;
+    RuntimeHmdPoseSnapshot runtime_hmd;
     {
       std::lock_guard<std::mutex> lock(mu_);
       origin = origin_snapshot_;
+      runtime_hmd = runtime_hmd_snapshot_;
     }
     apply_body_tracker_origin_transform(frame, origin);
     stability_filter_.configure(cfg_.stability_gate);
+    stability_filter_.set_runtime_hmd_position(
+        runtime_hmd.valid
+            ? std::optional<std::array<double, 3>>{
+                  std::array<double, 3>{
+                      runtime_hmd.p.x,
+                      runtime_hmd.p.y,
+                      runtime_hmd.p.z}}
+            : std::nullopt);
     frame = stability_filter_.filter_observed(std::move(frame), now_ns);
     runtime_jitter_filter_.configure(cfg_.jitter_filter);
     runtime_jitter_filter_.filter_body_trackers(frame);
@@ -2472,7 +2488,20 @@ class BodyTrackerInputThread {
 
   void maybe_publish_synthetic(uint64_t now_ns) {
     if (!cfg_.publish_runtime_shm || !cfg_.stability_gate.enabled) return;
+    RuntimeHmdPoseSnapshot runtime_hmd;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      runtime_hmd = runtime_hmd_snapshot_;
+    }
     stability_filter_.configure(cfg_.stability_gate);
+    stability_filter_.set_runtime_hmd_position(
+        runtime_hmd.valid
+            ? std::optional<std::array<double, 3>>{
+                  std::array<double, 3>{
+                      runtime_hmd.p.x,
+                      runtime_hmd.p.y,
+                      runtime_hmd.p.z}}
+            : std::nullopt);
     auto frame = stability_filter_.predicted_frame(now_ns);
     if (!frame) return;
     runtime_jitter_filter_.configure(cfg_.jitter_filter);
@@ -2540,6 +2569,7 @@ class BodyTrackerInputThread {
   mutable std::mutex mu_;
   BodyTrackerInputSnapshot snapshot_;
   RuntimeOriginSnapshot origin_snapshot_;
+  RuntimeHmdPoseSnapshot runtime_hmd_snapshot_;
   jitter_filter::RuntimeJitterFilter runtime_jitter_filter_{};
   BodyTrackerStabilityFilter stability_filter_{};
   std::unique_ptr<xr_tracking::BodyTrackerSetShmPublisher> runtime_publisher_;
@@ -2700,6 +2730,9 @@ int main(int argc, char** argv) {
   double runtime_controller_imu_prediction_window_ms = 500.0;
   double runtime_controller_imu_max_prediction_speed_mps = 2.0;
   double runtime_controller_imu_max_prediction_path_m = 0.65;
+  double runtime_controller_imu_max_distance_m = 0.60;
+  std::string runtime_controller_imu_distance_reference_axis = "none";
+  double runtime_controller_imu_distance_reference_offset_m = 0.0;
   bool runtime_controller_imu_lever_arm_mode = false;
   double runtime_controller_imu_lever_arm_left_x_m = 0.0;
   double runtime_controller_imu_lever_arm_left_y_m = 0.0;
@@ -2804,6 +2837,9 @@ int main(int argc, char** argv) {
   double runtime_body_tracker_max_prediction_acceleration_mps2 = 0.0;
   double runtime_body_tracker_prediction_damping = 0.35;
   double runtime_body_tracker_max_prediction_path_m = 0.65;
+  double runtime_body_tracker_max_distance_m = 1.20;
+  std::string runtime_body_tracker_distance_reference_axis = "y";
+  double runtime_body_tracker_distance_reference_offset_m = -0.80;
   bool runtime_body_tracker_prediction_window_mode = false;
   double runtime_body_tracker_prediction_window_ms = 500.0;
   bool runtime_body_tracker_publish_predicted_velocity = false;
@@ -2844,6 +2880,9 @@ int main(int argc, char** argv) {
   bool runtime_hand_tracking_prediction_window_mode = false;
   double runtime_hand_tracking_prediction_window_ms = 500.0;
   double runtime_hand_tracking_max_prediction_path_m = 0.65;
+  double runtime_hand_tracking_max_distance_m = 0.60;
+  std::string runtime_hand_tracking_distance_reference_axis = "none";
+  double runtime_hand_tracking_distance_reference_offset_m = 0.0;
   bool runtime_hand_gate_publish_predicted_velocity = false;
   double runtime_hand_gate_reacquire_blend_ms_hand_tracking = 0.0;
   double runtime_hand_gate_reacquire_blend_ms_imu = 0.0;
@@ -3132,6 +3171,12 @@ int main(int argc, char** argv) {
                  "Maximum speed of the final controller IMU predicted position after acceleration and lever arm; 0 disables");
   app.add_option("--runtime-controller-imu-max-prediction-path-m", runtime_controller_imu_max_prediction_path_m,
                  "Maximum accumulated controller IMU prediction path in metres; 0 disables");
+  app.add_option("--runtime-controller-imu-max-distance-m", runtime_controller_imu_max_distance_m,
+                 "Maximum distance from the adjusted transformed HMD reference to an IMU-controller predicted position in metres; 0 disables");
+  app.add_option("--runtime-controller-imu-distance-reference-axis", runtime_controller_imu_distance_reference_axis,
+                 "Optional runtime HMD-reference offset axis for IMU-controller distance limiting: none, x, y, z");
+  app.add_option("--runtime-controller-imu-distance-reference-offset-m", runtime_controller_imu_distance_reference_offset_m,
+                 "Signed offset in metres along --runtime-controller-imu-distance-reference-axis, applied after the HMD transform/config offset");
   app.add_option("--runtime-controller-imu-lever-arm-mode", runtime_controller_imu_lever_arm_mode,
                  "Curve controller IMU position prediction around a pivot using live IMU orientation; changes only the trajectory inside the existing Predicting state");
   app.add_option("--runtime-controller-imu-lever-arm-left-x-m", runtime_controller_imu_lever_arm_left_x_m,
@@ -3341,6 +3386,12 @@ int main(int argc, char** argv) {
                  "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
   app.add_option("--runtime-body-tracker-max-prediction-path-m", runtime_body_tracker_max_prediction_path_m,
                  "Maximum accumulated body tracker prediction path in metres; 0 disables");
+  app.add_option("--runtime-body-tracker-max-distance-m", runtime_body_tracker_max_distance_m,
+                 "Maximum distance from the adjusted transformed HMD reference to a predicted body tracker in metres; 0 disables");
+  app.add_option("--runtime-body-tracker-distance-reference-axis", runtime_body_tracker_distance_reference_axis,
+                 "Optional runtime HMD-reference offset axis for body tracker distance limiting: none, x, y, z");
+  app.add_option("--runtime-body-tracker-distance-reference-offset-m", runtime_body_tracker_distance_reference_offset_m,
+                 "Signed offset in metres along --runtime-body-tracker-distance-reference-axis, applied after the HMD transform/config offset");
   app.add_option("--runtime-body-tracker-prediction-window-mode", runtime_body_tracker_prediction_window_mode,
                  "Estimate body tracker prediction velocity from all real poses in a rolling time window instead of the legacy instantaneous velocity path");
   app.add_option("--runtime-body-tracker-prediction-window-ms", runtime_body_tracker_prediction_window_ms,
@@ -3419,6 +3470,12 @@ int main(int argc, char** argv) {
                  "Rolling real-pose history duration used by HAND_TRACKING prediction-window mode");
   app.add_option("--runtime-hand-tracking-max-prediction-path-m", runtime_hand_tracking_max_prediction_path_m,
                  "Maximum accumulated HAND_TRACKING prediction path in metres; 0 disables");
+  app.add_option("--runtime-hand-tracking-max-distance-m", runtime_hand_tracking_max_distance_m,
+                 "Maximum distance from the adjusted transformed HMD reference to a predicted HAND_TRACKING controller position in metres; 0 disables");
+  app.add_option("--runtime-hand-tracking-distance-reference-axis", runtime_hand_tracking_distance_reference_axis,
+                 "Optional runtime HMD-reference offset axis for HAND_TRACKING distance limiting: none, x, y, z");
+  app.add_option("--runtime-hand-tracking-distance-reference-offset-m", runtime_hand_tracking_distance_reference_offset_m,
+                 "Signed offset in metres along --runtime-hand-tracking-distance-reference-axis, applied after the HMD transform/config offset");
   app.add_option("--runtime-hand-gate-publish-predicted-velocity", runtime_hand_gate_publish_predicted_velocity,
                  "Runtime hand gate: publish decaying linear velocity with predicted hand poses; false avoids downstream double prediction");
   app.add_option("--runtime-hand-gate-reacquire-blend-ms,--runtime-hand-gate-reacquire-blend-ms-hand-tracking",
@@ -3585,6 +3642,18 @@ int main(int argc, char** argv) {
 
   const uint32_t runtime_body_tracker_predicted_status_value =
       parse_body_tracker_predicted_status(runtime_body_tracker_predicted_status);
+  const auto runtime_body_tracker_distance_reference_axis_value =
+      prediction_distance::parse_reference_axis(
+          runtime_body_tracker_distance_reference_axis,
+          "--runtime-body-tracker-distance-reference-axis");
+  const auto runtime_hand_tracking_distance_reference_axis_value =
+      prediction_distance::parse_reference_axis(
+          runtime_hand_tracking_distance_reference_axis,
+          "--runtime-hand-tracking-distance-reference-axis");
+  const auto runtime_controller_imu_distance_reference_axis_value =
+      prediction_distance::parse_reference_axis(
+          runtime_controller_imu_distance_reference_axis,
+          "--runtime-controller-imu-distance-reference-axis");
 
   const ControllerOverrideFileConfig controller_override_file_config =
       load_controller_override_file_config(tracking_transform_config_path);
@@ -3881,6 +3950,34 @@ int main(int argc, char** argv) {
     if (runtime_body_tracker_max_prediction_path_m < 0.0) {
       throw std::runtime_error("--runtime-body-tracker-max-prediction-path-m must be >= 0");
     }
+    const auto validate_distance_limit = [](double max_distance_m,
+                                            double reference_offset_m,
+                                            const char* max_option,
+                                            const char* offset_option) {
+      if (!std::isfinite(max_distance_m) || max_distance_m < 0.0) {
+        throw std::runtime_error(std::string(max_option) +
+                                 " must be finite and >= 0");
+      }
+      if (!std::isfinite(reference_offset_m)) {
+        throw std::runtime_error(std::string(offset_option) +
+                                 " must be finite");
+      }
+    };
+    validate_distance_limit(
+        runtime_body_tracker_max_distance_m,
+        runtime_body_tracker_distance_reference_offset_m,
+        "--runtime-body-tracker-max-distance-m",
+        "--runtime-body-tracker-distance-reference-offset-m");
+    validate_distance_limit(
+        runtime_hand_tracking_max_distance_m,
+        runtime_hand_tracking_distance_reference_offset_m,
+        "--runtime-hand-tracking-max-distance-m",
+        "--runtime-hand-tracking-distance-reference-offset-m");
+    validate_distance_limit(
+        runtime_controller_imu_max_distance_m,
+        runtime_controller_imu_distance_reference_offset_m,
+        "--runtime-controller-imu-max-distance-m",
+        "--runtime-controller-imu-distance-reference-offset-m");
     const double runtime_controller_imu_lever_arm_values[] = {
         runtime_controller_imu_lever_arm_left_x_m,
         runtime_controller_imu_lever_arm_left_y_m,
@@ -3986,6 +4083,12 @@ int main(int argc, char** argv) {
         std::cout << "runtime_body_tracker_max_prediction_acceleration_mps2: " << runtime_body_tracker_max_prediction_acceleration_mps2 << "\n";
         std::cout << "runtime_body_tracker_prediction_damping: " << runtime_body_tracker_prediction_damping << "\n";
         std::cout << "runtime_body_tracker_max_prediction_path_m: " << runtime_body_tracker_max_prediction_path_m << "\n";
+        std::cout << "runtime_body_tracker_max_distance_m: " << runtime_body_tracker_max_distance_m << "\n";
+        std::cout << "runtime_body_tracker_distance_reference_axis: "
+                  << prediction_distance::reference_axis_name(
+                         runtime_body_tracker_distance_reference_axis_value) << "\n";
+        std::cout << "runtime_body_tracker_distance_reference_offset_m: "
+                  << runtime_body_tracker_distance_reference_offset_m << "\n";
         std::cout << "runtime_body_tracker_prediction_window_mode: " << (runtime_body_tracker_prediction_window_mode ? "true" : "false") << "\n";
         std::cout << "runtime_body_tracker_prediction_window_ms: " << runtime_body_tracker_prediction_window_ms << "\n";
         std::cout << "runtime_body_tracker_publish_predicted_velocity: "
@@ -4047,6 +4150,13 @@ int main(int argc, char** argv) {
               << runtime_controller_imu_max_prediction_speed_mps << "\n";
     std::cout << "runtime_controller_imu_max_prediction_path_m: "
               << runtime_controller_imu_max_prediction_path_m << "\n";
+    std::cout << "runtime_controller_imu_max_distance_m: "
+              << runtime_controller_imu_max_distance_m << "\n";
+    std::cout << "runtime_controller_imu_distance_reference_axis: "
+              << prediction_distance::reference_axis_name(
+                     runtime_controller_imu_distance_reference_axis_value) << "\n";
+    std::cout << "runtime_controller_imu_distance_reference_offset_m: "
+              << runtime_controller_imu_distance_reference_offset_m << "\n";
     std::cout << "runtime_controller_imu_lever_arm_mode: "
               << (runtime_controller_imu_lever_arm_mode ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_lever_arm_left_m: ["
@@ -4165,6 +4275,12 @@ int main(int argc, char** argv) {
       std::cout << "runtime_hand_tracking_prediction_window_mode: " << (runtime_hand_tracking_prediction_window_mode ? "true" : "false") << "\n";
       std::cout << "runtime_hand_tracking_prediction_window_ms: " << runtime_hand_tracking_prediction_window_ms << "\n";
       std::cout << "runtime_hand_tracking_max_prediction_path_m: " << runtime_hand_tracking_max_prediction_path_m << "\n";
+      std::cout << "runtime_hand_tracking_max_distance_m: " << runtime_hand_tracking_max_distance_m << "\n";
+      std::cout << "runtime_hand_tracking_distance_reference_axis: "
+                << prediction_distance::reference_axis_name(
+                       runtime_hand_tracking_distance_reference_axis_value) << "\n";
+      std::cout << "runtime_hand_tracking_distance_reference_offset_m: "
+                << runtime_hand_tracking_distance_reference_offset_m << "\n";
       std::cout << "runtime_hand_gate_publish_predicted_velocity: "
                 << (runtime_hand_gate_publish_predicted_velocity ? "true" : "false") << "\n";
       std::cout << "runtime_hand_gate_reacquire_blend_ms_hand_tracking: " << runtime_hand_gate_reacquire_blend_ms_hand_tracking << "\n";
@@ -4575,6 +4691,12 @@ int main(int argc, char** argv) {
       cfg.stability_gate.max_prediction_acceleration_mps2 = runtime_body_tracker_max_prediction_acceleration_mps2;
       cfg.stability_gate.prediction_damping = runtime_body_tracker_prediction_damping;
       cfg.stability_gate.max_prediction_path_m = runtime_body_tracker_max_prediction_path_m;
+      cfg.stability_gate.prediction_distance.max_distance_m =
+          runtime_body_tracker_max_distance_m;
+      cfg.stability_gate.prediction_distance.reference_axis =
+          runtime_body_tracker_distance_reference_axis_value;
+      cfg.stability_gate.prediction_distance.reference_offset_m =
+          runtime_body_tracker_distance_reference_offset_m;
       cfg.stability_gate.prediction_window_mode = runtime_body_tracker_prediction_window_mode;
       cfg.stability_gate.prediction_window_ms = runtime_body_tracker_prediction_window_ms;
       cfg.stability_gate.publish_predicted_velocity = runtime_body_tracker_publish_predicted_velocity;
@@ -4736,6 +4858,12 @@ int main(int argc, char** argv) {
           std::max(0.0, runtime_controller_imu_max_prediction_speed_mps));
       dst.max_prediction_path_m = static_cast<float>(
           std::max(0.0, runtime_controller_imu_max_prediction_path_m));
+      dst.prediction_distance.max_distance_m =
+          runtime_controller_imu_max_distance_m;
+      dst.prediction_distance.reference_axis =
+          runtime_controller_imu_distance_reference_axis_value;
+      dst.prediction_distance.reference_offset_m =
+          runtime_controller_imu_distance_reference_offset_m;
       dst.lever_arm_enabled = runtime_controller_imu_lever_arm_mode;
       dst.lever_arm_local_m[0] = static_cast<float>(lever_arm_x_m);
       dst.lever_arm_local_m[1] = static_cast<float>(lever_arm_y_m);
@@ -4892,6 +5020,9 @@ int main(int argc, char** argv) {
                                   bool prediction_window_mode,
                                   double prediction_window_ms,
                                   double max_prediction_path_m,
+                                  double max_distance_m,
+                                  prediction_distance::ReferenceAxis distance_reference_axis,
+                                  double distance_reference_offset_m,
                                   std::string debug_csv) {
       hand_filter::HandPoseStabilityFilterConfig cfg;
       cfg.enabled = runtime_hand_stability_gate;
@@ -4906,6 +5037,9 @@ int main(int argc, char** argv) {
       cfg.prediction_window_mode = prediction_window_mode;
       cfg.prediction_window_ms = prediction_window_ms;
       cfg.max_prediction_path_m = max_prediction_path_m;
+      cfg.prediction_distance.max_distance_m = max_distance_m;
+      cfg.prediction_distance.reference_axis = distance_reference_axis;
+      cfg.prediction_distance.reference_offset_m = distance_reference_offset_m;
       cfg.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       cfg.reacquire_blend_ms = reacquire_blend_ms;
       cfg.debug_csv = std::move(debug_csv);
@@ -4922,6 +5056,9 @@ int main(int argc, char** argv) {
           runtime_hand_tracking_prediction_window_mode,
           runtime_hand_tracking_prediction_window_ms,
           runtime_hand_tracking_max_prediction_path_m,
+          runtime_hand_tracking_max_distance_m,
+          runtime_hand_tracking_distance_reference_axis_value,
+          runtime_hand_tracking_distance_reference_offset_m,
           runtime_hand_gate_debug_csv));
       // The IMU controller path owns lost-pose prediction and optical
       // reacquire blending. Keep the IMU hand gate as a validator/confirmation
@@ -4934,6 +5071,9 @@ int main(int argc, char** argv) {
           0.0,
           false,
           0.0,
+          0.0,
+          0.0,
+          prediction_distance::ReferenceAxis::None,
           0.0,
           {}));
     }
@@ -5633,20 +5773,28 @@ int main(int argc, char** argv) {
           runtime_jitter_filter.filter_hmd(frame.hmd);
         }
 
+        RuntimeHmdPoseSnapshot runtime_hmd_snapshot;
+        std::optional<std::array<double, 3>> runtime_hmd_position_for_distance;
+        if (frame.hmd.sequence != 0 && frame.hmd_valid &&
+            std::isfinite(frame.hmd.px) && std::isfinite(frame.hmd.py) &&
+            std::isfinite(frame.hmd.pz)) {
+          runtime_hmd_snapshot.valid = true;
+          runtime_hmd_snapshot.p = V3d{frame.hmd.px, frame.hmd.py, frame.hmd.pz};
+          runtime_hmd_snapshot.q = normalize_q(
+              {frame.hmd.qw, frame.hmd.qx, frame.hmd.qy, frame.hmd.qz});
+          runtime_hmd_snapshot.timestamp_ns = frame.read_timestamp_ns;
+          runtime_hmd_position_for_distance = std::array<double, 3>{
+              frame.hmd.px, frame.hmd.py, frame.hmd.pz};
+        }
+
         const RuntimeOriginSnapshot runtime_origin_snapshot = origin_state.snapshot();
         if (body_tracker_thread) {
           body_tracker_thread->set_origin_snapshot(runtime_origin_snapshot);
+          body_tracker_thread->set_runtime_hmd_snapshot(runtime_hmd_snapshot);
         }
         if (spatial_proxy_mesh_thread) {
           spatial_proxy_mesh_thread->set_origin_snapshot(runtime_origin_snapshot);
-          RuntimeHmdPoseSnapshotForSpatialMesh runtime_hmd_for_spatial;
-          if (frame.hmd.sequence != 0 && frame.hmd_valid) {
-            runtime_hmd_for_spatial.valid = true;
-            runtime_hmd_for_spatial.p = V3d{frame.hmd.px, frame.hmd.py, frame.hmd.pz};
-            runtime_hmd_for_spatial.q = normalize_q({frame.hmd.qw, frame.hmd.qx, frame.hmd.qy, frame.hmd.qz});
-            runtime_hmd_for_spatial.timestamp_ns = frame.read_timestamp_ns;
-          }
-          spatial_proxy_mesh_thread->set_runtime_hmd_snapshot(runtime_hmd_for_spatial);
+          spatial_proxy_mesh_thread->set_runtime_hmd_snapshot(runtime_hmd_snapshot);
         }
 
         if (tracking_transform_config.enabled) {
@@ -5704,6 +5852,16 @@ int main(int argc, char** argv) {
                                        false,
                                        false);
           }
+        }
+
+        if (runtime_hand_stability_gate && frame.hand_v2.sequence != 0) {
+          runtime_hand_stability_filter_hand_tracking.apply_prediction_distance_limit(
+              frame.hand_v2,
+              runtime_hmd_position_for_distance,
+              !left_uses_imu_profile,
+              !right_uses_imu_profile);
+          frame.hand_v2_valid = frame.hand_v2.sequence != 0 &&
+                                frame.hand_v2.hand_count > 0;
         }
 
         if (runtime_jitter_filter_enabled) {

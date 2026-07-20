@@ -8,6 +8,7 @@
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
 
+#include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
 
 namespace xr_runtime_adapter::override_controller {
@@ -94,6 +95,7 @@ struct RuntimeControllerImuMotionConfig {
   // Maximum accumulated synthetic controller path during prediction, in metres.
   // <= 0 disables the path limit.
   float max_prediction_path_m = 0.65f;
+  prediction_distance::Config prediction_distance{};
   bool prediction_window_mode = false;
   float prediction_window_ms = 500.0f;
 

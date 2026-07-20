@@ -7,6 +7,7 @@
 
 #include <xr_tracking/contracts/body_tracker_set_contract.hpp>
 
+#include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
 
 namespace xr_runtime_adapter::body_tracker_filter {
@@ -22,6 +23,7 @@ struct BodyTrackerStabilityGateConfig {
   // Maximum accumulated synthetic path during prediction, in metres.
   // <= 0 disables the path limit.
   double max_prediction_path_m = 0.65;
+  prediction_distance::Config prediction_distance{};
   bool prediction_window_mode = false;
   double prediction_window_ms = 500.0;
   bool publish_predicted_velocity = false;
@@ -36,6 +38,7 @@ class BodyTrackerStabilityFilter {
  public:
   void configure(BodyTrackerStabilityGateConfig cfg);
   void reset();
+  void set_runtime_hmd_position(std::optional<std::array<double, 3>> position);
 
   xr_tracking::BodyTrackerSetFrameF32V1 filter_observed(xr_tracking::BodyTrackerSetFrameF32V1 frame,
                                                         uint64_t now_ns);
@@ -114,6 +117,7 @@ class BodyTrackerStabilityFilter {
   bool has_template_ = false;
   xr_tracking::BodyTrackerSetFrameF32V1 template_frame_{};
   uint64_t last_synthetic_publish_ns_ = 0;
+  std::optional<std::array<double, 3>> runtime_hmd_position_;
 };
 
 }  // namespace xr_runtime_adapter::body_tracker_filter

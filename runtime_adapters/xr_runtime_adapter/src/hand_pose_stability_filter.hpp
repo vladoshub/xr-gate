@@ -5,12 +5,14 @@
 // xr_runtime_adapter owns runtime smoothing/reacquire policy.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -18,6 +20,7 @@
 
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 
+#include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
 
 namespace xr_runtime_adapter::hand_filter {
@@ -48,6 +51,7 @@ struct HandPoseStabilityFilterConfig {
   // Maximum accumulated synthetic controller path during prediction, in metres.
   // <= 0 disables the path limit.
   double max_prediction_path_m = 0.65;
+  prediction_distance::Config prediction_distance{};
   bool prediction_window_mode = false;
   double prediction_window_ms = 500.0;
   bool publish_predicted_velocity = false;
@@ -159,6 +163,47 @@ class HandPoseStabilityFilter {
     return frame;
   }
 
+  // Apply the HMD-distance limit after the caller has transformed both the HMD
+  // and hand frame into runtime space. This keeps the comparison consistent
+  // with coordinate_transform.offset_m, hmd_relative and runtime origin.
+  void apply_prediction_distance_limit(
+      xr_runtime::HandTrackingFrameF32V2& frame,
+      const std::optional<std::array<double, 3>>& transformed_hmd_position,
+      bool apply_left = true,
+      bool apply_right = true) {
+    if (!cfg_.enabled || !transformed_hmd_position ||
+        !prediction_distance::enabled(cfg_.prediction_distance)) {
+      return;
+    }
+
+    const auto apply_side = [&](xr_runtime::HandSideF32V2& side,
+                                HandStateV2& state,
+                                bool enabled) {
+      uint64_t prediction_elapsed_ns = 0;
+      if (!enabled || state.prediction_path_exhausted ||
+          !prediction_elapsed_v2(state, frame.source_timestamp_ns, cfg_,
+                                 prediction_elapsed_ns)) {
+        return;
+      }
+      const Vec3 p = controller_v2(side);
+      const std::array<double, 3> position = {p.x, p.y, p.z};
+      if (!prediction_distance::exceeds(
+              position, *transformed_hmd_position,
+              cfg_.prediction_distance)) {
+        return;
+      }
+
+      state.prediction_path_exhausted = true;
+      state.has_last_prediction = false;
+      state.blend_active = false;
+      clear_side_v2(side);
+    };
+
+    apply_side(frame.left, left_v2_, apply_left);
+    apply_side(frame.right, right_v2_, apply_right);
+    recompute_frame_status_v2(frame);
+  }
+
   std::string summary_string() const {
     std::ostringstream os;
     os << "hand_stability_gate: " << (cfg_.enabled ? "enabled" : "disabled") << "\n";
@@ -172,6 +217,13 @@ class HandPoseStabilityFilter {
     os << "hand_gate_max_prediction_velocity_mps: " << cfg_.max_prediction_velocity_mps << "\n";
     os << "hand_gate_prediction_damping: " << cfg_.prediction_damping << "\n";
     os << "hand_gate_max_prediction_path_m: " << cfg_.max_prediction_path_m << "\n";
+    os << "hand_gate_max_distance_m: "
+       << cfg_.prediction_distance.max_distance_m << "\n";
+    os << "hand_gate_distance_reference_axis: "
+       << prediction_distance::reference_axis_name(
+              cfg_.prediction_distance.reference_axis) << "\n";
+    os << "hand_gate_distance_reference_offset_m: "
+       << cfg_.prediction_distance.reference_offset_m << "\n";
     os << "hand_gate_prediction_window_mode: "
        << (cfg_.prediction_window_mode ? "true" : "false") << "\n";
     os << "hand_gate_prediction_window_ms: " << cfg_.prediction_window_ms << "\n";

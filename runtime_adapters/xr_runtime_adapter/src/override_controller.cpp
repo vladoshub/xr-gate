@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -1130,6 +1131,7 @@ void update_or_apply_imu_position_prediction(
     const RuntimeControllerImuMotionConfig& cfg,
     RuntimeControllerImuSideRuntimeState* state,
     const xr_runtime::HandSideF32V2* hand_side,
+    const xr_runtime::HmdPoseF64V1* hmd,
     uint64_t timestamp_ns,
     uint64_t hand_frame_sequence,
     uint64_t hand_source_timestamp_ns) {
@@ -1437,6 +1439,28 @@ void update_or_apply_imu_position_prediction(
     std::copy(std::begin(state->position_m), std::end(state->position_m),
               state->prediction_path_last_position_m);
     state->prediction_path_last_timestamp_ns = timestamp_ns;
+  }
+
+  if (hmd != nullptr &&
+      (hmd->flags & xr_runtime::HMD_FLAG_POSE_VALID) != 0u &&
+      std::isfinite(hmd->px) && std::isfinite(hmd->py) &&
+      std::isfinite(hmd->pz)) {
+    const std::array<double, 3> controller_position = {
+        state->position_m[0],
+        state->position_m[1],
+        state->position_m[2],
+    };
+    const std::array<double, 3> hmd_position = {
+        hmd->px,
+        hmd->py,
+        hmd->pz,
+    };
+    if (prediction_distance::exceeds(
+            controller_position, hmd_position, cfg.prediction_distance)) {
+      clear_imu_position_loss_state(*state, true);
+      invalidate_runtime_controller_pose(out);
+      return;
+    }
   }
 
   state->prediction_output_history_active = true;
@@ -1748,6 +1772,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       // cannot move the controller in space or bend its predicted trajectory.
       update_or_apply_imu_position_prediction(
           out, physical_imu, imu_motion_cfg, runtime_state, hand_side,
+          hmd,
           timestamp_ns, hand != nullptr ? hand->sequence : 0,
           hand != nullptr ? hand->source_timestamp_ns : 0);
 
