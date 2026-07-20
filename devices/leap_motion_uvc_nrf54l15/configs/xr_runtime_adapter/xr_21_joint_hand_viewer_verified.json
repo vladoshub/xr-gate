@@ -269,9 +269,9 @@
           "z",
           "y"
         ],
-        "invert_x": true,
+        "invert_x": false,
         "invert_y": false,
-        "invert_z": false,
+        "invert_z": true,
         "rotation_deg": {
           "x": 0.0,
           "y": 0.0,
