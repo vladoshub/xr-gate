@@ -1323,11 +1323,11 @@ void update_or_apply_imu_position_prediction(
       std::min(prediction_elapsed_ns, predict_ns);
   const float prediction_elapsed_s =
       static_cast<float>(clamped_prediction_ns) / 1.0e9f;
-  const float progress = predict_ns > 0
+  const float progress = cfg.prediction_time_decay_enabled && predict_ns > 0
       ? std::clamp(static_cast<float>(clamped_prediction_ns) /
                        static_cast<float>(predict_ns),
                    0.0f, 1.0f)
-      : 1.0f;
+      : 0.0f;
   const float damping = std::clamp(cfg.prediction_damping, 0.0f, 1.0f);
 
   if (!state->prediction_started) {

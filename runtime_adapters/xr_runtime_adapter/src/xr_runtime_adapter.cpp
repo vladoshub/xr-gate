@@ -2728,6 +2728,7 @@ int main(int argc, char** argv) {
   bool runtime_controller_right_imu_position_prediction = false;
   bool runtime_controller_imu_prediction_window_mode = false;
   double runtime_controller_imu_prediction_window_ms = 500.0;
+  bool runtime_controller_imu_time_decay = true;
   double runtime_controller_imu_max_prediction_speed_mps = 2.0;
   double runtime_controller_imu_max_prediction_path_m = 0.65;
   double runtime_controller_imu_max_distance_m = 0.60;
@@ -3167,6 +3168,8 @@ int main(int argc, char** argv) {
                  "Estimate both IMU-controller anchor velocities from all real optical controller poses in a rolling time window instead of the backend instantaneous velocity");
   app.add_option("--runtime-controller-imu-prediction-window-ms", runtime_controller_imu_prediction_window_ms,
                  "Rolling real optical-pose history duration used by controller IMU prediction-window mode");
+  app.add_option("--runtime-controller-imu-time-decay", runtime_controller_imu_time_decay,
+                 "Fade controller IMU predicted velocity and acceleration to zero by predict-lost timeout; false keeps full response until timeout");
   app.add_option("--runtime-controller-imu-max-prediction-speed-mps", runtime_controller_imu_max_prediction_speed_mps,
                  "Maximum speed of the final controller IMU predicted position after acceleration and lever arm; 0 disables");
   app.add_option("--runtime-controller-imu-max-prediction-path-m", runtime_controller_imu_max_prediction_path_m,
@@ -4146,6 +4149,8 @@ int main(int argc, char** argv) {
               << (runtime_controller_imu_prediction_window_mode ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_prediction_window_ms: "
               << runtime_controller_imu_prediction_window_ms << "\n";
+    std::cout << "runtime_controller_imu_time_decay: "
+              << (runtime_controller_imu_time_decay ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_max_prediction_speed_mps: "
               << runtime_controller_imu_max_prediction_speed_mps << "\n";
     std::cout << "runtime_controller_imu_max_prediction_path_m: "
@@ -4854,6 +4859,7 @@ int main(int argc, char** argv) {
       dst.prediction_window_mode = runtime_controller_imu_prediction_window_mode;
       dst.prediction_window_ms = static_cast<float>(
           std::max(0.0, runtime_controller_imu_prediction_window_ms));
+      dst.prediction_time_decay_enabled = runtime_controller_imu_time_decay;
       dst.max_prediction_speed_mps = static_cast<float>(
           std::max(0.0, runtime_controller_imu_max_prediction_speed_mps));
       dst.max_prediction_path_m = static_cast<float>(

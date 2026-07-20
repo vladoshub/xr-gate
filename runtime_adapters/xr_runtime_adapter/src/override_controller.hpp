@@ -92,6 +92,9 @@ struct RuntimeControllerImuMotionConfig {
   // lever-arm displacement. <= 0 disables this additional limit.
   float max_prediction_speed_mps = 2.0f;
   float prediction_damping = 1.0f;
+  // When enabled, base velocity and IMU acceleration fade linearly to zero
+  // by predict_lost_ms. When disabled, full response is kept until timeout.
+  bool prediction_time_decay_enabled = true;
   // Maximum accumulated synthetic controller path before position freeze, in metres.
   // The frozen pose remains valid until predict_lost_ms; <= 0 disables.
   float max_prediction_path_m = 0.65f;
