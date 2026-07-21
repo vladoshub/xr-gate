@@ -139,6 +139,7 @@ echo "summary_shm: enabled=$PUBLISH_RUNTIME_SPATIAL_SHM stream=$SPATIAL_STREAM s
 echo "proxy_mesh_shm: enabled=$SPATIAL_PROXY_MESH_ENABLED publish=$PUBLISH_SPATIAL_PROXY_MESH_SHM stream=$SPATIAL_PROXY_MESH_STREAM shm=$SPATIAL_PROXY_MESH_SHM_NAME rate=${SPATIAL_PROXY_MESH_RATE_HZ}Hz triangles=$SPATIAL_LIVE_GRID_TRIANGLES_ENABLED max_triangles=$SPATIAL_PROXY_MESH_MAX_TRIANGLES"
 echo "mapper: $MAPPER_BACKEND depth=${DEPTH_RATE_HZ}Hz range=${MIN_DEPTH_M}-${MAX_DEPTH_M} voxel=$POINT_VOXEL_SIZE_M max_points_frame=$MAX_POINTS_PER_FRAME"
 echo "quality: enabled=$QUALITY_GATE_ENABLED min_raw=$QUALITY_MIN_RAW_POINTS min_filtered=$QUALITY_MIN_FILTERED_POINTS pose_delta=$QUALITY_MAX_POSE_DELTA_M/$QUALITY_MAX_POSE_DELTA_DEG"
+echo "depth: min_disparity=$MIN_DISPARITY num_disparities=$NUM_DISPARITIES"
 
 args=(
   --mode "$SPATIAL_MAPPER_MODE"
@@ -165,6 +166,7 @@ args=(
   --depth-frame-id "$DEPTH_FRAME_ID"
   --fisheye-balance "$FISHEYE_BALANCE"
   --depth-rate-hz "$DEPTH_RATE_HZ"
+  --min-disparity "$MIN_DISPARITY"
   --num-disparities "$NUM_DISPARITIES"
   --block-size "$BLOCK_SIZE"
   --uniqueness-ratio "$UNIQUENESS_RATIO"
