@@ -128,6 +128,7 @@ RUNTIME_HAND_STABILITY_GATE=1
 RUNTIME_HAND_GATE_HOLD_LOST_MS=50
 RUNTIME_HAND_GATE_PREDICT_LOST_MS=350
 RUNTIME_HAND_GATE_PREDICTION_DAMPING=0.5
+RUNTIME_HAND_TRACKING_TIME_DECAY=1
 RUNTIME_HAND_GATE_MAX_PREDICTION_VELOCITY_MPS=2.0
 RUNTIME_HAND_GATE_PUBLISH_PREDICTED_VELOCITY=0
 RUNTIME_HAND_GATE_REACQUIRE_BLEND_MS=0
@@ -185,7 +186,11 @@ DERIVED_GRAB_RESPONSE_START=0.85
 
 The adapter can merge hand tracking with external controller input. This is useful when hand pose is available, but buttons, triggers, sticks, or fallback input should come from an external controller.
 
-When an HMD-relative lost-hand fallback is active together with an IMU orientation source, the published fallback orientation comes entirely from the existing non-IMU HMD-relative/static fallback. IMU orientation and angular velocity are not merged into the fallback output. Position prediction, lever-arm trajectory and acceleration compensation continue to use the complete physical IMU sample internally.
+When an HMD-relative lost-hand fallback is active together with an IMU
+orientation source, the published fallback orientation comes entirely from the
+existing non-IMU HMD-relative/static fallback. IMU orientation and angular
+velocity are not merged into the fallback output. Position prediction and
+acceleration integration continue to use the physical IMU samples internally.
 
 Typical stream:
 
@@ -218,9 +223,8 @@ IMU yaw correction deliberately excludes `hand_orientation_offset` and
 It compares coordinate/axis-corrected optical and IMU poses, then applies the
 retained yaw correction only to the final published IMU orientation where the
 configured offsets remain active. The uncorrected physical IMU orientation is
-kept for position prediction, lever-arm trajectory and acceleration conversion,
-so periodic and reacquire yaw correction cannot move the hand in space. This
-also prevents presentation/mounting offsets from being learned again as yaw
+kept for position prediction and acceleration conversion, so periodic and
+reacquire yaw correction cannot move the hand in space. This also prevents presentation/mounting offsets from being learned again as yaw
 drift.
 
 Controller input TCP uses the same packed `ControllerInputV3` payload as SHM
@@ -246,6 +250,7 @@ RUNTIME_BODY_TRACKER_HOLD_LOST_MS=150
 RUNTIME_BODY_TRACKER_PREDICT_LOST_MS=350
 RUNTIME_BODY_TRACKER_MAX_PREDICTION_VELOCITY_MPS=0.8
 RUNTIME_BODY_TRACKER_PREDICTION_DAMPING=0.30
+RUNTIME_BODY_TRACKER_TIME_DECAY=1
 RUNTIME_BODY_TRACKER_PUBLISH_PREDICTED_VELOCITY=0
 RUNTIME_BODY_TRACKER_REACQUIRE_BLEND_MS=180
 ```
@@ -266,46 +271,12 @@ RUNTIME_CONTROLLER_IMU_PREDICTION_WINDOW_MODE=1
 RUNTIME_CONTROLLER_IMU_PREDICTION_WINDOW_MS=500
 ```
 
-An independent lever-arm trajectory mode can curve the position prediction from
-live IMU orientation without changing the hold/predict/reacquire state machine:
+During IMU position prediction, every new timestamped accelerometer sample in
+`ControllerInputV3` is integrated once in source-timestamp order. This preserves
+all samples supplied by providers that batch multiple IMU readings in one frame
+and prevents repeated runtime ticks from integrating the same SHM data twice.
 
-```bash
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_MODE=1
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_X_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_Y_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_Z_M=-0.12
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_X_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_Y_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_Z_M=-0.12
-```
-
-The vector is pivot-to-controller in the final controller-local frame. Window
-mode and lever-arm mode are independent and may be enabled in any combination.
-The lever-arm path subtracts `omega x r` from the selected launch velocity to
-avoid counting the initial tangential velocity twice. Accelerometer integration
-remains the existing optional additive trajectory term.
-
-When accelerometer integration and lever-arm trajectory are both enabled, two
-independent opt-in corrections can remove rotational acceleration that the
-lever-arm path already represents:
-
-```bash
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_CENTRIPETAL_COMPENSATION=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_TANGENTIAL_COMPENSATION=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_ANGULAR_ACCELERATION_SMOOTH_ALPHA=0.15
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_MAX_ANGULAR_ACCELERATION_RAD_S2=50.0
-```
-
-Centripetal compensation subtracts `omega x (omega x r)`. Tangential
-compensation derives angular acceleration from gyro samples, low-pass filters
-it, and subtracts `alpha x r`. The exact IMU board position inside inexpensive
-controllers is not reliably known, so both corrections intentionally reuse the
-configured pivot-to-controller lever-arm vector as a pivot-to-sensor
-approximation. All values default to disabled and modify only the acceleration
-fed into the existing `Predicting` trajectory integrator; state transitions and
-timers are unchanged.
-
-The controller mode replaces only the legacy backend instantaneous velocity
+The window mode replaces only the legacy backend instantaneous velocity
 with the rolling optical estimate. Existing hold/predict timing, damping,
 velocity clamp, reacquire blend, and optional accelerometer integration remain
 unchanged.
@@ -318,8 +289,8 @@ RUNTIME_CONTROLLER_IMU_MAX_PREDICTION_SPEED_MPS=2.0
 ```
 
 The limit constrains both the selected launch velocity and the final output
-after acceleration integration and lever-arm displacement. `0` disables this
-additional speed guard; the existing shared launch-velocity cap still applies.
+after acceleration integration. `0` disables this additional speed guard; the
+existing shared launch-velocity cap still applies.
 The prediction state machine, time/path terminals, and lost-hand fallback are
 unchanged.
 

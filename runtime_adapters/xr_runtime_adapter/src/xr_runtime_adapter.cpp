@@ -2734,17 +2734,6 @@ int main(int argc, char** argv) {
   double runtime_controller_imu_max_distance_m = 0.60;
   std::string runtime_controller_imu_distance_reference_axis = "none";
   double runtime_controller_imu_distance_reference_offset_m = 0.0;
-  bool runtime_controller_imu_lever_arm_mode = false;
-  double runtime_controller_imu_lever_arm_left_x_m = 0.0;
-  double runtime_controller_imu_lever_arm_left_y_m = 0.0;
-  double runtime_controller_imu_lever_arm_left_z_m = -0.12;
-  double runtime_controller_imu_lever_arm_right_x_m = 0.0;
-  double runtime_controller_imu_lever_arm_right_y_m = 0.0;
-  double runtime_controller_imu_lever_arm_right_z_m = -0.12;
-  bool runtime_controller_imu_lever_arm_centripetal_compensation = false;
-  bool runtime_controller_imu_lever_arm_tangential_compensation = false;
-  double runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha = 0.15;
-  double runtime_controller_imu_lever_arm_max_angular_acceleration_rad_s2 = 50.0;
   bool runtime_controller_left_imu_yaw_correction = false;
   bool runtime_controller_right_imu_yaw_correction = false;
   std::string runtime_controller_imu_gravity_control_file =
@@ -2837,6 +2826,7 @@ int main(int argc, char** argv) {
   double runtime_body_tracker_max_prediction_velocity_mps = 0.8;
   double runtime_body_tracker_max_prediction_acceleration_mps2 = 0.0;
   double runtime_body_tracker_prediction_damping = 0.35;
+  bool runtime_body_tracker_time_decay = true;
   double runtime_body_tracker_max_prediction_path_m = 0.65;
   double runtime_body_tracker_max_distance_m = 1.20;
   std::string runtime_body_tracker_distance_reference_axis = "y";
@@ -2878,6 +2868,7 @@ int main(int argc, char** argv) {
   double runtime_hand_gate_predict_lost_ms_imu = 0.0;
   double runtime_hand_gate_max_prediction_velocity_mps = 2.0;
   double runtime_hand_gate_prediction_damping = 0.5;
+  bool runtime_hand_tracking_time_decay = true;
   bool runtime_hand_tracking_prediction_window_mode = false;
   double runtime_hand_tracking_prediction_window_ms = 500.0;
   double runtime_hand_tracking_max_prediction_path_m = 0.65;
@@ -3171,7 +3162,7 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-imu-time-decay", runtime_controller_imu_time_decay,
                  "Fade controller IMU predicted velocity and acceleration to zero by predict-lost timeout; false keeps full response until timeout");
   app.add_option("--runtime-controller-imu-max-prediction-speed-mps", runtime_controller_imu_max_prediction_speed_mps,
-                 "Maximum speed of the final controller IMU predicted position after acceleration and lever arm; 0 disables");
+                 "Maximum speed of the final controller IMU predicted position after acceleration integration; 0 disables");
   app.add_option("--runtime-controller-imu-max-prediction-path-m", runtime_controller_imu_max_prediction_path_m,
                  "Maximum accumulated controller IMU prediction path before position freeze in metres; 0 disables");
   app.add_option("--runtime-controller-imu-max-distance-m", runtime_controller_imu_max_distance_m,
@@ -3180,28 +3171,6 @@ int main(int argc, char** argv) {
                  "Optional runtime HMD-reference offset axis for IMU-controller distance limiting: none, x, y, z");
   app.add_option("--runtime-controller-imu-distance-reference-offset-m", runtime_controller_imu_distance_reference_offset_m,
                  "Signed offset in metres along --runtime-controller-imu-distance-reference-axis, applied after the HMD transform/config offset");
-  app.add_option("--runtime-controller-imu-lever-arm-mode", runtime_controller_imu_lever_arm_mode,
-                 "Curve controller IMU position prediction around a pivot using live IMU orientation; changes only the trajectory inside the existing Predicting state");
-  app.add_option("--runtime-controller-imu-lever-arm-left-x-m", runtime_controller_imu_lever_arm_left_x_m,
-                 "Left pivot-to-controller local lever-arm X component in metres");
-  app.add_option("--runtime-controller-imu-lever-arm-left-y-m", runtime_controller_imu_lever_arm_left_y_m,
-                 "Left pivot-to-controller local lever-arm Y component in metres");
-  app.add_option("--runtime-controller-imu-lever-arm-left-z-m", runtime_controller_imu_lever_arm_left_z_m,
-                 "Left pivot-to-controller local lever-arm Z component in metres");
-  app.add_option("--runtime-controller-imu-lever-arm-right-x-m", runtime_controller_imu_lever_arm_right_x_m,
-                 "Right pivot-to-controller local lever-arm X component in metres");
-  app.add_option("--runtime-controller-imu-lever-arm-right-y-m", runtime_controller_imu_lever_arm_right_y_m,
-                 "Right pivot-to-controller local lever-arm Y component in metres");
-  app.add_option("--runtime-controller-imu-lever-arm-right-z-m", runtime_controller_imu_lever_arm_right_z_m,
-                 "Right pivot-to-controller local lever-arm Z component in metres");
-  app.add_option("--runtime-controller-imu-lever-arm-centripetal-compensation", runtime_controller_imu_lever_arm_centripetal_compensation,
-                 "Subtract omega x (omega x r) from controller-IMU accelerometer integration while lever-arm trajectory mode is active. Uses the configured controller lever arm as an approximate sensor lever arm.");
-  app.add_option("--runtime-controller-imu-lever-arm-tangential-compensation", runtime_controller_imu_lever_arm_tangential_compensation,
-                 "Subtract filtered angular-acceleration x r from controller-IMU accelerometer integration while lever-arm trajectory mode is active. Uses the configured controller lever arm as an approximate sensor lever arm.");
-  app.add_option("--runtime-controller-imu-lever-arm-angular-acceleration-smooth-alpha", runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha,
-                 "Low-pass alpha in 0..1 for gyro-derived angular acceleration used by tangential lever-arm compensation");
-  app.add_option("--runtime-controller-imu-lever-arm-max-angular-acceleration-rad-s2", runtime_controller_imu_lever_arm_max_angular_acceleration_rad_s2,
-                 "Magnitude clamp for gyro-derived angular acceleration in rad/s^2; <=0 disables the clamp");
   app.add_option("--runtime-controller-left-imu-yaw-correction", runtime_controller_left_imu_yaw_correction,
                  "Enable retained optical yaw correction for the left IMU orientation. Updates only while a real optical hand pose is available.");
   app.add_option("--runtime-controller-right-imu-yaw-correction", runtime_controller_right_imu_yaw_correction,
@@ -3387,6 +3356,8 @@ int main(int argc, char** argv) {
                  "Cap body tracker prediction velocity change in metres per second squared; <=0 disables acceleration clamp");
   app.add_option("--runtime-body-tracker-prediction-damping", runtime_body_tracker_prediction_damping,
                  "Scale predicted body tracker velocity during lost-tracker prediction; 0 freezes, 1 uses full velocity");
+  app.add_option("--runtime-body-tracker-time-decay", runtime_body_tracker_time_decay,
+                 "Fade body-tracker predicted velocity to zero by PREDICT_LOST_MS; false keeps the configured velocity scale until timeout");
   app.add_option("--runtime-body-tracker-max-prediction-path-m", runtime_body_tracker_max_prediction_path_m,
                  "Maximum accumulated body tracker prediction path before position freeze in metres; 0 disables");
   app.add_option("--runtime-body-tracker-max-distance-m", runtime_body_tracker_max_distance_m,
@@ -3467,6 +3438,8 @@ int main(int argc, char** argv) {
                  "Runtime hand gate: clamp predicted lost-hand linear velocity in meters/second");
   app.add_option("--runtime-hand-gate-prediction-damping", runtime_hand_gate_prediction_damping,
                  "Runtime hand gate: prediction damping factor in 0..1 before applying lost-hand velocity");
+  app.add_option("--runtime-hand-tracking-time-decay", runtime_hand_tracking_time_decay,
+                 "Fade HAND_TRACKING predicted velocity to zero by PREDICT_LOST_MS; false keeps the configured velocity scale until timeout");
   app.add_option("--runtime-hand-tracking-prediction-window-mode", runtime_hand_tracking_prediction_window_mode,
                  "Estimate HAND_TRACKING lost-pose velocity from all accepted real controller poses in a rolling time window instead of the legacy final-frame delta");
   app.add_option("--runtime-hand-tracking-prediction-window-ms", runtime_hand_tracking_prediction_window_ms,
@@ -3981,29 +3954,6 @@ int main(int argc, char** argv) {
         runtime_controller_imu_distance_reference_offset_m,
         "--runtime-controller-imu-max-distance-m",
         "--runtime-controller-imu-distance-reference-offset-m");
-    const double runtime_controller_imu_lever_arm_values[] = {
-        runtime_controller_imu_lever_arm_left_x_m,
-        runtime_controller_imu_lever_arm_left_y_m,
-        runtime_controller_imu_lever_arm_left_z_m,
-        runtime_controller_imu_lever_arm_right_x_m,
-        runtime_controller_imu_lever_arm_right_y_m,
-        runtime_controller_imu_lever_arm_right_z_m,
-    };
-    for (double value : runtime_controller_imu_lever_arm_values) {
-      if (!std::isfinite(value)) {
-        throw std::runtime_error("controller IMU lever-arm components must be finite");
-      }
-    }
-    if (!std::isfinite(runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha) ||
-        runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha < 0.0 ||
-        runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha > 1.0) {
-      throw std::runtime_error(
-          "--runtime-controller-imu-lever-arm-angular-acceleration-smooth-alpha must be in 0..1");
-    }
-    if (!std::isfinite(runtime_controller_imu_lever_arm_max_angular_acceleration_rad_s2)) {
-      throw std::runtime_error(
-          "--runtime-controller-imu-lever-arm-max-angular-acceleration-rad-s2 must be finite");
-    }
     if (derived_pinch_active_threshold < 0.0f || derived_pinch_active_threshold > 1.0f ||
         derived_grab_active_threshold < 0.0f || derived_grab_active_threshold > 1.0f) {
       throw std::runtime_error("derived gesture thresholds must be in 0..1");
@@ -4085,6 +4035,8 @@ int main(int argc, char** argv) {
         std::cout << "runtime_body_tracker_max_prediction_velocity_mps: " << runtime_body_tracker_max_prediction_velocity_mps << "\n";
         std::cout << "runtime_body_tracker_max_prediction_acceleration_mps2: " << runtime_body_tracker_max_prediction_acceleration_mps2 << "\n";
         std::cout << "runtime_body_tracker_prediction_damping: " << runtime_body_tracker_prediction_damping << "\n";
+        std::cout << "runtime_body_tracker_time_decay: "
+                  << (runtime_body_tracker_time_decay ? "true" : "false") << "\n";
         std::cout << "runtime_body_tracker_max_prediction_path_m: " << runtime_body_tracker_max_prediction_path_m << "\n";
         std::cout << "runtime_body_tracker_max_distance_m: " << runtime_body_tracker_max_distance_m << "\n";
         std::cout << "runtime_body_tracker_distance_reference_axis: "
@@ -4162,24 +4114,6 @@ int main(int argc, char** argv) {
                      runtime_controller_imu_distance_reference_axis_value) << "\n";
     std::cout << "runtime_controller_imu_distance_reference_offset_m: "
               << runtime_controller_imu_distance_reference_offset_m << "\n";
-    std::cout << "runtime_controller_imu_lever_arm_mode: "
-              << (runtime_controller_imu_lever_arm_mode ? "true" : "false") << "\n";
-    std::cout << "runtime_controller_imu_lever_arm_left_m: ["
-              << runtime_controller_imu_lever_arm_left_x_m << ", "
-              << runtime_controller_imu_lever_arm_left_y_m << ", "
-              << runtime_controller_imu_lever_arm_left_z_m << "]\n";
-    std::cout << "runtime_controller_imu_lever_arm_right_m: ["
-              << runtime_controller_imu_lever_arm_right_x_m << ", "
-              << runtime_controller_imu_lever_arm_right_y_m << ", "
-              << runtime_controller_imu_lever_arm_right_z_m << "]\n";
-    std::cout << "runtime_controller_imu_lever_arm_centripetal_compensation: "
-              << (runtime_controller_imu_lever_arm_centripetal_compensation ? "true" : "false") << "\n";
-    std::cout << "runtime_controller_imu_lever_arm_tangential_compensation: "
-              << (runtime_controller_imu_lever_arm_tangential_compensation ? "true" : "false") << "\n";
-    std::cout << "runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha: "
-              << runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha << "\n";
-    std::cout << "runtime_controller_imu_lever_arm_max_angular_acceleration_rad_s2: "
-              << runtime_controller_imu_lever_arm_max_angular_acceleration_rad_s2 << "\n";
     std::cout << "runtime_controller_left_imu_yaw_correction: "
               << (runtime_controller_left_imu_yaw_correction ? "true" : "false") << "\n";
     std::cout << "runtime_controller_right_imu_yaw_correction: "
@@ -4277,6 +4211,8 @@ int main(int argc, char** argv) {
       std::cout << "runtime_hand_gate_predict_lost_ms_imu: " << runtime_hand_gate_predict_lost_ms_imu << "\n";
       std::cout << "runtime_hand_gate_max_prediction_velocity_mps: " << runtime_hand_gate_max_prediction_velocity_mps << "\n";
       std::cout << "runtime_hand_gate_prediction_damping: " << runtime_hand_gate_prediction_damping << "\n";
+      std::cout << "runtime_hand_tracking_time_decay: "
+                << (runtime_hand_tracking_time_decay ? "true" : "false") << "\n";
       std::cout << "runtime_hand_tracking_prediction_window_mode: " << (runtime_hand_tracking_prediction_window_mode ? "true" : "false") << "\n";
       std::cout << "runtime_hand_tracking_prediction_window_ms: " << runtime_hand_tracking_prediction_window_ms << "\n";
       std::cout << "runtime_hand_tracking_max_prediction_path_m: " << runtime_hand_tracking_max_prediction_path_m << "\n";
@@ -4695,6 +4631,7 @@ int main(int argc, char** argv) {
       cfg.stability_gate.max_prediction_velocity_mps = runtime_body_tracker_max_prediction_velocity_mps;
       cfg.stability_gate.max_prediction_acceleration_mps2 = runtime_body_tracker_max_prediction_acceleration_mps2;
       cfg.stability_gate.prediction_damping = runtime_body_tracker_prediction_damping;
+      cfg.stability_gate.prediction_time_decay_enabled = runtime_body_tracker_time_decay;
       cfg.stability_gate.max_prediction_path_m = runtime_body_tracker_max_prediction_path_m;
       cfg.stability_gate.prediction_distance.max_distance_m =
           runtime_body_tracker_max_distance_m;
@@ -4839,10 +4776,7 @@ int main(int argc, char** argv) {
     const auto configure_imu_motion = [&](override_controller::RuntimeControllerImuMotionConfig& dst,
                                           bool acceleration_integration,
                                           bool position_prediction,
-                                          bool yaw_correction,
-                                          double lever_arm_x_m,
-                                          double lever_arm_y_m,
-                                          double lever_arm_z_m) {
+                                          bool yaw_correction) {
       dst.acceleration_integration_enabled = acceleration_integration;
       dst.position_prediction_enabled = position_prediction;
       dst.yaw_correction_enabled = yaw_correction;
@@ -4870,20 +4804,6 @@ int main(int argc, char** argv) {
           runtime_controller_imu_distance_reference_axis_value;
       dst.prediction_distance.reference_offset_m =
           runtime_controller_imu_distance_reference_offset_m;
-      dst.lever_arm_enabled = runtime_controller_imu_lever_arm_mode;
-      dst.lever_arm_local_m[0] = static_cast<float>(lever_arm_x_m);
-      dst.lever_arm_local_m[1] = static_cast<float>(lever_arm_y_m);
-      dst.lever_arm_local_m[2] = static_cast<float>(lever_arm_z_m);
-      dst.lever_arm_centripetal_compensation_enabled =
-          runtime_controller_imu_lever_arm_centripetal_compensation;
-      dst.lever_arm_tangential_compensation_enabled =
-          runtime_controller_imu_lever_arm_tangential_compensation;
-      dst.lever_arm_angular_acceleration_smooth_alpha = static_cast<float>(
-          std::clamp(
-              runtime_controller_imu_lever_arm_angular_acceleration_smooth_alpha,
-              0.0, 1.0));
-      dst.lever_arm_max_angular_acceleration_rad_s2 = static_cast<float>(
-          runtime_controller_imu_lever_arm_max_angular_acceleration_rad_s2);
       dst.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       dst.reacquire_blend_ms = static_cast<float>(
           std::max(0.0, runtime_hand_gate_reacquire_blend_ms_imu));
@@ -4911,17 +4831,11 @@ int main(int argc, char** argv) {
     configure_imu_motion(runtime_controller_synthesis_cfg.left_imu_motion,
                          runtime_controller_left_imu_acceleration_integration,
                          runtime_controller_left_imu_position_prediction,
-                         runtime_controller_left_imu_yaw_correction,
-                         runtime_controller_imu_lever_arm_left_x_m,
-                         runtime_controller_imu_lever_arm_left_y_m,
-                         runtime_controller_imu_lever_arm_left_z_m);
+                         runtime_controller_left_imu_yaw_correction);
     configure_imu_motion(runtime_controller_synthesis_cfg.right_imu_motion,
                          runtime_controller_right_imu_acceleration_integration,
                          runtime_controller_right_imu_position_prediction,
-                         runtime_controller_right_imu_yaw_correction,
-                         runtime_controller_imu_lever_arm_right_x_m,
-                         runtime_controller_imu_lever_arm_right_y_m,
-                         runtime_controller_imu_lever_arm_right_z_m);
+                         runtime_controller_right_imu_yaw_correction);
     runtime_controller_synthesis_cfg.left_hand_tracking_movement_space =
         runtime_controller_left_movement_space_hand_tracking_value;
     runtime_controller_synthesis_cfg.right_hand_tracking_movement_space =
@@ -5026,6 +4940,7 @@ int main(int argc, char** argv) {
                                   bool prediction_window_mode,
                                   double prediction_window_ms,
                                   double max_prediction_path_m,
+                                  bool prediction_time_decay_enabled,
                                   double max_distance_m,
                                   prediction_distance::ReferenceAxis distance_reference_axis,
                                   double distance_reference_offset_m,
@@ -5040,6 +4955,7 @@ int main(int argc, char** argv) {
       cfg.predict_lost_ms = predict_lost_ms;
       cfg.max_prediction_velocity_mps = runtime_hand_gate_max_prediction_velocity_mps;
       cfg.prediction_damping = runtime_hand_gate_prediction_damping;
+      cfg.prediction_time_decay_enabled = prediction_time_decay_enabled;
       cfg.prediction_window_mode = prediction_window_mode;
       cfg.prediction_window_ms = prediction_window_ms;
       cfg.max_prediction_path_m = max_prediction_path_m;
@@ -5062,6 +4978,7 @@ int main(int argc, char** argv) {
           runtime_hand_tracking_prediction_window_mode,
           runtime_hand_tracking_prediction_window_ms,
           runtime_hand_tracking_max_prediction_path_m,
+          runtime_hand_tracking_time_decay,
           runtime_hand_tracking_max_distance_m,
           runtime_hand_tracking_distance_reference_axis_value,
           runtime_hand_tracking_distance_reference_offset_m,
@@ -5078,6 +4995,7 @@ int main(int argc, char** argv) {
           false,
           0.0,
           0.0,
+          true,
           0.0,
           prediction_distance::ReferenceAxis::None,
           0.0,

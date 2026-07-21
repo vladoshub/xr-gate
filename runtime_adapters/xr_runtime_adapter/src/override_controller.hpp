@@ -88,8 +88,8 @@ struct RuntimeControllerImuMotionConfig {
   float predict_lost_ms = 600.0f;
   float max_prediction_velocity_mps = 3.0f;
   // Maximum IMU-controller prediction speed. It constrains the launch/base
-  // velocity and the final synthetic output after acceleration integration and
-  // lever-arm displacement. <= 0 disables this additional limit.
+  // velocity and the final synthetic output after acceleration integration.
+  // <= 0 disables this additional limit.
   float max_prediction_speed_mps = 2.0f;
   float prediction_damping = 1.0f;
   // When enabled, base velocity and IMU acceleration fade linearly to zero
@@ -101,23 +101,6 @@ struct RuntimeControllerImuMotionConfig {
   prediction_distance::Config prediction_distance{};
   bool prediction_window_mode = false;
   float prediction_window_ms = 500.0f;
-
-  // Optional trajectory-only lever-arm model. It does not add states or alter
-  // hold/predict/reacquire timing. The vector is from the inferred pivot to the
-  // controller origin in the final controller-local orientation frame.
-  bool lever_arm_enabled = false;
-  float lever_arm_local_m[3] = {0.0f, 0.0f, -0.12f};
-
-  // Optional correction of accelerometer integration while lever-arm
-  // trajectory mode is active. Because the physical IMU position inside a
-  // controller cannot be determined reliably, the same pivot-to-controller
-  // lever_arm_local_m vector is used as an approximation for pivot-to-sensor.
-  // Both corrections are opt-in and alter only the acceleration fed into the
-  // existing Predicting-state integrator.
-  bool lever_arm_centripetal_compensation_enabled = false;
-  bool lever_arm_tangential_compensation_enabled = false;
-  float lever_arm_angular_acceleration_smooth_alpha = 0.15f;
-  float lever_arm_max_angular_acceleration_rad_s2 = 50.0f;
 
   bool publish_predicted_velocity = false;
   float reacquire_blend_ms = 0.0f;
@@ -145,13 +128,21 @@ struct RuntimeControllerImuMotionConfig {
   float yaw_correction_reacquire_blend_ms = 250.0f;
 };
 
+enum class RuntimeControllerImuPredictionFreezeReason : uint8_t {
+  None = 0,
+  MaxDistance = 1,
+  MaxPredictionPath = 2,
+};
+
 struct RuntimeControllerImuSideRuntimeState {
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
-  // Path/distance limits freeze only the synthetic position. Live IMU
-  // orientation continues until the normal predict_lost_ms timeout.
-  bool prediction_frozen = false;
+  // MAX_DISTANCE_M may recover from the frozen position when newly received
+  // accelerometer samples produce an in-range candidate. MAX_PREDICTION_PATH_M
+  // remains latched until optical reacquire or the normal prediction timeout.
+  RuntimeControllerImuPredictionFreezeReason prediction_freeze_reason =
+      RuntimeControllerImuPredictionFreezeReason::None;
   bool reacquire_blend_active = false;
   bool yaw_correction_valid = false;
   bool yaw_correction_requested = false;
@@ -159,7 +150,9 @@ struct RuntimeControllerImuSideRuntimeState {
   bool yaw_check_reacquire = false;
   bool yaw_blend_active = false;
   bool yaw_blend_reacquire = false;
-  uint64_t last_update_ns = 0;
+  // Timestamp of the newest accelerometer sample already integrated. This
+  // prevents repeated runtime ticks from integrating the same SHM frame twice.
+  uint64_t last_acceleration_sample_timestamp_ns = 0;
   uint64_t last_optical_pose_ns = 0;
   uint64_t last_yaw_correction_update_ns = 0;
   uint64_t yaw_check_last_frame_sequence = 0;
@@ -168,10 +161,6 @@ struct RuntimeControllerImuSideRuntimeState {
   uint64_t reacquire_blend_start_ns = 0;
   float anchor_position_m[3] = {};
   float anchor_velocity_mps[3] = {};
-  bool lever_arm_anchor_valid = false;
-  float lever_arm_anchor_world_m[3] = {};
-  float lever_arm_pivot_anchor_position_m[3] = {};
-  float lever_arm_pivot_anchor_velocity_mps[3] = {};
   prediction_window::PositionWindowEstimator<> position_history{};
   uint64_t position_history_last_frame_sequence = 0;
   float position_m[3] = {};
@@ -180,7 +169,7 @@ struct RuntimeControllerImuSideRuntimeState {
   float acceleration_velocity_delta_mps[3] = {};
   // Last position actually published by the IMU predictor. This is separate
   // from the analytical trajectory so the final output can be rate-limited
-  // after acceleration and lever-arm displacement have both been applied.
+  // after acceleration integration has been applied.
   bool prediction_output_history_active = false;
   float prediction_output_last_position_m[3] = {};
   uint64_t prediction_output_last_timestamp_ns = 0;
@@ -188,10 +177,6 @@ struct RuntimeControllerImuSideRuntimeState {
   float prediction_path_m = 0.0f;
   float prediction_path_last_position_m[3] = {};
   uint64_t prediction_path_last_timestamp_ns = 0;
-  bool lever_arm_angular_history_valid = false;
-  uint64_t lever_arm_angular_history_timestamp_ns = 0;
-  float lever_arm_previous_angular_velocity_world_rad_s[3] = {};
-  float lever_arm_filtered_angular_acceleration_world_rad_s2[3] = {};
   float reacquire_blend_from_position_m[3] = {};
   float reacquire_blend_from_velocity_mps[3] = {};
   bool yaw_trigger_range_valid = false;

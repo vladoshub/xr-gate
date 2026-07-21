@@ -466,14 +466,16 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
     const uint64_t dt_ns = std::min<uint64_t>(prediction_elapsed_ns, predict_ns);
     const double dt_s = static_cast<double>(dt_ns) / 1e9;
     const double damping = std::clamp(cfg_.prediction_damping, 0.0, 1.0);
-    const double progress = std::clamp(static_cast<double>(dt_ns) /
-                                           static_cast<double>(predict_ns),
-                                       0.0, 1.0);
+    const double progress = cfg_.prediction_time_decay_enabled
+        ? std::clamp(static_cast<double>(dt_ns) /
+                         static_cast<double>(predict_ns),
+                     0.0, 1.0)
+        : 0.0;
     Vec3 v = clamp_velocity(state.velocity_mps);
 
-    // Decelerate synthetic motion to zero over the prediction window instead
-    // of continuing at a constant velocity. This limits overshoot when the
-    // last observed velocity was noisy near an occlusion boundary.
+    // When time decay is enabled, decelerate synthetic motion to zero over
+    // the prediction window. When disabled, keep the configured velocity
+    // scale constant until the normal predict_lost_ms timeout.
     const double integrated_time_s = dt_s * (1.0 - 0.5 * progress);
     const Vec3 delta = scale(v, damping * integrated_time_s);
     assign_position(out, add(pose_position(out), delta));
@@ -504,9 +506,9 @@ std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predict
     }
 
     // By default the predicted pose is published with zero velocity so that a
-    // runtime consumer cannot extrapolate it a second time.  When explicitly
-    // enabled, publish the instantaneous velocity of the decelerating
-    // trajectory above.  It reaches zero at the end of the prediction window.
+    // runtime consumer cannot extrapolate it a second time. When explicitly
+    // enabled, publish the instantaneous trajectory velocity. It reaches zero
+    // at timeout only when time decay is enabled.
     if (!state.prediction_frozen && cfg_.publish_predicted_velocity) {
       const Vec3 predicted_v = scale(v, damping * (1.0 - progress));
       out.pose.vx = static_cast<float>(predicted_v.x);

@@ -48,6 +48,7 @@ struct HandPoseStabilityFilterConfig {
   double predict_lost_ms = 0.0;
   double max_prediction_velocity_mps = 2.0;
   double prediction_damping = 0.5;
+  bool prediction_time_decay_enabled = true;
   // Maximum accumulated synthetic controller path before position freeze, in metres.
   // The frozen pose remains valid until predict_lost_ms; <= 0 disables.
   double max_prediction_path_m = 0.65;
@@ -256,6 +257,8 @@ class HandPoseStabilityFilter {
     os << "hand_gate_predict_lost_ms: " << cfg_.predict_lost_ms << "\n";
     os << "hand_gate_max_prediction_velocity_mps: " << cfg_.max_prediction_velocity_mps << "\n";
     os << "hand_gate_prediction_damping: " << cfg_.prediction_damping << "\n";
+    os << "hand_gate_prediction_time_decay: "
+       << (cfg_.prediction_time_decay_enabled ? "true" : "false") << "\n";
     os << "hand_gate_max_prediction_path_m: " << cfg_.max_prediction_path_m << "\n";
     os << "hand_gate_max_distance_m: "
        << cfg_.prediction_distance.max_distance_m << "\n";
@@ -648,15 +651,12 @@ class HandPoseStabilityFilter {
     Vec3 v = state.has_velocity ? state.velocity_mps : Vec3{};
     v = clamp_velocity(v, cfg);
 
-    // Do not extrapolate with a constant velocity for the whole lost window.
-    // The final visible hand samples are often noisy exactly when the hand is
-    // leaving the camera FOV.  Constant-velocity extrapolation can therefore
-    // overshoot and later look like the hand bounced back on reacquire.
-    // Integrate a velocity that decays linearly to zero at the end of the
-    // prediction window.  The trajectory stays monotonic and comes to rest.
-    const double progress = horizon_ns > 0
+    // When time decay is enabled, integrate a velocity that falls linearly
+    // to zero at the end of the prediction window. When disabled, keep the
+    // configured velocity scale constant until the normal timeout.
+    const double progress = cfg.prediction_time_decay_enabled && horizon_ns > 0
         ? std::clamp(static_cast<double>(dt_ns) / static_cast<double>(horizon_ns), 0.0, 1.0)
-        : 1.0;
+        : 0.0;
     const double integrated_time_s = dt_s * (1.0 - 0.5 * progress);
     const Vec3 delta = scale(v, damping * integrated_time_s);
     translate_side_v2(out, delta);
@@ -664,10 +664,9 @@ class HandPoseStabilityFilter {
     mark_degraded_hold_v2(out, source_ts, state, cfg);
 
     // By default the predicted pose is published with zero velocity so that
-    // OpenVR/Monado cannot extrapolate it a second time.  An opt-in mode can
-    // publish the instantaneous velocity of the decelerating prediction.  This
-    // is the derivative of the trajectory above, not the stale last-good
-    // velocity, so it reaches zero at the end of the prediction window.
+    // OpenVR/Monado cannot extrapolate it a second time. An opt-in mode can
+    // publish the instantaneous trajectory velocity. It reaches zero at
+    // timeout only when time decay is enabled.
     if (cfg.publish_predicted_velocity && state.has_velocity && horizon_ns > 0) {
       const Vec3 predicted_v = scale(v, damping * (1.0 - progress));
       out.vx = static_cast<float>(predicted_v.x);

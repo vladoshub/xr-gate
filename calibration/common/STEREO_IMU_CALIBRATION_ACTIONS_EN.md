@@ -255,6 +255,7 @@ update_rate: <actual published rate>
 
 ## 5. Set the real IMU rate
 
+Set your real IMU rate:
 
 ```bash
 IMU_UPDATE_RATE=208.0
@@ -284,6 +285,28 @@ Print at 100% scale with “fit to page” disabled.
 Mount the print on a rigid flat surface.
 
 Verify that the physical tag size matches:
+
+```bash
+ROW_MM=171.1
+COL_MM=243.7
+
+python3 - <<PY
+row_mm = float("$ROW_MM")
+col_mm = float("$COL_MM")
+
+tag_from_row = row_mm / 6.6
+tag_from_col = col_mm / 9.4
+avg = (tag_from_row + tag_from_col) / 2
+
+print("tag from row mm:", tag_from_row)
+print("tag from col mm:", tag_from_col)
+print("avg tag mm:", avg)
+print("tagSize meters:", avg / 1000.0)
+PY
+```
+
+Then update `tagSize` in `aprilgrid_a4_5x7_25mm.yaml`.
+
 
 ```yaml
 tagSize: <metres>

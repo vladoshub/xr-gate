@@ -2025,38 +2025,6 @@ controller_override.hand_gestures.left_enabled=false
 controller_override.hand_gestures.right_enabled=false
 ```
 
-
-## Controller IMU lever-arm trajectory
-
-```bash
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_MODE=1
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_X_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_Y_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_LEFT_Z_M=-0.12
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_X_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_Y_M=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_RIGHT_Z_M=-0.12
-```
-
-The mode changes only the trajectory inside the existing `Predicting` phase.
-Window and legacy launch-velocity modes remain supported independently.
-
-Optional accelerometer corrections:
-
-```bash
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_CENTRIPETAL_COMPENSATION=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_TANGENTIAL_COMPENSATION=0
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_ANGULAR_ACCELERATION_SMOOTH_ALPHA=0.15
-RUNTIME_CONTROLLER_IMU_LEVER_ARM_MAX_ANGULAR_ACCELERATION_RAD_S2=50.0
-```
-
-These options are effective only when lever-arm trajectory and accelerometer
-integration are both enabled. Centripetal correction subtracts
-`omega x (omega x r)`; tangential correction subtracts filtered `alpha x r`.
-Because the exact IMU board location cannot be identified reliably, `r` is the
-same configured per-side controller lever-arm vector. The options do not add or
-change prediction states, timers, timeout, reacquire confirmation, or blend.
-
 ## Controller IMU prediction speed limit
 
 ```bash
@@ -2064,6 +2032,5 @@ RUNTIME_CONTROLLER_IMU_MAX_PREDICTION_SPEED_MPS=2.0
 ```
 
 The speed guard constrains the launch velocity and clamps the final per-frame
-predicted displacement after accelerometer integration and lever-arm
-displacement. `0` disables the additional guard. It does not change prediction
-states, time/path terminals, or lost-hand fallback behavior.
+predicted displacement after accelerometer integration. `0` disables the
+additional guard. It does not change prediction states, time/path terminals, or lost-hand fallback behavior.

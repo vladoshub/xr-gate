@@ -20,6 +20,7 @@ struct BodyTrackerStabilityGateConfig {
   double max_prediction_velocity_mps = 0.8;
   double max_prediction_acceleration_mps2 = 0.0;
   double prediction_damping = 0.35;
+  bool prediction_time_decay_enabled = true;
   // Maximum accumulated synthetic path before position is frozen, in metres.
   // The frozen pose remains valid until predict_lost_ms; <= 0 disables.
   double max_prediction_path_m = 0.65;
