@@ -46,6 +46,9 @@ REATTACH_DEVICES="${REATTACH_DEVICES:-${OVERRIDE_CONTROLLER_REATTACH_DEVICES:-1}
 REATTACH_INTERVAL_MS="${REATTACH_INTERVAL_MS:-${OVERRIDE_CONTROLLER_REATTACH_INTERVAL_MS:-3000}}" # device reattach/rescan interval in milliseconds
 
 EVENT_WAIT_MAX_MS="${EVENT_WAIT_MAX_MS:-${OVERRIDE_CONTROLLER_EVENT_WAIT_MAX_MS:-20}}"      # maximum provider event wait before publishing current state
+XR_BACKEND_CONTROL_FILE="${XR_BACKEND_CONTROL_FILE:-/tmp/xr_backend_control.json}"          # shared backend control JSON used for gravity_magnitude
+XR_BACKEND_CONTROL_FILE="$(expand_tilde "$XR_BACKEND_CONTROL_FILE")"                        # normalize ~/ in backend control path
+OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS="${OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS:-500}" # reload gravity_magnitude interval; 0 disables polling
 
 # Input providers. Provider-specific settings are parsed by each provider.
 # Generic overrides use semicolon-separated provider.key=value entries, e.g.
@@ -159,6 +162,8 @@ args+=("--allow-shared-physical-device-sides" "$ALLOW_SHARED_PHYSICAL_DEVICE_SID
 args+=("--reattach-devices" "$REATTACH_DEVICES")
 args+=("--reattach-interval-ms" "$REATTACH_INTERVAL_MS")
 args+=("--event-wait-max-ms" "$EVENT_WAIT_MAX_MS")
+args+=("--backend-control-file" "$XR_BACKEND_CONTROL_FILE")
+args+=("--backend-control-poll-ms" "$OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS")
 args+=("--providers" "$PROVIDERS")
 if [[ -n "$PROVIDER_OPTIONS" ]]; then
   IFS=';' read -r -a provider_option_items <<< "$PROVIDER_OPTIONS"
@@ -200,6 +205,7 @@ log "CONTROLLER_INPUT_STREAM=$CONTROLLER_INPUT_STREAM"
 log "CONTROLLER_INPUT_SHM_NAME=$CONTROLLER_INPUT_SHM_NAME"
 log "CONTROLLER_INPUT_RATE_HZ=$CONTROLLER_INPUT_RATE_HZ CONTROLLER_INPUT_SLOTS=$CONTROLLER_INPUT_SLOTS"
 log "PROVIDERS=$PROVIDERS"
+log "XR_BACKEND_CONTROL_FILE=$XR_BACKEND_CONTROL_FILE OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS=$OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS"
 if [[ -n "$PROVIDER_OPTIONS" ]]; then
   log "PROVIDER_OPTIONS=$PROVIDER_OPTIONS"
 fi

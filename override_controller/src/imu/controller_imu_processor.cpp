@@ -1,4 +1,5 @@
 #include <xr_override_controller/imu/controller_imu_processor.hpp>
+#include <xr_override_controller/backend_control.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +7,6 @@
 namespace xr_override_controller::imu {
 namespace {
 
-constexpr float kGravityMps2 = 9.80665f;
 
 float vector_norm(const Vec3f& v) {
   return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
@@ -57,7 +57,7 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
   // Use it only while the measured magnitude remains plausibly gravity-like;
   // gyro integration continues at full rate outside this window.
   if (accel_norm > 1.0e-6f && std::isfinite(accel_norm) &&
-      std::abs(accel_norm - kGravityMps2) <= 3.0f) {
+      std::abs(accel_norm - current_backend_control_snapshot().gravity_magnitude) <= 3.0f) {
     ax /= accel_norm;
     ay /= accel_norm;
     az /= accel_norm;
@@ -118,7 +118,8 @@ void ControllerImuProcessor::update_initial_gyro_bias(const RawControllerImuSamp
   if (!sample.gyroscope_valid || !sample.accelerometer_valid || gyro_bias_sample_count_ >= 200) return;
   const float gyro_magnitude = vector_norm(sample.angular_velocity_rad_s);
   const float accel_magnitude = vector_norm(sample.specific_force_m_s2);
-  if (gyro_magnitude >= 0.20f || std::abs(accel_magnitude - kGravityMps2) >= 1.0f) return;
+  const float gravity_magnitude = current_backend_control_snapshot().gravity_magnitude;
+  if (gyro_magnitude >= 0.20f || std::abs(accel_magnitude - gravity_magnitude) >= 1.0f) return;
 
   ++gyro_bias_sample_count_;
   const float alpha = 1.0f / static_cast<float>(gyro_bias_sample_count_);

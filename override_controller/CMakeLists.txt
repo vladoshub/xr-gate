@@ -19,6 +19,7 @@ endif()
 add_executable(override_controller
   src/main.cpp
   src/core/types.cpp
+  src/core/backend_control.cpp
   src/core/config_io.cpp
   src/core/controller_input_publisher.cpp
   src/imu/controller_imu_processor.cpp

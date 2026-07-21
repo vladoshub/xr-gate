@@ -1,9 +1,10 @@
 #include "gearvr_protocol.hpp"
 
+#include <xr_override_controller/backend_control.hpp>
+
 namespace xr_override_controller::gearvr {
 namespace {
 
-constexpr float kGravityMps2 = 9.80665f;
 constexpr float kAccelLsbPerG = 2048.0f;
 constexpr float kGyroLsbPerDegS = 14.285f;
 constexpr float kMagUtPerLsb = 0.06f;
@@ -25,13 +26,13 @@ uint32_t unsigned_le32(const uint8_t* data, size_t offset) {
          (static_cast<uint32_t>(data[offset + 3]) << 24);
 }
 
-DecodedImuSample decode_imu_sample(const uint8_t* data, size_t base) {
+DecodedImuSample decode_imu_sample(const uint8_t* data, size_t base, float gravity_magnitude) {
   DecodedImuSample sample;
   sample.device_timestamp_us = unsigned_le32(data, base);
   sample.accel_m_s2 = {
-      signed_le16(data, base + 4) * kGravityMps2 / kAccelLsbPerG,
-      signed_le16(data, base + 6) * kGravityMps2 / kAccelLsbPerG,
-      signed_le16(data, base + 8) * kGravityMps2 / kAccelLsbPerG,
+      signed_le16(data, base + 4) * gravity_magnitude / kAccelLsbPerG,
+      signed_le16(data, base + 6) * gravity_magnitude / kAccelLsbPerG,
+      signed_le16(data, base + 8) * gravity_magnitude / kAccelLsbPerG,
   };
   sample.gyro_rad_s = {
       signed_le16(data, base + 10) / kGyroLsbPerDegS * kPi / 180.0f,
@@ -55,8 +56,9 @@ std::optional<DecodedPacket> decode_packet(const uint8_t* data, size_t size) {
   // magnetometer at byte 32. The previous decoder treated bytes 32..47 as a
   // third IMU record and read the magnetometer from 48..53, corrupting AHRS.
   // All multi-byte sensor values are little-endian.
-  packet.imu_samples[0] = decode_imu_sample(data, 0);
-  packet.imu_samples[1] = decode_imu_sample(data, 16);
+  const float gravity_magnitude = current_backend_control_snapshot().gravity_magnitude;
+  packet.imu_samples[0] = decode_imu_sample(data, 0, gravity_magnitude);
+  packet.imu_samples[1] = decode_imu_sample(data, 16, gravity_magnitude);
   packet.magnetic_uT = {
       signed_le16(data, 32) * kMagUtPerLsb,
       signed_le16(data, 34) * kMagUtPerLsb,

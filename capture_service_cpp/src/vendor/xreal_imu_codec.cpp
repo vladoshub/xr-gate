@@ -20,8 +20,14 @@ const std::array<uint8_t, 10>& xreal_imu_start_command() {
   return kStartCmd;
 }
 
-bool normalize_xreal_imu_packet(const uint8_t* packet, size_t size, float out_gyro_accel[6]) {
-  if (!packet || size != kXrealHidPacketSize || !out_gyro_accel) return false;
+bool normalize_xreal_imu_packet(const uint8_t* packet,
+                                size_t size,
+                                double gravity_magnitude_mps2,
+                                float out_gyro_accel[6]) {
+  if (!packet || size != kXrealHidPacketSize || !out_gyro_accel ||
+      !std::isfinite(gravity_magnitude_mps2) || gravity_magnitude_mps2 <= 0.0) {
+    return false;
+  }
 
   const int32_t gx_raw = s24le(packet + 18);
   const int32_t gy_raw = s24le(packet + 21);
@@ -32,14 +38,13 @@ bool normalize_xreal_imu_packet(const uint8_t* packet, size_t size, float out_gy
 
   const double gyro_scalar_dps = 1.0 / 8388608.0 * 2000.0;
   const double accel_scalar_g = 1.0 / 8388608.0 * 16.0;
-  const double gravity = 9.80665;
 
   out_gyro_accel[0] = static_cast<float>((gx_raw * gyro_scalar_dps) * kPi / 180.0);
   out_gyro_accel[1] = static_cast<float>((gy_raw * gyro_scalar_dps) * kPi / 180.0);
   out_gyro_accel[2] = static_cast<float>((gz_raw * gyro_scalar_dps) * kPi / 180.0);
-  out_gyro_accel[3] = static_cast<float>(ax_raw * accel_scalar_g * gravity);
-  out_gyro_accel[4] = static_cast<float>(ay_raw * accel_scalar_g * gravity);
-  out_gyro_accel[5] = static_cast<float>(az_raw * accel_scalar_g * gravity);
+  out_gyro_accel[3] = static_cast<float>(ax_raw * accel_scalar_g * gravity_magnitude_mps2);
+  out_gyro_accel[4] = static_cast<float>(ay_raw * accel_scalar_g * gravity_magnitude_mps2);
+  out_gyro_accel[5] = static_cast<float>(az_raw * accel_scalar_g * gravity_magnitude_mps2);
   return true;
 }
 

@@ -516,6 +516,11 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_int(y, {"service.tcp.port", "service.tcp_port", "tcp.port", "tcp_port"}, cfg.tcp_port);
   set_int(y, {"service.tcp.client_queue_size", "service.tcp_client_queue_size",
               "tcp.client_queue_size", "tcp_client_queue_size"}, cfg.tcp_client_queue_size);
+  set_string(y, {platform_key("service.backend_control.file"), "service.backend_control.file",
+                 platform_key("backend_control.file"), "backend_control.file"},
+             cfg.backend_control_file);
+  set_int(y, {"service.backend_control.poll_ms", "backend_control.poll_ms"},
+          cfg.backend_control_poll_ms);
   bool legacy_tcp_enabled = false;
   if (has(y, "service.tcp_enabled")) {
     set_bool(y, {"service.tcp_enabled"}, legacy_tcp_enabled);
@@ -680,6 +685,7 @@ void validate_runtime_config(RuntimeConfig& cfg) {
   cfg.imu.serial.timestamp_mode = lowercase(trim(cfg.imu.serial.timestamp_mode));
   cfg.imu.serial.protocol_device_uid = trim(cfg.imu.serial.protocol_device_uid);
   cfg.profile_name = trim(cfg.profile_name);
+  cfg.backend_control_file = expand_user_path(trim(cfg.backend_control_file));
 
   if (!cfg.profile_name.empty()) {
     for (const unsigned char c : cfg.profile_name) {
@@ -697,6 +703,9 @@ void validate_runtime_config(RuntimeConfig& cfg) {
   if (cfg.imu.slot_count <= 0) throw std::runtime_error("imu.slot_count must be positive");
   if (cfg.imu.raw_slot_count <= 0) throw std::runtime_error("imu.raw.slot_count must be positive");
   if (cfg.tcp_port <= 0 || cfg.tcp_port > 65535) throw std::runtime_error("tcp port is out of range");
+  if (cfg.backend_control_poll_ms < 0) {
+    throw std::runtime_error("backend_control.poll_ms must be non-negative");
+  }
   if (cfg.camera.enabled) {
     if (cfg.camera.driver != "xreal_ultra" && cfg.camera.driver != "opencv") {
       throw std::runtime_error("unsupported camera.driver=" + cfg.camera.driver + "; supported: xreal_ultra, opencv");

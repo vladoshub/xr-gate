@@ -758,6 +758,7 @@ bool runtime_world_linear_acceleration(
     const RuntimeImuSample& imu,
     const RuntimeAccelerationSample& acceleration_sample,
     const RuntimeControllerImuMotionConfig& cfg,
+    float gravity_magnitude_mps2,
     float out_acceleration[3]) {
   if (!cfg.acceleration_integration_enabled || !imu.orientation_valid) {
     return false;
@@ -765,7 +766,7 @@ bool runtime_world_linear_acceleration(
 
   q_rotate(imu.orientation, acceleration_sample.specific_force_m_s2,
            out_acceleration);
-  out_acceleration[1] -= std::max(0.0f, cfg.gravity_mps2);
+  out_acceleration[1] -= std::max(0.0f, gravity_magnitude_mps2);
   if (!finite_v3(out_acceleration)) return false;
 
   const float deadband = std::max(0.0f, cfg.acceleration_deadband_mps2);
@@ -808,6 +809,7 @@ struct AccelerationIntegrationResult {
 AccelerationIntegrationResult integrate_new_acceleration_samples(
     const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
+    float gravity_magnitude_mps2,
     RuntimeControllerImuSideRuntimeState& state,
     float prediction_progress) {
   AccelerationIntegrationResult result{};
@@ -845,7 +847,8 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
     if (dt_ns == 0) continue;
 
     float acceleration[3] = {};
-    if (!runtime_world_linear_acceleration(imu, sample, cfg, acceleration)) {
+    if (!runtime_world_linear_acceleration(
+            imu, sample, cfg, gravity_magnitude_mps2, acceleration)) {
       continue;
     }
 
@@ -1116,6 +1119,7 @@ void update_or_apply_imu_position_prediction(
     xr_runtime::RuntimeControllerSideStateV1& out,
     const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
+    float gravity_magnitude_mps2,
     RuntimeControllerImuSideRuntimeState* state,
     const xr_runtime::HandSideF32V2* hand_side,
     const xr_runtime::HmdPoseF64V1* hmd,
@@ -1306,7 +1310,8 @@ void update_or_apply_imu_position_prediction(
   }
 
   const AccelerationIntegrationResult acceleration_result =
-      integrate_new_acceleration_samples(imu, cfg, *state, progress);
+      integrate_new_acceleration_samples(
+          imu, cfg, gravity_magnitude_mps2, *state, progress);
   if (recovering_from_distance_freeze &&
       acceleration_result.integrated_sample_count == 0) {
     // Distance recovery is intentionally driven only by newly received IMU
@@ -1672,6 +1677,7 @@ void merge_hand_gestures(xr_runtime::RuntimeControllerSideStateV1& out,
 void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   bool left,
                   const RuntimeControllerSynthesisConfig& cfg,
+                  float gravity_magnitude_mps2,
                   const xr_runtime::HandTrackingFrameF32V2* hand,
                   const xr_runtime::HandTrackingFrameF32V2* optical_yaw_hand,
                   const xr_runtime::ControllerInputV3* controller_input,
@@ -1760,7 +1766,8 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       // and acceleration world transform. Periodic/reacquire yaw correction therefore
       // cannot move the controller in space or bend its predicted trajectory.
       update_or_apply_imu_position_prediction(
-          out, physical_imu, imu_motion_cfg, runtime_state, hand_side,
+          out, physical_imu, imu_motion_cfg, gravity_magnitude_mps2,
+          runtime_state, hand_side,
           hmd,
           timestamp_ns, hand != nullptr ? hand->sequence : 0,
           hand != nullptr ? hand->source_timestamp_ns : 0);
@@ -2061,6 +2068,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& optical_yaw_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
+    float gravity_magnitude_mps2,
     RuntimeControllerSynthesisState* runtime_state) {
   xr_runtime::RuntimeControllerStateFrameV1 frame{};
   frame.sequence = sequence;
@@ -2072,9 +2080,11 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
   const xr_runtime::ControllerInputV3* controller = controller_input ? &(*controller_input) : nullptr;
   const xr_runtime::HmdPoseF64V1* hmd = runtime_hmd_pose ? &(*runtime_hmd_pose) : nullptr;
 
-  compose_side(frame.left, true, cfg, hand, yaw_hand, controller, hmd, timestamp_ns,
+  compose_side(frame.left, true, cfg, gravity_magnitude_mps2, hand, yaw_hand,
+               controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->left : nullptr);
-  compose_side(frame.right, false, cfg, hand, yaw_hand, controller, hmd, timestamp_ns,
+  compose_side(frame.right, false, cfg, gravity_magnitude_mps2, hand, yaw_hand,
+               controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->right : nullptr);
 
   if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {

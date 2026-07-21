@@ -1,5 +1,6 @@
 #include "capture_service_cpp/sources/imu_source.hpp"
 
+#include "capture_service_cpp/backend_control.hpp"
 #include "capture_service_cpp/platform/hid_input_device.hpp"
 #include "capture_service_cpp/vendor/xreal_imu_codec.hpp"
 
@@ -13,7 +14,9 @@ namespace {
 
 class XrealHidImuSource final : public IImuSource {
  public:
-  explicit XrealHidImuSource(RuntimeConfig cfg) : cfg_(std::move(cfg)) {}
+  explicit XrealHidImuSource(RuntimeConfig cfg)
+      : cfg_(std::move(cfg)),
+        backend_control_(cfg_.backend_control_file, cfg_.backend_control_poll_ms) {}
 
   std::string name() const override { return "xreal_hid"; }
 
@@ -31,6 +34,7 @@ class XrealHidImuSource final : public IImuSource {
   }
 
   void open() override {
+    backend_control_.poll_if_due(steady_ns());
     const auto& x = cfg_.imu.xreal_hid;
     device_.open_interface(x.vendor_id, x.product_id, x.interface_number, "XREAL HID IMU interface");
     const auto& start_cmd = xreal_imu_start_command();
@@ -46,12 +50,17 @@ class XrealHidImuSource final : public IImuSource {
     if (count == 0) return SourceReadStatus::Timeout;
 
     result.receive_timestamp_ns = steady_ns();
+    backend_control_.poll_if_due(result.receive_timestamp_ns);
     result.raw_packet.assign(packet_.begin(), packet_.begin() + count);
     ++raw_count_;
     if (static_cast<int>(raw_count_) <= cfg_.imu.xreal_hid.drop_first_packets) return SourceReadStatus::Data;
 
     float payload[6]{};
-    if (!normalize_xreal_imu_packet(packet_.data(), static_cast<size_t>(count), payload)) return SourceReadStatus::Data;
+    if (!normalize_xreal_imu_packet(
+            packet_.data(), static_cast<size_t>(count),
+            backend_control_.snapshot().gravity_magnitude, payload)) {
+      return SourceReadStatus::Data;
+    }
     for (int i = 0; i < 3; ++i) {
       result.sample.gyro_rad_s[static_cast<size_t>(i)] = payload[i];
       result.sample.accel_m_s2[static_cast<size_t>(i)] = payload[i + 3];
@@ -72,6 +81,7 @@ class XrealHidImuSource final : public IImuSource {
 
  private:
   RuntimeConfig cfg_;
+  BackendControlReader backend_control_;
   HidInputDevice device_;
   std::array<uint8_t, kXrealHidPacketSize> packet_{};
   uint64_t raw_count_ = 0;

@@ -51,7 +51,9 @@ int main(int argc, char** argv) {
     std::cerr << "[capture_service_cpp] config=" << cfg.config_path
               << " profile=" << (cfg.profile_name.empty() ? "<none>" : cfg.profile_name)
               << " camera=" << (cfg.camera.enabled ? cfg.camera.driver : "disabled")
-              << " imu=" << (cfg.imu.enabled ? cfg.imu.driver : "disabled") << std::endl;
+              << " imu=" << (cfg.imu.enabled ? cfg.imu.driver : "disabled")
+              << " backend_control_file=" << cfg.backend_control_file
+              << " backend_control_poll_ms=" << cfg.backend_control_poll_ms << std::endl;
 
     std::vector<std::thread> threads;
     if (camera_source) {

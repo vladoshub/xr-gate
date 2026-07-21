@@ -371,3 +371,26 @@ The provider boundary and shared C++ IMU processor are intentionally transport
 independent. A future MPU-6050 provider only needs to discover/open its own
 serial/BLE device, fill `imu::RawControllerImuSample` in SI units, and publish
 the same normal input/IMU provider state.
+
+## Backend gravity control
+
+`override_controller` reads the same backend control JSON as `xr_runtime_adapter`:
+
+```json
+{
+  "gravity_magnitude": 9.80665,
+  "reset_counter": 0
+}
+```
+
+The Linux launcher uses:
+
+```bash
+XR_BACKEND_CONTROL_FILE=/tmp/xr_backend_control.json
+OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS=500
+```
+
+`gravity_magnitude` is used both when Gear VR raw accelerometer counts are converted
+from `LSB/g` to `m/s²` and by the shared IMU processor's Madgwick/stationary gates.
+Changing gravity is applied without restarting the service. `reset_counter` is tracked
+for diagnostics; runtime prediction/yaw reset handling remains in `xr_runtime_adapter`.

@@ -1,3 +1,4 @@
+#include <xr_override_controller/backend_control.hpp>
 #include <xr_override_controller/config_io.hpp>
 #include <xr_override_controller/controller_input_publisher.hpp>
 #include <xr_override_controller/input_provider.hpp>
@@ -69,6 +70,8 @@ struct Args {
   bool reattach_devices = true;
   uint32_t reattach_interval_ms = 0;
   uint32_t event_wait_max_ms = 0;
+  fs::path backend_control_file = "/tmp/xr_backend_control.json";
+  uint32_t backend_control_poll_ms = 500;
   bool train = false;
   bool list_devices = false;
   bool connect_devices = false;
@@ -103,6 +106,8 @@ void usage() {
       "  --no-reattach-devices    Disable device reattach/rescan\n"
       "  --reattach-interval-ms <n> Rescan interval. Default: 1000\n"
       "  --event-wait-max-ms <n>  Max event select wait. Higher reduces idle CPU\n"
+      "  --backend-control-file <p> JSON with gravity_magnitude/reset_counter. Default: /tmp/xr_backend_control.json\n"
+      "  --backend-control-poll-ms <n> Reload backend gravity interval; 0 disables polling. Default: 500\n"
       "  --provider <name>        Enable input provider; repeatable\n"
       "  --providers <csv>        Comma-separated provider list\n"
       "  --provider-option <provider.key=value> Provider-owned option; repeatable\n"
@@ -220,6 +225,10 @@ Args parse_args(int argc, char** argv) {
       a.reattach_interval_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
     } else if (v == "--event-wait-max-ms") {
       a.event_wait_max_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
+    } else if (v == "--backend-control-file") {
+      a.backend_control_file = need(v.c_str());
+    } else if (v == "--backend-control-poll-ms") {
+      a.backend_control_poll_ms = static_cast<uint32_t>(std::stoul(need(v.c_str())));
     } else if (v == "--provider") {
       a.providers.push_back(need(v.c_str()));
     } else if (v == "--providers") {
@@ -2062,7 +2071,9 @@ void connect_config_devices(InputProvider& provider, AppConfig& cfg, const fs::p
   std::cout << "\nSaved updated config: " << config_path << "\n";
 }
 
-void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
+void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
+                 const fs::path& backend_control_file,
+                 uint32_t backend_control_poll_ms) {
   std::vector<DeviceInfo> devices;
   std::vector<RuntimeBinding> bindings;
   std::vector<RuntimeBinding> hold_toggle_bindings;
@@ -2199,6 +2210,17 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
   const int event_wait_cap_ms = static_cast<int>(std::max<uint32_t>(1, cfg.input.event_wait_max_ms));
   auto next_publish = std::chrono::steady_clock::now();
   auto next_reattach_check = std::chrono::steady_clock::now() + reattach_interval;
+  auto next_backend_control_poll = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(backend_control_poll_ms);
+  std::string backend_control_last_error;
+  const BackendControlSnapshot initial_backend_control =
+      current_backend_control_snapshot();
+  std::cout << "[override_controller] backend_control_file="
+            << backend_control_file
+            << " poll_ms=" << backend_control_poll_ms
+            << " gravity_magnitude="
+            << initial_backend_control.gravity_magnitude
+            << " reset_counter=" << initial_backend_control.reset_counter << "\n";
 
   while (!g_stop) {
     const auto before_wait = std::chrono::steady_clock::now();
@@ -2340,6 +2362,30 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose) {
     }
 
     auto now = std::chrono::steady_clock::now();
+    if (backend_control_poll_ms > 0 && now >= next_backend_control_poll) {
+      next_backend_control_poll = now + std::chrono::milliseconds(backend_control_poll_ms);
+      try {
+        const BackendControlSnapshot previous = current_backend_control_snapshot();
+        const BackendControlSnapshot snapshot = load_backend_control_snapshot(backend_control_file);
+        update_backend_control_snapshot(snapshot);
+        backend_control_last_error.clear();
+        if (snapshot.gravity_magnitude != previous.gravity_magnitude ||
+            snapshot.reset_counter != previous.reset_counter) {
+          std::cout << "[override_controller] backend control gravity_magnitude "
+                    << previous.gravity_magnitude << " -> " << snapshot.gravity_magnitude
+                    << "; reset_counter " << previous.reset_counter << " -> "
+                    << snapshot.reset_counter << "\n";
+        }
+      } catch (const std::exception& e) {
+        const std::string message = e.what();
+        if (message != backend_control_last_error) {
+          std::cerr << "[override_controller][WARN] backend control poll failed: "
+                    << message << "; keeping previous gravity_magnitude="
+                    << current_backend_control_snapshot().gravity_magnitude << "\n";
+          backend_control_last_error = message;
+        }
+      }
+    }
     if (cfg.input.reattach_devices && now >= next_reattach_check) {
       next_reattach_check = now + reattach_interval;
 
@@ -2464,6 +2510,15 @@ int main(int argc, char** argv) {
     signal(SIGTERM, on_signal);
 
     Args args = parse_args(argc, argv);
+    try {
+      const BackendControlSnapshot snapshot =
+          load_backend_control_snapshot(args.backend_control_file);
+      update_backend_control_snapshot(snapshot);
+    } catch (const std::exception& e) {
+      std::cerr << "[override_controller][WARN] initial backend control load failed: "
+                << e.what() << "; using default gravity_magnitude="
+                << current_backend_control_snapshot().gravity_magnitude << "\n";
+    }
     const fs::path executable_dir = current_executable_dir(argc > 0 ? argv[0] : nullptr);
     InputProviderOptions provider_options;
     provider_options.providers = args.providers;
@@ -2560,7 +2615,8 @@ int main(int argc, char** argv) {
       return 0;
     }
     std::cout << "[override_controller] using config: " << selected_path << "\n";
-    run_service(*provider, cfg, args.verbose);
+    run_service(*provider, cfg, args.verbose, args.backend_control_file,
+                args.backend_control_poll_ms);
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "[override_controller][ERROR] " << e.what() << "\n";

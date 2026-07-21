@@ -185,6 +185,9 @@ struct RuntimeConfig {
   int tcp_port = 45660;
   int tcp_client_queue_size = 256;
 
+  std::string backend_control_file = "/tmp/xr_backend_control.json";
+  int backend_control_poll_ms = 500;
+
   CameraSourceConfig camera;
   ImuSourceConfig imu;
 };

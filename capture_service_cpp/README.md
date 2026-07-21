@@ -560,3 +560,38 @@ Backend launchers load an exact `<profile>.env` from their own
 `CPP_CAPTURE_PROFILE` can override the YAML value. Namespace and profile remain
 separate: namespace identifies the stream set, while profile selects compatible
 calibration and backend settings.
+
+
+## Shared backend gravity
+
+For the built-in `xreal_hid` IMU source, raw accelerometer values are converted
+from sensor `g` units to `m/s²` using `gravity_magnitude` from the shared backend
+control JSON:
+
+```json
+{
+  "gravity_magnitude": 9.80665,
+  "reset_counter": 0
+}
+```
+
+Defaults:
+
+```bash
+XR_BACKEND_CONTROL_FILE=/tmp/xr_backend_control.json
+CAPTURE_SERVICE_BACKEND_CONTROL_POLL_MS=500
+```
+
+The service does not require the file to exist at startup. It initially uses
+`9.80665 m/s²`, retries periodically, and switches to the latest valid value when
+the file appears or changes. `reset_counter` is read for contract compatibility
+but does not reset the capture pipeline.
+
+Equivalent YAML:
+
+```yaml
+service:
+  backend_control:
+    file: /tmp/xr_backend_control.json
+    poll_ms: 500
+```

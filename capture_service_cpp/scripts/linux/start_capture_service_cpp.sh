@@ -70,6 +70,15 @@ if [[ -n "${TCP_PORT:-}" ]]; then
   args+=(--tcp-port "$TCP_PORT")
 fi
 
+BACKEND_CONTROL_FILE_VALUE="${XR_BACKEND_CONTROL_FILE:-${CPP_CAPTURE_BACKEND_CONTROL_FILE:-}}"
+if [[ -n "$BACKEND_CONTROL_FILE_VALUE" ]]; then
+  args+=(--backend-control-file "$(expand_tilde "$BACKEND_CONTROL_FILE_VALUE")")
+fi
+BACKEND_CONTROL_POLL_MS_VALUE="${CAPTURE_SERVICE_BACKEND_CONTROL_POLL_MS:-${CPP_CAPTURE_BACKEND_CONTROL_POLL_MS:-}}"
+if [[ -n "$BACKEND_CONTROL_POLL_MS_VALUE" ]]; then
+  args+=(--backend-control-poll-ms "$BACKEND_CONTROL_POLL_MS_VALUE")
+fi
+
 if [[ "${NO_CAMERA:-0}" == "1" ]]; then
   args+=(--no-camera)
 fi

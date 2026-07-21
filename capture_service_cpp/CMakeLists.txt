@@ -20,6 +20,7 @@ endif()
 
 set(CAPTURE_SERVICE_CPP_SOURCES
   src/common.cpp
+  src/backend_control.cpp
   src/main.cpp
   src/image_transform.cpp
   src/interleaved_columns_decoder.cpp
@@ -135,6 +136,14 @@ if(BUILD_TESTING)
   )
   target_include_directories(interleaved_columns_decoder_smoke PRIVATE include)
   add_test(NAME interleaved_columns_decoder_smoke COMMAND interleaved_columns_decoder_smoke)
+
+  add_executable(backend_control_xreal_imu_smoke
+    tests/backend_control_xreal_imu_smoke.cpp
+    src/backend_control.cpp
+    src/vendor/xreal_imu_codec.cpp
+  )
+  target_include_directories(backend_control_xreal_imu_smoke PRIVATE include)
+  add_test(NAME backend_control_xreal_imu_smoke COMMAND backend_control_xreal_imu_smoke)
 
   add_executable(xr_controller_v1_smoke
     tests/xr_controller_v1_smoke.cpp

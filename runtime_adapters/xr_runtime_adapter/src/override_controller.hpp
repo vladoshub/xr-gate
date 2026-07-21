@@ -78,7 +78,7 @@ struct RuntimeControllerImuMotionConfig {
   bool yaw_correction_enabled = false;
 
   // specific_force_m_s2 includes gravity. Runtime tracking space uses +Y up.
-  float gravity_mps2 = 9.80665f;
+  // Gravity magnitude is supplied per frame from BackendControlSnapshot.
   float acceleration_deadband_mps2 = 0.15f;
   float max_linear_acceleration_mps2 = 12.0f;
 
@@ -286,6 +286,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const std::optional<xr_runtime::HandTrackingFrameF32V2>& optical_yaw_hand,
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
+    float gravity_magnitude_mps2,
     RuntimeControllerSynthesisState* runtime_state = nullptr);
 
 }  // namespace xr_runtime_adapter::override_controller

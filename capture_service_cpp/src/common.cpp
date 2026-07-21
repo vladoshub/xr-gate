@@ -101,6 +101,7 @@ void usage(const char* argv0) {
             << " [--config PATH | --config-path PATH | --config-dir DIR --config-name NAME]"
             << " [--registry PATH] [--namespace NAME] [--profile NAME] [--publish shm|tcp|shm,tcp]"
             << " [--tcp-bind HOST] [--tcp-port PORT]"
+            << " [--backend-control-file PATH] [--backend-control-poll-ms MS]"
             << " [--camera-driver xreal_ultra|opencv]"
             << " [--camera-layout side_by_side_horizontal|side_by_side_vertical|interleaved_columns|dual]";
   print_platform_camera_usage(std::cerr);
@@ -188,6 +189,12 @@ RuntimeConfig parse_args(int argc, char** argv) {
   cfg.tcp_bind_host = env_or("TCP_BIND_HOST", env_or("CPP_CAPTURE_TCP_BIND_HOST", cfg.tcp_bind_host));
   cfg.tcp_port = env_int("TCP_PORT", env_int("CPP_CAPTURE_TCP_PORT", cfg.tcp_port));
   cfg.tcp_client_queue_size = env_int("TCP_CLIENT_QUEUE_SIZE", env_int("CPP_CAPTURE_TCP_CLIENT_QUEUE_SIZE", cfg.tcp_client_queue_size));
+  cfg.backend_control_file = env_or(
+      "XR_BACKEND_CONTROL_FILE",
+      env_or("CPP_CAPTURE_BACKEND_CONTROL_FILE", cfg.backend_control_file));
+  cfg.backend_control_poll_ms = env_int(
+      "CAPTURE_SERVICE_BACKEND_CONTROL_POLL_MS",
+      env_int("CPP_CAPTURE_BACKEND_CONTROL_POLL_MS", cfg.backend_control_poll_ms));
   if (env_bool("TCP_ENABLED", false) &&
       std::find(cfg.publish_modes.begin(), cfg.publish_modes.end(), "tcp") == cfg.publish_modes.end()) {
     cfg.publish_modes.push_back("tcp");
@@ -210,6 +217,8 @@ RuntimeConfig parse_args(int argc, char** argv) {
     else if (a == "--tcp-bind") cfg.tcp_bind_host = need("--tcp-bind");
     else if (a == "--tcp-port") cfg.tcp_port = std::stoi(need("--tcp-port"));
     else if (a == "--tcp-client-queue-size") cfg.tcp_client_queue_size = std::stoi(need("--tcp-client-queue-size"));
+    else if (a == "--backend-control-file") cfg.backend_control_file = need("--backend-control-file");
+    else if (a == "--backend-control-poll-ms") cfg.backend_control_poll_ms = std::stoi(need("--backend-control-poll-ms"));
     else if (a == "--camera-driver") {
       const std::string previous = cfg.camera.driver;
       cfg.camera.driver = need("--camera-driver");

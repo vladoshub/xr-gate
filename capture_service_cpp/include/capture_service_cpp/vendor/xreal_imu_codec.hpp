@@ -13,6 +13,9 @@ constexpr size_t kXrealHidPacketSize = 64;
 constexpr int kXrealDefaultImuDropFirstPackets = 500;
 
 const std::array<uint8_t, 10>& xreal_imu_start_command();
-bool normalize_xreal_imu_packet(const uint8_t* packet, size_t size, float out_gyro_accel[6]);
+bool normalize_xreal_imu_packet(const uint8_t* packet,
+                                size_t size,
+                                double gravity_magnitude_mps2,
+                                float out_gyro_accel[6]);
 
 }  // namespace xr_capture_cpp
