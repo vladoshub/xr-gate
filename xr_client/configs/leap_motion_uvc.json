@@ -81,6 +81,7 @@
   "pre_gate_services": [
     {
       "name": "capture_service",
+      "no_imu": true,
       "enable_env": "RUN_CAPTURE_SERVICE",
       "enabled": true,
       "command": [

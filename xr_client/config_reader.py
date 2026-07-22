@@ -61,6 +61,7 @@ class ServiceSpec:
     enabled: bool = True
     start_on_launch: bool = True
     optional: bool = False
+    no_imu: bool = False
     cwd: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
     wait_streams: List[WaitStream] = field(default_factory=list)
@@ -185,6 +186,7 @@ def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: fl
         enabled=enabled,
         start_on_launch=bool(item.get("start_on_launch", True)),
         optional=bool(item.get("optional", False)),
+        no_imu=bool(item.get("no_imu", False)),
         cwd=cwd,
         env=env,
         wait_streams=parse_wait_streams(item.get("wait_streams", []), default_timeout_s, root_project),

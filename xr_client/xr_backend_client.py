@@ -84,11 +84,11 @@ def command_option_value(command: Sequence[str], option: str) -> Optional[str]:
 
 
 def replace_command_option(
-    command: Sequence[str],
-    option: str,
-    value: str,
-    *,
-    remove_flags: Sequence[str] = (),
+        command: Sequence[str],
+        option: str,
+        value: str,
+        *,
+        remove_flags: Sequence[str] = (),
 ) -> List[str]:
     """Replace one command option while preserving unrelated arguments."""
     result: List[str] = []
@@ -288,7 +288,7 @@ class Launcher:
                     option.wait_timeout_s,
                     option.readiness_min_alive_s,
                     option.readiness_status_interval_s,
-                )
+                    )
         if spec.pre_capture_wait_s > 0.0:
             log(f"Waiting {spec.pre_capture_wait_s:.1f}s before starting capture_service")
             if not self.dry_run:
@@ -436,13 +436,45 @@ class Launcher:
             time.sleep(0.25)
 
     def wait_for_service_streams(self, spec: ServiceSpec) -> None:
+        imu_stream_names = {"imu0"}
+        for env_name in ("IMU_STREAM", "CAPTURE_IMU_STREAM"):
+            configured = str(spec.env.get(env_name, "")).strip()
+            if configured:
+                imu_stream_names.add(configured)
+
+        basalt_vo = self.configured_basalt_mode() == "vo"
+
+        def skip_reason(wait: WaitStream) -> Optional[str]:
+            if wait.stream not in imu_stream_names:
+                return None
+            if bool(getattr(spec, "no_imu", False)):
+                return "no_imu=true"
+            if basalt_vo:
+                return "Basalt mode=vo"
+            return None
+
         if self.dry_run:
             for wait in spec.wait_streams:
+                reason = skip_reason(wait)
+                if reason:
+                    log(
+                        f"DRY-RUN skip stream '{wait.stream}' for {spec.name}: "
+                        f"{reason}"
+                    )
+                    continue
                 log(f"DRY-RUN wait for stream '{wait.stream}' in {wait.registry}")
             if spec.ready_message:
                 log(spec.ready_message)
             return
+
         for wait in spec.wait_streams:
+            reason = skip_reason(wait)
+            if reason:
+                log(
+                    f"Skipping stream '{wait.stream}' for {spec.name}: "
+                    f"{reason}"
+                )
+                continue
             self.wait_stream(spec.name, wait)
         if spec.ready_message:
             log(spec.ready_message)
@@ -547,6 +579,17 @@ class Launcher:
 
     def foreground_services_iter(self) -> List[ServiceSpec]:
         return list(self.cfg.foreground_services)
+
+    def configured_basalt_mode(self) -> str:
+        """Return the currently selected Basalt mode from the service command."""
+        for spec in (
+                self.pre_gate_services_iter()
+                + self.post_gate_services_iter()
+                + self.foreground_services_iter()
+        ):
+            if spec.name == "basalt_vio":
+                return basalt_mode_from_command(spec.command)
+        return "vio"
 
     def running_items_by_name(self, names: Sequence[str]) -> List[RunningProcess]:
         wanted = set(names)
@@ -659,8 +702,8 @@ class Launcher:
                     obj["streams"] = [
                         item for item in streams_obj
                         if not (
-                            isinstance(item, dict)
-                            and any(item.get(k) in stream_names for k in ("stream", "stream_id", "stream_name", "name", "id"))
+                                isinstance(item, dict)
+                                and any(item.get(k) in stream_names for k in ("stream", "stream_id", "stream_name", "name", "id"))
                         )
                     ]
                     changed = changed or len(obj["streams"]) != before
@@ -1526,7 +1569,7 @@ class Launcher:
         log(
             f"{spec.name} exited with code {code}; restarting "
             f"({len(self.restart_history.get(spec.name, []))}/{spec.restart_max_attempts})"
-        , color="yellow")
+            , color="yellow")
         self.print_log_tail(item.log_path, lines=40)
         self.unregister_running_item(item)
 
@@ -1709,10 +1752,10 @@ def apply_root_override(cfg: ClientConfig, new_root_raw: Optional[str]) -> None:
 
 
 def apply_basalt_mode(
-    cfg: ClientConfig,
-    mode: str,
-    *,
-    require_service: bool = False,
+        cfg: ClientConfig,
+        mode: str,
+        *,
+        require_service: bool = False,
 ) -> None:
     """Pass an explicit VO/VIO mode to every basalt_vio launcher."""
     normalized = normalize_basalt_mode(mode)
