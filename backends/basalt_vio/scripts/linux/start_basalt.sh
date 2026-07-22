@@ -98,6 +98,61 @@ done
 }
 # shellcheck source=/dev/null
 source "$PROFILE_HELPER"
+
+# Explicit Basalt estimator mode. Consume these launcher arguments before
+# forwarding unrelated options through capture_profile.sh and into the backend.
+#
+# Supported forms:
+#   --mode vio | --mode vo
+#   --mode=vio | --mode=vo
+#   --vio | --vo
+#   --no-imu                 Compatibility alias for --mode vo
+BASALT_MODE="${BASALT_MODE:-vio}"
+BASALT_MODE_FORWARD_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)
+      [[ $# -ge 2 ]] || {
+        echo "[start_basalt][ERROR] --mode requires 'vio' or 'vo'" >&2
+        exit 2
+      }
+      BASALT_MODE="$2"
+      shift 2
+      ;;
+    --mode=*)
+      BASALT_MODE="${1#--mode=}"
+      shift
+      ;;
+    --vio)
+      BASALT_MODE="vio"
+      shift
+      ;;
+    --vo|--no-imu)
+      BASALT_MODE="vo"
+      shift
+      ;;
+    --)
+      shift
+      BASALT_MODE_FORWARD_ARGS+=("$@")
+      break
+      ;;
+    *)
+      BASALT_MODE_FORWARD_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${BASALT_MODE_FORWARD_ARGS[@]}"
+
+BASALT_MODE="$(printf '%s' "$BASALT_MODE" | tr '[:upper:]' '[:lower:]')"
+case "$BASALT_MODE" in
+  vio|vo) ;;
+  *)
+    echo "[start_basalt][ERROR] BASALT_MODE must be 'vio' or 'vo', got: $BASALT_MODE" >&2
+    exit 2
+    ;;
+esac
+
 capture_profile_parse_cli "$@"
 set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
 capture_profile_load_backend \
@@ -119,13 +174,22 @@ CALIB_PROFILE_NAME="${CALIB_PROFILE_NAME:-unified_480_ccw90}"
 XR_DEVICE_NAME="${XR_DEVICE_NAME:-xreal_air2ultra}"
 FINAL_PROFILE_DIR="${FINAL_PROFILE_DIR:-$XR_CALIB_DIR/final/$XR_DEVICE_NAME/$XR_SERIAL/$CALIB_PROFILE_NAME}"
 FINAL_PROFILE_DIR="$(expand_tilde "$FINAL_PROFILE_DIR")"
-BASALT_CALIB="${BASALT_CALIB:-$FINAL_PROFILE_DIR/basalt_calib_unified_480_ccw90.json}"
-BASALT_VIO_CONFIG="${BASALT_VIO_CONFIG:-$FINAL_PROFILE_DIR/basalt_vio_config_unified_480_ccw90.json}"
+BASALT_CALIB="${BASALT_CALIB:-$FINAL_PROFILE_DIR/basalt_calib_${CALIB_PROFILE_NAME}.json}"
+BASALT_VIO_CONFIG="${BASALT_VIO_CONFIG:-$FINAL_PROFILE_DIR/basalt_vio_config_${CALIB_PROFILE_NAME}.json}"
+BASALT_VO_CONFIG="${BASALT_VO_CONFIG:-$FINAL_PROFILE_DIR/basalt_vo_config_${CALIB_PROFILE_NAME}.json}"
 BASALT_CALIB="$(expand_tilde "$BASALT_CALIB")"
 BASALT_VIO_CONFIG="$(expand_tilde "$BASALT_VIO_CONFIG")"
+BASALT_VO_CONFIG="$(expand_tilde "$BASALT_VO_CONFIG")"
+
+BASALT_CONFIG="$BASALT_VIO_CONFIG"
+BASALT_ESTIMATOR_ARGS=()
+if [[ "$BASALT_MODE" == "vo" ]]; then
+  BASALT_CONFIG="$BASALT_VO_CONFIG"
+  BASALT_ESTIMATOR_ARGS+=(--no-imu)
+fi
 
 validate_basalt_json_object "camera calibration" "$BASALT_CALIB"
-validate_basalt_json_object "VIO config" "$BASALT_VIO_CONFIG"
+validate_basalt_json_object "${BASALT_MODE^^} config" "$BASALT_CONFIG"
 
 OUT_DIR="${OUT_DIR:-/tmp/xr_basalt_unified_live}"
 XR_BACKEND_CONTROL_FILE="${XR_BACKEND_CONTROL_FILE:-/tmp/xr_backend_control.json}"
@@ -137,7 +201,15 @@ STARTUP_GATE_SCRIPT="$(expand_tilde "$STARTUP_GATE_SCRIPT")"
 STARTUP_GATE_TIMEOUT_SEC="${STARTUP_GATE_TIMEOUT_SEC:-0}"
 STARTUP_GATE_PRINT_EVERY="${STARTUP_GATE_PRINT_EVERY:-5}"
 STARTUP_GATE_VISUAL="${STARTUP_GATE_VISUAL:-1}"
-STARTUP_GATE_IMU="${STARTUP_GATE_IMU:-1}"
+STARTUP_GATE_IMU_DEFAULT=1
+if [[ "$BASALT_MODE" == "vo" ]]; then
+  STARTUP_GATE_IMU_DEFAULT=0
+fi
+STARTUP_GATE_IMU="${STARTUP_GATE_IMU:-$STARTUP_GATE_IMU_DEFAULT}"
+if [[ "$BASALT_MODE" == "vo" && "$STARTUP_GATE_IMU" == "1" ]]; then
+  echo "[start_basalt][WARN] disabling STARTUP_GATE_IMU in VO mode"
+  STARTUP_GATE_IMU=0
+fi
 STARTUP_VISUAL_GOOD_FRAMES="${STARTUP_VISUAL_GOOD_FRAMES:-30}"
 STARTUP_MIN_MEAN="${STARTUP_MIN_MEAN:-22}"
 STARTUP_MIN_STDDEV="${STARTUP_MIN_STDDEV:-10}"
@@ -164,8 +236,12 @@ echo "[start_basalt] PROFILE_FILE=$CAPTURE_PROFILE_FILE_RESOLVED"
 echo "[start_basalt] BASALT_BIN_DIR=$BASALT_BIN_DIR"
 echo "[start_basalt] BASALT_LIB_DIR=$BASALT_LIB_DIR"
 echo "[start_basalt] FINAL_PROFILE_DIR=$FINAL_PROFILE_DIR"
+echo "[start_basalt] BASALT_MODE=$BASALT_MODE"
 echo "[start_basalt] BASALT_CALIB=$BASALT_CALIB"
 echo "[start_basalt] BASALT_VIO_CONFIG=$BASALT_VIO_CONFIG"
+echo "[start_basalt] BASALT_VO_CONFIG=$BASALT_VO_CONFIG"
+echo "[start_basalt] BASALT_CONFIG=$BASALT_CONFIG"
+echo "[start_basalt] STARTUP_GATE_IMU=$STARTUP_GATE_IMU"
 echo "[start_basalt] XR_BACKEND_CONTROL_FILE=$XR_BACKEND_CONTROL_FILE"
 echo "[start_basalt] STARTUP_GATE=$STARTUP_GATE"
 echo "[start_basalt] STARTUP_GATE_SCRIPT=$STARTUP_GATE_SCRIPT"
@@ -218,18 +294,22 @@ if [[ "$STARTUP_GATE" == "1" ]]; then
     python3 "$STARTUP_GATE_SCRIPT" "${gate_args[@]}"
 fi
 
-exec "$BASALT_BIN_DIR/capture_basalt_backend" \
-  --transport "$TRANSPORT" \
-  --registry "$CAPTURE_REGISTRY" \
-  --tcp-host "$CAPTURE_TCP_HOST" \
-  --tcp-port "$CAPTURE_TCP_PORT" \
-  --cam0-stream "$CAM0_STREAM" \
-  --cam1-stream "$CAM1_STREAM" \
-  --imu-stream "$IMU_STREAM" \
-  --cam-calib "$BASALT_CALIB" \
-  --config-path "$BASALT_VIO_CONFIG" \
-  --out-dir "$OUT_DIR" \
-  --duration 0 \
-  --image-scale 256 \
-  --no-enforce-realtime \
-  "$@"
+backend_args=(
+  --transport "$TRANSPORT"
+  --registry "$CAPTURE_REGISTRY"
+  --tcp-host "$CAPTURE_TCP_HOST"
+  --tcp-port "$CAPTURE_TCP_PORT"
+  --cam0-stream "$CAM0_STREAM"
+  --cam1-stream "$CAM1_STREAM"
+  --imu-stream "$IMU_STREAM"
+  --cam-calib "$BASALT_CALIB"
+  --config-path "$BASALT_CONFIG"
+  --out-dir "$OUT_DIR"
+  --duration 0
+  --image-scale 256
+  --no-enforce-realtime
+)
+backend_args+=("${BASALT_ESTIMATOR_ARGS[@]}")
+backend_args+=("$@")
+
+exec "$BASALT_BIN_DIR/capture_basalt_backend" "${backend_args[@]}"

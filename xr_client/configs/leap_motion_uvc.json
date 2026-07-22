@@ -126,8 +126,6 @@
       "camera0",
       "--cam1-stream",
       "camera1",
-      "--imu-stream",
-      "imu0",
       "--stream-quality-gate",
       "--quality-window-s",
       "5.0",
@@ -533,7 +531,7 @@
           "vio",
           "vo"
         ],
-        "default_value": "vio",
+        "default_value": "vo",
         "labels": {
           "vio": "6DoF IMU (VIO)",
           "vo": "6DoF no IMU (stereo VO)"

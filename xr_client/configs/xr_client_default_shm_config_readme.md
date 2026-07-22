@@ -1775,18 +1775,25 @@ Example:
 
 ```json
 "manual-toggle-basalt-imu-mode": {
-  "type": "toggle_service_command_flag",
+  "type": "toggle_service_command_mode",
   "service": "basalt_vio",
-  "flag": "--no-imu",
-  "flag_present_label": "6DoF no IMU (stereo VO)",
-  "flag_absent_label": "6DoF IMU (VIO)",
+  "option": "--mode",
+  "values": ["vio", "vo"],
+  "default_value": "vio",
+  "labels": {
+    "vio": "6DoF IMU (VIO)",
+    "vo": "6DoF no IMU (stereo VO)"
+  },
+  "remove_flags": ["--no-imu", "--vo", "--vio"],
   "start_if_stopped": false,
   "wait_streams": true,
-  "env_when_flag_present": {
-    "STARTUP_GATE_IMU": "0"
-  },
-  "env_when_flag_absent": {
-    "STARTUP_GATE_IMU": null
+  "env_by_value": {
+    "vio": {
+      "STARTUP_GATE_IMU": null
+    },
+    "vo": {
+      "STARTUP_GATE_IMU": "0"
+    }
   },
   "clean_streams_before_start": [
     {
@@ -1973,7 +1980,7 @@ Current expected controls:
 ```text
 1 - restart running backends
 2 - start/stop hand_tracking
-3 - restart Basalt and toggle 6DoF IMU / 6DoF no IMU
+3 - restart Basalt and toggle VIO / stereo VO
 4 - recenter 3DoF
 5 - start/stop override_controller
 6 - start/stop xr_video
@@ -2697,7 +2704,7 @@ RUN_VIEWER=1 ./run_xr_client.sh --config xreal_ultra
 ```text
 1 - restart running backends
 2 - start/stop hand_tracking
-3 - restart Basalt and toggle 6DoF IMU / 6DoF no IMU
+3 - restart Basalt and toggle VIO / stereo VO
 4 - recenter 3DoF
 5 - start/stop override_controller
 6 - start/stop xr_video

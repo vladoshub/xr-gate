@@ -87,7 +87,7 @@ class ManualControlPoller:
         print("XR backend controls:", flush=True)
         print("  1 - restart running backends", flush=True)
         print("  2 - start/stop hand_tracking", flush=True)
-        print("  3 - toggle Basalt 6DoF IMU / 6DoF no IMU (restarts Basalt)", flush=True)
+        print("  3 - toggle Basalt VIO / stereo VO (restarts Basalt)", flush=True)
         print("  4 - recenter 3DoF (works only when imu_3dof_backend is running)", flush=True)
         print("  5 - start/stop override_controller", flush=True)
         print("  6 - start/stop xr_video", flush=True)

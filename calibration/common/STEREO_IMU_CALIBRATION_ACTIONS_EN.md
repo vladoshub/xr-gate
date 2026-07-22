@@ -570,6 +570,7 @@ The command creates three runtime files in the final profile directory:
 basalt_calib_<profile>.json
 mercury_calib_<profile>.json
 basalt_vio_config_<target-specific-name>.json
+basalt_vo_config_<target-specific-name>.json
 ```
 
 The VIO file is copied from the shared algorithm template; it is not derived
@@ -626,6 +627,10 @@ install -m 0644 \
 install -m 0644 \
   "$SRC/basalt_vio_config_${CALIB_PROFILE_NAME}.json" \
   "$DST/basalt_vio_config_640x480.json"
+  
+install -m 0644 \
+  "$SRC/basalt_vo_config_${CALIB_PROFILE_NAME}.json" \
+  "$DST/basalt_vo_config_640x480.json"  
 ```
 
 All three source files are now produced by `convert-runtime`; no separate VIO
@@ -684,6 +689,7 @@ export FINAL_PROFILE_DIR="\$XR_TRACKING_CALIB_DIR/final/\$XR_TRACKING_CALIB_TARG
 
 export BASALT_CALIB="\${XR_TRACKING_BASALT_CALIB:-\$FINAL_PROFILE_DIR/basalt_calib_640x480.json}"
 export BASALT_VIO_CONFIG="\${XR_TRACKING_BASALT_VIO_CONFIG:-\$FINAL_PROFILE_DIR/basalt_vio_config_640x480.json}"
+export BASALT_VO_CONFIG="\${XR_TRACKING_BASALT_VO_CONFIG:-\$FINAL_PROFILE_DIR/basalt_vo_config_640x480.json}"
 export MERCURY_CALIB="\${XR_TRACKING_MERCURY_CALIB:-\$FINAL_PROFILE_DIR/mercury_calib_640x480.json}"
 
 export TRACKING_TRANSFORM_CONFIG="\$XR_TRACKING_CONFIGS_ROOT/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json"

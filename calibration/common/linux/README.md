@@ -85,7 +85,7 @@ profile directory. The default template is:
 calibration/common/linux/templates/basalt_vio_config_default.json
 ```
 
-Each target may override the output name with `BASALT_VIO_CONFIG_NAME`. Current
+Each target may override the output name with `BASALT_VIO_CONFIG_NAME` and `BASALT_VO_CONFIG_NAME`. Current
 outputs are:
 
 ```text

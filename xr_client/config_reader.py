@@ -400,19 +400,26 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
         "secondary_clean_streams_on_start": clean_hmd3,
     }
     toggle_basalt_imu_mode = {
-        "type": "toggle_service_command_flag",
+        "type": "toggle_service_command_mode",
         "description": "Restart Basalt and switch between 6DoF VIO with IMU and stereo 6DoF VO without IMU.",
         "service": "basalt_vio",
-        "flag": "--no-imu",
-        "flag_present_label": "6DoF no IMU (stereo VO)",
-        "flag_absent_label": "6DoF IMU (VIO)",
+        "option": "--mode",
+        "values": ["vio", "vo"],
+        "default_value": "vio",
+        "labels": {
+            "vio": "6DoF IMU (VIO)",
+            "vo": "6DoF no IMU (stereo VO)",
+        },
+        "remove_flags": ["--no-imu", "--vo", "--vio"],
         "start_if_stopped": False,
         "wait_streams": True,
-        "env_when_flag_present": {
-            "STARTUP_GATE_IMU": "0",
-        },
-        "env_when_flag_absent": {
-            "STARTUP_GATE_IMU": None,
+        "env_by_value": {
+            "vio": {
+                "STARTUP_GATE_IMU": None,
+            },
+            "vo": {
+                "STARTUP_GATE_IMU": "0",
+            },
         },
         "clean_streams_before_start": clean_hmd,
     }

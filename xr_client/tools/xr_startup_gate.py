@@ -59,13 +59,13 @@ def _install_capture_client_import_paths() -> None:
             root / "bin" / "python" / "capture_service",
             root / "capture_service",
             root,
-        ])
+            ])
     candidates.extend([
         PROJECT_ROOT / "bin" / "python",
         PROJECT_ROOT / "bin" / "python" / "capture_service",
         PROJECT_ROOT / "capture_service",
         PROJECT_ROOT,
-    ])
+        ])
     for candidate in candidates:
         if (candidate / "capture_client").exists():
             _prepend_sys_path(candidate)
@@ -182,17 +182,17 @@ class CaptureServiceStereoImuSource:
     """Stereo+IMU source backed by capture_client over SHM or TCP."""
 
     def __init__(
-        self,
-        *,
-        transport: str,
-        registry: str,
-        tcp_host: str,
-        tcp_port: int,
-        cam0_stream: str,
-        cam1_stream: str,
-        imu_stream: str,
-        stereo_max_delta_ms: float,
-        wait_for_imu_s: float,
+            self,
+            *,
+            transport: str,
+            registry: str,
+            tcp_host: str,
+            tcp_port: int,
+            cam0_stream: str,
+            cam1_stream: str,
+            imu_stream: str,
+            stereo_max_delta_ms: float,
+            wait_for_imu_s: float,
     ) -> None:
         CaptureClient, BasaltStereoImuSynchronizer, _StereoPairReader = _load_capture_client_modules()
         if transport == "shm":
@@ -228,15 +228,15 @@ class CaptureServiceStereoSource:
     """Camera-only source used by the stream-quality preflight gate."""
 
     def __init__(
-        self,
-        *,
-        transport: str,
-        registry: str,
-        tcp_host: str,
-        tcp_port: int,
-        cam0_stream: str,
-        cam1_stream: str,
-        stereo_max_delta_ms: float,
+            self,
+            *,
+            transport: str,
+            registry: str,
+            tcp_host: str,
+            tcp_port: int,
+            cam0_stream: str,
+            cam1_stream: str,
+            stereo_max_delta_ms: float,
     ) -> None:
         CaptureClient, _BasaltStereoImuSynchronizer, StereoPairReader = _load_capture_client_modules()
         if transport == "shm":
@@ -338,13 +338,13 @@ def compute_image_health(frame) -> ImageHealth:
 
 def image_health_ok(h: ImageHealth, cfg: VisualGateConfig) -> bool:
     return (
-        h.mean >= cfg.min_mean
-        and h.stddev >= cfg.min_stddev
-        and h.black_fraction <= cfg.max_black_fraction
-        and h.white_fraction <= cfg.max_white_fraction
-        and h.corners >= cfg.min_corners
-        and h.grid_cells >= cfg.min_grid_cells
-        and h.laplacian_stddev >= cfg.min_laplacian_stddev
+            h.mean >= cfg.min_mean
+            and h.stddev >= cfg.min_stddev
+            and h.black_fraction <= cfg.max_black_fraction
+            and h.white_fraction <= cfg.max_white_fraction
+            and h.corners >= cfg.min_corners
+            and h.grid_cells >= cfg.min_grid_cells
+            and h.laplacian_stddev >= cfg.min_laplacian_stddev
     )
 
 
@@ -391,11 +391,11 @@ def compute_imu_health(samples: Sequence, expected_gravity_magnitude: float) -> 
 
 def imu_health_ok(h: ImuHealth, cfg: ImuGateConfig) -> bool:
     return (
-        h.samples >= max(0, cfg.min_samples)
-        and h.gyro_norm_mean <= cfg.max_gyro_norm
-        and h.gyro_norm_stddev <= cfg.max_gyro_stddev
-        and h.accel_magnitude_error <= cfg.max_accel_magnitude_error
-        and h.accel_norm_stddev <= cfg.max_accel_stddev
+            h.samples >= max(0, cfg.min_samples)
+            and h.gyro_norm_mean <= cfg.max_gyro_norm
+            and h.gyro_norm_stddev <= cfg.max_gyro_stddev
+            and h.accel_magnitude_error <= cfg.max_accel_magnitude_error
+            and h.accel_norm_stddev <= cfg.max_accel_stddev
     )
 
 
@@ -418,9 +418,9 @@ def image_defective(h: ImageHealth, cfg: StreamQualityGateConfig) -> bool:
     if h.black_fraction >= cfg.max_black_fraction:
         return True
     no_detail = (
-        h.stddev <= cfg.min_stddev
-        and h.laplacian_stddev <= cfg.min_laplacian_stddev
-        and h.corners <= cfg.min_corners
+            h.stddev <= cfg.min_stddev
+            and h.laplacian_stddev <= cfg.min_laplacian_stddev
+            and h.corners <= cfg.min_corners
     )
     return bool(no_detail)
 
@@ -484,9 +484,9 @@ def run_stream_quality_gate(source: SyncedPacketSource, cfg: StartupGateConfig) 
             defective += 1
 
         should_print = (
-            frames_seen == 1
-            or bad
-            or (cfg.print_every > 0 and frames_seen % cfg.print_every == 0 and frames_seen != last_print_seen)
+                frames_seen == 1
+                or bad
+                or (cfg.print_every > 0 and frames_seen % cfg.print_every == 0 and frames_seen != last_print_seen)
         )
         if should_print:
             last_print_seen = frames_seen
@@ -560,15 +560,21 @@ def run_startup_gate(source: SyncedPacketSource, cfg: StartupGateConfig) -> Star
             continue
         frames_seen += 1
 
-        if not getattr(packet, "imu_samples", ()):  # same warning as backend gate path.
+        # CaptureServiceStereoImuSource returns a synchronized packet with
+        # .pair/.imu_samples, while CaptureServiceStereoSource returns the
+        # stereo pair directly.
+        pair = getattr(packet, "pair", packet)
+        imu_samples = getattr(packet, "imu_samples", ())
+
+        if cfg.imu.enabled and not imu_samples:
             print(
-                f"[xr_startup_gate] WARN: empty IMU window at frame timestamp {packet.pair.timestamp_ns}",
+                f"[xr_startup_gate] WARN: empty IMU window at frame timestamp {pair.timestamp_ns}",
                 flush=True,
             )
 
         if not visual_ready:
-            h0 = compute_image_health(packet.pair.cam0)
-            h1 = compute_image_health(packet.pair.cam1)
+            h0 = compute_image_health(pair.cam0)
+            h1 = compute_image_health(pair.cam1)
             ok0 = image_health_ok(h0, cfg.visual)
             ok1 = image_health_ok(h1, cfg.visual)
             ok = ok0 and ok1
@@ -576,9 +582,9 @@ def run_startup_gate(source: SyncedPacketSource, cfg: StartupGateConfig) -> Star
             visual_good = visual_good + 1 if ok else 0
 
             if (
-                visual_seen == 1
-                or visual_good >= cfg.visual.good_frames
-                or (cfg.print_every > 0 and visual_seen % cfg.print_every == 0)
+                    visual_seen == 1
+                    or visual_good >= cfg.visual.good_frames
+                    or (cfg.print_every > 0 and visual_seen % cfg.print_every == 0)
             ):
                 print(
                     "[xr_startup_gate] startup visual gate: "
@@ -592,20 +598,20 @@ def run_startup_gate(source: SyncedPacketSource, cfg: StartupGateConfig) -> Star
                 visual_ready = True
                 print(
                     "[xr_startup_gate] startup visual gate passed at frame timestamp "
-                    f"{packet.pair.timestamp_ns}",
+                    f"{pair.timestamp_ns}",
                     flush=True,
                 )
 
         if not imu_ready:
-            h = compute_imu_health(packet.imu_samples, abs(cfg.imu.expected_gravity_magnitude))
+            h = compute_imu_health(imu_samples, abs(cfg.imu.expected_gravity_magnitude))
             ok = imu_health_ok(h, cfg.imu)
             imu_seen += 1
             imu_good = imu_good + 1 if ok else 0
 
             if (
-                imu_seen == 1
-                or imu_good >= cfg.imu.good_frames
-                or (cfg.print_every > 0 and imu_seen % cfg.print_every == 0)
+                    imu_seen == 1
+                    or imu_good >= cfg.imu.good_frames
+                    or (cfg.print_every > 0 and imu_seen % cfg.print_every == 0)
             ):
                 print(
                     "[xr_startup_gate] startup IMU gate: "
@@ -618,7 +624,7 @@ def run_startup_gate(source: SyncedPacketSource, cfg: StartupGateConfig) -> Star
                 imu_ready = True
                 print(
                     "[xr_startup_gate] startup IMU gate passed at frame timestamp "
-                    f"{packet.pair.timestamp_ns}",
+                    f"{pair.timestamp_ns}",
                     flush=True,
                 )
 
@@ -791,17 +797,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
             result = run_stream_quality_gate(source, cfg)
         else:
-            source = CaptureServiceStereoImuSource(
-                transport=transport,
-                registry=args.registry,
-                tcp_host=args.tcp_host,
-                tcp_port=args.tcp_port,
-                cam0_stream=args.cam0_stream,
-                cam1_stream=args.cam1_stream,
-                imu_stream=args.imu_stream,
-                stereo_max_delta_ms=args.stereo_max_delta_ms,
-                wait_for_imu_s=args.wait_for_imu_s,
-            )
+            if cfg.imu.enabled:
+                source = CaptureServiceStereoImuSource(
+                    transport=transport,
+                    registry=args.registry,
+                    tcp_host=args.tcp_host,
+                    tcp_port=args.tcp_port,
+                    cam0_stream=args.cam0_stream,
+                    cam1_stream=args.cam1_stream,
+                    imu_stream=args.imu_stream,
+                    stereo_max_delta_ms=args.stereo_max_delta_ms,
+                    wait_for_imu_s=args.wait_for_imu_s,
+                )
+            else:
+                # Visual-only startup must not require or subscribe to imu0.
+                source = CaptureServiceStereoSource(
+                    transport=transport,
+                    registry=args.registry,
+                    tcp_host=args.tcp_host,
+                    tcp_port=args.tcp_port,
+                    cam0_stream=args.cam0_stream,
+                    cam1_stream=args.cam1_stream,
+                    stereo_max_delta_ms=args.stereo_max_delta_ms,
+                )
             if cfg.quality.enabled:
                 q_source = CaptureServiceStereoSource(
                     transport=transport,

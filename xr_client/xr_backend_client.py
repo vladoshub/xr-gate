@@ -60,6 +60,71 @@ except ImportError:
 IS_POSIX = os.name == "posix"
 IS_WINDOWS = os.name == "nt"
 
+BASALT_MODE_OPTION = "--mode"
+BASALT_LEGACY_MODE_FLAGS = ("--no-imu", "--vo", "--vio")
+
+
+def normalize_basalt_mode(value: str) -> str:
+    mode = str(value).strip().lower()
+    if mode not in ("vio", "vo"):
+        raise ValueError(f"Basalt mode must be 'vio' or 'vo', got: {value!r}")
+    return mode
+
+
+def command_option_value(command: Sequence[str], option: str) -> Optional[str]:
+    prefix = option + "="
+    for index, argument in enumerate(command):
+        if argument == option:
+            if index + 1 < len(command):
+                return str(command[index + 1])
+            return None
+        if argument.startswith(prefix):
+            return argument[len(prefix):]
+    return None
+
+
+def replace_command_option(
+    command: Sequence[str],
+    option: str,
+    value: str,
+    *,
+    remove_flags: Sequence[str] = (),
+) -> List[str]:
+    """Replace one command option while preserving unrelated arguments."""
+    result: List[str] = []
+    skip_next = False
+    option_prefix = option + "="
+    remove = set(remove_flags)
+    for argument in command:
+        if skip_next:
+            skip_next = False
+            continue
+        if argument == option:
+            skip_next = True
+            continue
+        if argument.startswith(option_prefix):
+            continue
+        if argument in remove:
+            continue
+        result.append(argument)
+    result.extend([option, value])
+    return result
+
+
+def basalt_mode_from_command(command: Sequence[str], default: str = "vio") -> str:
+    explicit = command_option_value(command, BASALT_MODE_OPTION)
+    if explicit is not None:
+        try:
+            return normalize_basalt_mode(explicit)
+        except ValueError:
+            return normalize_basalt_mode(default)
+    if "--no-imu" in command or "--vo" in command:
+        return "vo"
+    if "--vio" in command:
+        return "vio"
+    return normalize_basalt_mode(default)
+
+
 class Launcher:
     def __init__(self, cfg: ClientConfig, *, dry_run: bool = False) -> None:
         self.cfg = cfg
@@ -316,12 +381,20 @@ class Launcher:
             self.print_log_tail(log_path)
             self.fail(f"{spec.name} exited immediately with code {proc.returncode}")
         if spec.name == "basalt_vio":
-            log(
-                "IMPORTANT: Basalt VIO is initializing. For correct positioning, "
-                "gently rotate or move your head for a couple of seconds. "
-                "Avoid fast turns, shaking, or large movements.",
-                color="red",
-            )
+            basalt_mode = basalt_mode_from_command(spec.command)
+            if basalt_mode == "vo":
+                log(
+                    "IMPORTANT: Basalt stereo VO is initializing. Look at a textured "
+                    "scene and gently rotate your head for a couple of seconds. "
+                    "Avoid fast turns, shaking, or large movements.",
+                    color="red",
+                )
+            else:
+                log(
+                    "IMPORTANT: Basalt VIO is initializing. Keep the headset steady "
+                    "until IMU initialization completes, then move gently.",
+                    color="red",
+                )
         self.start_log_limiter(item)
         return True
 
@@ -391,7 +464,13 @@ class Launcher:
             flag = str(action.get("flag") or "")
             if service and flag:
                 return f"Restart {service} and toggle {flag}"
-            return "Restart a service and toggle a command-line mode"
+            return "Restart a service and toggle a command-line flag"
+        if action_type == "toggle_service_command_mode":
+            service = str(action.get("service") or "")
+            option = str(action.get("option") or BASALT_MODE_OPTION)
+            if service:
+                return f"Restart {service} and switch {option}"
+            return "Restart a service and switch a command-line mode"
         if action_type == "toggle_exclusive_services":
             primary = str(action.get("primary_service") or action.get("sixdof_service") or "primary")
             secondary = str(action.get("secondary_service") or action.get("threedof_service") or "secondary")
@@ -786,6 +865,117 @@ class Launcher:
 
         log(f"{prefix} action {event.name}: {service_name} is running in {target_label} mode")
 
+    def toggle_service_command_mode_action(self, action: Dict[str, Any], event: TapEvent) -> None:
+        """Cycle a command option through configured values and restart a service.
+
+        The selected value is stored only in the in-memory ServiceSpec, so a
+        stopped service remembers the requested mode for its next start.
+        """
+        prefix = self._event_prefix(event)
+        service_name = str(action.get("service") or "")
+        option = str(action.get("option") or BASALT_MODE_OPTION)
+        raw_values = action.get("values", ["vio", "vo"])
+        values = [str(value).strip().lower() for value in raw_values if str(value).strip()]
+        if not service_name or not option or len(values) < 2:
+            log(
+                f"{prefix} action {event.name}: toggle_service_command_mode "
+                "requires service, option and at least two values"
+            )
+            return
+
+        spec = self.service_spec_by_name(service_name)
+        if spec is None:
+            log(f"{prefix}[WARN] no service spec named {service_name!r}")
+            return
+
+        default_value = str(action.get("default_value") or values[0]).strip().lower()
+        current_value = command_option_value(spec.command, option)
+        if current_value is None and service_name == "basalt_vio":
+            current_value = basalt_mode_from_command(spec.command, default_value)
+        current_value = str(current_value or default_value).strip().lower()
+        if current_value not in values:
+            current_value = default_value if default_value in values else values[0]
+
+        target_index = (values.index(current_value) + 1) % len(values)
+        target_value = values[target_index]
+        labels = action.get("labels", {})
+        if not isinstance(labels, dict):
+            labels = {}
+        target_label = str(labels.get(target_value) or target_value)
+
+        remove_flags_raw = action.get("remove_flags", [])
+        if not isinstance(remove_flags_raw, list):
+            remove_flags_raw = []
+        remove_flags = [str(value) for value in remove_flags_raw]
+
+        was_running = self.is_service_running(service_name)
+        old_command = list(spec.command)
+        old_env = dict(spec.env)
+
+        if was_running:
+            log(f"{prefix} action {event.name}: restart {service_name} in {target_label} mode")
+            self.stop_service_names([service_name])
+        else:
+            log(f"{prefix} action {event.name}: select {target_label} mode for {service_name}")
+
+        spec.command = replace_command_option(
+            spec.command,
+            option,
+            target_value,
+            remove_flags=remove_flags,
+        )
+
+        env_by_value = action.get("env_by_value", {})
+        if isinstance(env_by_value, dict):
+            self._apply_service_env_overrides(spec, env_by_value.get(target_value, {}))
+
+        start_if_stopped = bool(action.get("start_if_stopped", False))
+        if not was_running and not start_if_stopped:
+            log(
+                f"{prefix} action {event.name}: {service_name} is not running; "
+                f"the next start will use {target_label} mode"
+            )
+            return
+
+        clean_registries = [str(x) for x in action.get("clean_registries_before_start", [])]
+        clean_streams = [dict(x) for x in action.get("clean_streams_before_start", [])]
+        self.clean_registry_paths(clean_registries)
+        self.clean_stream_entries(clean_streams)
+
+        try:
+            started = self._start_service_by_name_for_action(
+                service_name,
+                event,
+                wait_streams=bool(action.get("wait_streams", True)),
+            )
+            if not started:
+                raise RuntimeError(f"{service_name} did not start")
+        except Exception as exc:
+            self.stop_service_names([service_name])
+            spec.command = old_command
+            spec.env = old_env
+            log(
+                f"{prefix}[WARN] failed to start {service_name} in {target_label} mode: "
+                f"{exc}; restoring the previous mode"
+            )
+            if was_running:
+                self.clean_registry_paths(clean_registries)
+                self.clean_stream_entries(clean_streams)
+                try:
+                    self._start_service_by_name_for_action(
+                        service_name,
+                        event,
+                        wait_streams=bool(action.get("wait_streams", True)),
+                    )
+                except Exception as restore_exc:
+                    self.fail(
+                        f"failed to restore {service_name} after mode switch failure: "
+                        f"{restore_exc}"
+                    )
+            return
+
+        log(f"{prefix} action {event.name}: {service_name} is running in {target_label} mode")
+
     def toggle_exclusive_services_action(self, action: Dict[str, Any], event: TapEvent) -> None:
         prefix = self._event_prefix(event)
         primary = str(action.get("primary_service") or action.get("sixdof_service") or "basalt_vio")
@@ -933,6 +1123,9 @@ class Launcher:
             return
         if action_type == "toggle_service_command_flag":
             self.toggle_service_command_flag_action(action, event)
+            return
+        if action_type == "toggle_service_command_mode":
+            self.toggle_service_command_mode_action(action, event)
             return
         if action_type == "toggle_exclusive_services":
             self.toggle_exclusive_services_action(action, event)
@@ -1444,10 +1637,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ap.add_argument("--print-default-config", action="store_true", help="Print default JSON config and exit")
     ap.add_argument("--dry-run", action="store_true", help="Print actions without launching processes")
     ap.add_argument("--no-gate", action="store_true", help="Skip startup gate")
-    ap.add_argument(
+    basalt_mode_group = ap.add_mutually_exclusive_group()
+    basalt_mode_group.add_argument(
+        "--basalt-mode",
+        choices=("vio", "vo"),
+        help="Select Basalt estimator mode explicitly: VIO with IMU or stereo VO without IMU",
+    )
+    basalt_mode_group.add_argument(
         "--no-imu",
         action="store_true",
-        help="Start the basalt_vio service in stereo visual-odometry mode without opening or subscribing to IMU",
+        help="Compatibility alias for --basalt-mode vo",
     )
     ap.add_argument("--prestart-option", help="Override prestart control option id/choice")
     ap.add_argument("--display-mode", choices=["prompt", "60hz", "90hz", "current", "skip"], help="Compatibility alias for --prestart-option")
@@ -1508,21 +1707,39 @@ def apply_root_override(cfg: ClientConfig, new_root_raw: Optional[str]) -> None:
         }
 
 
-def apply_basalt_no_imu_mode(cfg: ClientConfig) -> None:
+
+def apply_basalt_mode(
+    cfg: ClientConfig,
+    mode: str,
+    *,
+    require_service: bool = False,
+) -> None:
+    """Pass an explicit VO/VIO mode to every basalt_vio launcher."""
+    normalized = normalize_basalt_mode(mode)
     matches = [
         spec
         for spec in cfg.pre_gate_services + cfg.post_gate_services + cfg.foreground_services
         if spec.name == "basalt_vio"
     ]
     if not matches:
-        raise RuntimeError("--no-imu was requested, but the selected config has no basalt_vio service")
+        if require_service:
+            raise RuntimeError(
+                f"--basalt-mode {normalized} was requested, but the selected config "
+                "has no basalt_vio service"
+            )
+        return
 
     for spec in matches:
-        if "--no-imu" not in spec.command:
-            spec.command.append("--no-imu")
-        # start_basalt.sh may run its own startup gate. Keep visual checks, but
-        # never request an IMU gate in a mode that intentionally has no IMU.
-        spec.env["STARTUP_GATE_IMU"] = "0"
+        spec.command = replace_command_option(
+            spec.command,
+            BASALT_MODE_OPTION,
+            normalized,
+            remove_flags=BASALT_LEGACY_MODE_FLAGS,
+        )
+        if normalized == "vo":
+            spec.env["STARTUP_GATE_IMU"] = "0"
+        else:
+            spec.env.pop("STARTUP_GATE_IMU", None)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1536,8 +1753,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         selected_config = resolve_config_argument(args)
         cfg = load_config(selected_config)
         apply_root_override(cfg, args.root)
-        if args.no_imu:
-            apply_basalt_no_imu_mode(cfg)
+        requested_basalt_mode = "vo" if args.no_imu else (args.basalt_mode or "vio")
+        apply_basalt_mode(
+            cfg,
+            requested_basalt_mode,
+            require_service=bool(args.no_imu or args.basalt_mode),
+        )
         if args.no_gate and cfg.gate is not None:
             cfg.gate.enabled = False
         if args.gate_debug and cfg.gate is not None:
