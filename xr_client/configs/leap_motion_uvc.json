@@ -173,7 +173,9 @@
       "enable_env": "RUN_BASALT",
       "enabled": true,
       "command": [
-        "{common_scripts}/basalt_vio/start_basalt.sh"
+        "{common_scripts}/basalt_vio/start_basalt.sh",
+        "--mode",
+        "vo"
       ],
       "wait_streams": [
         {

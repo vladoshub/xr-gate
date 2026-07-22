@@ -746,11 +746,52 @@ Example good basalt with debug:
 connected0 183 unconnected0 128
 ```
 
-You need to find empirically the value that will give the largest number of 'connected0' and at the same time the percentage of connected0 would be the largest relative to the sum of connected0 and unconnected0
+You need to find empirically the value that will give the largest number of `connected0` and at the same time the percentage of connected0 would be the largest relative to the sum of connected0 and unconnected0
+
+If `connected0` does not change or remains near 0 try change `vio_min_triangulation_dist`
+
+
+```bash
+CALIB=/path/to/basalt_calib_stereo.json
+
+python3 - "$CALIB" <<'PY'
+import json
+import math
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    value = json.load(f)["value0"]
+
+cam0, cam1 = value["T_imu_cam"]
+
+dx = float(cam1["px"]) - float(cam0["px"])
+dy = float(cam1["py"]) - float(cam0["py"])
+dz = float(cam1["pz"]) - float(cam0["pz"])
+
+baseline = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+for k in (0.5, 0.7, 0.8, 0.9):
+    print(f"k={k:.1f}: {baseline * k:.6f} m")
+
+print(f"baseline: {baseline:.6f} m ({baseline * 1000:.2f} mm)")
+PY
+```
+
+OR
+threshold = 0.8 × baseline
 
 ```text
-After tests set found "optical_flow_epipolar_error" and "config.vio_debug": false in basalt_vio_config.json:
+config.vio_min_triangulation_dist = 0.8 × baseline
 ```
+
+Example:
+
+```text
+"config.vio_min_triangulation_dist": 0.03,
+```
+
+
+After tests set found "optical_flow_epipolar_error", "config.vio_min_triangulation_dist" and "config.vio_debug": false in basalt_vio_config.json:
 
 ---
 

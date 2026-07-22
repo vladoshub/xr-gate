@@ -5,12 +5,12 @@
       "coordinate_transform": {
         "axis_map": [
           "x",
-          "z",
-          "y"
+          "y",
+          "z"
         ],
         "invert_x": false,
         "invert_y": false,
-        "invert_z": true,
+        "invert_z": false,
         "rotation_deg": {
           "x": 0.0,
           "y": 0.0,
@@ -40,7 +40,7 @@
         }
       },
       "orientation_offset": {
-        "enabled": true,
+        "enabled": false,
         "multiply_order": "pre",
         "quaternion_xyzw": [
           -0.641745993585,

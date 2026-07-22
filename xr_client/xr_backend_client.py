@@ -1796,12 +1796,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         selected_config = resolve_config_argument(args)
         cfg = load_config(selected_config)
         apply_root_override(cfg, args.root)
-        requested_basalt_mode = "vo" if args.no_imu else (args.basalt_mode or "vio")
-        apply_basalt_mode(
-            cfg,
-            requested_basalt_mode,
-            require_service=bool(args.no_imu or args.basalt_mode),
-        )
+        requested_basalt_mode: Optional[str] = None
+        require_basalt_service = False
+
+        if args.no_imu:
+            requested_basalt_mode = "vo"
+            require_basalt_service = True
+        elif args.basalt_mode:
+            requested_basalt_mode = args.basalt_mode
+            require_basalt_service = True
+        elif any(
+            bool(getattr(spec, "no_imu", False))
+            for spec in cfg.pre_gate_services
+        ):
+            # A camera-only capture service cannot satisfy VIO. Select stereo
+            # VO automatically so start_basalt receives --mode vo and the
+            # native backend receives --no-imu.
+            requested_basalt_mode = "vo"
+
+        # With no explicit CLI mode and no camera-only service, preserve the
+        # mode already configured in the service command instead of forcing VIO.
+        if requested_basalt_mode is not None:
+            apply_basalt_mode(
+                cfg,
+                requested_basalt_mode,
+                require_service=require_basalt_service,
+            )
         if args.no_gate and cfg.gate is not None:
             cfg.gate.enabled = False
         if args.gate_debug and cfg.gate is not None:
