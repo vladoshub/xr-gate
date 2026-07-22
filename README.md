@@ -199,6 +199,11 @@ DEVICE_CONFIG=xreal_ultra
 DEVICE_CONFIG=leap_motion_uvc_nrf54l15
 ```
 
+**UltraLeapUVC**
+```bash
+DEVICE_CONFIG=leap_motion_uvc
+```
+
    
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
@@ -290,6 +295,11 @@ DEVICE_CONFIG=xreal_ultra
 DEVICE_CONFIG=leap_motion_uvc_nrf54l15
 ```
 
+**UltraLeapUVC**
+```bash
+DEVICE_CONFIG=leap_motion_uvc
+```
+
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
@@ -330,10 +340,22 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
+**XREAL ULTRA (no IMU)**
+```bash
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config xreal_ultra --no-imu
+```
+
 **UltraLeapUVC + nRF54L15 (experimental)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config leap_motion_uvc_nrf54l15
+```
+
+**UltraLeapUVC (experimental no IMU)**
+```bash
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config leap_motion_uvc
 ```
 
 You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
