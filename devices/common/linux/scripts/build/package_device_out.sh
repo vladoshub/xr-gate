@@ -626,6 +626,7 @@ if [[ $# -eq 0 ]]; then
   echo "  ./run_xr_client.sh --config xreal_ultra" >&2
   echo "  ./run_xr_client.sh --config xreal_ultra --no-imu" >&2
   echo "  ./run_xr_client.sh --config leap_motion_uvc_nrf54l15" >&2
+  echo "  ./run_xr_client.sh --config leap_motion_uvc" >&2
   echo "Available profiles:" >&2
   find "$XR_CLIENT_CONFIG_DIR" -maxdepth 1 -type f -name '*.json' -printf '  %f\n' 2>/dev/null | sort >&2 || true
   exit 2
@@ -647,6 +648,7 @@ Examples:
 ./run_xr_client.sh --config xreal_ultra
 ./run_xr_client.sh --config xreal_ultra --no-imu
 ./run_xr_client.sh --config leap_motion_uvc_nrf54l15
+./run_xr_client.sh --config leap_motion_uvc
 ```
 
 Config names are resolved from `bin/python/xr_client/configs`; an explicit JSON

@@ -11,7 +11,7 @@ export XR_DEVICE_DISPLAY_NAME="${XR_DEVICE_DISPLAY_NAME:-XR Gate}"
 export XR_OUT_PACKAGE_NAME="${XR_OUT_PACKAGE_NAME:-xr-gate}"
 # One profile list drives the packaged xr_client configs and device/tracking
 # bundles by default. The lower-level lists remain independently overridable.
-export XR_PACKAGE_PROFILES="${XR_PACKAGE_PROFILES:-xreal_ultra leap_motion_uvc_nrf54l15}"
+export XR_PACKAGE_PROFILES="${XR_PACKAGE_PROFILES:-xreal_ultra leap_motion_uvc_nrf54l15 leap_motion_uvc}"
 export XR_PACKAGE_DEVICE_TARGETS="${XR_PACKAGE_DEVICE_TARGETS:-$XR_PACKAGE_PROFILES}"
 export XR_PACKAGE_CONFIG_PROFILES="${XR_PACKAGE_CONFIG_PROFILES:-$XR_PACKAGE_PROFILES}"
 export XR_VENDOR_COMPONENTS="${XR_VENDOR_COMPONENTS:-xreal_ultra}"
