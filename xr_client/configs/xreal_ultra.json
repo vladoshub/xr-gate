@@ -525,6 +525,30 @@
         ],
         "description": "Start or stop Mercury hand tracking."
       },
+      "manual-toggle-basalt-imu-mode": {
+        "type": "toggle_service_command_flag",
+        "service": "basalt_vio",
+        "flag": "--no-imu",
+        "flag_present_label": "6DoF no IMU (stereo VO)",
+        "flag_absent_label": "6DoF IMU (VIO)",
+        "start_if_stopped": false,
+        "wait_streams": true,
+        "env_when_flag_present": {
+          "STARTUP_GATE_IMU": "0"
+        },
+        "env_when_flag_absent": {
+          "STARTUP_GATE_IMU": null
+        },
+        "clean_streams_before_start": [
+          {
+            "registry": "/tmp/tracking_streams.json",
+            "streams": [
+              "hmd_pose"
+            ]
+          }
+        ],
+        "description": "Restart Basalt and switch between 6DoF VIO with IMU and stereo 6DoF VO without IMU."
+      },
       "manual-toggle-3dof-6dof": {
         "type": "toggle_exclusive_services",
         "primary_service": "basalt_vio",

@@ -50,6 +50,3 @@ camera:
       flip: none
 
   stall_exit_ms: 3000
-
-imu:
-  enabled: false

@@ -645,6 +645,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "gravity_magnitude: " << gravity_magnitude << "\n";
     std::cout << "gravity_vector: [0, 0, " << gravity_z << "]\n";
+    std::cout << "imu_input: " << (use_imu ? "enabled" : "disabled (stereo VO)") << "\n";
     std::cout << "reset_counter: " << reset_counter << "\n";
     std::cout << "control_file: " << (no_control_file ? std::string("disabled") : control_file_path) << "\n";
     if (!no_control_file) {
@@ -675,7 +676,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<capture_client::ICaptureTransport> capture_transport;
     if (transport_type == "shm") {
       capture_transport = std::make_unique<capture_client::ShmCaptureTransport>(
-          registry_path, cam0_stream, cam1_stream, imu_stream);
+          registry_path, cam0_stream, cam1_stream, imu_stream, use_imu);
     } else if (transport_type == "tcp") {
       capture_client::TcpCaptureTransportConfig tcp_cfg;
       tcp_cfg.host = tcp_host;
@@ -683,6 +684,7 @@ int main(int argc, char** argv) {
       tcp_cfg.cam0_stream = cam0_stream;
       tcp_cfg.cam1_stream = cam1_stream;
       tcp_cfg.imu_stream = imu_stream;
+      tcp_cfg.subscribe_imu = use_imu;
       capture_transport = std::make_unique<capture_client::TcpCaptureTransport>(std::move(tcp_cfg));
     } else if (transport_type == "capture_tcp") {
       capture_client::CaptureServiceTcpTransportConfig capture_tcp_cfg;
@@ -691,13 +693,13 @@ int main(int argc, char** argv) {
       capture_tcp_cfg.cam0_stream = cam0_stream;
       capture_tcp_cfg.cam1_stream = cam1_stream;
       capture_tcp_cfg.imu_stream = imu_stream;
-      capture_tcp_cfg.subscribe_imu = true;
+      capture_tcp_cfg.subscribe_imu = use_imu;
       capture_transport = std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(capture_tcp_cfg));
     } else {
       throw std::runtime_error("unknown --transport: " + transport_type + "; expected shm, tcp, or capture_tcp");
     }
     std::cout << "[capture_basalt_backend] capture transport ready: " << capture_transport->type() << "\n";
-    capture_client::StereoImuSynchronizer sync(*capture_transport);
+    capture_client::StereoImuSynchronizer sync(*capture_transport, 1'000'000, 0.05, use_imu);
 
     std::unique_ptr<xr_runtime::HmdPoseShmPublisher> pose_pub;
     if (publish_pose_shm) {
@@ -870,7 +872,7 @@ int main(int argc, char** argv) {
           continue;
         }
 
-        if (packet->imu_samples.empty()) {
+        if (use_imu && packet->imu_samples.empty()) {
           std::cerr << "[capture_basalt_backend] WARN: empty IMU window at frame timestamp "
                     << packet->pair.timestamp_ns << "\n";
         }
@@ -955,13 +957,15 @@ int main(int argc, char** argv) {
           continue;
         }
 
-        for (const auto& s : packet->imu_samples) {
-          basalt::ImuData<double>::Ptr imu(new basalt::ImuData<double>);
-          imu->t_ns = s.timestamp_ns;
-          imu->gyro = Eigen::Vector3d(s.gyro_rad_s[0], s.gyro_rad_s[1], s.gyro_rad_s[2]);
-          imu->accel = Eigen::Vector3d(s.accel_m_s2[0], s.accel_m_s2[1], s.accel_m_s2[2]);
-          vio->imu_data_queue.push(imu);
-          imu_count_total++;
+        if (use_imu) {
+          for (const auto& s : packet->imu_samples) {
+            basalt::ImuData<double>::Ptr imu(new basalt::ImuData<double>);
+            imu->t_ns = s.timestamp_ns;
+            imu->gyro = Eigen::Vector3d(s.gyro_rad_s[0], s.gyro_rad_s[1], s.gyro_rad_s[2]);
+            imu->accel = Eigen::Vector3d(s.accel_m_s2[0], s.accel_m_s2[1], s.accel_m_s2[2]);
+            vio->imu_data_queue.push(imu);
+            imu_count_total++;
+          }
         }
 
         basalt::OpticalFlowInput::Ptr input(new basalt::OpticalFlowInput);
@@ -979,8 +983,12 @@ int main(int argc, char** argv) {
           const double rate = stream_s > 0.0 ? double(n - 1) / stream_s : 0.0;
           std::cout << "[capture_basalt_backend] frame=" << n
                     << " stream_rate=" << rate << "Hz"
-                    << " imu_count=" << packet->imu_samples.size()
-                    << " latest_imu_delta_ms=" << packet->latest_imu_delta_ms()
+                    << " imu_mode=" << (use_imu ? "enabled" : "disabled")
+                    << " imu_count=" << packet->imu_samples.size();
+          if (use_imu) {
+            std::cout << " latest_imu_delta_ms=" << packet->latest_imu_delta_ms();
+          }
+          std::cout
                     << "\n";
         }
       }

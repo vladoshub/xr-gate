@@ -63,6 +63,21 @@ unsupported Kalibr camera models. The current converter supports only the
 `pinhole-equi` Kalibr model (`pinhole` + `equidistant` in camchain YAML), which
 is emitted as a runtime `kb4` camera.
 
+For a camera-only stereo profile, convert the camchain installed by
+`save-camera` without running camera-IMU calibration:
+
+```bash
+./calibration/common/linux/calibrate.sh --target <target> convert-runtime --no-imu
+```
+
+In this mode the default input is
+`$CAMERA_PROFILE_DIR/$CAMCHAIN_OUTPUT_NAME`. The runtime body frame is defined
+as `cam0`; `T_imu_cam[0]` is identity and `T_imu_cam[1]` is derived from
+`cam1.T_cn_cnm1`. `cam_time_offset_ns` is zero. IMU rate/noise fields remain in
+the JSON only because the Basalt calibration schema requires them; Basalt
+started with `--no-imu` ignores those fields. Do not use this output for normal
+VIO with IMU enabled.
+
 The same command also installs a Basalt VIO algorithm config into the final
 profile directory. The default template is:
 

@@ -31,6 +31,7 @@ struct TcpCaptureTransportConfig {
   size_t camera_slots = 256;
   size_t imu_slots = 8192;
   double first_packet_timeout_s = 3.0;
+  bool subscribe_imu = true;
 };
 
 class TcpStreamReader final : public IStreamReader {
@@ -130,11 +131,11 @@ class TcpCaptureTransport final : public ICaptureTransport {
     running_ = true;
     recv_thread_ = std::thread([this] { recv_loop(); });
 
-    const bool got_all = wait_for_all_first_packets(cfg_.first_packet_timeout_s);
+    const bool got_all = wait_for_required_first_packets(cfg_.first_packet_timeout_s);
     if (!got_all) {
       throw std::runtime_error(
-          "TcpCaptureTransport connected, but did not receive initial packets for all streams "
-          "within timeout. Need camera0, camera1 and imu0 before starting synchronizer.");
+          "TcpCaptureTransport connected, but did not receive initial packets for required streams "
+          "within timeout.");
     }
   }
 
@@ -160,12 +161,12 @@ class TcpCaptureTransport final : public ICaptureTransport {
   IStreamReader& imu() override { return *imu_; }
 
  private:
-  bool wait_for_all_first_packets(double timeout_s) const {
+  bool wait_for_required_first_packets(double timeout_s) const {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeout_s);
     while (std::chrono::steady_clock::now() < deadline) {
       if (cam0_->latest_sequence() != 0 &&
           cam1_->latest_sequence() != 0 &&
-          imu_->latest_sequence() != 0) {
+          (!cfg_.subscribe_imu || imu_->latest_sequence() != 0)) {
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -175,11 +176,12 @@ class TcpCaptureTransport final : public ICaptureTransport {
               << "cam0_seq=" << cam0_->latest_sequence()
               << " cam1_seq=" << cam1_->latest_sequence()
               << " imu_seq=" << imu_->latest_sequence()
+              << " subscribe_imu=" << (cfg_.subscribe_imu ? "true" : "false")
               << "\n";
 
     return cam0_->latest_sequence() != 0 &&
            cam1_->latest_sequence() != 0 &&
-           imu_->latest_sequence() != 0;
+           (!cfg_.subscribe_imu || imu_->latest_sequence() != 0);
   }
 
   void recv_loop() {

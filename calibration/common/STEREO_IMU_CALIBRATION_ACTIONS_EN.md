@@ -7,7 +7,7 @@ Required streams:
 ```text
 camera0 — left GRAY8 image
 camera1 — right GRAY8 image
-imu0    — gyro in rad/s, accelerometer in m/s²
+imu0    — gyro in rad/s, accelerometer in m/s² (Optional)
 ```
 
 The stereo camera and IMU must be rigidly mounted.
@@ -19,7 +19,7 @@ Build
 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-## 1. Calibrate the IMU mount axes
+## 1. Calibrate the IMU mount axes (Skip if no IMU)
 
 Prepare device_profile (see others in ~/xr-gate/capture_service_cpp/configs/)
 
@@ -151,6 +151,7 @@ CAMERA_MODEL_1="pinhole-equi"
 IMU_YAML_NAME="imu_my_sensor.yaml"
 
 # Replace with the measured published imu0 rate estimated_sample_rate_hz from 1 step!
+#If no IMU just no change
 IMU_UPDATE_RATE=208.0
 
 # Initial values. Replace with measured values when available.
@@ -160,6 +161,40 @@ IMU_GYRO_NOISE_DENSITY=0.001
 IMU_GYRO_RANDOM_WALK=0.0001
 
 DEFAULT_RECORD_MODE="stereo_imu"
+```
+
+No IMU
+```bash
+CALIB_TARGET_NAME="my_stereo_camera"
+CALIB_LABEL="My Stereo Camera"
+CALIB_DEVICE_NAME="my_stereo_camera"
+
+CALIB_UNIT_ID="${CALIB_UNIT_ID:-camera_unit_001}"
+CALIB_PROFILE_NAME="${CALIB_PROFILE_NAME:-stereo_640x480_none}"
+
+EXPECT_WIDTH=640
+EXPECT_HEIGHT=480
+RECORD_PREFIX="my_stereo_camera_640x480_calib"
+
+CAPTURE_CONFIG_CAMERA_ONLY="${CAPTURE_CONFIG_CAMERA_ONLY:-$ROOT_PROJECT/devices/my_device/configs/capture_service/my_camera_only.yaml}"
+CAPTURE_CONFIG="$CAPTURE_CONFIG_CAMERA_ONLY"
+
+CAMERA_MODEL_0="pinhole-equi"
+CAMERA_MODEL_1="pinhole-equi"
+
+# The common target schema may still generate a technical IMU YAML.
+IMU_YAML_NAME="imu_unused.yaml"
+
+# Placeholders required by the current Basalt calibration JSON schema.
+# Basalt started with --no-imu does not use these values.
+IMU_UPDATE_RATE=200.0
+IMU_ACCEL_NOISE_DENSITY=0.01
+IMU_ACCEL_RANDOM_WALK=0.001
+IMU_GYRO_NOISE_DENSITY=0.001
+IMU_GYRO_RANDOM_WALK=0.0001
+
+DEFAULT_RECORD_MODE="camera_only"
+
 ```
 
 Use a unique `CALIB_UNIT_ID` for every physical assembly or mount revision.
@@ -173,7 +208,7 @@ The final stereo+IMU config must publish:
 ```text
 camera0
 camera1
-imu0
+imu0 (optional)
 ```
 
 Requirements:
@@ -238,7 +273,7 @@ FORCE_TARGET_CONFIGS=1 \
   install
 ```
 
-Check the generated IMU YAML:
+Check the generated IMU YAML (Skip if no IMU):
 
 ```bash
 cat "$HOME/xr_calib/$CALIB_TARGET"/imu*.yaml
@@ -255,7 +290,7 @@ update_rate: <actual published rate>
 
 ## 5. Set the real IMU rate
 
-Set your real IMU rate:
+Set your real IMU rate (Skip if no IMU):
 
 ```bash
 IMU_UPDATE_RATE=208.0
@@ -321,8 +356,20 @@ Use one recording for both stereo calibration and camera–IMU calibration:
 
 Before starting, you must stop all running capture_service_cpp
 
+
 ```bash
 RECORD_MODE=stereo_imu \
+START_CAPTURE_SERVICE=1 \
+SECONDS_TOTAL=90 \
+"$CAL_COMMON/calibrate.sh" \
+  --target "$CALIB_TARGET" \
+  record
+```
+
+If no IMU:
+
+```bash
+RECORD_MODE=camera_only \
 START_CAPTURE_SERVICE=1 \
 SECONDS_TOTAL=90 \
 "$CAL_COMMON/calibrate.sh" \
@@ -388,7 +435,22 @@ NO_IMU=0 \
   bag
 ```
 
-The bag must contain:
+If no IMU:
+
+```bash
+BAG="$HOME/xr_calib/$CALIB_TARGET/bags/$(basename "$DS")_stereo_imu.bag"
+
+DS="$DS" \
+BAG="$BAG" \
+NO_IMU=1 \
+"$CAL_COMMON/calibrate.sh" \
+  --target "$CALIB_TARGET" \
+  bag
+```
+
+
+
+For stereo+IMU mode, the bag must contain:
 
 ```text
 /cam0/image_raw
@@ -396,7 +458,12 @@ The bag must contain:
 /imu0
 ```
 
-Do not continue if `/imu0` is missing.
+For camera-only mode, the bag must contain:
+
+```text
+/cam0/image_raw
+/cam1/image_raw
+```
 
 ---
 
@@ -434,7 +501,7 @@ A practical target is below approximately `0.5 px`.
 
 ---
 
-## 10. Run camera–IMU calibration
+## 10. Run camera–IMU calibration (Skip if no IMU)
 
 For a 90-second bag:
 
@@ -469,6 +536,14 @@ Use `MAX_ITER=20` only when the final iterations are still improving significant
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
   convert-runtime
+```
+
+If no IMU:
+
+```bash
+"$CAL_COMMON/calibrate.sh" \
+  --target "$CALIB_TARGET" \
+  convert-runtime --no-imu
 ```
 
 The converter uses these target-profile values:

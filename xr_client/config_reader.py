@@ -399,6 +399,23 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
         "primary_clean_streams_on_start": clean_hmd,
         "secondary_clean_streams_on_start": clean_hmd3,
     }
+    toggle_basalt_imu_mode = {
+        "type": "toggle_service_command_flag",
+        "description": "Restart Basalt and switch between 6DoF VIO with IMU and stereo 6DoF VO without IMU.",
+        "service": "basalt_vio",
+        "flag": "--no-imu",
+        "flag_present_label": "6DoF no IMU (stereo VO)",
+        "flag_absent_label": "6DoF IMU (VIO)",
+        "start_if_stopped": False,
+        "wait_streams": True,
+        "env_when_flag_present": {
+            "STARTUP_GATE_IMU": "0",
+        },
+        "env_when_flag_absent": {
+            "STARTUP_GATE_IMU": None,
+        },
+        "clean_streams_before_start": clean_hmd,
+    }
     recenter = {
         "type": "recenter_3dof",
         "description": "Recenter the IMU-only 3DoF yaw origin.",
@@ -445,6 +462,7 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
         "right-quadruple-tap": toggle_override_controller,
         "manual-restart-running-backends": restart_running,
         "manual-toggle-hand-tracking": toggle_hand,
+        "manual-toggle-basalt-imu-mode": toggle_basalt_imu_mode,
         "manual-toggle-3dof-6dof": toggle_3dof,
         "manual-recenter-3dof": recenter,
         "manual-toggle-override-controller": toggle_override_controller,

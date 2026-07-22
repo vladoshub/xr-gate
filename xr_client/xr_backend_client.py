@@ -386,6 +386,12 @@ class Launcher:
         if action_type == "toggle_service":
             service = str(action.get("service") or "")
             return f"Start/stop {service}" if service else "Start/stop configured service"
+        if action_type == "toggle_service_command_flag":
+            service = str(action.get("service") or "")
+            flag = str(action.get("flag") or "")
+            if service and flag:
+                return f"Restart {service} and toggle {flag}"
+            return "Restart a service and toggle a command-line mode"
         if action_type == "toggle_exclusive_services":
             primary = str(action.get("primary_service") or action.get("sixdof_service") or "primary")
             secondary = str(action.get("secondary_service") or action.get("threedof_service") or "secondary")
@@ -678,6 +684,108 @@ class Launcher:
         self.clean_stream_entries([dict(x) for x in action.get("clean_streams_on_start", [])])
         self._start_service_by_name_for_action(service_name, event, wait_streams=bool(action.get("wait_streams", True)))
 
+    def _apply_service_env_overrides(self, spec: ServiceSpec, values: Any) -> None:
+        if not isinstance(values, dict):
+            return
+        for raw_key, raw_value in values.items():
+            key = str(raw_key)
+            if raw_value is None:
+                spec.env.pop(key, None)
+            else:
+                spec.env[key] = expand_path(str(raw_value), self.cfg.root_project)
+
+    def toggle_service_command_flag_action(self, action: Dict[str, Any], event: TapEvent) -> None:
+        """Toggle one command flag and restart the selected service when active.
+
+        The service spec is mutated only for the current xr_client session. If
+        the service is stopped, the selected mode is remembered for its next
+        start without implicitly switching away from another tracking backend.
+        """
+        prefix = self._event_prefix(event)
+        service_name = str(action.get("service") or "")
+        flag = str(action.get("flag") or "")
+        if not service_name or not flag:
+            log(f"{prefix} action {event.name}: toggle_service_command_flag requires service and flag")
+            return
+
+        spec = self.service_spec_by_name(service_name)
+        if spec is None:
+            log(f"{prefix}[WARN] no service spec named {service_name!r}")
+            return
+
+        flag_is_present = flag in spec.command
+        target_flag_present = not flag_is_present
+        target_label = str(
+            action.get("flag_present_label" if target_flag_present else "flag_absent_label")
+            or (f"{flag} enabled" if target_flag_present else f"{flag} disabled")
+        )
+        was_running = self.is_service_running(service_name)
+        old_command = list(spec.command)
+        old_env = dict(spec.env)
+
+        if was_running:
+            log(f"{prefix} action {event.name}: restart {service_name} in {target_label} mode")
+            self.stop_service_names([service_name])
+        else:
+            log(f"{prefix} action {event.name}: select {target_label} mode for {service_name}")
+
+        if target_flag_present:
+            if flag not in spec.command:
+                spec.command.append(flag)
+            self._apply_service_env_overrides(spec, action.get("env_when_flag_present", {}))
+        else:
+            spec.command = [arg for arg in spec.command if arg != flag]
+            self._apply_service_env_overrides(spec, action.get("env_when_flag_absent", {}))
+
+        start_if_stopped = bool(action.get("start_if_stopped", False))
+        if not was_running and not start_if_stopped:
+            log(
+                f"{prefix} action {event.name}: {service_name} is not running; "
+                f"the next start will use {target_label} mode"
+            )
+            return
+
+        clean_registries = [str(x) for x in action.get("clean_registries_before_start", [])]
+        clean_streams = [dict(x) for x in action.get("clean_streams_before_start", [])]
+        self.clean_registry_paths(clean_registries)
+        self.clean_stream_entries(clean_streams)
+
+        try:
+            started = self._start_service_by_name_for_action(
+                service_name,
+                event,
+                wait_streams=bool(action.get("wait_streams", True)),
+            )
+            if not started:
+                raise RuntimeError(f"{service_name} did not start")
+        except Exception as exc:
+            # Remove a failed child entry, restore the previous spec, and try to
+            # recover the old tracking mode instead of leaving the HMD without
+            # a pose producer after a manual mode switch.
+            self.stop_service_names([service_name])
+            spec.command = old_command
+            spec.env = old_env
+            log(
+                f"{prefix}[WARN] failed to start {service_name} in {target_label} mode: {exc}; "
+                "restoring the previous mode"
+            )
+            if was_running:
+                self.clean_registry_paths(clean_registries)
+                self.clean_stream_entries(clean_streams)
+                try:
+                    self._start_service_by_name_for_action(
+                        service_name,
+                        event,
+                        wait_streams=bool(action.get("wait_streams", True)),
+                    )
+                except Exception as restore_exc:
+                    self.fail(
+                        f"failed to restore {service_name} after mode switch failure: {restore_exc}"
+                    )
+            return
+
+        log(f"{prefix} action {event.name}: {service_name} is running in {target_label} mode")
+
     def toggle_exclusive_services_action(self, action: Dict[str, Any], event: TapEvent) -> None:
         prefix = self._event_prefix(event)
         primary = str(action.get("primary_service") or action.get("sixdof_service") or "basalt_vio")
@@ -822,6 +930,9 @@ class Launcher:
             return
         if action_type == "toggle_service":
             self.toggle_service_action(action, event)
+            return
+        if action_type == "toggle_service_command_flag":
+            self.toggle_service_command_flag_action(action, event)
             return
         if action_type == "toggle_exclusive_services":
             self.toggle_exclusive_services_action(action, event)
@@ -1333,6 +1444,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ap.add_argument("--print-default-config", action="store_true", help="Print default JSON config and exit")
     ap.add_argument("--dry-run", action="store_true", help="Print actions without launching processes")
     ap.add_argument("--no-gate", action="store_true", help="Skip startup gate")
+    ap.add_argument(
+        "--no-imu",
+        action="store_true",
+        help="Start the basalt_vio service in stereo visual-odometry mode without opening or subscribing to IMU",
+    )
     ap.add_argument("--prestart-option", help="Override prestart control option id/choice")
     ap.add_argument("--display-mode", choices=["prompt", "60hz", "90hz", "current", "skip"], help="Compatibility alias for --prestart-option")
     ap.add_argument("--gate-debug", action="store_true", help="Print raw startup gate output to the terminal")
@@ -1392,6 +1508,23 @@ def apply_root_override(cfg: ClientConfig, new_root_raw: Optional[str]) -> None:
         }
 
 
+def apply_basalt_no_imu_mode(cfg: ClientConfig) -> None:
+    matches = [
+        spec
+        for spec in cfg.pre_gate_services + cfg.post_gate_services + cfg.foreground_services
+        if spec.name == "basalt_vio"
+    ]
+    if not matches:
+        raise RuntimeError("--no-imu was requested, but the selected config has no basalt_vio service")
+
+    for spec in matches:
+        if "--no-imu" not in spec.command:
+            spec.command.append("--no-imu")
+        # start_basalt.sh may run its own startup gate. Keep visual checks, but
+        # never request an IMU gate in a mode that intentionally has no IMU.
+        spec.env["STARTUP_GATE_IMU"] = "0"
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     if args.print_default_config:
@@ -1403,6 +1536,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         selected_config = resolve_config_argument(args)
         cfg = load_config(selected_config)
         apply_root_override(cfg, args.root)
+        if args.no_imu:
+            apply_basalt_no_imu_mode(cfg)
         if args.no_gate and cfg.gate is not None:
             cfg.gate.enabled = False
         if args.gate_debug and cfg.gate is not None:

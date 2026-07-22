@@ -1671,6 +1671,7 @@ Current important action types:
 ```text
 recenter_3dof
 toggle_service
+toggle_service_command_flag
 toggle_exclusive_services
 restart_services
 ```
@@ -1768,7 +1769,57 @@ manual-toggle-xr-spatial:
 
 ---
 
-## 12.3 `toggle_exclusive_services`
+## 12.3 `toggle_service_command_flag`
+
+Example:
+
+```json
+"manual-toggle-basalt-imu-mode": {
+  "type": "toggle_service_command_flag",
+  "service": "basalt_vio",
+  "flag": "--no-imu",
+  "flag_present_label": "6DoF no IMU (stereo VO)",
+  "flag_absent_label": "6DoF IMU (VIO)",
+  "start_if_stopped": false,
+  "wait_streams": true,
+  "env_when_flag_present": {
+    "STARTUP_GATE_IMU": "0"
+  },
+  "env_when_flag_absent": {
+    "STARTUP_GATE_IMU": null
+  },
+  "clean_streams_before_start": [
+    {
+      "registry": "/tmp/tracking_streams.json",
+      "streams": ["hmd_pose"]
+    }
+  ]
+}
+```
+
+Meaning:
+
+```text
+If the service is running:
+  stop it, toggle the command flag, clean stale streams, and start it again.
+
+If the service is stopped and start_if_stopped=false:
+  update the session-local service command for its next start without starting it.
+
+env_when_flag_present / env_when_flag_absent:
+  update service environment variables together with the command mode.
+
+null environment value:
+  remove that variable from the service environment. This is used when returning to Basalt IMU mode, so `STARTUP_GATE_IMU=1` is never injected explicitly and the launcher/profile default remains authoritative.
+```
+
+The config file on disk is not modified. If startup in the new mode fails, the
+client restores the previous command/environment and tries to restart the old
+mode.
+
+---
+
+## 12.4 `toggle_exclusive_services`
 
 Example:
 
@@ -1922,11 +1973,13 @@ Current expected controls:
 ```text
 1 - restart running backends
 2 - start/stop hand_tracking
-3 - toggle 3DoF/6DoF
+3 - restart Basalt and toggle 6DoF IMU / 6DoF no IMU
 4 - recenter 3DoF
 5 - start/stop override_controller
 6 - start/stop xr_video
 7 - start/stop xr_spatial
+8 - enable/disable IMU tap controls for this session
+9 - toggle 6DoF/3DoF
 ```
 
 Typical mapping:
@@ -1939,7 +1992,7 @@ Typical mapping:
   manual-toggle-hand-tracking
 
 3:
-  manual-toggle-3dof-6dof
+  manual-toggle-basalt-imu-mode
 
 4:
   manual-recenter-3dof
@@ -1952,6 +2005,12 @@ Typical mapping:
 
 7:
   manual-toggle-xr-spatial
+
+8:
+  manual-toggle-shake-controls
+
+9:
+  manual-toggle-3dof-6dof
 ```
 
 If the menu does not show an action, check the `manual_controls.py` mapping as well as this JSON.
@@ -2638,11 +2697,13 @@ RUN_VIEWER=1 ./run_xr_client.sh --config xreal_ultra
 ```text
 1 - restart running backends
 2 - start/stop hand_tracking
-3 - toggle 3DoF/6DoF
+3 - restart Basalt and toggle 6DoF IMU / 6DoF no IMU
 4 - recenter 3DoF
 5 - start/stop override_controller
 6 - start/stop xr_video
 7 - start/stop xr_spatial
+8 - enable/disable IMU tap controls for this session
+9 - toggle 6DoF/3DoF
 ```
 
 ### Tap controls

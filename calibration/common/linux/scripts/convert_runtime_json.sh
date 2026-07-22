@@ -6,7 +6,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=load_target.sh
 source "$SCRIPT_DIR/load_target.sh"
 
-CAMCHAIN="$(expand_tilde "${CAMCHAIN:-$FINAL_PROFILE_DIR/camchain-imucam.yaml}")"
+usage() {
+  cat <<USAGE
+Usage: ${0##*/} [--no-imu]
+
+Options:
+  --no-imu  Convert the saved stereo camera-only camchain. The converter uses
+            cam0 as a synthetic body frame and does not require T_cam_imu.
+  -h, --help
+            Show this help.
+
+Environment overrides such as CAMCHAIN, BASALT_OUT, MERCURY_OUT and
+BASALT_VIO_OUT remain supported.
+USAGE
+}
+
+NO_IMU="${NO_IMU:-0}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-imu)
+      NO_IMU=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[convert-runtime][ERROR] unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$NO_IMU" in
+  0|1) ;;
+  *) echo "[convert-runtime][ERROR] NO_IMU must be 0 or 1, got: $NO_IMU" >&2; exit 2 ;;
+esac
+
+if [[ -n "${CAMCHAIN:-}" ]]; then
+  CAMCHAIN="$(expand_tilde "$CAMCHAIN")"
+elif [[ "$NO_IMU" == "1" ]]; then
+  CAMCHAIN="$CAMERA_PROFILE_DIR/$CAMCHAIN_OUTPUT_NAME"
+else
+  CAMCHAIN="$FINAL_PROFILE_DIR/camchain-imucam.yaml"
+fi
+
 BASALT_OUT="$(expand_tilde "${BASALT_OUT:-$FINAL_PROFILE_DIR/basalt_calib_${CALIB_PROFILE_NAME}.json}")"
 MERCURY_OUT="$(expand_tilde "${MERCURY_OUT:-$FINAL_PROFILE_DIR/mercury_calib_${CALIB_PROFILE_NAME}.json}")"
 BASALT_VIO_OUT="$(expand_tilde "${BASALT_VIO_OUT:-$FINAL_PROFILE_DIR/$BASALT_VIO_CONFIG_NAME}")"
@@ -17,7 +63,13 @@ FORCE_BASALT_VIO_CONFIG="${FORCE_BASALT_VIO_CONFIG:-0}"
 [[ -f "$BASALT_VIO_CONFIG_TEMPLATE" ]] || { echo "[convert-runtime][ERROR] Basalt VIO config template missing: $BASALT_VIO_CONFIG_TEMPLATE" >&2; exit 1; }
 mkdir -p "$FINAL_PROFILE_DIR"
 
+MODE="stereo_vio"
+if [[ "$NO_IMU" == "1" ]]; then
+  MODE="stereo_vo_no_imu"
+fi
+
 print_target_summary
+echo "MODE=$MODE"
 echo "CAMCHAIN=$CAMCHAIN"
 echo "BASALT_OUT=$BASALT_OUT"
 echo "MERCURY_OUT=$MERCURY_OUT"
@@ -28,17 +80,26 @@ echo "IMU_ACCEL_NOISE_DENSITY=$IMU_ACCEL_NOISE_DENSITY"
 echo "IMU_ACCEL_RANDOM_WALK=$IMU_ACCEL_RANDOM_WALK"
 echo "IMU_GYRO_NOISE_DENSITY=$IMU_GYRO_NOISE_DENSITY"
 echo "IMU_GYRO_RANDOM_WALK=$IMU_GYRO_RANDOM_WALK"
+if [[ "$NO_IMU" == "1" ]]; then
+  echo "[convert-runtime] no-IMU mode: T_imu_cam[0] is identity, T_imu_cam[1] is derived from cam1.T_cn_cnm1"
+  echo "[convert-runtime] no-IMU mode: IMU rate/noise fields are schema placeholders and are ignored by Basalt --no-imu"
+fi
 
-python3 "$CONVERTER_TO_RUNTIME" \
-  --camchain "$CAMCHAIN" \
-  --out "$BASALT_OUT" \
-  --imu-update-rate "$IMU_UPDATE_RATE" \
-  --accel-noise-density "$IMU_ACCEL_NOISE_DENSITY" \
-  --accel-random-walk "$IMU_ACCEL_RANDOM_WALK" \
-  --gyro-noise-density "$IMU_GYRO_NOISE_DENSITY" \
+converter_args=(
+  --camchain "$CAMCHAIN"
+  --out "$BASALT_OUT"
+  --imu-update-rate "$IMU_UPDATE_RATE"
+  --accel-noise-density "$IMU_ACCEL_NOISE_DENSITY"
+  --accel-random-walk "$IMU_ACCEL_RANDOM_WALK"
+  --gyro-noise-density "$IMU_GYRO_NOISE_DENSITY"
   --gyro-random-walk "$IMU_GYRO_RANDOM_WALK"
+)
+if [[ "$NO_IMU" == "1" ]]; then
+  converter_args+=(--no-imu)
+fi
+python3 "$CONVERTER_TO_RUNTIME" "${converter_args[@]}"
 
-python3 - "$BASALT_OUT" "$IMU_UPDATE_RATE" <<'PY'
+python3 - "$BASALT_OUT" "$IMU_UPDATE_RATE" "$NO_IMU" <<'PY'
 import json
 import math
 import sys
@@ -46,14 +107,16 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 expected_rate = float(sys.argv[2])
+no_imu = sys.argv[3] == "1"
 data = json.loads(path.read_text(encoding="utf-8"))
 if not isinstance(data, dict) or not isinstance(data.get("value0"), dict):
     raise SystemExit(f"[convert-runtime][ERROR] invalid JSON root in {path}")
 value = data["value0"]
 if len(value.get("resolution", [])) != 2:
     raise SystemExit("[convert-runtime][ERROR] expected two camera resolutions")
-if len(value.get("T_imu_cam", [])) != 2:
-    raise SystemExit("[convert-runtime][ERROR] expected two camera-to-IMU poses")
+poses = value.get("T_imu_cam", [])
+if len(poses) != 2:
+    raise SystemExit("[convert-runtime][ERROR] expected two camera-to-body poses")
 if len(value.get("intrinsics", [])) != 2:
     raise SystemExit("[convert-runtime][ERROR] expected two camera intrinsics blocks")
 actual_rate = float(value.get("imu_update_rate", float("nan")))
@@ -63,6 +126,24 @@ if not math.isclose(actual_rate, expected_rate, rel_tol=0.0, abs_tol=1e-9):
     )
 if not all(cam.get("camera_type") == "kb4" for cam in value["intrinsics"]):
     raise SystemExit("[convert-runtime][ERROR] expected kb4 runtime cameras")
+if no_imu:
+    identity = {
+        "px": 0.0,
+        "py": 0.0,
+        "pz": 0.0,
+        "qx": 0.0,
+        "qy": 0.0,
+        "qz": 0.0,
+        "qw": 1.0,
+    }
+    for key, expected in identity.items():
+        actual = float(poses[0].get(key, float("nan")))
+        if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-9):
+            raise SystemExit(
+                f"[convert-runtime][ERROR] no-IMU cam0 body pose is not identity: {key}={actual}"
+            )
+    if int(value.get("cam_time_offset_ns", -1)) != 0:
+        raise SystemExit("[convert-runtime][ERROR] no-IMU cam_time_offset_ns must be zero")
 print(f"[convert-runtime] validated {path}")
 PY
 

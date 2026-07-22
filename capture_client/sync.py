@@ -79,12 +79,12 @@ class ImuWindowReader:
 
 
 class BasaltStereoImuSynchronizer:
-    """Builds stereo frame + IMU window packets for future Basalt backend.
+    """Builds synchronized stereo packets for Basalt VO or VIO consumers.
 
-    This does not call Basalt. It only performs transport-neutral synchronization
-    suitable for a VIO consumer:
-      - next stereo pair
-      - all IMU samples after previous frame and up to current frame timestamp
+    This does not call Basalt. With ``use_imu=True`` it attaches all IMU
+    samples after the previous frame and up to the current frame timestamp.
+    With ``use_imu=False`` it reads only the stereo pair and returns an empty
+    IMU window without accessing or waiting for an IMU stream.
     """
 
     def __init__(
@@ -96,10 +96,19 @@ class BasaltStereoImuSynchronizer:
         imu_stream: str = "imu0",
         stereo_max_delta_ns: int = 1_000_000,
         wait_for_imu_s: float = 0.05,
+        use_imu: bool = True,
     ):
         self.client = client
-        self.pairs = StereoPairReader(client, cam0_stream, cam1_stream, max_timestamp_delta_ns=stereo_max_delta_ns)
-        self.imu = ImuWindowReader(client, imu_stream)
+        self.use_imu = bool(use_imu)
+        self.pairs = StereoPairReader(
+            client,
+            cam0_stream,
+            cam1_stream,
+            max_timestamp_delta_ns=stereo_max_delta_ns,
+        )
+        self.imu: Optional[ImuWindowReader] = (
+            ImuWindowReader(client, imu_stream) if self.use_imu else None
+        )
         self.wait_for_imu_s = wait_for_imu_s
         self.previous_camera_timestamp_ns: Optional[int] = None
 
@@ -107,8 +116,13 @@ class BasaltStereoImuSynchronizer:
         pair = self.pairs.read_next_pair(timeout_s=timeout_s, copy_payload=copy_images)
         if pair is None:
             return None
-        self.imu.wait_until_at_least(pair.timestamp_ns, timeout_s=self.wait_for_imu_s)
-        samples = self.imu.read_window_until(pair.timestamp_ns)
+        samples: tuple[ImuSample, ...] = tuple()
+        if self.use_imu:
+            assert self.imu is not None
+            self.imu.wait_until_at_least(
+                pair.timestamp_ns, timeout_s=self.wait_for_imu_s
+            )
+            samples = self.imu.read_window_until(pair.timestamp_ns)
         out = SyncedStereoImu(
             pair=pair,
             imu_samples=samples,

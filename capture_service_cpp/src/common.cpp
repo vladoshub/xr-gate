@@ -106,7 +106,7 @@ void usage(const char* argv0) {
             << " [--camera-layout side_by_side_horizontal|side_by_side_vertical|interleaved_columns|dual]";
   print_platform_camera_usage(std::cerr);
   std::cerr << " [--secondary-video-device PATH] [--secondary-camera-index N]"
-            << " [--imu-driver xreal_hid|serial] [--serial-port PORT] [--serial-baud RATE]"
+            << " [--imu-driver xreal_hid|serial|synthetic] [--serial-port PORT] [--serial-baud RATE]"
             << " [--no-camera] [--no-imu] [--duration SEC]\n"
             << "Default config: ~/.config/xr_tracking/capture_service_cpp/config.yaml. "
             << "If it does not exist, the built-in XREAL Ultra profile is used.\n";
@@ -171,6 +171,8 @@ RuntimeConfig parse_args(int argc, char** argv) {
       cfg.imu.raw_stream_id = "imu_raw";
       cfg.imu.raw_frame_id = "imu_raw";
       cfg.imu.raw_payload_size = cfg.imu.serial.max_packet_size;
+    } else if (cfg.imu.driver == "synthetic") {
+      cfg.imu.raw_enabled = false;
     }
   }
   cfg.camera.primary.device_path = env_or("CPP_CAPTURE_VIDEO_DEVICE", env_or("VIDEO_DEVICE", cfg.camera.primary.device_path));
@@ -246,6 +248,8 @@ RuntimeConfig parse_args(int argc, char** argv) {
         cfg.imu.raw_stream_id = "imu_raw";
         cfg.imu.raw_frame_id = "imu_raw";
         cfg.imu.raw_payload_size = cfg.imu.serial.max_packet_size;
+      } else if (previous != cfg.imu.driver && cfg.imu.driver == "synthetic") {
+        cfg.imu.raw_enabled = false;
       }
     }
     else if (a == "--serial-port") cfg.imu.serial.port = need("--serial-port");
