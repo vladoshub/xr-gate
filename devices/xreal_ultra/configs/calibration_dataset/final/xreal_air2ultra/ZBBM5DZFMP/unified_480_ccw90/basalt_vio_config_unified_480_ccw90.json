@@ -19,7 +19,7 @@
         "config.vio_max_iterations": 7,
         "config.vio_obs_std_dev": 0.5,
         "config.vio_obs_huber_thresh": 1.0,
-        "config.vio_min_triangulation_dist": 0.05,
+        "config.vio_min_triangulation_dist": 0.1,
         "config.vio_enforce_realtime": false,
         "config.vio_use_lm": true,
         "config.vio_lm_lambda_initial": 0.0001,

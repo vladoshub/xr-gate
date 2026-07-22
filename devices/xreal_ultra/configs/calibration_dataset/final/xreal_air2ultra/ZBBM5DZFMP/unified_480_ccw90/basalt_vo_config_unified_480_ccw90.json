@@ -18,7 +18,7 @@
         "config.vio_extended_logging": false,
         "config.vio_obs_std_dev": 0.5,
         "config.vio_obs_huber_thresh": 1.0,
-        "config.vio_min_triangulation_dist": 0.05,
+        "config.vio_min_triangulation_dist": 0.1,
         "config.vio_outlier_threshold": 3.0,
         "config.vio_filter_iteration": 4,
         "config.vio_max_iterations": 7,
