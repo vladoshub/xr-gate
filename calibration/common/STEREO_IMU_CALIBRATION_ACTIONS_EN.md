@@ -533,6 +533,7 @@ Use `MAX_ITER=20` only when the final iterations are still improving significant
 ## 11. Convert to runtime JSON
 
 ```bash
+FORCE_BASALT_VO_CONFIG=1 \
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
   convert-runtime
@@ -541,6 +542,7 @@ Use `MAX_ITER=20` only when the final iterations are still improving significant
 If no IMU:
 
 ```bash
+FORCE_BASALT_VO_CONFIG=1 \
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
   convert-runtime --no-imu
@@ -700,6 +702,49 @@ echo "[OK] created: $TRACKING_ENV"
 Start `capture_service_cpp` and Basalt first.
 
 Enable Mercury and the rest of the XR stack only after pose tracking works.
+
+---
+
+# Set VO Basalt (For none IMU)
+
+If basalt crash in no-imu mode try set 'optical_flow_epipolar_error' in basalt_vio_config.json:
+
+Enable debug in basalt_vio_config.json:
+
+```text
+"config.vio_debug": true
+```
+
+Find  the best value `optical_flow_epipolar_error` in interval (0.05, 0.01 ... 0.5 , 0.6 ... 1, 2, ..)
+```text
+ "config.optical_flow_epipolar_error": 0.7
+```
+
+Also recommended set duration in basalt launcher `start_basalt.sh` (For ease of checking, `optical_flow_epipolar_error`):
+
+3 sec run:
+
+```text
+--duration 3
+```
+
+Example bad log basalt with debug:
+
+```text
+connected0 1 unconnected0 128
+```
+
+Example good basalt with debug:
+
+```text
+connected0 183 unconnected0 128
+```
+
+You need to find empirically the value that will give the largest number of 'connected0' and at the same time the percentage of connected0 would be the largest relative to the sum of connected0 and unconnected0
+
+```text
+After tests set found "optical_flow_epipolar_error" and "config.vio_debug": false in basalt_vio_config.json:
+```
 
 ---
 

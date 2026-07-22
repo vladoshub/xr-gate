@@ -16,8 +16,9 @@ Options:
   -h, --help
             Show this help.
 
-Environment overrides such as CAMCHAIN, BASALT_OUT, MERCURY_OUT and
-BASALT_VIO_OUT remain supported.
+Environment overrides such as CAMCHAIN, BASALT_OUT, MERCURY_OUT,
+BASALT_VIO_OUT, BASALT_VO_OUT, BASALT_VO_CONFIG_TEMPLATE and
+BASALT_VO_CONFIG_OVERRIDES remain supported.
 USAGE
 }
 
@@ -58,9 +59,24 @@ MERCURY_OUT="$(expand_tilde "${MERCURY_OUT:-$FINAL_PROFILE_DIR/mercury_calib_${C
 BASALT_VIO_OUT="$(expand_tilde "${BASALT_VIO_OUT:-$FINAL_PROFILE_DIR/$BASALT_VIO_CONFIG_NAME}")"
 FORCE_BASALT_VIO_CONFIG="${FORCE_BASALT_VIO_CONFIG:-0}"
 
+BASALT_VO_CONFIG_NAME="${BASALT_VO_CONFIG_NAME:-basalt_vo_config_${CALIB_PROFILE_NAME}.json}"
+BASALT_VO_OUT="$(expand_tilde "${BASALT_VO_OUT:-$FINAL_PROFILE_DIR/$BASALT_VO_CONFIG_NAME}")"
+BASALT_VO_CONFIG_TEMPLATE_DEFAULT="${XR_CALIB_COMMON_DIR:-$SCRIPT_DIR}/templates/euroc_config_vo.json"
+BASALT_VO_CONFIG_TEMPLATE="$(expand_tilde "${BASALT_VO_CONFIG_TEMPLATE:-$BASALT_VO_CONFIG_TEMPLATE_DEFAULT}")"
+BASALT_VO_CONFIG_OVERRIDES="${BASALT_VO_CONFIG_OVERRIDES:-}"
+if [[ -n "$BASALT_VO_CONFIG_OVERRIDES" ]]; then
+  BASALT_VO_CONFIG_OVERRIDES="$(expand_tilde "$BASALT_VO_CONFIG_OVERRIDES")"
+fi
+FORCE_BASALT_VO_CONFIG="${FORCE_BASALT_VO_CONFIG:-0}"
+
 [[ -f "$CONVERTER_TO_RUNTIME" ]] || { echo "[convert-runtime][ERROR] converter missing: $CONVERTER_TO_RUNTIME" >&2; exit 1; }
 [[ -f "$CAMCHAIN" ]] || { echo "[convert-runtime][ERROR] camchain missing: $CAMCHAIN" >&2; exit 1; }
 [[ -f "$BASALT_VIO_CONFIG_TEMPLATE" ]] || { echo "[convert-runtime][ERROR] Basalt VIO config template missing: $BASALT_VIO_CONFIG_TEMPLATE" >&2; exit 1; }
+[[ -f "$BASALT_VO_CONFIG_TEMPLATE" ]] || { echo "[convert-runtime][ERROR] Basalt VO config template missing: $BASALT_VO_CONFIG_TEMPLATE" >&2; exit 1; }
+if [[ -n "$BASALT_VO_CONFIG_OVERRIDES" && ! -f "$BASALT_VO_CONFIG_OVERRIDES" ]]; then
+  echo "[convert-runtime][ERROR] Basalt VO config overrides missing: $BASALT_VO_CONFIG_OVERRIDES" >&2
+  exit 1
+fi
 mkdir -p "$FINAL_PROFILE_DIR"
 
 MODE="stereo_vio"
@@ -75,6 +91,9 @@ echo "BASALT_OUT=$BASALT_OUT"
 echo "MERCURY_OUT=$MERCURY_OUT"
 echo "BASALT_VIO_CONFIG_TEMPLATE=$BASALT_VIO_CONFIG_TEMPLATE"
 echo "BASALT_VIO_OUT=$BASALT_VIO_OUT"
+echo "BASALT_VO_CONFIG_TEMPLATE=$BASALT_VO_CONFIG_TEMPLATE"
+echo "BASALT_VO_CONFIG_OVERRIDES=${BASALT_VO_CONFIG_OVERRIDES:-<none>}"
+echo "BASALT_VO_OUT=$BASALT_VO_OUT"
 echo "IMU_UPDATE_RATE=$IMU_UPDATE_RATE"
 echo "IMU_ACCEL_NOISE_DENSITY=$IMU_ACCEL_NOISE_DENSITY"
 echo "IMU_ACCEL_RANDOM_WALK=$IMU_ACCEL_RANDOM_WALK"
@@ -176,8 +195,105 @@ if not data["value0"]:
 print(f"[convert-runtime] validated {path}")
 PY_VIO
 
-echo "[OK] runtime calibration and Basalt VIO JSON files created"
-ls -lh "$BASALT_OUT" "$MERCURY_OUT" "$BASALT_VIO_OUT"
+# Build a dedicated stereo-VO algorithm config from the upstream EuRoC VO
+# baseline plus an optional device-specific JSON overlay.
+if [[ ! -e "$BASALT_VO_OUT" || "$FORCE_BASALT_VO_CONFIG" == "1" ]]; then
+  BASALT_VO_RENDERED="$(mktemp)"
+  trap 'rm -f "${BASALT_VO_RENDERED:-}"' EXIT
+
+  python3 - \
+    "$BASALT_VO_CONFIG_TEMPLATE" \
+    "$BASALT_VO_CONFIG_OVERRIDES" \
+    "$BASALT_VO_RENDERED" <<'PY_VO'
+import json
+import sys
+from pathlib import Path
+
+template_path = Path(sys.argv[1])
+overrides_arg = sys.argv[2]
+out_path = Path(sys.argv[3])
+
+try:
+    data = json.loads(template_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(
+        f"[convert-runtime][ERROR] invalid Basalt VO template {template_path}: {exc}"
+    )
+
+if not isinstance(data, dict) or not isinstance(data.get("value0"), dict):
+    raise SystemExit(
+        f"[convert-runtime][ERROR] Basalt VO template must contain an object at value0: "
+        f"{template_path}"
+    )
+
+if overrides_arg:
+    overrides_path = Path(overrides_arg)
+    try:
+        overrides_doc = json.loads(overrides_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(
+            f"[convert-runtime][ERROR] invalid Basalt VO overrides "
+            f"{overrides_path}: {exc}"
+        )
+
+    # Accept either {"value0": {...}} or a direct {"config.*": ...} object.
+    overrides = overrides_doc.get("value0", overrides_doc)
+    if not isinstance(overrides, dict):
+        raise SystemExit(
+            f"[convert-runtime][ERROR] Basalt VO overrides must be an object: "
+            f"{overrides_path}"
+        )
+    data["value0"].update(overrides)
+
+out_path.write_text(
+    json.dumps(data, indent=4, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+PY_VO
+
+  install -Dm0644 "$BASALT_VO_RENDERED" "$BASALT_VO_OUT"
+  echo "[convert-runtime] installed Basalt VO config: $BASALT_VO_OUT"
+else
+  echo "[convert-runtime] preserving existing Basalt VO config: $BASALT_VO_OUT"
+  echo "[convert-runtime] set FORCE_BASALT_VO_CONFIG=1 to replace it from template/overrides"
+fi
+
+python3 - "$BASALT_VO_OUT" <<'PY_VO_VALIDATE'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"[convert-runtime][ERROR] invalid Basalt VO config {path}: {exc}")
+
+if not isinstance(data, dict) or not isinstance(data.get("value0"), dict):
+    raise SystemExit(
+        f"[convert-runtime][ERROR] Basalt VO config must contain an object at value0: "
+        f"{path}"
+    )
+
+value = data["value0"]
+required = {
+    "config.optical_flow_type",
+    "config.optical_flow_epipolar_error",
+    "config.vio_linearization_type",
+    "config.vio_scale_jacobian",
+}
+missing = sorted(required - value.keys())
+if missing:
+    raise SystemExit(
+        f"[convert-runtime][ERROR] Basalt VO config is missing required keys: "
+        f"{', '.join(missing)}"
+    )
+
+print(f"[convert-runtime] validated {path}")
+PY_VO_VALIDATE
+
+echo "[OK] runtime calibration, Basalt VIO and Basalt VO JSON files created"
+ls -lh "$BASALT_OUT" "$MERCURY_OUT" "$BASALT_VIO_OUT" "$BASALT_VO_OUT"
 if command -v jq >/dev/null 2>&1; then
   jq '.value0.resolution,
       .value0.imu_update_rate,
