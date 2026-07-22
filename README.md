@@ -635,6 +635,11 @@ git clone https://github.com/vladoshub/xr-gate.git xr_tracking
 cd xr_tracking
 ```
 
+Build the complete multi-profile package (vendor components included by default) and download hand-tracking models:
+```bash
+XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
 Build the complete multi-profile package (vendor components included by default):
 ```bash
 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
