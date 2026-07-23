@@ -792,9 +792,9 @@ See `readme/xrizer.md`.
 
 Project-owned source code is licensed under the MIT License. See `LICENSE`.
 
-Some files, directories, patches, optional tools, generated binaries, downloaded models, and third-party dependencies are governed by their own upstream licenses. Files with an explicit SPDX header or local license notice keep that license.
+Third-party files, adapted code, SDKs, binaries, configuration templates, models, and optional tools retain their upstream licenses. Baseline texts are stored in `LICENSES/`, and release packaging collects exact license bundles and source metadata from the pinned upstream checkouts under `LICENSES/components/`.
 
-See `THIRD_PARTY_NOTICES.md` for the main third-party components and packaging notes.
+See `THIRD_PARTY_NOTICES.md` for the component inventory and packaging rules.
 
 ## Third-party code and references
 

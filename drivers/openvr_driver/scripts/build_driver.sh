@@ -261,5 +261,27 @@ rm -rf "$INSTALL_DRIVER_PACKAGE.tmp" "$INSTALL_DRIVER_PACKAGE"
 cp -a "$BUILD_DRIVER_PACKAGE" "$INSTALL_DRIVER_PACKAGE.tmp"
 mv "$INSTALL_DRIVER_PACKAGE.tmp" "$INSTALL_DRIVER_PACKAGE"
 
+OPENVR_LICENSE_FILE=""
+for candidate in "$SDK_ROOT/LICENSE" "$SDK_ROOT/LICENSE.txt"; do
+  [[ -f "$candidate" ]] && { OPENVR_LICENSE_FILE="$candidate"; break; }
+done
+if [[ -z "$OPENVR_LICENSE_FILE" ]]; then
+  echo "[ERROR] OpenVR SDK license not found under: $SDK_ROOT" >&2
+  exit 2
+fi
+mkdir -p "$INSTALL_DRIVER_PACKAGE/licenses"
+cp "$OPENVR_LICENSE_FILE" "$INSTALL_DRIVER_PACKAGE/licenses/OpenVR-LICENSE.txt"
+OPENVR_RESOLVED_COMMIT="$OPENVR_REF"
+if [[ -d "$SDK_ROOT/.git" ]]; then
+  OPENVR_RESOLVED_COMMIT="$(git -C "$SDK_ROOT" rev-parse HEAD)"
+fi
+cat > "$INSTALL_DRIVER_PACKAGE/licenses/SOURCE_INFO.txt" <<EOF_OPENVR_SOURCE
+Component: Valve OpenVR SDK/runtime library used by XR Gate OpenVR driver
+License: BSD-3-Clause
+Upstream repository: $OPENVR_REPO_URL
+Requested ref: $OPENVR_REF
+Resolved commit: $OPENVR_RESOLVED_COMMIT
+EOF_OPENVR_SOURCE
+
 echo "[build_driver] Installed driver package: $INSTALL_DRIVER_PACKAGE"
 echo "Driver package: $INSTALL_DRIVER_PACKAGE"

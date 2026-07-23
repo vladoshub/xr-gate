@@ -104,5 +104,32 @@ mkdir -p "$MERCURY_MODELS"
 cp "$MODEL_SRC_DIR/$DETECTION_MODEL" "$MERCURY_MODELS/"
 cp "$MODEL_SRC_DIR/$KEYPOINT_MODEL" "$MERCURY_MODELS/"
 
-log "Installed Mercury models:"
-ls -lh "$MERCURY_MODELS/$DETECTION_MODEL" "$MERCURY_MODELS/$KEYPOINT_MODEL"
+MERCURY_MODEL_LICENSE="$MERCURY_DRIVER_DIR/LICENSES/BSL-1.0.txt"
+require_file "$MERCURY_MODEL_LICENSE"
+rm -rf "$MERCURY_MODELS/licenses"
+mkdir -p "$MERCURY_MODELS/licenses"
+cp "$MERCURY_MODEL_LICENSE" "$MERCURY_MODELS/licenses/BSL-1.0.txt"
+MERCURY_DRIVER_RESOLVED_COMMIT="$(git -C "$MERCURY_DRIVER_DIR" rev-parse HEAD)"
+cat > "$MERCURY_MODELS/SOURCE_INFO.txt" <<EOF_MODEL_SOURCE
+Component: Mercury hand-tracking ONNX models
+Upstream repository: $MERCURY_DRIVER_REPO_URL
+Requested ref: $MERCURY_DRIVER_REF
+Resolved commit: $MERCURY_DRIVER_RESOLVED_COMMIT
+Repository license file packaged by upstream: BSL-1.0
+XR Gate does not relicense or independently certify the provenance of the model weights.
+Models:
+  $DETECTION_MODEL
+  $KEYPOINT_MODEL
+EOF_MODEL_SOURCE
+(
+  cd "$MERCURY_MODELS"
+  sha256sum "$DETECTION_MODEL" "$KEYPOINT_MODEL" "licenses/BSL-1.0.txt" > SHA256SUMS.txt
+)
+
+log "Installed Mercury models and legal metadata:"
+ls -lh \
+  "$MERCURY_MODELS/$DETECTION_MODEL" \
+  "$MERCURY_MODELS/$KEYPOINT_MODEL" \
+  "$MERCURY_MODELS/licenses/BSL-1.0.txt" \
+  "$MERCURY_MODELS/SOURCE_INFO.txt" \
+  "$MERCURY_MODELS/SHA256SUMS.txt"

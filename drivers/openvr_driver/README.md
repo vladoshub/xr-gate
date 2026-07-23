@@ -121,3 +121,12 @@ for one-off tests and have higher priority.
 `XR_OPENVR_PACKAGE_TAG` can distinguish packages for the same profile, mode,
 and frequency. Existing XREAL package names such as `openvr_driver_60HZ` remain
 unchanged.
+
+## Standalone source archive
+
+Regenerate the repository's standalone source ZIP with legal files and without
+build/cache/backup artifacts:
+
+```bash
+./drivers/openvr_driver/scripts/package_source_zip.sh
+```

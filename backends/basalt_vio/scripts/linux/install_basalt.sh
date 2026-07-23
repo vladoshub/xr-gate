@@ -431,6 +431,34 @@ cp -a "$BACKEND_DIR/scripts" "$INSTALL_BIN_DIR/scripts"
 cp "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh"   "$INSTALL_BIN_DIR/scripts/linux/capture_profile.sh"
 chmod +x "$INSTALL_BIN_DIR/scripts/linux/"*.sh
 
+# Preserve the exact Basalt license and dependency copyright files used by this
+# build. Basalt itself is BSD-3-Clause; vcpkg ports may carry other permissive
+# licenses which must remain visible when their code is linked into libbasalt.
+BASALT_LICENSE_DIR="$INSTALL_BIN_DIR/licenses"
+rm -rf "$BASALT_LICENSE_DIR"
+mkdir -p "$BASALT_LICENSE_DIR/vcpkg"
+[[ -f "$BASALT_DIR/LICENSE" ]] || { echo "[ERROR] Basalt LICENSE not found: $BASALT_DIR/LICENSE" >&2; exit 1; }
+cp "$BASALT_DIR/LICENSE" "$BASALT_LICENSE_DIR/Basalt-LICENSE.txt"
+BASALT_RESOLVED_COMMIT="$(git -C "$BASALT_DIR" rev-parse HEAD)"
+cat > "$BASALT_LICENSE_DIR/SOURCE_INFO.txt" <<EOF_BASALT_SOURCE
+Component: Basalt
+License: BSD-3-Clause
+Upstream repository: $BASALT_REPO_URL
+Requested ref: $BASALT_REF
+Resolved commit: $BASALT_RESOLVED_COMMIT
+Installed binaries: $BUILD_TARGETS
+Runtime library directory: lib
+Configuration files under configs/ and XR Gate calibration profiles may be derived from Basalt configuration schemas/templates and modified for XR Gate devices.
+EOF_BASALT_SOURCE
+
+while IFS= read -r -d '' copyright_file; do
+  relative="${copyright_file#"$BASALT_BUILD_DIR/vcpkg_installed/"}"
+  relative="${relative%/copyright}"
+  destination="$BASALT_LICENSE_DIR/vcpkg/$relative.txt"
+  mkdir -p "$(dirname "$destination")"
+  cp "$copyright_file" "$destination"
+done < <(find "$BASALT_BUILD_DIR/vcpkg_installed" -type f -path '*/share/*/copyright' -print0 2>/dev/null)
+
 echo
 echo "[built files]"
 for target in $BUILD_TARGETS; do
