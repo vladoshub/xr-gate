@@ -61,6 +61,7 @@ class ServiceSpec:
     enabled: bool = True
     start_on_launch: bool = True
     optional: bool = False
+    no_imu: bool = False
     cwd: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
     wait_streams: List[WaitStream] = field(default_factory=list)
@@ -185,6 +186,7 @@ def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: fl
         enabled=enabled,
         start_on_launch=bool(item.get("start_on_launch", True)),
         optional=bool(item.get("optional", False)),
+        no_imu=bool(item.get("no_imu", False)),
         cwd=cwd,
         env=env,
         wait_streams=parse_wait_streams(item.get("wait_streams", []), default_timeout_s, root_project),
@@ -399,6 +401,30 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
         "primary_clean_streams_on_start": clean_hmd,
         "secondary_clean_streams_on_start": clean_hmd3,
     }
+    toggle_basalt_imu_mode = {
+        "type": "toggle_service_command_mode",
+        "description": "Restart Basalt and switch between 6DoF VIO with IMU and stereo 6DoF VO without IMU.",
+        "service": "basalt_vio",
+        "option": "--mode",
+        "values": ["vio", "vo"],
+        "default_value": "vio",
+        "labels": {
+            "vio": "6DoF IMU (VIO)",
+            "vo": "6DoF no IMU (stereo VO)",
+        },
+        "remove_flags": ["--no-imu", "--vo", "--vio"],
+        "start_if_stopped": False,
+        "wait_streams": True,
+        "env_by_value": {
+            "vio": {
+                "STARTUP_GATE_IMU": None,
+            },
+            "vo": {
+                "STARTUP_GATE_IMU": "0",
+            },
+        },
+        "clean_streams_before_start": clean_hmd,
+    }
     recenter = {
         "type": "recenter_3dof",
         "description": "Recenter the IMU-only 3DoF yaw origin.",
@@ -445,6 +471,7 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
         "right-quadruple-tap": toggle_override_controller,
         "manual-restart-running-backends": restart_running,
         "manual-toggle-hand-tracking": toggle_hand,
+        "manual-toggle-basalt-imu-mode": toggle_basalt_imu_mode,
         "manual-toggle-3dof-6dof": toggle_3dof,
         "manual-recenter-3dof": recenter,
         "manual-toggle-override-controller": toggle_override_controller,

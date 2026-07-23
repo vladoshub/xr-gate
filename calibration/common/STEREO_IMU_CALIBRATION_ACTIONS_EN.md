@@ -7,7 +7,7 @@ Required streams:
 ```text
 camera0 — left GRAY8 image
 camera1 — right GRAY8 image
-imu0    — gyro in rad/s, accelerometer in m/s²
+imu0    — gyro in rad/s, accelerometer in m/s² (Optional)
 ```
 
 The stereo camera and IMU must be rigidly mounted.
@@ -19,16 +19,8 @@ Build
 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-## 1. Calibrate the IMU mount axes
 
 Prepare device_profile (see others in ~/xr-gate/capture_service_cpp/configs/)
-
-Temporarily remove any existing:
-
-```yaml
-imu:
-  transform:
-```
 
 Start `capture_service_cpp`.
 
@@ -42,6 +34,16 @@ Example:
 
 ```bash
 CONFIG_PATH=~/xr-gate/devices/leap_motion_uvc_nrf54l15/configs/capture_service/leap_motion_uvc_nrf54l15.yaml ~/xr-gate/out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+## 1. Calibrate the IMU mount axes (Skip if no IMU)
+
+
+Temporarily remove any existing:
+
+```yaml
+imu:
+  transform:
 ```
 
 Open new terminal
@@ -115,6 +117,7 @@ Create:
 calibration/common/linux/profiles/<target>.env
 ```
 
+target = name = CALIB_TARGET_NAME
 Example:
 ```text
 calibration/common/linux/profiles/my_stereo_imu.env
@@ -151,6 +154,7 @@ CAMERA_MODEL_1="pinhole-equi"
 IMU_YAML_NAME="imu_my_sensor.yaml"
 
 # Replace with the measured published imu0 rate estimated_sample_rate_hz from 1 step!
+#If no IMU just no change
 IMU_UPDATE_RATE=208.0
 
 # Initial values. Replace with measured values when available.
@@ -160,6 +164,40 @@ IMU_GYRO_NOISE_DENSITY=0.001
 IMU_GYRO_RANDOM_WALK=0.0001
 
 DEFAULT_RECORD_MODE="stereo_imu"
+```
+
+No IMU
+```bash
+CALIB_TARGET_NAME="my_stereo_camera"
+CALIB_LABEL="My Stereo Camera"
+CALIB_DEVICE_NAME="my_stereo_camera"
+
+CALIB_UNIT_ID="${CALIB_UNIT_ID:-camera_unit_001}"
+CALIB_PROFILE_NAME="${CALIB_PROFILE_NAME:-stereo_640x480_none}"
+
+EXPECT_WIDTH=640
+EXPECT_HEIGHT=480
+RECORD_PREFIX="my_stereo_camera_640x480_calib"
+
+CAPTURE_CONFIG_CAMERA_ONLY="${CAPTURE_CONFIG_CAMERA_ONLY:-$ROOT_PROJECT/devices/my_device/configs/capture_service/my_camera_only.yaml}"
+CAPTURE_CONFIG="$CAPTURE_CONFIG_CAMERA_ONLY"
+
+CAMERA_MODEL_0="pinhole-equi"
+CAMERA_MODEL_1="pinhole-equi"
+
+# The common target schema may still generate a technical IMU YAML.
+IMU_YAML_NAME="imu_unused.yaml"
+
+# Placeholders required by the current Basalt calibration JSON schema.
+# Basalt started with --no-imu does not use these values.
+IMU_UPDATE_RATE=200.0
+IMU_ACCEL_NOISE_DENSITY=0.01
+IMU_ACCEL_RANDOM_WALK=0.001
+IMU_GYRO_NOISE_DENSITY=0.001
+IMU_GYRO_RANDOM_WALK=0.0001
+
+DEFAULT_RECORD_MODE="camera_only"
+
 ```
 
 Use a unique `CALIB_UNIT_ID` for every physical assembly or mount revision.
@@ -173,7 +211,7 @@ The final stereo+IMU config must publish:
 ```text
 camera0
 camera1
-imu0
+imu0 (optional)
 ```
 
 Requirements:
@@ -221,6 +259,17 @@ export CALIB_UNIT_ID="mount_v1_unit_001"
 export CALIB_PROFILE_NAME="stereo_640x480_none"
 ```
 
+No IMU
+
+```bash
+ROOT="$HOME/xr-gate"
+CAL_COMMON="$ROOT/calibration/common/linux"
+
+export CALIB_TARGET="my_stereo_camera"
+export CALIB_UNIT_ID="mount_v1_unit_001"
+export CALIB_PROFILE_NAME="stereo_640x480_none"
+```
+
 Check the resolved profile:
 
 ```bash
@@ -238,7 +287,7 @@ FORCE_TARGET_CONFIGS=1 \
   install
 ```
 
-Check the generated IMU YAML:
+Check the generated IMU YAML (Skip if no IMU):
 
 ```bash
 cat "$HOME/xr_calib/$CALIB_TARGET"/imu*.yaml
@@ -255,7 +304,7 @@ update_rate: <actual published rate>
 
 ## 5. Set the real IMU rate
 
-Set your real IMU rate:
+Set your real IMU rate (Skip if no IMU):
 
 ```bash
 IMU_UPDATE_RATE=208.0
@@ -321,8 +370,28 @@ Use one recording for both stereo calibration and camera–IMU calibration:
 
 Before starting, you must stop all running capture_service_cpp
 
+
+You can prevent run capture_service_cpp:
+
+```bash
+CONFIG_PATH=~/xr-gate/devices/leap_motion_uvc/configs/capture_service/leap_motion_uvc.yaml ~/xr-gate-release/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+If you prevent run capture_service_cpp start calibrate.sh START_CAPTURE_SERVICE=0 
+
 ```bash
 RECORD_MODE=stereo_imu \
+START_CAPTURE_SERVICE=1 \
+SECONDS_TOTAL=90 \
+"$CAL_COMMON/calibrate.sh" \
+  --target "$CALIB_TARGET" \
+  record
+```
+
+If no IMU:
+
+```bash
+RECORD_MODE=camera_only \
 START_CAPTURE_SERVICE=1 \
 SECONDS_TOTAL=90 \
 "$CAL_COMMON/calibrate.sh" \
@@ -333,7 +402,7 @@ SECONDS_TOTAL=90 \
 After start and press enter run parallel in new terminal for check camera:
 
 ```bash
-./xr-gate/capture_client/debug/direct_slam_viewer_shm.sh
+CAPTURE_CLIENT_ROOT=~/xr-gate/capture_client ./xr-gate/capture_client/debug/direct_slam_viewer_shm.sh
 ```
 
 Keep the AprilGrid still and move the entire camera+IMU assembly.
@@ -388,7 +457,22 @@ NO_IMU=0 \
   bag
 ```
 
-The bag must contain:
+If no IMU:
+
+```bash
+BAG="$HOME/xr_calib/$CALIB_TARGET/bags/$(basename "$DS")_stereo_imu.bag"
+
+DS="$DS" \
+BAG="$BAG" \
+NO_IMU=1 \
+"$CAL_COMMON/calibrate.sh" \
+  --target "$CALIB_TARGET" \
+  bag
+```
+
+
+
+For stereo+IMU mode, the bag must contain:
 
 ```text
 /cam0/image_raw
@@ -396,7 +480,12 @@ The bag must contain:
 /imu0
 ```
 
-Do not continue if `/imu0` is missing.
+For camera-only mode, the bag must contain:
+
+```text
+/cam0/image_raw
+/cam1/image_raw
+```
 
 ---
 
@@ -434,7 +523,7 @@ A practical target is below approximately `0.5 px`.
 
 ---
 
-## 10. Run camera–IMU calibration
+## 10. Run camera–IMU calibration (Skip if no IMU)
 
 For a 90-second bag:
 
@@ -465,10 +554,23 @@ Use `MAX_ITER=20` only when the final iterations are still improving significant
 
 ## 11. Convert to runtime JSON
 
+
+###chmod +x calibration/common/linux/scripts/convert_runtime_json.sh
+
 ```bash
+FORCE_BASALT_VO_CONFIG=1 \
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
   convert-runtime
+```
+
+If no IMU:
+
+```bash
+FORCE_BASALT_VO_CONFIG=1 \
+"$CAL_COMMON/calibrate.sh" \
+  --target "$CALIB_TARGET" \
+  convert-runtime --no-imu
 ```
 
 The converter uses these target-profile values:
@@ -493,6 +595,7 @@ The command creates three runtime files in the final profile directory:
 basalt_calib_<profile>.json
 mercury_calib_<profile>.json
 basalt_vio_config_<target-specific-name>.json
+basalt_vo_config_<target-specific-name>.json
 ```
 
 The VIO file is copied from the shared algorithm template; it is not derived
@@ -549,6 +652,10 @@ install -m 0644 \
 install -m 0644 \
   "$SRC/basalt_vio_config_${CALIB_PROFILE_NAME}.json" \
   "$DST/basalt_vio_config_640x480.json"
+  
+install -m 0644 \
+  "$SRC/basalt_vo_config_${CALIB_PROFILE_NAME}.json" \
+  "$DST/basalt_vo_config_640x480.json"  
 ```
 
 All three source files are now produced by `convert-runtime`; no separate VIO
@@ -607,6 +714,7 @@ export FINAL_PROFILE_DIR="\$XR_TRACKING_CALIB_DIR/final/\$XR_TRACKING_CALIB_TARG
 
 export BASALT_CALIB="\${XR_TRACKING_BASALT_CALIB:-\$FINAL_PROFILE_DIR/basalt_calib_640x480.json}"
 export BASALT_VIO_CONFIG="\${XR_TRACKING_BASALT_VIO_CONFIG:-\$FINAL_PROFILE_DIR/basalt_vio_config_640x480.json}"
+export BASALT_VO_CONFIG="\${XR_TRACKING_BASALT_VO_CONFIG:-\$FINAL_PROFILE_DIR/basalt_vo_config_640x480.json}"
 export MERCURY_CALIB="\${XR_TRACKING_MERCURY_CALIB:-\$FINAL_PROFILE_DIR/mercury_calib_640x480.json}"
 
 export TRACKING_TRANSFORM_CONFIG="\$XR_TRACKING_CONFIGS_ROOT/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json"
@@ -625,6 +733,90 @@ echo "[OK] created: $TRACKING_ENV"
 Start `capture_service_cpp` and Basalt first.
 
 Enable Mercury and the rest of the XR stack only after pose tracking works.
+
+---
+
+# Set VO Basalt (For none IMU)
+
+If basalt crash in no-imu mode try set 'optical_flow_epipolar_error' in basalt_vio_config.json:
+
+Enable debug in basalt_vio_config.json:
+
+```text
+"config.vio_debug": true
+```
+
+Find  the best value `optical_flow_epipolar_error` in interval (0.05, 0.01 ... 0.5 , 0.6 ... 1, 2, ..)
+```text
+ "config.optical_flow_epipolar_error": 0.7
+```
+
+Also recommended set duration in basalt launcher `start_basalt.sh` (For ease of checking, `optical_flow_epipolar_error`):
+
+3 sec run:
+
+```text
+--duration 3
+```
+
+Example bad log basalt with debug:
+
+```text
+connected0 1 unconnected0 128
+```
+
+Example good basalt with debug:
+
+```text
+connected0 183 unconnected0 128
+```
+
+You need to find empirically the value that will give the largest number of `connected0` and at the same time the percentage of connected0 would be the largest relative to the sum of connected0 and unconnected0
+
+If `connected0` does not change or remains near 0 try change `vio_min_triangulation_dist`
+
+
+```bash
+CALIB=/path/to/basalt_calib_stereo.json
+
+python3 - "$CALIB" <<'PY'
+import json
+import math
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    value = json.load(f)["value0"]
+
+cam0, cam1 = value["T_imu_cam"]
+
+dx = float(cam1["px"]) - float(cam0["px"])
+dy = float(cam1["py"]) - float(cam0["py"])
+dz = float(cam1["pz"]) - float(cam0["pz"])
+
+baseline = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+for k in (0.5, 0.7, 0.8, 0.9):
+    print(f"k={k:.1f}: {baseline * k:.6f} m")
+
+print(f"baseline: {baseline:.6f} m ({baseline * 1000:.2f} mm)")
+PY
+```
+
+OR
+threshold = 0.8 × baseline
+
+```text
+config.vio_min_triangulation_dist = 0.8 × baseline
+```
+
+Example:
+
+```text
+"config.vio_min_triangulation_dist": 0.03,
+```
+
+
+After tests set found "optical_flow_epipolar_error", "config.vio_min_triangulation_dist" and "config.vio_debug": false in basalt_vio_config.json:
 
 ---
 

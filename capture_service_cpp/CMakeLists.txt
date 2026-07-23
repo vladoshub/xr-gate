@@ -38,6 +38,7 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/sources/imu_source_factory.cpp
   src/sources/xreal_hid_imu_source.cpp
   src/sources/serial_imu_source.cpp
+  src/sources/synthetic_imu_source.cpp
   src/sources/serial_imu_protocol.cpp
   src/protocols/xr_controller_v1.cpp
   src/protocols/xr_imu_v1.cpp
@@ -113,6 +114,15 @@ if(BUILD_TESTING)
   target_include_directories(capture_config_canonical_smoke PRIVATE include)
   add_test(NAME capture_config_canonical_smoke
     COMMAND capture_config_canonical_smoke ${CMAKE_CURRENT_SOURCE_DIR}/configs/xreal_ultra.yaml)
+
+  add_executable(capture_config_optional_imu_smoke
+    tests/capture_config_optional_imu_smoke.cpp
+    src/common.cpp
+    src/config/capture_config.cpp
+    ${CAPTURE_CONFIG_TEST_PLATFORM_SOURCE}
+  )
+  target_include_directories(capture_config_optional_imu_smoke PRIVATE include)
+  add_test(NAME capture_config_optional_imu_smoke COMMAND capture_config_optional_imu_smoke)
 
   add_executable(camera_controls_config_smoke
     tests/camera_controls_config_smoke.cpp

@@ -577,7 +577,9 @@ jobs:
           fi
           test -f merged/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
           test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
+          test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
           test -d merged/xr-gate/devices/leap_motion_uvc_nrf54l15
+          test -d merged/xr-gate/devices/leap_motion_uvc
           test -x merged/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
           test -x merged/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
           test ! -e merged/xr-gate/devices/common/linux/scripts/build
@@ -694,7 +696,9 @@ jobs:
           fi
           test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
           test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
+          test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
           test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
+          test -d verify/runtime/xr-gate/devices/leap_motion_uvc
           test -x verify/runtime/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
           test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
           test ! -e verify/runtime/xr-gate/devices/common/linux/scripts/build

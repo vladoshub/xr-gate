@@ -130,6 +130,13 @@ struct XrealHidImuConfig {
   int read_timeout_ms = 50;
 };
 
+struct SyntheticImuConfig {
+  double rate_hz = 200.0;
+  std::array<float, 3> gyro_rad_s{{0.0f, 0.0f, 0.0f}};
+  std::array<float, 3> accel_m_s2{{0.0f, 0.0f, 0.0f}};
+  std::string timestamp_mode = "host_monotonic";
+};
+
 enum class ImuTransformMode {
   Identity,
   Axes,
@@ -165,6 +172,7 @@ struct ImuSourceConfig {
   ImuTransformConfig transform;
   XrealHidImuConfig xreal_hid;
   SerialImuConfig serial;
+  SyntheticImuConfig synthetic;
 };
 
 struct RuntimeConfig {

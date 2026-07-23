@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 
 #include <capture_client/contracts/messages.hpp>
 
@@ -74,6 +75,29 @@ class IStreamReader {
     out.accel_m_s2[2] = read_f32_le(p + 20);
     return true;
   }
+};
+
+// Placeholder reader used by camera-only transports. Keeping a concrete
+// reader preserves the long-standing ICaptureTransport::imu() interface while
+// allowing callers to opt out of opening, subscribing to, or waiting for an
+// actual IMU stream.
+class NullStreamReader final : public IStreamReader {
+ public:
+  explicit NullStreamReader(std::string stream_id = "imu_disabled") {
+    info_.stream_id = std::move(stream_id);
+    info_.frame_id = info_.stream_id;
+    info_.kind = "IMU";
+    info_.format_name = "IMU_DISABLED";
+    info_.format_code = static_cast<int>(FormatCode::IMU_F32_LE);
+  }
+
+  const StreamInfo& info() const override { return info_; }
+  uint64_t latest_sequence() const override { return 0; }
+  bool read_latest(RawMessage&) const override { return false; }
+  bool read_sequence(uint64_t, RawMessage&) const override { return false; }
+
+ private:
+  StreamInfo info_;
 };
 
 class ICaptureTransport {

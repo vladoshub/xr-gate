@@ -432,6 +432,27 @@ void set_bool(const FlatYaml& y, const std::vector<std::string>& keys, bool& tar
   }
 }
 
+void set_double(const FlatYaml& y, const std::vector<std::string>& keys, double& target) {
+  for (const auto& key : keys) {
+    const auto it = y.scalars.find(key);
+    if (it != y.scalars.end()) {
+      target = parse_double_value(it->second);
+      return;
+    }
+  }
+}
+
+void set_float3(const FlatYaml& y, const std::string& key, std::array<float, 3>& target) {
+  if (!has(y, key)) return;
+  const auto values = get_yaml_sequence(y, key);
+  if (values.size() != 3) {
+    throw std::runtime_error(key + " must contain exactly 3 entries");
+  }
+  for (size_t i = 0; i < values.size(); ++i) {
+    target[i] = static_cast<float>(parse_double_value(values[i]));
+  }
+}
+
 std::vector<std::string> sequence_or_csv(const FlatYaml& y, const std::vector<std::string>& keys,
                                          const std::vector<std::string>& fallback) {
   for (const auto& key : keys) {
@@ -572,6 +593,12 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_string(y, {"camera.transform.right.flip", "camera.right.flip"}, cfg.camera.right_transform.flip);
   set_int(y, {"camera.stall_exit_ms"}, cfg.camera.stall_exit_ms);
 
+  const bool has_imu_config = has_prefix(y, "imu.") || has_prefix(y, "xreal_linux.imu.");
+  if (!has_imu_config) {
+    // An explicit config may be camera-only simply by omitting the entire IMU
+    // mapping. The built-in no-config XREAL fallback remains unchanged.
+    cfg.imu.enabled = false;
+  }
   const bool legacy_xreal_imu = has_prefix(y, "xreal_linux.imu.");
   if (legacy_xreal_imu && !has(y, "imu.driver")) cfg.imu.driver = "xreal_hid";
   set_bool(y, {"imu.enabled", "xreal_linux.imu.enabled"}, cfg.imu.enabled);
@@ -622,11 +649,19 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_int(y, {"imu.serial.read_timeout_ms"}, cfg.imu.serial.read_timeout_ms);
   set_size(y, {"imu.serial.max_packet_size"}, cfg.imu.serial.max_packet_size);
 
+  set_double(y, {"imu.synthetic.rate_hz"}, cfg.imu.synthetic.rate_hz);
+  set_float3(y, "imu.synthetic.gyro_rad_s", cfg.imu.synthetic.gyro_rad_s);
+  set_float3(y, "imu.synthetic.accel_m_s2", cfg.imu.synthetic.accel_m_s2);
+  set_string(y, {"imu.synthetic.timestamp_mode"}, cfg.imu.synthetic.timestamp_mode);
+
   if (previous_driver != cfg.imu.driver && cfg.imu.driver == "serial" && !raw_enabled_explicit) {
     cfg.imu.raw_enabled = false;
     cfg.imu.raw_stream_id = "imu_raw";
     cfg.imu.raw_frame_id = "imu_raw";
     cfg.imu.raw_payload_size = cfg.imu.serial.max_packet_size;
+  } else if (previous_driver != cfg.imu.driver && cfg.imu.driver == "synthetic" &&
+             !raw_enabled_explicit) {
+    cfg.imu.raw_enabled = false;
   }
 }
 
@@ -683,6 +718,7 @@ void validate_runtime_config(RuntimeConfig& cfg) {
   cfg.imu.driver = lowercase(trim(cfg.imu.driver));
   cfg.imu.serial.protocol = lowercase(trim(cfg.imu.serial.protocol));
   cfg.imu.serial.timestamp_mode = lowercase(trim(cfg.imu.serial.timestamp_mode));
+  cfg.imu.synthetic.timestamp_mode = lowercase(trim(cfg.imu.synthetic.timestamp_mode));
   cfg.imu.serial.protocol_device_uid = trim(cfg.imu.serial.protocol_device_uid);
   cfg.profile_name = trim(cfg.profile_name);
   cfg.backend_control_file = expand_user_path(trim(cfg.backend_control_file));
@@ -724,8 +760,10 @@ void validate_runtime_config(RuntimeConfig& cfg) {
     throw std::runtime_error("camera left and right stream ids must be different");
   }
   if (cfg.imu.enabled) {
-    if (cfg.imu.driver != "xreal_hid" && cfg.imu.driver != "serial") {
-      throw std::runtime_error("unsupported imu.driver=" + cfg.imu.driver + "; supported: xreal_hid, serial");
+    if (cfg.imu.driver != "xreal_hid" && cfg.imu.driver != "serial" &&
+        cfg.imu.driver != "synthetic") {
+      throw std::runtime_error(
+          "unsupported imu.driver=" + cfg.imu.driver + "; supported: xreal_hid, serial, synthetic");
     }
     if (cfg.imu.driver == "xreal_hid" && cfg.imu.xreal_hid.read_timeout_ms <= 0) {
       throw std::runtime_error("imu.xreal_hid.read_timeout_ms must be positive");
@@ -759,6 +797,29 @@ void validate_runtime_config(RuntimeConfig& cfg) {
       if (cfg.imu.raw_enabled && cfg.imu.serial.protocol == "xr_imu_v1" &&
           cfg.imu.raw_payload_size < 48) {
         throw std::runtime_error("imu.raw.payload_size must be at least 48 for xr_imu_v1");
+      }
+    }
+    if (cfg.imu.driver == "synthetic") {
+      if (!std::isfinite(cfg.imu.synthetic.rate_hz) || cfg.imu.synthetic.rate_hz <= 0.0 ||
+          cfg.imu.synthetic.rate_hz > 10000.0) {
+        throw std::runtime_error("imu.synthetic.rate_hz must be finite and in (0, 10000]");
+      }
+      if (cfg.imu.synthetic.timestamp_mode != "host_monotonic") {
+        throw std::runtime_error(
+            "imu.synthetic.timestamp_mode must be host_monotonic");
+      }
+      for (float value : cfg.imu.synthetic.gyro_rad_s) {
+        if (!std::isfinite(value)) {
+          throw std::runtime_error("imu.synthetic.gyro_rad_s values must be finite");
+        }
+      }
+      for (float value : cfg.imu.synthetic.accel_m_s2) {
+        if (!std::isfinite(value)) {
+          throw std::runtime_error("imu.synthetic.accel_m_s2 values must be finite");
+        }
+      }
+      if (cfg.imu.raw_enabled) {
+        throw std::runtime_error("imu.raw.enabled must be false for imu.driver=synthetic");
       }
     }
     if (cfg.imu.raw_enabled && cfg.imu.raw_stream_id == cfg.imu.stream_id) {

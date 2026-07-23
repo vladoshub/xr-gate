@@ -251,11 +251,17 @@ class ShmCaptureTransport final : public ICaptureTransport {
   explicit ShmCaptureTransport(const std::string& registry_path,
                                const std::string& cam0_stream = "camera0",
                                const std::string& cam1_stream = "camera1",
-                               const std::string& imu_stream = "imu0")
+                               const std::string& imu_stream = "imu0",
+                               bool subscribe_imu = true)
       : registry_(registry_path),
         cam0_(std::make_unique<ShmStreamReader>(registry_.stream(cam0_stream))),
-        cam1_(std::make_unique<ShmStreamReader>(registry_.stream(cam1_stream))),
-        imu_(std::make_unique<ShmStreamReader>(registry_.stream(imu_stream))) {}
+        cam1_(std::make_unique<ShmStreamReader>(registry_.stream(cam1_stream))) {
+    if (subscribe_imu) {
+      imu_ = std::make_unique<ShmStreamReader>(registry_.stream(imu_stream));
+    } else {
+      imu_ = std::make_unique<NullStreamReader>(imu_stream);
+    }
+  }
 
   const std::string& type() const override {
     static const std::string kType = "shm";
@@ -270,7 +276,7 @@ class ShmCaptureTransport final : public ICaptureTransport {
   CaptureRegistry registry_;
   std::unique_ptr<ShmStreamReader> cam0_;
   std::unique_ptr<ShmStreamReader> cam1_;
-  std::unique_ptr<ShmStreamReader> imu_;
+  std::unique_ptr<IStreamReader> imu_;
 };
 
 // Backward-compatible alias for older local code/scripts.

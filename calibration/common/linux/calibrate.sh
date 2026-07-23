@@ -7,7 +7,7 @@ TARGET="${CALIB_TARGET:-xreal_ultra}"
 
 usage() {
   cat <<USAGE
-Usage: $0 [--target NAME] COMMAND
+Usage: $0 [--target NAME] COMMAND [COMMAND OPTIONS]
 
 Targets:
   xreal_ultra
@@ -22,6 +22,7 @@ Commands:
   save-camera       Install latest camera-only result into target profile directory
   imu-camera        Run camera-IMU calibration
   convert-runtime   Convert Kalibr camchain and install Basalt/Mercury/VIO JSON
+                    Add --no-imu for a saved camera-only stereo camchain
 USAGE
 }
 

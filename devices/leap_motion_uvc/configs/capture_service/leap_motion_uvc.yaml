@@ -1,0 +1,56 @@
+version: 1
+
+service:
+  profile: leap_motion_uvc
+  namespace: leap_uvc_test
+  registry_path: /tmp/capture_service_streams.json
+  publish: [shm]
+
+camera:
+  enabled: true
+  driver: opencv
+  slot_count: 8
+  layout: interleaved_columns
+  stereo_order: left_right
+
+  primary:
+    device:
+      linux: /dev/v4l/by-id/usb-Leap_Motion_Leap_Motion_Controller-video-index0
+    index: 0
+    api:
+      linux: v4l2
+      windows: auto
+
+    width: 640
+    height: 480
+    # Keep the device-native 57.5 FPS mode.
+    fps: 0
+    raw_format: false
+    convert_rgb: false
+    buffer_size: 1
+
+    controls_policy: strict
+    controls:
+      brightness: 5
+      gain: 32
+      exposure_time_absolute: 4000
+      contrast: 3
+
+  output:
+    left_stream: camera0
+    right_stream: camera1
+    width: 640
+    height: 480
+
+  transform:
+    left:
+      rotate: 180
+      flip: none
+    right:
+      rotate: 180
+      flip: none
+
+  stall_exit_ms: 3000
+
+imu:
+  enabled: false

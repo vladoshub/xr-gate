@@ -148,6 +148,14 @@ def main() -> None:
     ap.add_argument("--accel-random-walk", required=True, type=nonnegative_float)
     ap.add_argument("--gyro-noise-density", required=True, type=nonnegative_float)
     ap.add_argument("--gyro-random-walk", required=True, type=nonnegative_float)
+    ap.add_argument(
+        "--no-imu",
+        action="store_true",
+        help=(
+            "convert a stereo camera-only Kalibr camchain; use cam0 as the "
+            "synthetic body frame and do not require T_cam_imu"
+        ),
+    )
     args = ap.parse_args()
 
     camchain_path = Path(args.camchain)
@@ -166,19 +174,39 @@ def main() -> None:
     if not all(isinstance(cam, dict) for cam in cams):
         raise ValueError("cam0 and cam1 must be YAML mappings")
 
-    T_imu_cam = []
-    for index, cam in enumerate(cams):
-        # Kalibr gives T_cam_imu: imu -> camera.
-        # The existing XR Gate Basalt JSON convention stores inverse(T_cam_imu).
-        T_cam_imu = require_matrix4(
-            f"cam{index}.T_cam_imu", cam.get("T_cam_imu")
+    if args.no_imu:
+        # A camera-only Kalibr camchain has no physical IMU frame.  Define the
+        # runtime body frame as cam0.  Kalibr stores T_cn_cnm1 on cam1 as the
+        # transform from cam0 to cam1.  XR Gate's T_imu_cam entries store the
+        # inverse direction (camera -> body), so cam1 uses its inverse.
+        identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+        T_cam1_cam0 = require_matrix4(
+            "cam1.T_cn_cnm1", cams[1].get("T_cn_cnm1")
         )
-        T_imu_cam.append(pose_from_T(mat_inv(T_cam_imu)))
+        T_imu_cam = [
+            pose_from_T(identity),
+            pose_from_T(mat_inv(T_cam1_cam0)),
+        ]
+        cam_time_offset_ns = 0
+    else:
+        T_imu_cam = []
+        for index, cam in enumerate(cams):
+            # Kalibr gives T_cam_imu: imu -> camera.
+            # The existing XR Gate Basalt JSON convention stores inverse(T_cam_imu).
+            T_cam_imu = require_matrix4(
+                f"cam{index}.T_cam_imu", cam.get("T_cam_imu")
+            )
+            T_imu_cam.append(pose_from_T(mat_inv(T_cam_imu)))
 
-    shifts = [float(cam.get("timeshift_cam_imu", 0.0)) for cam in cams]
-    if not all(math.isfinite(shift) for shift in shifts):
-        raise ValueError("camera-to-IMU time shifts must be finite")
-    cam_time_offset_ns = int(round((sum(shifts) / len(shifts)) * 1e9))
+        shifts = [float(cam.get("timeshift_cam_imu", 0.0)) for cam in cams]
+        if not all(math.isfinite(shift) for shift in shifts):
+            raise ValueError("camera-to-IMU time shifts must be finite")
+        cam_time_offset_ns = int(round((sum(shifts) / len(shifts)) * 1e9))
 
     resolution = []
     for index, cam in enumerate(cams):
@@ -244,6 +272,7 @@ def main() -> None:
     out_path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
 
     print("written:", out_path)
+    print("mode:", "stereo_vo_no_imu" if args.no_imu else "stereo_vio")
     print("resolution:", data["value0"]["resolution"])
     print("imu_update_rate:", data["value0"]["imu_update_rate"])
     print("cam_time_offset_ns:", cam_time_offset_ns)

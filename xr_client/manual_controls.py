@@ -25,7 +25,7 @@ class ManualControlPoller:
     def __init__(self) -> None:
         self.stop_requested = False
         self._win_buffer = ""
-        self._prompt = "XR control [1/2/3/4/5/6/7/8/h/q]: "
+        self._prompt = "XR control [1/2/3/4/5/6/7/8/9/h/q]: "
         self.mapping: Dict[str, str] = {
             "1": "manual-restart-running-backends",
             "r": "manual-restart-running-backends",
@@ -34,7 +34,13 @@ class ManualControlPoller:
             "htr": "manual-toggle-hand-tracking",
             "hand": "manual-toggle-hand-tracking",
             "hands": "manual-toggle-hand-tracking",
-            "3": "manual-toggle-3dof-6dof",
+            "3": "manual-toggle-basalt-imu-mode",
+            "basalt": "manual-toggle-basalt-imu-mode",
+            "basalt-imu": "manual-toggle-basalt-imu-mode",
+            "no-imu": "manual-toggle-basalt-imu-mode",
+            "vo": "manual-toggle-basalt-imu-mode",
+            "vio": "manual-toggle-basalt-imu-mode",
+            "9": "manual-toggle-3dof-6dof",
             "3dof": "manual-toggle-3dof-6dof",
             "6dof": "manual-toggle-3dof-6dof",
             "toggle": "manual-toggle-3dof-6dof",
@@ -81,12 +87,13 @@ class ManualControlPoller:
         print("XR backend controls:", flush=True)
         print("  1 - restart running backends", flush=True)
         print("  2 - start/stop hand_tracking", flush=True)
-        print("  3 - toggle 3DoF/6DoF", flush=True)
+        print("  3 - toggle Basalt VIO / stereo VO (restarts Basalt)", flush=True)
         print("  4 - recenter 3DoF (works only when imu_3dof_backend is running)", flush=True)
         print("  5 - start/stop override_controller", flush=True)
         print("  6 - start/stop xr_video", flush=True)
         print("  7 - start/stop xr_spatial", flush=True)
         print("  8 - shake control toggle (enable/disable IMU tap controls for this session)", flush=True)
+        print("  9 - toggle 6DoF/3DoF", flush=True)
         print("  h - show this menu", flush=True)
         print("  q - stop all and exit", flush=True)
         print("", flush=True)
@@ -106,7 +113,7 @@ class ManualControlPoller:
             return []
         event_name = self.mapping.get(raw)
         if not event_name:
-            print("Unknown command. Use 1, 2, 3, 4, 5, 6, 7, 8, h or q.", flush=True)
+            print("Unknown command. Use 1, 2, 3, 4, 5, 6, 7, 8, 9, h or q.", flush=True)
             self._print_prompt()
             return []
         self._print_prompt()
@@ -136,7 +143,7 @@ class ManualControlPoller:
     def _poll_windows(self) -> List[TapEvent]:
         """Poll native Windows console without select() or input() threads.
 
-        Single-key controls (1/2/3/4/5/6/7/8/h/q) are executed immediately. Longer text
+        Single-key controls (1/2/3/4/5/6/7/8/9/h/q) are executed immediately. Longer text
         aliases still work after Enter. Printable characters are echoed manually
         because msvcrt.getwch() reads raw console input.
         """
@@ -146,7 +153,7 @@ class ManualControlPoller:
             return []
 
         events: List[TapEvent] = []
-        single_key_commands = {"1", "2", "3", "4", "5", "6", "7", "8", "h", "q", "r"}
+        single_key_commands = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "h", "q", "r"}
         while msvcrt.kbhit():
             ch = msvcrt.getwch()
 

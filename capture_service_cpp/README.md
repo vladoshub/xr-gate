@@ -174,6 +174,22 @@ imu:
 
 Camera and IMU source selection is never coupled.
 
+An explicit camera-only config may omit the entire `imu:` mapping. In that
+case IMU is disabled and no IMU device, thread or stream is created:
+
+```yaml
+version: 1
+service:
+  publish: [shm]
+camera:
+  enabled: true
+  driver: opencv
+  layout: side_by_side_horizontal
+```
+
+The built-in no-config XREAL Ultra fallback is unchanged and still enables the
+XREAL HID IMU.
+
 ## Camera drivers
 
 ### `xreal_ultra`
@@ -308,6 +324,29 @@ Only complete validated serial samples reset `imu.stall_exit_ms`. Receiving part
 
 For HMD VIO, firmware should send raw calibrated-unit gyro/accelerometer samples without Madgwick/Mahony orientation fusion or startup gyro-bias subtraction. Basalt continues to estimate IMU bias in the existing pipeline.
 
+### `synthetic`
+
+Publishes a paced normalized IMU stream without opening hardware. No standard
+device profile selects this driver automatically.
+
+```yaml
+imu:
+  enabled: true
+  driver: synthetic
+  output:
+    stream: imu_synthetic
+    frame: imu_synthetic
+  synthetic:
+    rate_hz: 200
+    gyro_rad_s: [0.0, 0.0, 0.0]
+    accel_m_s2: [0.0, 0.0, 0.0]
+    timestamp_mode: host_monotonic
+```
+
+Synthetic samples receive monotonically increasing host steady-clock
+timestamps and sequence numbers. Raw publication is not supported for this
+driver.
+
 
 ### IMU frame transform
 
@@ -418,7 +457,7 @@ python3 tools/calibrate_imu_axes.py --self-test
 --camera-api v4l2|gstreamer|msmf|dshow|any
 --secondary-video-device PATH
 --secondary-camera-index N
---imu-driver xreal_hid|serial
+--imu-driver xreal_hid|serial|synthetic
 --serial-port PORT
 --serial-baud RATE
 --raw-imu

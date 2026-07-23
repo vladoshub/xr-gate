@@ -37,20 +37,23 @@ struct SyncedStereoImu {
 class StereoImuSynchronizer {
  public:
   StereoImuSynchronizer(ICaptureTransport& transport, int64_t max_stereo_delta_ns = 1'000'000,
-                        double wait_for_imu_s = 0.05)
-      : transport_(transport), max_stereo_delta_ns_(max_stereo_delta_ns), wait_for_imu_s_(wait_for_imu_s) {
+                        double wait_for_imu_s = 0.05, bool use_imu = true)
+      : transport_(transport), max_stereo_delta_ns_(max_stereo_delta_ns),
+        wait_for_imu_s_(wait_for_imu_s), use_imu_(use_imu) {
     last_pair_seq_ = std::min(transport_.cam0().latest_sequence(), transport_.cam1().latest_sequence());
-    last_imu_seq_ = transport_.imu().latest_sequence();
+    if (use_imu_) last_imu_seq_ = transport_.imu().latest_sequence();
   }
 
   std::optional<SyncedStereoImu> read_next(double timeout_s = 1.0) {
     auto pair = read_next_pair(timeout_s);
     if (!pair) return std::nullopt;
-    wait_until_imu_at_least(pair->timestamp_ns, wait_for_imu_s_);
     SyncedStereoImu out;
     out.previous_camera_timestamp_ns = previous_camera_timestamp_ns_;
     out.pair = std::move(*pair);
-    out.imu_samples = read_imu_window_until(out.pair.timestamp_ns);
+    if (use_imu_) {
+      wait_until_imu_at_least(out.pair.timestamp_ns, wait_for_imu_s_);
+      out.imu_samples = read_imu_window_until(out.pair.timestamp_ns);
+    }
     previous_camera_timestamp_ns_ = out.pair.timestamp_ns;
     return out;
   }
@@ -120,6 +123,7 @@ class StereoImuSynchronizer {
   ICaptureTransport& transport_;
   int64_t max_stereo_delta_ns_ = 1'000'000;
   double wait_for_imu_s_ = 0.05;
+  bool use_imu_ = true;
   uint64_t last_pair_seq_ = 0;
   uint64_t last_imu_seq_ = 0;
   std::optional<int64_t> previous_camera_timestamp_ns_;
