@@ -392,7 +392,7 @@ If no IMU:
 
 ```bash
 RECORD_MODE=camera_only \
-START_CAPTURE_SERVICE=0 \
+START_CAPTURE_SERVICE=1 \
 SECONDS_TOTAL=90 \
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
