@@ -19,16 +19,8 @@ Build
 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-## 1. Calibrate the IMU mount axes (Skip if no IMU)
 
 Prepare device_profile (see others in ~/xr-gate/capture_service_cpp/configs/)
-
-Temporarily remove any existing:
-
-```yaml
-imu:
-  transform:
-```
 
 Start `capture_service_cpp`.
 
@@ -42,6 +34,16 @@ Example:
 
 ```bash
 CONFIG_PATH=~/xr-gate/devices/leap_motion_uvc_nrf54l15/configs/capture_service/leap_motion_uvc_nrf54l15.yaml ~/xr-gate/out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+## 1. Calibrate the IMU mount axes (Skip if no IMU)
+
+
+Temporarily remove any existing:
+
+```yaml
+imu:
+  transform:
 ```
 
 Open new terminal
@@ -115,6 +117,7 @@ Create:
 calibration/common/linux/profiles/<target>.env
 ```
 
+target = name = CALIB_TARGET_NAME
 Example:
 ```text
 calibration/common/linux/profiles/my_stereo_imu.env
@@ -256,6 +259,17 @@ export CALIB_UNIT_ID="mount_v1_unit_001"
 export CALIB_PROFILE_NAME="stereo_640x480_none"
 ```
 
+No IMU
+
+```bash
+ROOT="$HOME/xr-gate"
+CAL_COMMON="$ROOT/calibration/common/linux"
+
+export CALIB_TARGET="my_stereo_camera"
+export CALIB_UNIT_ID="mount_v1_unit_001"
+export CALIB_PROFILE_NAME="stereo_640x480_none"
+```
+
 Check the resolved profile:
 
 ```bash
@@ -357,6 +371,14 @@ Use one recording for both stereo calibration and camera–IMU calibration:
 Before starting, you must stop all running capture_service_cpp
 
 
+You can prevent run capture_service_cpp:
+
+```bash
+CONFIG_PATH=~/xr-gate/devices/leap_motion_uvc/configs/capture_service/leap_motion_uvc.yaml ~/xr-gate-release/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
+```
+
+If you prevent run capture_service_cpp start calibrate.sh START_CAPTURE_SERVICE=0 
+
 ```bash
 RECORD_MODE=stereo_imu \
 START_CAPTURE_SERVICE=1 \
@@ -370,7 +392,7 @@ If no IMU:
 
 ```bash
 RECORD_MODE=camera_only \
-START_CAPTURE_SERVICE=1 \
+START_CAPTURE_SERVICE=0 \
 SECONDS_TOTAL=90 \
 "$CAL_COMMON/calibrate.sh" \
   --target "$CALIB_TARGET" \
@@ -380,7 +402,7 @@ SECONDS_TOTAL=90 \
 After start and press enter run parallel in new terminal for check camera:
 
 ```bash
-./xr-gate/capture_client/debug/direct_slam_viewer_shm.sh
+CAPTURE_CLIENT_ROOT=~/xr-gate/capture_client ./xr-gate/capture_client/debug/direct_slam_viewer_shm.sh
 ```
 
 Keep the AprilGrid still and move the entire camera+IMU assembly.
