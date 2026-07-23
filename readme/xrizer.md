@@ -17,17 +17,15 @@ git clone https://github.com/vladoshub/xr-gate.git xr_tracking
 cd ~/src/xr_tracking
 
 XR_BUILD_ONLY=xrizer \
-./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+XR_BUILD_XRIZER=1 \
+XR_PACKAGE_ALLOW_PARTIAL=1 \
+XRIZER_PACKAGE_COMPLIANCE=1 \
+XRIZER_VENDOR_CARGO_SOURCES=1 \
+XRIZER_INSTALL_RUSTUP=1 \
+CLONE_XRIZER=1 \
+./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-Equivalent explicit form:
-
-```bash
-cd ~/src/xr_tracking
-
-XR_BUILD_XRIZER=1 XR_BUILD_ONLY=xrizer \
-./devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-```
 
 ## Run CLI
 
