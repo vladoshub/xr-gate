@@ -190,6 +190,8 @@ if [[ ! -d "$ORT_ROOT" ]]; then
 fi
 require_file "$ORT_ROOT/include/onnxruntime_c_api.h"
 require_file "$ORT_ROOT/lib/libonnxruntime.so"
+require_file "$ORT_ROOT/LICENSE"
+require_file "$ORT_ROOT/ThirdPartyNotices.txt"
 ls -lh "$ORT_ROOT/include/onnxruntime_c_api.h"
 ls -lh "$ORT_ROOT/lib"/libonnxruntime.so*
 
@@ -300,6 +302,26 @@ cp -a "$BACKEND_DIR/configs" "$INSTALL_BIN_DIR/configs"
 cp -a "$BACKEND_DIR/scripts" "$INSTALL_BIN_DIR/scripts"
 cp "$ROOT_PROJECT/backends/common/scripts/linux/capture_profile.sh"   "$INSTALL_BIN_DIR/scripts/linux/capture_profile.sh"
 chmod +x "$INSTALL_BIN_DIR/scripts/linux/"*.sh
+
+MERCURY_LICENSE_DIR="$INSTALL_BIN_DIR/licenses"
+rm -rf "$MERCURY_LICENSE_DIR"
+mkdir -p "$MERCURY_LICENSE_DIR/monado" "$MERCURY_LICENSE_DIR/xr-gate-mercury-overlay"
+require_dir "$MONADO_DIR/LICENSES"
+cp -a "$MONADO_DIR/LICENSES" "$MERCURY_LICENSE_DIR/monado/LICENSES"
+require_file "$ROOT_PROJECT/LICENSES/BSL-1.0.txt"
+cp "$ROOT_PROJECT/LICENSES/BSL-1.0.txt" "$MERCURY_LICENSE_DIR/xr-gate-mercury-overlay/BSL-1.0.txt"
+MERCURY_MONADO_RESOLVED_COMMIT="$(git -C "$MONADO_DIR" rev-parse HEAD)"
+cat > "$MERCURY_LICENSE_DIR/SOURCE_INFO.txt" <<EOF_MERCURY_SOURCE
+Component: XR Mercury runtime
+Base component: Monado
+Monado repository: $MONADO_REPO_URL
+Requested Monado commit: $MONADO_COMMIT
+Resolved Monado commit: $MERCURY_MONADO_RESOLVED_COMMIT
+Project overlay license: BSL-1.0
+ONNX Runtime version: $ORT_VERSION
+ONNX Runtime legal files remain under: ${ORT_ROOT#"$ROOT_PROJECT/"}
+The Monado checkout is patched by XR Gate before building; upstream does not endorse the modified binary.
+EOF_MERCURY_SOURCE
 ls -lh "$INSTALL_BIN_DIR"
 
 if [[ "$INSTALL_MERCURY_MODELS" == "1" ]]; then

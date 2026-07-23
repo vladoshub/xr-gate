@@ -267,10 +267,160 @@ package_include_xrizer_helpers() {
 
 package_project_legal_files() {
   [[ -f "$XR_ROOT_PROJECT/LICENSE" ]] || fatal "project LICENSE not found: $XR_ROOT_PROJECT/LICENSE"
+  [[ -d "$XR_ROOT_PROJECT/LICENSES" ]] || fatal "project LICENSES directory not found: $XR_ROOT_PROJECT/LICENSES"
+  [[ -f "$XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md" ]] || fatal "project THIRD_PARTY_NOTICES.md not found: $XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md"
+
   copy_file "$XR_ROOT_PROJECT/LICENSE" "$XR_OUT_ROOT/LICENSE"
+  copy_dir "$XR_ROOT_PROJECT/LICENSES" "$XR_OUT_ROOT/LICENSES"
+  # Keep the historical path because package sanity checks and downstream
+  # consumers already reference LICENSES/MIT.txt. The descriptive alias makes
+  # it clear that MIT applies to original XR Gate code, not all bundled files.
   copy_file "$XR_ROOT_PROJECT/LICENSE" "$XR_OUT_ROOT/LICENSES/MIT.txt"
-  if [[ -f "$XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md" ]]; then
-    copy_file "$XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md" "$XR_OUT_ROOT/THIRD_PARTY_NOTICES.md"
+  copy_file "$XR_ROOT_PROJECT/LICENSE" "$XR_OUT_ROOT/LICENSES/XR-Gate-MIT.txt"
+  copy_file "$XR_ROOT_PROJECT/THIRD_PARTY_NOTICES.md" "$XR_OUT_ROOT/THIRD_PARTY_NOTICES.md"
+}
+
+package_component_legal_files() {
+  local legal_dir
+  local relative
+  local component_dst
+  local found=0
+
+  mkdir -p "$XR_OUT_ROOT/LICENSES/components"
+
+  # Install/build scripts place exact upstream legal material next to their
+  # binaries under a lowercase licenses/ directory. Mirror each bundle into one
+  # predictable top-level location without removing the component-local copy.
+  while IFS= read -r -d '' legal_dir; do
+    relative="${legal_dir#"$XR_OUT_BIN_ROOT/"}"
+    relative="${relative%/licenses}"
+    component_dst="$XR_OUT_ROOT/LICENSES/components/$relative"
+    copy_dir "$legal_dir" "$component_dst"
+    found=1
+  done < <(find "$XR_OUT_BIN_ROOT" -type d -name licenses -print0 2>/dev/null)
+
+  # ONNX Runtime release archives place legal files at the archive root rather
+  # than under licenses/. Require both the project license and the complete
+  # generated third-party notice whenever libonnxruntime is redistributed.
+  local ort_root=""
+  local ort_license=""
+  local ort_notices=""
+  ort_root="$(find "$XR_OUT_BIN_ROOT/onnxruntime" -mindepth 1 -maxdepth 1 -type d -name 'onnxruntime-*' -print -quit 2>/dev/null || true)"
+  if [[ -n "$ort_root" && -e "$ort_root/lib/libonnxruntime.so" ]]; then
+    for candidate in "$ort_root/LICENSE" "$ort_root/LICENSE.txt"; do
+      [[ -f "$candidate" ]] && { ort_license="$candidate"; break; }
+    done
+    for candidate in "$ort_root/ThirdPartyNotices.txt" "$ort_root/THIRD_PARTY_NOTICES.txt"; do
+      [[ -f "$candidate" ]] && { ort_notices="$candidate"; break; }
+    done
+    [[ -n "$ort_license" ]] || fatal "ONNX Runtime is present without upstream LICENSE under: $ort_root"
+    [[ -n "$ort_notices" ]] || fatal "ONNX Runtime is present without ThirdPartyNotices.txt under: $ort_root"
+    mkdir -p "$XR_OUT_ROOT/LICENSES/components/onnxruntime"
+    copy_file "$ort_license" "$XR_OUT_ROOT/LICENSES/components/onnxruntime/LICENSE.txt"
+    copy_file "$ort_notices" "$XR_OUT_ROOT/LICENSES/components/onnxruntime/ThirdPartyNotices.txt"
+    cat > "$XR_OUT_ROOT/LICENSES/components/onnxruntime/SOURCE_INFO.txt" <<EOF_ORT_INFO
+Component: ONNX Runtime
+Packaged path: ${ort_root#"$XR_OUT_ROOT/"}
+License: MIT plus upstream ThirdPartyNotices.txt
+EOF_ORT_INFO
+    found=1
+  fi
+
+  # Fail closed for the main redistributed binaries. A partial package may omit
+  # a component entirely, but a present binary must have its exact build-time
+  # legal bundle.
+  if [[ -x "$XR_OUT_BIN_ROOT/backends/basalt_vio/capture_basalt_backend" ]]; then
+    [[ -f "$XR_OUT_BIN_ROOT/backends/basalt_vio/licenses/Basalt-LICENSE.txt" ]] || \
+      fatal "Basalt binary is present without Basalt license bundle"
+  fi
+  if [[ -f "$XR_OUT_BIN_ROOT/backends/mercury_hand_tracking/libxr_mercury_runtime.so" ]]; then
+    [[ -d "$XR_OUT_BIN_ROOT/backends/mercury_hand_tracking/licenses/monado/LICENSES" ]] || \
+      fatal "Mercury runtime is present without Monado license bundle"
+  fi
+  if [[ -x "$XR_OUT_BIN_ROOT/drivers/monado_driver/monado-service" || -e "$XR_OUT_BIN_ROOT/drivers/monado_driver/libopenxr_monado.so" ]]; then
+    [[ -d "$XR_OUT_BIN_ROOT/drivers/monado_driver/licenses/monado/LICENSES" ]] || \
+      fatal "Monado runtime is present without Monado license bundle"
+  fi
+
+  if [[ "$found" == "0" ]]; then
+    log "no component-local legal bundles found (partial/source-only package)"
+  else
+    log "packaged component license bundles under LICENSES/components"
+  fi
+}
+
+package_system_dependency_notices() {
+  local notices_root="$XR_OUT_ROOT/LICENSES/system-packages"
+  local manifest="$notices_root/MANIFEST.tsv"
+  local package
+  local copyright_file
+  local found=0
+
+  # These Ubuntu/Debian packages provide headers or libraries used by XR Gate
+  # binaries. Header-only/template code can be compiled into the executables,
+  # while shared libraries are normally installed separately by the runtime
+  # dependency installer. Preserve the exact distro copyright metadata from the
+  # build environment instead of guessing versions or reducing multi-license
+  # packages to one generic license name.
+  local packages=(
+    nlohmann-json3-dev
+    libcli11-dev
+    libeigen3-dev
+    libopencv-dev
+    libceres-dev
+    libcjson-dev
+    libjson-c-dev
+    libhidapi-dev
+    libusb-1.0-0-dev
+    libtbb-dev
+    libvulkan-dev
+    glslang-dev
+    libssl-dev
+    libudev-dev
+    libsystemd-dev
+    libdbus-1-dev
+    libwayland-dev
+    libxkbcommon-dev
+    libx11-dev
+    libxrandr-dev
+    libxext-dev
+    libxfixes-dev
+    libxxf86vm-dev
+    libxinerama-dev
+    libgl1-mesa-dev
+    libegl1-mesa-dev
+  )
+
+  rm -rf "$notices_root"
+  mkdir -p "$notices_root"
+  printf 'package\tversion\tarchitecture\tcopyright_file\n' > "$manifest"
+
+  if ! command -v dpkg-query >/dev/null 2>&1; then
+    log "dpkg-query not available; skip distro package notices"
+    return 0
+  fi
+
+  for package in "${packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q '^install ok installed$'; then
+      continue
+    fi
+    copyright_file="/usr/share/doc/$package/copyright"
+    if [[ ! -f "$copyright_file" ]]; then
+      log "installed package has no readable copyright file: $package"
+      continue
+    fi
+    mkdir -p "$notices_root/$package"
+    copy_file "$copyright_file" "$notices_root/$package/copyright"
+    dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\t/usr/share/doc/${binary:Package}/copyright\n' \
+      "$package" >> "$manifest"
+    found=1
+  done
+
+  if [[ "$found" == "0" ]]; then
+    rm -rf "$notices_root"
+    log "no distro dependency copyright files found (artifact-only or non-Debian package build)"
+  else
+    log "packaged distro dependency notices: $manifest"
   fi
 }
 
@@ -593,6 +743,12 @@ fi
 if [[ "$XR_PACKAGE_COPY_CALIBRATION_DATASET" == "1" ]]; then
   copy_if_exists "$XR_ROOT_PROJECT/calibration_dataset" "$XR_OUT_ROOT/calibration_dataset"
 fi
+
+# Collect legal material only after all vendor hooks, optional runtime metadata,
+# and stale-driver cleanup have finished. This prevents stale component notices
+# and includes legal bundles added late by device-specific packaging hooks.
+package_component_legal_files
+package_system_dependency_notices
 
 # The old Python/GStreamer capture_service was removed from the core package.
 # Runtime Python now consists of standalone capture_client, xr_client and tools.

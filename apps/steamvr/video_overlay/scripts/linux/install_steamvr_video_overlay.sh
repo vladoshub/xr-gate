@@ -115,6 +115,27 @@ if [[ -n "$OPENVR_LIB" ]]; then
   cp "$OPENVR_LIB" "$INSTALL_BIN_DIR/"
 fi
 
+OPENVR_LICENSE_FILE=""
+for candidate in "$XR_OPENVR_SDK_ROOT/LICENSE" "$XR_OPENVR_SDK_ROOT/LICENSE.txt"; do
+  [[ -f "$candidate" ]] && { OPENVR_LICENSE_FILE="$candidate"; break; }
+done
+if [[ -z "$OPENVR_LICENSE_FILE" ]]; then
+  echo "[install_steamvr_video_overlay][ERROR] OpenVR SDK license not found under: $XR_OPENVR_SDK_ROOT" >&2
+  exit 2
+fi
+mkdir -p "$INSTALL_BIN_DIR/licenses"
+cp "$OPENVR_LICENSE_FILE" "$INSTALL_BIN_DIR/licenses/OpenVR-LICENSE.txt"
+OPENVR_RESOLVED_COMMIT="unknown-external-checkout"
+if [[ -d "$XR_OPENVR_SDK_ROOT/.git" ]]; then
+  OPENVR_RESOLVED_COMMIT="$(git -C "$XR_OPENVR_SDK_ROOT" rev-parse HEAD)"
+fi
+cat > "$INSTALL_BIN_DIR/licenses/SOURCE_INFO.txt" <<EOF_OPENVR_APP_SOURCE
+Component: Valve OpenVR SDK/runtime library used by apps/steamvr/video_overlay/scripts/linux/install_steamvr_video_overlay.sh
+License: BSD-3-Clause
+SDK path: $XR_OPENVR_SDK_ROOT
+Resolved commit: $OPENVR_RESOLVED_COMMIT
+EOF_OPENVR_APP_SOURCE
+
 rm -rf "$INSTALL_BIN_DIR/scripts"
 cp -a "$APP_DIR/scripts" "$INSTALL_BIN_DIR/scripts"
 cp "$APP_DIR/README.md" "$INSTALL_BIN_DIR/README.md"
