@@ -554,6 +554,9 @@ Use `MAX_ITER=20` only when the final iterations are still improving significant
 
 ## 11. Convert to runtime JSON
 
+
+###chmod +x calibration/common/linux/scripts/convert_runtime_json.sh
+
 ```bash
 FORCE_BASALT_VO_CONFIG=1 \
 "$CAL_COMMON/calibrate.sh" \
