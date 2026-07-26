@@ -1,15 +1,13 @@
 # XR Gate
 
-Experimental open-source XR runtime stack for **AR glasses**, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
+Experimental open-source XR runtime stack, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
 
-XR Tracking currently provides a working end-to-end XR stack with a modular architecture intended to make support for other AR/XR glasses and sensors, tracking backends, and input devices possible over time.
+This project is a hardware-independent gateway to VR/XR for devices with limited or no native support. You can use AR glasses with depth cameras (e.g., Xreal Ultra) as a VR headset or even build your own custom tracker to create your own HMD (Leapmotion/Leapmotion + nRF54L15).
 
-It already supports 6DoF/3DoF spatial tracking, ML-based hand tracking, VR controller emulation from hand poses and physical input devices, and working SteamVR/OpenVR and Monado/OpenXR driver integration, as well as standalone tools. The stack captures stereo grayscale video and IMU data directly, synchronizes the streams, and feeds the resulting tracking and input state into real XR runtimes and applications.
-
-The goal is to keep the project useful in two directions at once:
-
-- **For users and XR hobbyists:** download runtime packages, register the driver, start `xr_client`, and run SteamVR/OpenVR games/apps on lightweight glasses without external tracking!
-- **For engineers and researchers:** use the codebase as a real-time computer vision / perception / XR systems project with C++ capture, Python stream clients, ONNX hand-tracking integration, VIO, runtime filtering, spatial mapping, IPC transports, controller emulation, and reproducible packaging.
+Supported: 
+1. 6DoF tracking is supported, both fully stereo and with IMU support (Basalt integration)
+2. Image analysis-based hand tracking (Mercury hand tracking integration)
+3. Various input devices emulate VR controllers, including those with their own IMUs for precise tracking (Samsung Gear VR support or VR-like Bluetooth controllers)
 
 
 **For installation and usage instructions, see:**
