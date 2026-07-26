@@ -2,7 +2,7 @@
 
 Experimental open-source XR runtime stack, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
 
-This project is a hardware-independent gateway to VR/XR for devices with limited or no native support. You can use AR glasses with depth cameras (e.g., Xreal Ultra) as a VR headset or even build your own custom tracker to create your own HMD (Leapmotion/Leapmotion + nRF54L15).
+This project is a hardware-independent gateway to VR/XR for devices with limited or no native support. You can use AR glasses with depth cameras (like Xreal Ultra) without any additional hardware as a VR headset or even build your own custom tracker to create your own HMD (Leapmotion/Leapmotion + nRF54L15).
 
 Supported: 
 1. 6DoF tracking is supported, both fully stereo and with IMU support (Basalt integration)
