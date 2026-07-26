@@ -134,6 +134,12 @@ enum class RuntimeControllerImuPredictionFreezeReason : uint8_t {
   MaxPredictionPath = 2,
 };
 
+enum class RuntimeControllerHmdRelativeBlendMode : uint8_t {
+  None = 0,
+  Enter = 1,
+  Exit = 2,
+};
+
 struct RuntimeControllerImuSideRuntimeState {
   bool has_position_anchor = false;
   bool prediction_active = false;
@@ -144,6 +150,10 @@ struct RuntimeControllerImuSideRuntimeState {
   RuntimeControllerImuPredictionFreezeReason prediction_freeze_reason =
       RuntimeControllerImuPredictionFreezeReason::None;
   bool reacquire_blend_active = false;
+  RuntimeControllerHmdRelativeBlendMode hmd_relative_blend_mode =
+      RuntimeControllerHmdRelativeBlendMode::None;
+  bool hmd_relative_last_published_pose_valid = false;
+  bool hmd_relative_last_published_pose_is_hmd_relative = false;
   bool yaw_correction_valid = false;
   bool yaw_correction_requested = false;
   bool yaw_check_active = false;
@@ -159,6 +169,7 @@ struct RuntimeControllerImuSideRuntimeState {
   uint64_t yaw_trigger_hold_start_ns = 0;
   uint64_t yaw_blend_start_ns = 0;
   uint64_t reacquire_blend_start_ns = 0;
+  uint64_t hmd_relative_blend_start_ns = 0;
   float anchor_position_m[3] = {};
   float anchor_velocity_mps[3] = {};
   prediction_window::PositionWindowEstimator<> position_history{};
@@ -179,6 +190,14 @@ struct RuntimeControllerImuSideRuntimeState {
   uint64_t prediction_path_last_timestamp_ns = 0;
   float reacquire_blend_from_position_m[3] = {};
   float reacquire_blend_from_velocity_mps[3] = {};
+  float hmd_relative_blend_from_position_m[3] = {};
+  float hmd_relative_blend_from_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float hmd_relative_blend_from_linear_velocity_mps[3] = {};
+  float hmd_relative_blend_from_angular_velocity_rad_s[3] = {};
+  float hmd_relative_last_published_position_m[3] = {};
+  float hmd_relative_last_published_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float hmd_relative_last_published_linear_velocity_mps[3] = {};
+  float hmd_relative_last_published_angular_velocity_rad_s[3] = {};
   bool yaw_trigger_range_valid = false;
   float yaw_trigger_reference_error_rad = 0.0f;
   float yaw_trigger_min_unwrapped_error_rad = 0.0f;
@@ -236,6 +255,8 @@ struct RuntimeControllerSynthesisConfig {
   RuntimeControllerImuMotionConfig right_imu_motion{};
 
   LostHandPoseFallbackMode lost_hand_pose_fallback = LostHandPoseFallbackMode::PoseInvalid;
+  float hmd_relative_enter_blend_ms = 150.0f;
+  float hmd_relative_exit_blend_ms = 250.0f;
 
   // Controls only visual hand-derived gestures when building RuntimeControllerStateV1.
   // External ControllerInputV3 buttons/axes remain authoritative and are not affected.

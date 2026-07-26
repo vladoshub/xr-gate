@@ -2719,6 +2719,8 @@ int main(int argc, char** argv) {
 
   std::string runtime_controller_mode = "hand_tracking_with_button_priority";
   std::string runtime_controller_lost_hand_pose_fallback = "pose_invalid";
+  double runtime_controller_hmd_relative_enter_blend_ms = 150.0;
+  double runtime_controller_hmd_relative_exit_blend_ms = 250.0;
   std::string runtime_controller_left_orientation_source = "HAND_TRACKING_BACKEND";
   std::string runtime_controller_right_orientation_source = "HAND_TRACKING_BACKEND";
   bool hand_orientation_offset_only_runtime = true;
@@ -3140,6 +3142,12 @@ int main(int argc, char** argv) {
   CLI::Option* runtime_controller_lost_hand_pose_fallback_option =
       app.add_option("--runtime-controller-lost-hand-pose-fallback", runtime_controller_lost_hand_pose_fallback,
                      "Hand-tracking controller modes: fallback pose when a hand is lost: pose_invalid, hmd_relative_with_input, hmd_relative_with_controller_present, or hmd_relative. hmd_relative_with_input keeps held override-controller hands body/HMD-relative only while physical buttons/axes are active.");
+  app.add_option("--runtime-controller-hmd-relative-enter-blend-ms",
+                 runtime_controller_hmd_relative_enter_blend_ms,
+                 "Blend duration from the last predicted/optical controller pose into lost-hand HMD-relative fallback; 0 disables.");
+  app.add_option("--runtime-controller-hmd-relative-exit-blend-ms",
+                 runtime_controller_hmd_relative_exit_blend_ms,
+                 "Blend duration from HMD-relative fallback into reacquired optical controller pose; 0 disables.");
   app.add_option("--runtime-controller-left-orientation-source", runtime_controller_left_orientation_source,
                  "Left controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
   app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
@@ -3719,6 +3727,12 @@ int main(int argc, char** argv) {
   if (override_controller_gesture_block_latch_ms < 0.0) {
     throw std::runtime_error("--override-controller-gesture-block-latch-ms must be >= 0");
   }
+  if (runtime_controller_hmd_relative_enter_blend_ms < 0.0) {
+    throw std::runtime_error("--runtime-controller-hmd-relative-enter-blend-ms must be >= 0");
+  }
+  if (runtime_controller_hmd_relative_exit_blend_ms < 0.0) {
+    throw std::runtime_error("--runtime-controller-hmd-relative-exit-blend-ms must be >= 0");
+  }
   if (runtime_hand_gate_confirm_frames < 1) {
     throw std::runtime_error("--runtime-hand-gate-confirm-frames must be >= 1");
   }
@@ -4079,6 +4093,10 @@ int main(int argc, char** argv) {
               << override_controller::lost_hand_pose_fallback_mode_name(
                      runtime_controller_lost_hand_pose_fallback_value)
               << "\n";
+    std::cout << "runtime_controller_hmd_relative_enter_blend_ms: "
+              << runtime_controller_hmd_relative_enter_blend_ms << "\n";
+    std::cout << "runtime_controller_hmd_relative_exit_blend_ms: "
+              << runtime_controller_hmd_relative_exit_blend_ms << "\n";
     std::cout << "runtime_controller_left_orientation_source: "
               << override_controller::runtime_controller_orientation_source_name(
                      runtime_controller_left_orientation_source_value) << "\n";
@@ -4368,6 +4386,10 @@ int main(int argc, char** argv) {
             << override_controller::lost_hand_pose_fallback_mode_name(
                    runtime_controller_lost_hand_pose_fallback_value)
             << "\n";
+  std::cout << "runtime_controller_hmd_relative_enter_blend_ms: "
+            << runtime_controller_hmd_relative_enter_blend_ms << "\n";
+  std::cout << "runtime_controller_hmd_relative_exit_blend_ms: "
+            << runtime_controller_hmd_relative_exit_blend_ms << "\n";
   std::cout << "publish_runtime_controller_state_shm: "
             << (publish_runtime_controller_state_shm ? "true" : "false") << "\n";
   std::cout << "runtime_controller_left_offset_m: ["
@@ -4765,6 +4787,10 @@ int main(int argc, char** argv) {
     runtime_controller_synthesis_cfg.left_hand_gestures_enabled = effective_runtime_left_hand_gestures_enabled;
     runtime_controller_synthesis_cfg.right_hand_gestures_enabled = effective_runtime_right_hand_gestures_enabled;
     runtime_controller_synthesis_cfg.lost_hand_pose_fallback = runtime_controller_lost_hand_pose_fallback_value;
+    runtime_controller_synthesis_cfg.hmd_relative_enter_blend_ms = static_cast<float>(
+        std::max(0.0, runtime_controller_hmd_relative_enter_blend_ms));
+    runtime_controller_synthesis_cfg.hmd_relative_exit_blend_ms = static_cast<float>(
+        std::max(0.0, runtime_controller_hmd_relative_exit_blend_ms));
     runtime_controller_synthesis_cfg.left_orientation_source = runtime_controller_left_orientation_source_value;
     runtime_controller_synthesis_cfg.right_orientation_source = runtime_controller_right_orientation_source_value;
     runtime_controller_synthesis_cfg.left_imu_orientation =

@@ -192,6 +192,47 @@ void set_orientation_xyzw(xr_runtime::RuntimeControllerSideStateV1& out, Qf q) {
   out.orientation_xyzw[3] = q.w;
 }
 
+Qf q_slerp_shortest(Qf from, Qf to, float t) {
+  from = normalize_q(from);
+  to = normalize_q(to);
+  t = std::clamp(t, 0.0f, 1.0f);
+
+  float dot = from.w * to.w + from.x * to.x +
+              from.y * to.y + from.z * to.z;
+  if (dot < 0.0f) {
+    to.w = -to.w;
+    to.x = -to.x;
+    to.y = -to.y;
+    to.z = -to.z;
+    dot = -dot;
+  }
+  dot = std::clamp(dot, -1.0f, 1.0f);
+
+  if (dot > 0.9995f) {
+    return normalize_q({
+        from.w + (to.w - from.w) * t,
+        from.x + (to.x - from.x) * t,
+        from.y + (to.y - from.y) * t,
+        from.z + (to.z - from.z) * t,
+    });
+  }
+
+  const float theta = std::acos(dot);
+  const float sin_theta = std::sin(theta);
+  if (!std::isfinite(sin_theta) || std::abs(sin_theta) <= 1.0e-6f) {
+    return from;
+  }
+
+  const float from_weight = std::sin((1.0f - t) * theta) / sin_theta;
+  const float to_weight = std::sin(t * theta) / sin_theta;
+  return normalize_q({
+      from.w * from_weight + to.w * to_weight,
+      from.x * from_weight + to.x * to_weight,
+      from.y * from_weight + to.y * to_weight,
+      from.z * from_weight + to.z * to_weight,
+  });
+}
+
 bool finite_q_xyzw(const float q[4]) {
   return std::isfinite(q[0]) && std::isfinite(q[1]) &&
          std::isfinite(q[2]) && std::isfinite(q[3]);
@@ -867,6 +908,12 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
   return result;
 }
 
+bool runtime_controller_pose_is_valid(
+    const xr_runtime::RuntimeControllerSideStateV1& out) {
+  return (out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u &&
+         (out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID) == 0u;
+}
+
 void invalidate_runtime_controller_pose(xr_runtime::RuntimeControllerSideStateV1& out) {
   out.flags &= ~(xr_runtime::RUNTIME_CONTROLLER_POSE_VALID |
                  xr_runtime::RUNTIME_CONTROLLER_TRACKED |
@@ -1241,8 +1288,14 @@ void update_or_apply_imu_position_prediction(
 
   const uint64_t elapsed_ns = timestamp_ns - state->last_optical_pose_ns;
   if (lost_output_ns == 0 || elapsed_ns > lost_output_ns) {
+    const bool preserve_hmd_relative_pose =
+        runtime_controller_pose_is_valid(out) &&
+        (out.source_mask &
+         xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE) != 0u;
     clear_imu_position_loss_state(*state, true);
-    invalidate_runtime_controller_pose(out);
+    if (!preserve_hmd_relative_pose) {
+      invalidate_runtime_controller_pose(out);
+    }
     return;
   }
 
@@ -1674,6 +1727,178 @@ void merge_hand_gestures(xr_runtime::RuntimeControllerSideStateV1& out,
   }
 }
 
+bool runtime_controller_pose_is_final_hmd_relative(
+    const xr_runtime::RuntimeControllerSideStateV1& out) {
+  if (!runtime_controller_pose_is_valid(out) ||
+      (out.source_mask &
+       xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE) == 0u) {
+    return false;
+  }
+
+  // compose_side selects HMD-relative before the IMU hold/prediction stage.
+  // During that stage the HMD-relative source bit remains present, so wait
+  // until the synthetic last-good/prediction markers disappear.
+  const uint32_t prediction_sources =
+      xr_runtime::RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE |
+      xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION;
+  return (out.source_mask & prediction_sources) == 0u;
+}
+
+void clear_hmd_relative_pose_blend(
+    RuntimeControllerImuSideRuntimeState& state) {
+  state.hmd_relative_blend_mode =
+      RuntimeControllerHmdRelativeBlendMode::None;
+  state.hmd_relative_blend_start_ns = 0;
+}
+
+void remember_hmd_relative_published_pose(
+    const xr_runtime::RuntimeControllerSideStateV1& out,
+    bool is_hmd_relative,
+    RuntimeControllerImuSideRuntimeState& state) {
+  if (!runtime_controller_pose_is_valid(out)) {
+    state.hmd_relative_last_published_pose_valid = false;
+    state.hmd_relative_last_published_pose_is_hmd_relative = false;
+    return;
+  }
+
+  state.hmd_relative_last_published_pose_valid = true;
+  state.hmd_relative_last_published_pose_is_hmd_relative = is_hmd_relative;
+  std::copy(std::begin(out.position), std::end(out.position),
+            state.hmd_relative_last_published_position_m);
+  std::copy(std::begin(out.orientation_xyzw),
+            std::end(out.orientation_xyzw),
+            state.hmd_relative_last_published_orientation_xyzw);
+  std::copy(std::begin(out.linear_velocity),
+            std::end(out.linear_velocity),
+            state.hmd_relative_last_published_linear_velocity_mps);
+  std::copy(std::begin(out.angular_velocity),
+            std::end(out.angular_velocity),
+            state.hmd_relative_last_published_angular_velocity_rad_s);
+}
+
+void start_hmd_relative_pose_blend(
+    RuntimeControllerHmdRelativeBlendMode mode,
+    uint64_t timestamp_ns,
+    RuntimeControllerImuSideRuntimeState& state) {
+  state.hmd_relative_blend_mode = mode;
+  state.hmd_relative_blend_start_ns = timestamp_ns;
+  std::copy(std::begin(state.hmd_relative_last_published_position_m),
+            std::end(state.hmd_relative_last_published_position_m),
+            state.hmd_relative_blend_from_position_m);
+  std::copy(std::begin(state.hmd_relative_last_published_orientation_xyzw),
+            std::end(state.hmd_relative_last_published_orientation_xyzw),
+            state.hmd_relative_blend_from_orientation_xyzw);
+  std::copy(std::begin(state.hmd_relative_last_published_linear_velocity_mps),
+            std::end(state.hmd_relative_last_published_linear_velocity_mps),
+            state.hmd_relative_blend_from_linear_velocity_mps);
+  std::copy(std::begin(state.hmd_relative_last_published_angular_velocity_rad_s),
+            std::end(state.hmd_relative_last_published_angular_velocity_rad_s),
+            state.hmd_relative_blend_from_angular_velocity_rad_s);
+}
+
+void apply_hmd_relative_pose_blend(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const RuntimeControllerSynthesisConfig& cfg,
+    uint64_t timestamp_ns,
+    bool real_optical_pose_available,
+    RuntimeControllerImuSideRuntimeState* state) {
+  if (state == nullptr) return;
+
+  const bool target_valid = runtime_controller_pose_is_valid(out);
+  const bool target_hmd_relative =
+      runtime_controller_pose_is_final_hmd_relative(out);
+
+  bool interrupted = false;
+  if (state->hmd_relative_blend_mode ==
+          RuntimeControllerHmdRelativeBlendMode::Enter &&
+      !target_hmd_relative) {
+    // Input/controller/HMD permission disappeared, or optical tracking
+    // returned. Publish the newly selected target immediately.
+    clear_hmd_relative_pose_blend(*state);
+    interrupted = true;
+  } else if (state->hmd_relative_blend_mode ==
+                 RuntimeControllerHmdRelativeBlendMode::Exit &&
+             (!real_optical_pose_available || !target_valid ||
+              target_hmd_relative)) {
+    // Optical tracking disappeared during exit. compose_side has already
+    // selected either the currently allowed HMD-relative fallback or INVALID.
+    clear_hmd_relative_pose_blend(*state);
+    interrupted = true;
+  }
+
+  if (!interrupted &&
+      state->hmd_relative_blend_mode ==
+          RuntimeControllerHmdRelativeBlendMode::None &&
+      target_valid && state->hmd_relative_last_published_pose_valid) {
+    if (target_hmd_relative &&
+        !state->hmd_relative_last_published_pose_is_hmd_relative &&
+        cfg.hmd_relative_enter_blend_ms > 0.0f) {
+      start_hmd_relative_pose_blend(
+          RuntimeControllerHmdRelativeBlendMode::Enter,
+          timestamp_ns, *state);
+    } else if (!target_hmd_relative && real_optical_pose_available &&
+               state->hmd_relative_last_published_pose_is_hmd_relative &&
+               cfg.hmd_relative_exit_blend_ms > 0.0f) {
+      start_hmd_relative_pose_blend(
+          RuntimeControllerHmdRelativeBlendMode::Exit,
+          timestamp_ns, *state);
+    }
+  }
+
+  if (state->hmd_relative_blend_mode !=
+      RuntimeControllerHmdRelativeBlendMode::None) {
+    const float duration_ms =
+        state->hmd_relative_blend_mode ==
+                RuntimeControllerHmdRelativeBlendMode::Enter
+            ? cfg.hmd_relative_enter_blend_ms
+            : cfg.hmd_relative_exit_blend_ms;
+    const uint64_t duration_ns = nonnegative_ms_to_ns(duration_ms);
+    const uint64_t elapsed_ns =
+        timestamp_ns >= state->hmd_relative_blend_start_ns
+            ? timestamp_ns - state->hmd_relative_blend_start_ns
+            : 0;
+    const float t = duration_ns > 0
+        ? std::clamp(static_cast<float>(elapsed_ns) /
+                         static_cast<float>(duration_ns),
+                     0.0f, 1.0f)
+        : 1.0f;
+
+    for (int axis = 0; axis < 3; ++axis) {
+      out.position[axis] =
+          state->hmd_relative_blend_from_position_m[axis] +
+          (out.position[axis] -
+           state->hmd_relative_blend_from_position_m[axis]) * t;
+      out.linear_velocity[axis] =
+          state->hmd_relative_blend_from_linear_velocity_mps[axis] +
+          (out.linear_velocity[axis] -
+           state->hmd_relative_blend_from_linear_velocity_mps[axis]) * t;
+      out.angular_velocity[axis] =
+          state->hmd_relative_blend_from_angular_velocity_rad_s[axis] +
+          (out.angular_velocity[axis] -
+           state->hmd_relative_blend_from_angular_velocity_rad_s[axis]) * t;
+    }
+    set_orientation_xyzw(
+        out,
+        q_slerp_shortest(
+            q_from_xyzw(state->hmd_relative_blend_from_orientation_xyzw),
+            q_from_xyzw(out.orientation_xyzw), t));
+
+    out.flags &= ~xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID;
+    out.flags |= xr_runtime::RUNTIME_CONTROLLER_POSE_VALID |
+                 xr_runtime::RUNTIME_CONTROLLER_TRACKED |
+                 xr_runtime::RUNTIME_CONTROLLER_SYNTHETIC_POSE;
+    out.source_mask &= ~xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID;
+    out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_SYNTHETIC_POSE;
+
+    if (t >= 1.0f) {
+      clear_hmd_relative_pose_blend(*state);
+    }
+  }
+
+  remember_hmd_relative_published_pose(
+      out, target_hmd_relative, *state);
+}
+
 void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   bool left,
                   const RuntimeControllerSynthesisConfig& cfg,
@@ -1692,6 +1917,20 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
   if (hand != nullptr) {
     hand_side = left ? &hand->left : &hand->right;
     valid_hand_side = hand_side_is_valid(*hand, *hand_side, left);
+  }
+
+  const bool real_optical_pose_available = real_optical_hand_pose(hand_side);
+  const bool hmd_relative_exit_lost_optical =
+      runtime_state != nullptr &&
+      runtime_state->hmd_relative_blend_mode ==
+          RuntimeControllerHmdRelativeBlendMode::Exit &&
+      !real_optical_pose_available;
+  if (hmd_relative_exit_lost_optical) {
+    // Do not return to hand hold/prediction when optical tracking disappears
+    // during the HMD-relative exit blend. The configured fallback policy must
+    // decide immediately between HMD-relative and INVALID.
+    valid_hand_side = false;
+    clear_imu_position_loss_state(*runtime_state, true);
   }
 
   const xr_runtime::HandSideF32V2* optical_yaw_hand_side = nullptr;
@@ -1811,6 +2050,9 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       controller_side != nullptr && controller_side_is_present(*controller_side)) {
     out.flags |= xr_runtime::RUNTIME_CONTROLLER_CONNECTED;
   }
+
+  apply_hmd_relative_pose_blend(
+      out, cfg, timestamp_ns, real_optical_pose_available, runtime_state);
 }
 
 }  // namespace
