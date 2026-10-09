@@ -175,6 +175,13 @@ jobs:
           submodules: recursive
           lfs: true
 
+      - name: Configure Git workspace trust in container
+        run: |
+          # checkout uses a temporary HOME for its safe.directory configuration.
+          # Persist trust for this workspace in the configuration used by run steps.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
+
       - name: Validate common build/package wrappers
         run: |
           set -euo pipefail
@@ -407,6 +414,13 @@ jobs:
         with:
           submodules: recursive
           lfs: true
+
+      - name: Configure Git workspace trust in container
+        run: |
+          # checkout uses a temporary HOME for its safe.directory configuration.
+          # Persist trust for this workspace in the configuration used by run steps.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
 
       - name: Install xrizer build packages
         run: |
