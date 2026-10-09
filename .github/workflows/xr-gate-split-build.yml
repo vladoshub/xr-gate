@@ -255,6 +255,7 @@ jobs:
           XR_PACKAGE_ALLOW_PARTIAL: "1"
           CLONE_OPENVR: "1"
           CLONE_MONADO: "1"
+          BASALT_BUILD_JOBS: "2"
         run: |
           df -h
           ./devices/common/linux/scripts/build/install_xr_gate_out.sh
