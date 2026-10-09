@@ -53,9 +53,16 @@ first_existing() {
   printf '%s\n' "${1/#\~/$HOME}"
 }
 
+# Prefer the runtime matching this machine; retain legacy archive names.
+RELEASE_UBUNTU=""
+if [[ -r /etc/os-release ]]; then
+  RELEASE_UBUNTU="$(. /etc/os-release; [[ "$ID" != ubuntu ]] || printf '%s' "$VERSION_ID")"
+fi
 MAIN_ARCHIVE="${MAIN_ARCHIVE:-${MAIN_ZIP:-}}"
 if [[ -z "$MAIN_ARCHIVE" ]]; then
   MAIN_ARCHIVE="$(first_existing \
+    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-ubuntu-${RELEASE_UBUNTU}-linux-x64.tar.gz" \
+    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-ubuntu-${RELEASE_UBUNTU}-linux-x64.zip" \
     "$SCRIPT_DIR/${XR_RELEASE_DEVICE_TARGET}_linux_x64.tar.gz" \
     "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-linux-x64.tar.gz" \
     "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-linux-x64.zip")"
@@ -205,7 +212,9 @@ select_tar_from_archive() {
 MAIN_TAR="$(select_tar_from_archive \
   "$MAIN_ARCHIVE" "$TMP_DIR/main_zip" "main" \
   "${XR_RELEASE_DEVICE_TARGET}_linux_x64.tar.gz" \
-  "${XR_RELEASE_TARGET_HYPHEN}-linux-x64.tar.gz")"
+  "${XR_RELEASE_TARGET_HYPHEN}-linux-x64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-24.04-linux-x64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-x64.tar.gz")"
 
 MODELS_TAR="$(select_tar_from_archive \
   "$MODELS_ARCHIVE" "$TMP_DIR/models_zip" "models" \
@@ -312,4 +321,4 @@ ls -lh "$DST_MERCURY_DIR"
 echo
 echo "Next:"
 echo "  cd \"$XR_PACKAGE_DIR\""
-echo "  ./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh"
+echo "  ./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh"

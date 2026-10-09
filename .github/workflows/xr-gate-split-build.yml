@@ -63,6 +63,10 @@ env:
   XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
   XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
 
   dispatch-info:
@@ -131,14 +135,16 @@ jobs:
           retention-days: 7
 
   build-part:
-    name: build ${{ matrix.name }}
+    name: build ${{ matrix.component.name }} / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
+    container: ubuntu:${{ matrix.ubuntu }}
     timeout-minutes: 180
 
     strategy:
       fail-fast: false
       matrix:
-        include:
+        ubuntu: ["24.04", "26.04"]
+        component:
           - name: capture
             build_only: "capture_service_cpp xreal_display_helper"
           - name: runtime
@@ -155,6 +161,14 @@ jobs:
             build_only: "monado_driver"
 
     steps:
+      - name: Bootstrap build container
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends sudo git git-lfs ca-certificates
+          . /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = '${{ matrix.ubuntu }}'
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -206,7 +220,7 @@ jobs:
           git lfs install --local
 
       - name: Install SteamVR/OpenGL build packages
-        if: ${{ matrix.name == 'steamvr' }}
+        if: ${{ matrix.component.name == 'steamvr' }}
         run: |
           sudo apt-get install -y --no-install-recommends \
             mesa-common-dev libopengl-dev libgl-dev libglx-dev libegl-dev \
@@ -217,7 +231,7 @@ jobs:
             libxcb-dri3-dev libxcb-xfixes0-dev
 
       - name: Install Monado X11/XCB build packages
-        if: ${{ matrix.name == 'monado' }}
+        if: ${{ matrix.component.name == 'monado' }}
         run: |
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
@@ -230,7 +244,7 @@ jobs:
 
       - name: Build partial package
         env:
-          XR_BUILD_ONLY: ${{ matrix.build_only }}
+          XR_BUILD_ONLY: ${{ matrix.component.build_only }}
           XR_PACKAGE_ALLOW_PARTIAL: "1"
           CLONE_OPENVR: "1"
           CLONE_MONADO: "1"
@@ -241,7 +255,7 @@ jobs:
           find out/xr-gate -maxdepth 4 -type f | sort | sed -n '1,200p'
 
       - name: Validate capture launchers and TCP metadata probe
-        if: ${{ matrix.name == 'capture' }}
+        if: ${{ matrix.component.name == 'capture' }}
         run: |
           set -euo pipefail
           test -x out/xr-gate/bin/scripts/capture_service_cpp/start_capture_service_cpp.sh
@@ -299,12 +313,12 @@ jobs:
           test "$PROFILE" = "leap_motion_uvc_nrf54l15"
 
       - name: Validate capture profile resolver
-        if: ${{ matrix.name == 'runtime' }}
+        if: ${{ matrix.component.name == 'runtime' }}
         run: |
           bash backends/common/tests/capture_profile_smoke.sh
 
       - name: Validate common/device script separation
-        if: ${{ matrix.name == 'runtime' }}
+        if: ${{ matrix.component.name == 'runtime' }}
         run: |
           set -euo pipefail
           test -x out/xr-gate/devices/common/linux/scripts/basalt_vio/start_basalt.sh
@@ -325,7 +339,7 @@ jobs:
           test ! -e out/xr-gate/devices/xreal_ultra/linux/scripts/xr_video
 
       - name: Validate xr_spatial SHM/TCP launchers
-        if: ${{ matrix.name == 'spatial' }}
+        if: ${{ matrix.component.name == 'spatial' }}
         run: |
           set -euo pipefail
           test -x out/xr-gate/bin/backends/xr_spatial/xr_spatial_backend
@@ -348,32 +362,46 @@ jobs:
 
       - name: Archive partial package
         run: |
-          tar -C out -czf xr-gate_${{ matrix.name }}.tar.gz xr-gate
-          ls -lh xr-gate_${{ matrix.name }}.tar.gz
+          tar -C out -czf xr-gate_${{ matrix.component.name }}.tar.gz xr-gate
+          ls -lh xr-gate_${{ matrix.component.name }}.tar.gz
 
       - name: Upload partial package
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_partial_artifacts == true }}
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-part-${{ matrix.name }}
-          path: xr-gate_${{ matrix.name }}.tar.gz
+          name: xr-gate-part-ubuntu-${{ matrix.ubuntu }}-${{ matrix.component.name }}
+          path: xr-gate_${{ matrix.component.name }}.tar.gz
           retention-days: 3
 
       - name: Upload merge input
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-merge-input-${{ matrix.name }}
-          path: xr-gate_${{ matrix.name }}.tar.gz
+          name: xr-gate-merge-input-ubuntu-${{ matrix.ubuntu }}-${{ matrix.component.name }}
+          path: xr-gate_${{ matrix.component.name }}.tar.gz
           retention-days: 3
 
 
   build-xrizer:
-    name: build optional xrizer GPL component
+    name: build optional xrizer / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
+    container: ubuntu:${{ matrix.ubuntu }}
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer == true }}
     timeout-minutes: 180
 
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["24.04", "26.04"]
+
     steps:
+      - name: Bootstrap build container
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends sudo git git-lfs ca-certificates
+          . /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = '${{ matrix.ubuntu }}'
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -431,14 +459,14 @@ jobs:
       - name: Upload xrizer merge input
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-merge-input-xrizer
+          name: xr-gate-merge-input-ubuntu-${{ matrix.ubuntu }}-xrizer
           path: xr-gate_xrizer.tar.gz
           retention-days: 3
 
       - name: Upload xrizer Corresponding Source
         uses: actions/upload-artifact@v4
         with:
-          name: xrizer-corresponding-source
+          name: xrizer-corresponding-source-ubuntu-${{ matrix.ubuntu }}
           path: out/xr-gate/SOURCES/xrizer/xrizer-corresponding-source-*.tar.gz
           if-no-files-found: error
           retention-days: 7
@@ -522,19 +550,25 @@ jobs:
           retention-days: 7
 
   merge-package:
-    name: merge runtime package
+    name: merge runtime / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
+    container: ubuntu:${{ matrix.ubuntu }}
     needs:
       - build-part
       - build-xrizer
     if: ${{ always() && needs.build-part.result == 'success' && (needs.build-xrizer.result == 'success' || needs.build-xrizer.result == 'skipped') }}
     timeout-minutes: 60
 
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["24.04", "26.04"]
+
     steps:
       - name: Download partial packages
         uses: actions/download-artifact@v4
         with:
-          pattern: xr-gate-merge-input-*
+          pattern: xr-gate-merge-input-ubuntu-${{ matrix.ubuntu }}-*
           path: partials
           merge-multiple: false
 
@@ -588,14 +622,20 @@ jobs:
           test ! -e merged/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
           du -sh merged/xr-gate
           find merged/xr-gate -maxdepth 4 -type f | sort | sed -n '1,300p'
-          tar -C merged -czf xr-gate-linux-x64.tar.gz xr-gate
-          ls -lh xr-gate-linux-x64.tar.gz
+          printf '%s\n' '${{ matrix.ubuntu }}' > merged/xr-gate/BUILD_UBUNTU_VERSION
+          # A venv embeds build-machine paths; the installer recreates it on the target.
+          rm -rf merged/xr-gate/bin/python-runtime/venv
+          # Validate in the target distro with runtime packages only, before archiving.
+          bash merged/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh --no-device-access
+          rm -rf merged/xr-gate/bin/python-runtime/venv
+          tar -C merged -czf xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz xr-gate
+          ls -lh xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz
 
       - name: Upload merged package
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-linux-x64
-          path: xr-gate-linux-x64.tar.gz
+          name: xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64
+          path: xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz
           retention-days: 7
 
 
@@ -627,7 +667,8 @@ jobs:
       - name: Download merged runtime package
         uses: actions/download-artifact@v4
         with:
-          name: xr-gate-linux-x64
+          pattern: xr-gate-ubuntu-*-linux-x64
+          merge-multiple: true
           path: release-assets/runtime
 
       - name: Download Mercury hand-tracking models
@@ -646,7 +687,8 @@ jobs:
         if: ${{ env.XR_BUILD_XRIZER == '1' }}
         uses: actions/download-artifact@v4
         with:
-          name: xrizer-corresponding-source
+          pattern: xrizer-corresponding-source-ubuntu-*
+          merge-multiple: false
           path: release-assets/xrizer-source
 
       - name: Validate release assets
@@ -655,56 +697,59 @@ jobs:
 
           find release-assets -maxdepth 5 -type f -print -exec ls -lh {} \;
 
-          test -f release-assets/runtime/xr-gate-linux-x64.tar.gz
           test -f release-assets/models/hand-tracking-models-mercury.tar.gz
           test -f release-assets/unpack-helper/unpack_xr_gate.sh
 
-          mkdir -p verify/runtime
-          tar -xzf release-assets/runtime/xr-gate-linux-x64.tar.gz -C verify/runtime
+          for ubuntu in 24.04 26.04; do
+            rm -rf verify/runtime
+            mkdir -p verify/runtime
+            tar -xzf release-assets/runtime/xr-gate-ubuntu-${ubuntu}-linux-x64.tar.gz -C verify/runtime
 
-          test -d verify/runtime/xr-gate/bin
-          test -x verify/runtime/xr-gate/run_xr_client.sh
-          test -x verify/runtime/xr-gate/bin/capture_service_cpp/capture_tcp_probe
-          test -x verify/runtime/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service.sh
-          test -x verify/runtime/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
-          test -x verify/runtime/xr-gate/bin/scripts/backends/xr_spatial/capture_profile.sh
-          test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
-          if [[ "$XR_BUILD_VENDOR_COMPONENTS" == "1" ]]; then
-            test -x verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
-          else
-            test ! -e verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
-          fi
-          test -f verify/runtime/xr-gate/LICENSE
-          test -f verify/runtime/xr-gate/LICENSES/MIT.txt
-          test -f verify/runtime/xr-gate/THIRD_PARTY_NOTICES.md
-          if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
-            test -d verify/runtime/xr-gate/bin/drivers/xrizer/runtime
-            test -f verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
-            test -f verify/runtime/xr-gate/SOURCES/xrizer/SOURCE.txt
-            test -f verify/runtime/xr-gate/SOURCES/xrizer/SHA256SUMS.txt
-            RUNTIME_SOURCE="$(find verify/runtime/xr-gate/SOURCES/xrizer -maxdepth 1 -type f \
-              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
-            RELEASE_SOURCE="$(find release-assets/xrizer-source -maxdepth 2 -type f \
-              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
-            test -n "$RUNTIME_SOURCE"
-            test -n "$RELEASE_SOURCE"
-            cmp "$RUNTIME_SOURCE" "$RELEASE_SOURCE"
-          else
-            test ! -e verify/runtime/xr-gate/bin/drivers/xrizer
-            test ! -e verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
-            test ! -e verify/runtime/xr-gate/SOURCES/xrizer
-          fi
-          test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
-          test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
-          test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
-          test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
-          test -d verify/runtime/xr-gate/devices/leap_motion_uvc
-          test -x verify/runtime/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
-          test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
-          test ! -e verify/runtime/xr-gate/devices/common/linux/scripts/build
-          test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
-          test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/capture_service
-          test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
+            test "$(cat verify/runtime/xr-gate/BUILD_UBUNTU_VERSION)" = "$ubuntu"
+            test -d verify/runtime/xr-gate/bin
+            test -x verify/runtime/xr-gate/run_xr_client.sh
+            test -x verify/runtime/xr-gate/bin/capture_service_cpp/capture_tcp_probe
+            test -x verify/runtime/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service.sh
+            test -x verify/runtime/xr-gate/devices/common/linux/scripts/xr_spatial/start_xr_spatial_tcp.sh
+            test -x verify/runtime/xr-gate/bin/scripts/backends/xr_spatial/capture_profile.sh
+            test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xreal_display_helper/start_xreal_helper_60hz.sh
+            if [[ "$XR_BUILD_VENDOR_COMPONENTS" == "1" ]]; then
+              test -x verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
+            else
+              test ! -e verify/runtime/xr-gate/bin/xreal_display_helper/xreal_display_helper
+            fi
+            test -f verify/runtime/xr-gate/LICENSE
+            test -f verify/runtime/xr-gate/LICENSES/MIT.txt
+            test -f verify/runtime/xr-gate/THIRD_PARTY_NOTICES.md
+            if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
+              test -d verify/runtime/xr-gate/bin/drivers/xrizer/runtime
+              test -f verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
+              test -f verify/runtime/xr-gate/SOURCES/xrizer/SOURCE.txt
+              test -f verify/runtime/xr-gate/SOURCES/xrizer/SHA256SUMS.txt
+              RUNTIME_SOURCE="$(find verify/runtime/xr-gate/SOURCES/xrizer -maxdepth 1 -type f \
+                -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+              RELEASE_SOURCE="$(find "release-assets/xrizer-source/xrizer-corresponding-source-ubuntu-${ubuntu}" -maxdepth 2 -type f \
+                -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+              test -n "$RUNTIME_SOURCE"
+              test -n "$RELEASE_SOURCE"
+              cmp "$RUNTIME_SOURCE" "$RELEASE_SOURCE"
+            else
+              test ! -e verify/runtime/xr-gate/bin/drivers/xrizer
+              test ! -e verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
+              test ! -e verify/runtime/xr-gate/SOURCES/xrizer
+            fi
+            test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
+            test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
+            test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
+            test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
+            test -d verify/runtime/xr-gate/devices/leap_motion_uvc
+            test -x verify/runtime/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+            test -x verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_runtime_deps_ubuntu24.sh
+            test ! -e verify/runtime/xr-gate/devices/common/linux/scripts/build
+            test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/install_xreal_ultra_out.sh
+            test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/capture_service
+            test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
+          done
 
       - name: Create or update GitHub Release
         env:
@@ -715,15 +760,20 @@ jobs:
           set -euo pipefail
 
           ASSETS=(
-            release-assets/runtime/xr-gate-linux-x64.tar.gz
+            release-assets/runtime/xr-gate-ubuntu-24.04-linux-x64.tar.gz
+            release-assets/runtime/xr-gate-ubuntu-26.04-linux-x64.tar.gz
             release-assets/models/hand-tracking-models-mercury.tar.gz
             release-assets/unpack-helper/unpack_xr_gate.sh
           )
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
-            XRIZER_SOURCE_ASSET="$(find release-assets/xrizer-source -maxdepth 2 -type f \
-              -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
-            test -n "$XRIZER_SOURCE_ASSET"
-            ASSETS+=("$XRIZER_SOURCE_ASSET")
+            for ubuntu in 24.04 26.04; do
+              source_dir="release-assets/xrizer-source/xrizer-corresponding-source-ubuntu-${ubuntu}"
+              source_archive="$(find "$source_dir" -maxdepth 2 -type f -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"
+              test -n "$source_archive"
+              asset="release-assets/xrizer-corresponding-source-ubuntu-${ubuntu}.tar.gz"
+              cp "$source_archive" "$asset"
+              ASSETS+=("$asset")
+            done
           fi
 
           args=()
@@ -739,6 +789,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "XR Gate $TAG" \
-              --notes "Automated multi-profile XR Gate Linux x64 release artifact." \
+              --notes "XR Gate Linux x64: separate Ubuntu 24.04 and 26.04 packages. Download the archive matching your Ubuntu version; Mercury models are shared." \
               "${args[@]}"
           fi
