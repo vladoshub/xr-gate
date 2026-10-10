@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-log() { echo "[install_runtime_deps_ubuntu24] $*" >&2; }
-warn() { echo "[install_runtime_deps_ubuntu24][WARN] $*" >&2; }
-fatal() { echo "[install_runtime_deps_ubuntu24][ERROR] $*" >&2; exit 1; }
+log() { echo "[install_runtime_deps_ubuntu] $*" >&2; }
+warn() { echo "[install_runtime_deps_ubuntu][WARN] $*" >&2; }
+fatal() { echo "[install_runtime_deps_ubuntu][ERROR] $*" >&2; exit 1; }
 
 usage() {
   cat <<'USAGE'
-Install Ubuntu 24.04 runtime dependencies for an already built XR Gate runtime
+Install Ubuntu 24.04 / 26.04 runtime dependencies for an already built XR Gate runtime
 package.
 
 This common installer owns system packages, the package-local thin Python venv
@@ -15,7 +15,7 @@ and runtime checks. Device-specific permissions/udev setup is delegated through
 XR_RUNTIME_DEVICE_ACCESS_SCRIPT.
 
 Usage:
-  devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh [options]
+  devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh [options]
 
 Options:
   --no-apt       Do not install apt packages.
@@ -62,8 +62,8 @@ fi
 if [[ -r /etc/os-release ]]; then
   # shellcheck source=/dev/null
   source /etc/os-release
-  if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" ]]; then
-    warn "tested target is Ubuntu 24.04; detected ID=${ID:-unknown} VERSION_ID=${VERSION_ID:-unknown}"
+  if [[ "${ID:-}" != "ubuntu" || ( "${VERSION_ID:-}" != "24.04" && "${VERSION_ID:-}" != "26.04" ) ]]; then
+    warn "supported targets are Ubuntu 24.04 and 26.04; detected ID=${ID:-unknown} VERSION_ID=${VERSION_ID:-unknown}"
   fi
 else
   warn "/etc/os-release not found; cannot verify Ubuntu version"
@@ -73,6 +73,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_PACKAGE_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 XR_PACKAGE_ROOT="${XR_PACKAGE_ROOT:-$DEFAULT_PACKAGE_ROOT}"
 XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
+
+if [[ -f "$XR_PACKAGE_ROOT/BUILD_UBUNTU_VERSION" ]]; then
+  package_ubuntu="$(cat "$XR_PACKAGE_ROOT/BUILD_UBUNTU_VERSION")"
+  if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != "$package_ubuntu" ]]; then
+    fatal "package requires Ubuntu $package_ubuntu; detected ${ID:-unknown} ${VERSION_ID:-unknown}. Download the matching runtime archive."
+  fi
+fi
 
 # Detect whether this is the deploy package root or a source checkout root.
 PACKAGE_MODE=0
@@ -231,7 +238,7 @@ for name in required:
 if failed:
     raise SystemExit(
         "missing required Python runtime modules: " + ", ".join(failed) +
-        "\nInstall runtime deps again on Ubuntu 24.04."
+        "\nInstall runtime deps again on the matching Ubuntu version."
     )
 PY
 
@@ -271,7 +278,7 @@ fi
 
 cat >&2 <<EOF2
 
-[install_runtime_deps_ubuntu24] Done.
+[install_runtime_deps_ubuntu] Done.
 
 Notes:
   - A device access hook may require re-login/reboot after group or udev changes.

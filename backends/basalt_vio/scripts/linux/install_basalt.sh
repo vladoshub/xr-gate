@@ -389,7 +389,8 @@ cd "$BASALT_DIR"
 echo
 echo "[build targets]"
 for target in $BUILD_TARGETS; do
-  "$CMAKE_BIN" --build "$BASALT_BUILD_DIR" --target "$target" -j"$(nproc)"
+  "$CMAKE_BIN" --build "$BASALT_BUILD_DIR" --target "$target" \
+    -j"${BASALT_BUILD_JOBS:-$(nproc)}"
 done
 
 echo

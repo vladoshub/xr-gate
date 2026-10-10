@@ -824,7 +824,7 @@ XR_BUILD_VENDOR_COMPONENTS=0 \
 The generic dependency installer is:
 
 ```bash
-./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh
 ```
 
 Mercury hand-tracking models remain a separately distributed optional artifact.
