@@ -139,8 +139,11 @@ cd ~/xr-gate-release/xr-gate
 ./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh
 ```
 
-Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups.
-**After that, log out/log in or reboot.**
+**For Xreal Ultra - add the user to `video`, `input`, and `plugdev` groups**
+
+```bash
+./devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
+```
 
 ### 2. Optional: train override controller input (once)
 
