@@ -101,7 +101,7 @@ XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, Steam
 
 
 ## Quick start
-Tested on Ubuntu 24.04
+Tested on Ubuntu 24.04 and Ubuntu 26.04
 
 ### 1. Install (once)
 
@@ -136,7 +136,7 @@ After extraction, the runtime package will be available under:
 
 ```bash
 cd ~/xr-gate-release/xr-gate
-./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
+./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh
 ```
 
 Build/runtime scripts may add the user to `video`, `input`, and `plugdev` groups.
