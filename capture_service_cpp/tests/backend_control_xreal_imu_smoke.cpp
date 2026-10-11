@@ -53,6 +53,8 @@ int main() {
   }
 
   std::array<uint8_t, kXrealHidPacketSize> packet{};
+  packet[0] = 0x01;
+  packet[1] = 0x02;
   // XREAL scale is +/-16 g over signed 24-bit full scale. 524288 counts is 1 g.
   write_s24le(packet, 33, 524288);
 

@@ -90,6 +90,9 @@ struct ImageTransformConfig {
 struct CameraSourceConfig {
   bool enabled = true;
   std::string driver = "xreal_ultra";
+  // device: XREAL footer t62, mapped with the shared HID clock model.
+  // host_receive retains the legacy time basis for existing calibrations.
+  std::string timestamp_mode = "host_receive";
 
   // xreal_packed: one vendor-packed XREAL stream.
   // side_by_side_horizontal / side_by_side_vertical: one normal OpenCV frame.
@@ -123,6 +126,7 @@ struct SerialImuConfig {
 };
 
 struct XrealHidImuConfig {
+  std::string timestamp_mode = "host_receive";  // device | host_receive
   uint16_t vendor_id = 0x3318;
   uint16_t product_id = 0x0426;
   int interface_number = 2;

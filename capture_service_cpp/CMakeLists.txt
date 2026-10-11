@@ -43,7 +43,9 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/protocols/xr_controller_v1.cpp
   src/protocols/xr_imu_v1.cpp
   src/timing/affine_device_clock_mapper.cpp
+  src/timing/xreal_device_clock.cpp
   src/vendor/xreal_camera_decoder.cpp
+  src/vendor/xreal_camera_metadata.cpp
   src/vendor/xreal_camera_transform.cpp
   src/vendor/xreal_imu_codec.cpp
   src/vendor/xreal_stream_specs.cpp
@@ -115,6 +117,17 @@ if(BUILD_TESTING)
   add_test(NAME capture_config_canonical_smoke
     COMMAND capture_config_canonical_smoke ${CMAKE_CURRENT_SOURCE_DIR}/configs/xreal_ultra.yaml)
 
+  add_executable(capture_config_xreal_timing_smoke
+    tests/capture_config_xreal_timing_smoke.cpp
+    src/common.cpp
+    src/config/capture_config.cpp
+    ${CAPTURE_CONFIG_TEST_PLATFORM_SOURCE}
+  )
+  target_include_directories(capture_config_xreal_timing_smoke PRIVATE include)
+  add_test(NAME capture_config_xreal_timing_smoke
+    COMMAND capture_config_xreal_timing_smoke
+      ${CMAKE_CURRENT_SOURCE_DIR}/../devices/xreal_ultra/configs/capture_service/xreal_air2ultra_linux_unified_480_device_time_shm.yaml)
+
   add_executable(capture_config_optional_imu_smoke
     tests/capture_config_optional_imu_smoke.cpp
     src/common.cpp
@@ -175,6 +188,30 @@ if(BUILD_TESTING)
   )
   target_include_directories(affine_device_clock_mapper_smoke PRIVATE include)
   add_test(NAME affine_device_clock_mapper_smoke COMMAND affine_device_clock_mapper_smoke)
+
+  add_executable(xreal_device_timing_smoke
+    tests/xreal_device_timing_smoke.cpp
+    src/timing/affine_device_clock_mapper.cpp
+    src/timing/xreal_device_clock.cpp
+    src/vendor/xreal_camera_metadata.cpp
+    src/vendor/xreal_imu_codec.cpp
+  )
+  target_include_directories(xreal_device_timing_smoke PRIVATE include)
+  target_link_libraries(xreal_device_timing_smoke PRIVATE Threads::Threads)
+  add_test(NAME xreal_device_timing_smoke COMMAND xreal_device_timing_smoke)
+
+  add_executable(stereo_imu_time_offset_smoke tests/stereo_imu_time_offset_smoke.cpp)
+  target_include_directories(stereo_imu_time_offset_smoke PRIVATE ../shared/include)
+  add_test(NAME stereo_imu_time_offset_smoke COMMAND stereo_imu_time_offset_smoke)
+
+  add_executable(xreal_camera_decoder_smoke
+    tests/xreal_camera_decoder_smoke.cpp
+    src/vendor/xreal_camera_decoder.cpp
+    src/vendor/xreal_camera_metadata.cpp
+  )
+  target_include_directories(xreal_camera_decoder_smoke PRIVATE include)
+  target_link_libraries(xreal_camera_decoder_smoke PRIVATE ${OpenCV_LIBS})
+  add_test(NAME xreal_camera_decoder_smoke COMMAND xreal_camera_decoder_smoke)
 
   add_executable(imu_transform_smoke
     tests/imu_transform_smoke.cpp

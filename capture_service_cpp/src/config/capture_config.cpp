@@ -571,6 +571,7 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
     cfg.camera.secondary.convert_rgb = true;
   }
   set_string(y, {"camera.layout"}, cfg.camera.layout);
+  set_string(y, {"camera.timestamp_mode"}, cfg.camera.timestamp_mode);
   set_string(y, {"camera.stereo_order", "camera.order"}, cfg.camera.stereo_order);
   apply_camera_device(y, "camera.primary", cfg.camera.primary);
   apply_camera_device(y, "camera.secondary", cfg.camera.secondary);
@@ -629,6 +630,7 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   }
 
   int vid = cfg.imu.xreal_hid.vendor_id;
+  set_string(y, {"imu.xreal_hid.timestamp_mode"}, cfg.imu.xreal_hid.timestamp_mode);
   int pid = cfg.imu.xreal_hid.product_id;
   set_int(y, {"imu.xreal_hid.vendor_id", "xreal_linux.imu.vendor_id"}, vid);
   set_int(y, {"imu.xreal_hid.product_id", "xreal_linux.imu.product_id"}, pid);
@@ -713,9 +715,11 @@ bool load_runtime_config_file(const std::string& path, RuntimeConfig& cfg) {
 
 void validate_runtime_config(RuntimeConfig& cfg) {
   cfg.camera.driver = lowercase(trim(cfg.camera.driver));
+  cfg.camera.timestamp_mode = lowercase(trim(cfg.camera.timestamp_mode));
   cfg.camera.layout = lowercase(trim(cfg.camera.layout));
   cfg.camera.stereo_order = lowercase(trim(cfg.camera.stereo_order));
   cfg.imu.driver = lowercase(trim(cfg.imu.driver));
+  cfg.imu.xreal_hid.timestamp_mode = lowercase(trim(cfg.imu.xreal_hid.timestamp_mode));
   cfg.imu.serial.protocol = lowercase(trim(cfg.imu.serial.protocol));
   cfg.imu.serial.timestamp_mode = lowercase(trim(cfg.imu.serial.timestamp_mode));
   cfg.imu.synthetic.timestamp_mode = lowercase(trim(cfg.imu.synthetic.timestamp_mode));
@@ -743,6 +747,18 @@ void validate_runtime_config(RuntimeConfig& cfg) {
     throw std::runtime_error("backend_control.poll_ms must be non-negative");
   }
   if (cfg.camera.enabled) {
+    if (cfg.camera.timestamp_mode != "device" && cfg.camera.timestamp_mode != "host_receive") {
+      throw std::runtime_error("camera.timestamp_mode must be device or host_receive");
+    }
+    if (cfg.camera.timestamp_mode == "device" &&
+        (cfg.camera.driver != "xreal_ultra" || !cfg.imu.enabled || cfg.imu.driver != "xreal_hid" ||
+         cfg.imu.xreal_hid.timestamp_mode != "device")) {
+      throw std::runtime_error("XREAL device camera timestamps require the XREAL HID IMU in device timestamp mode");
+    }
+    if (cfg.camera.driver == "xreal_ultra" && cfg.imu.enabled && cfg.imu.driver == "xreal_hid" &&
+        cfg.camera.timestamp_mode != cfg.imu.xreal_hid.timestamp_mode) {
+      throw std::runtime_error("XREAL camera and IMU timestamp modes must match");
+    }
     if (cfg.camera.driver != "xreal_ultra" && cfg.camera.driver != "opencv") {
       throw std::runtime_error("unsupported camera.driver=" + cfg.camera.driver + "; supported: xreal_ultra, opencv");
     }
@@ -767,6 +783,10 @@ void validate_runtime_config(RuntimeConfig& cfg) {
     }
     if (cfg.imu.driver == "xreal_hid" && cfg.imu.xreal_hid.read_timeout_ms <= 0) {
       throw std::runtime_error("imu.xreal_hid.read_timeout_ms must be positive");
+    }
+    if (cfg.imu.driver == "xreal_hid" &&
+        cfg.imu.xreal_hid.timestamp_mode != "device" && cfg.imu.xreal_hid.timestamp_mode != "host_receive") {
+      throw std::runtime_error("imu.xreal_hid.timestamp_mode must be device or host_receive");
     }
     if (cfg.imu.driver == "serial") {
       if (cfg.imu.serial.port.empty() && cfg.imu.serial.protocol_device_uid.empty()) {

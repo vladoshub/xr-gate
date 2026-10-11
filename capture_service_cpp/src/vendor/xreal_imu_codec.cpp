@@ -1,11 +1,17 @@
 #include "capture_service_cpp/vendor/xreal_imu_codec.hpp"
 
 #include <cmath>
+#include <limits>
 
 namespace xr_capture_cpp {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846264338327950288;
+
+bool is_motion_report(const uint8_t* packet, size_t size) {
+  return packet && (size == kXrealHidPacketSize || size == kXrealHidMaxPacketSize) &&
+      packet[0] == 0x01 && packet[1] == 0x02;
+}
 
 int32_t s24le(const uint8_t* p) {
   int32_t v = static_cast<int32_t>(p[0] | (p[1] << 8) | (p[2] << 16));
@@ -20,11 +26,18 @@ const std::array<uint8_t, 10>& xreal_imu_start_command() {
   return kStartCmd;
 }
 
+bool decode_xreal_imu_timestamp(const uint8_t* packet, size_t size, uint64_t& timestamp_ns) {
+  timestamp_ns = 0;
+  if (!is_motion_report(packet, size)) return false;
+  for (size_t i = 0; i < 8; ++i) timestamp_ns |= static_cast<uint64_t>(packet[4 + i]) << (8 * i);
+  return timestamp_ns && timestamp_ns <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+}
+
 bool normalize_xreal_imu_packet(const uint8_t* packet,
                                 size_t size,
                                 double gravity_magnitude_mps2,
                                 float out_gyro_accel[6]) {
-  if (!packet || size != kXrealHidPacketSize || !out_gyro_accel ||
+  if (!is_motion_report(packet, size) || !out_gyro_accel ||
       !std::isfinite(gravity_magnitude_mps2) || gravity_magnitude_mps2 <= 0.0) {
     return false;
   }

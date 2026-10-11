@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <optional>
 
 namespace xr_capture_cpp {
 
@@ -28,6 +29,10 @@ class AffineDeviceClockMapper {
 
   uint64_t map_us(uint64_t device_timestamp_us, uint64_t host_receive_ns);
   uint64_t map_ns(uint64_t device_timestamp_ns, uint64_t host_receive_ns);
+  // Evaluate the current model without training it, checking arrival order,
+  // or clamping against another stream's last mapped timestamp. Camera frames
+  // can arrive after newer IMU samples from the same device clock.
+  std::optional<uint64_t> project_ns(uint64_t device_timestamp_ns) const;
   void reset();
   Diagnostics diagnostics() const;
 

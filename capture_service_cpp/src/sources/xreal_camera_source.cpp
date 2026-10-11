@@ -3,6 +3,7 @@
 #include "capture_service_cpp/platform/camera_capture.hpp"
 #include "capture_service_cpp/vendor/xreal_camera_decoder.hpp"
 #include "capture_service_cpp/vendor/xreal_camera_transform.hpp"
+#include "capture_service_cpp/timing/xreal_device_clock.hpp"
 
 #include <iostream>
 #include <memory>
@@ -13,7 +14,8 @@ namespace {
 
 class XrealCameraSource final : public ICameraSource {
  public:
-  explicit XrealCameraSource(RuntimeConfig cfg) : cfg_(std::move(cfg)) {}
+  explicit XrealCameraSource(RuntimeConfig cfg, std::shared_ptr<XrealDeviceClock> clock)
+      : cfg_(std::move(cfg)), clock_(std::move(clock)) {}
 
   std::string name() const override { return "xreal_ultra"; }
 
@@ -31,6 +33,9 @@ class XrealCameraSource final : public ICameraSource {
   }
 
   void open() override {
+    if (cfg_.camera.timestamp_mode == "device" && !clock_) {
+      throw std::runtime_error("XREAL device camera timestamp mode requires the shared HID clock mapper");
+    }
     init_xreal_camera_tables();
     if (!capture_.open(cfg_.camera.primary, "XREAL camera")) {
       throw std::runtime_error("failed to open XREAL camera");
@@ -43,13 +48,23 @@ class XrealCameraSource final : public ICameraSource {
     output = {};
     cv::Mat frame;
     if (!capture_.read(frame) || frame.empty()) return SourceReadStatus::Timeout;
+    const uint64_t receive_ns = steady_ns();
 
     bool is_right = false;
-    if (!decode_xreal_eye(frame, raw_eye_, is_right)) {
+    const bool device_time = cfg_.camera.timestamp_mode == "device";
+    XrealCameraMetadata metadata;
+    if (!decode_xreal_eye(frame, raw_eye_, is_right, device_time ? &metadata : nullptr)) {
       ++decode_fail_;
-      return SourceReadStatus::Data;
+      return SourceReadStatus::TransportActivity;
     }
     ++decoded_;
+    auto pair_status = XrealStereoTimestampPairer::Result::Pending;
+    if (device_time) {
+      pair_status = pairer_.push(metadata);
+      if (pair_status == XrealStereoTimestampPairer::Result::Discard) {
+        return SourceReadStatus::TransportActivity;
+      }
+    }
     if (is_right) {
       latest_right_ = transform_xreal_gray_eye(raw_eye_, transforms_.right_rotate, transforms_.right_flip);
       have_right_ = true;
@@ -57,13 +72,23 @@ class XrealCameraSource final : public ICameraSource {
       latest_left_ = transform_xreal_gray_eye(raw_eye_, transforms_.left_rotate, transforms_.left_flip);
       have_left_ = true;
     }
-    if (!have_left_ || !have_right_) return SourceReadStatus::Data;
+    if (device_time) {
+      if (pair_status != XrealStereoTimestampPairer::Result::Complete) return SourceReadStatus::Data;
+    } else if (!have_left_ || !have_right_) return SourceReadStatus::Data;
+
+    uint64_t timestamp_ns = steady_ns();
+    if (device_time) {
+      const auto mapped = clock_->map_camera_ns(metadata.t62_ns, receive_ns);
+      if (!mapped || *mapped <= last_timestamp_ns_) return SourceReadStatus::TransportActivity;
+      timestamp_ns = *mapped;
+    }
 
     validate_dimensions(latest_left_, "left");
     validate_dimensions(latest_right_, "right");
     output.left = latest_left_;
     output.right = latest_right_;
-    output.timestamp_ns = steady_ns();
+    output.timestamp_ns = timestamp_ns;
+    last_timestamp_ns_ = timestamp_ns;
     have_left_ = false;
     have_right_ = false;
     ++published_pairs_;
@@ -72,6 +97,8 @@ class XrealCameraSource final : public ICameraSource {
     if (now - last_log_ns_ > 2000000000ULL) {
       std::cerr << "[capture_service_cpp] camera source=xreal_ultra decoded=" << decoded_
                 << " decode_fail=" << decode_fail_ << " pairs=" << published_pairs_
+                << " timestamp_mode=" << cfg_.camera.timestamp_mode
+                << " pair_drop=" << pairer_.dropped()
                 << " left_rotate=" << transforms_.left_rotate << " left_flip=" << transforms_.left_flip
                 << " right_rotate=" << transforms_.right_rotate << " right_flip=" << transforms_.right_flip
                 << std::endl;
@@ -93,6 +120,8 @@ class XrealCameraSource final : public ICameraSource {
   }
 
   RuntimeConfig cfg_;
+  std::shared_ptr<XrealDeviceClock> clock_;
+  XrealStereoTimestampPairer pairer_;
   CameraCapture capture_;
   cv::Mat raw_eye_;
   cv::Mat latest_left_;
@@ -103,13 +132,15 @@ class XrealCameraSource final : public ICameraSource {
   uint64_t decoded_ = 0;
   uint64_t decode_fail_ = 0;
   uint64_t published_pairs_ = 0;
+  uint64_t last_timestamp_ns_ = 0;
   uint64_t last_log_ns_ = steady_ns();
 };
 
 }  // namespace
 
-std::unique_ptr<ICameraSource> make_xreal_camera_source(const RuntimeConfig& cfg) {
-  return std::make_unique<XrealCameraSource>(cfg);
+std::unique_ptr<ICameraSource> make_xreal_camera_source(
+    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> clock) {
+  return std::make_unique<XrealCameraSource>(cfg, std::move(clock));
 }
 
 }  // namespace xr_capture_cpp

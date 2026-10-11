@@ -22,20 +22,18 @@ void camera_thread(const RuntimeConfig& cfg, std::unique_ptr<ICameraSource> sour
         request_stop_with_exit_code(kExitDeviceLost);
         break;
       }
-      if (status == SourceReadStatus::Data) last_data_ns = steady_ns();
-      if (status == SourceReadStatus::Timeout) {
+      if (frame.complete()) last_data_ns = steady_ns();
+      if (!frame.complete()) {
         if (cfg.camera.stall_exit_ms > 0 &&
             steady_ns() - last_data_ns >= static_cast<uint64_t>(cfg.camera.stall_exit_ms) * 1000000ULL) {
-          std::cerr << "[capture_service_cpp][ERROR] no camera data for " << cfg.camera.stall_exit_ms
+          std::cerr << "[capture_service_cpp][ERROR] no valid stereo pairs for " << cfg.camera.stall_exit_ms
                     << " ms from " << source_name << std::endl;
           request_stop_with_exit_code(kExitDeviceLost);
           break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (status == SourceReadStatus::Timeout) std::this_thread::sleep_for(std::chrono::milliseconds(2));
         continue;
       }
-      if (!frame.complete()) continue;
-
       const uint64_t timestamp_ns = frame.timestamp_ns ? frame.timestamp_ns : steady_ns();
       publishers->publish(cfg.camera.left_stream_id, frame.left.ptr<uint8_t>(), frame.left.total(),
                           timestamp_ns, static_cast<uint32_t>(frame.left.cols),

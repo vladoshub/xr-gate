@@ -4,11 +4,13 @@
 
 namespace xr_capture_cpp {
 
-std::unique_ptr<ICameraSource> make_xreal_camera_source(const RuntimeConfig& cfg);
+std::unique_ptr<ICameraSource> make_xreal_camera_source(
+    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> clock);
 std::unique_ptr<ICameraSource> make_opencv_stereo_camera_source(const RuntimeConfig& cfg);
 
-std::unique_ptr<ICameraSource> create_camera_source(const RuntimeConfig& cfg) {
-  if (cfg.camera.driver == "xreal_ultra") return make_xreal_camera_source(cfg);
+std::unique_ptr<ICameraSource> create_camera_source(
+    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> xreal_clock) {
+  if (cfg.camera.driver == "xreal_ultra") return make_xreal_camera_source(cfg, std::move(xreal_clock));
   if (cfg.camera.driver == "opencv") return make_opencv_stereo_camera_source(cfg);
   throw std::runtime_error("unsupported camera source: " + cfg.camera.driver);
 }
