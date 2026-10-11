@@ -167,6 +167,89 @@ void sample_orientation_matches_force_time() {
   near(out.left.position[1], 0, "mounting offset created gravity leakage");
 }
 
+void physical_yaw_does_not_flip_at_vertical() {
+  // Optical and inertial pitch can differ by a few degrees, especially near
+  // the edge of the camera view. Crossing vertical must not reverse the world
+  // acceleration. Exercise both sides and both quaternion representations.
+  for (bool right : {false, true}) {
+    for (float pitch_deg : {-91.0f, -90.0f, -89.0f, 89.0f, 90.0f, 91.0f}) {
+      for (float world_yaw : {-kPi, -0.6f, 0.0f, 0.6f, kPi}) {
+        for (float quaternion_sign : {-1.0f, 1.0f}) {
+          Scenario s;
+          if (right) {
+            s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+            s.cfg.right_imu_motion = s.cfg.left_imu_motion;
+          }
+          const auto provider = cu::q_from_axis_angle(1, 0, 0, pitch_deg * kPi / 180);
+          const auto optical = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, world_yaw),
+              cu::q_from_axis_angle(1, 0, 0, (pitch_deg + 2) * kPi / 180));
+          const auto tick = [&](int ms, bool tracked) {
+            const auto now = s.prepare(ms);
+            auto input = s.input;
+            auto hand = s.hand;
+            auto& imu = input.left.imu;
+            imu.orientation_xyzw[0] = provider.x;
+            imu.orientation_xyzw[1] = provider.y;
+            imu.orientation_xyzw[2] = provider.z;
+            imu.orientation_xyzw[3] = provider.w;
+            const auto force = cu::q_rotate(cu::q_conj(provider), {tracked ? 0.0 : 1.0, 9.81, 0});
+            imu.samples[0].specific_force_m_s2[0] = force.x;
+            imu.samples[0].specific_force_m_s2[1] = force.y;
+            imu.samples[0].specific_force_m_s2[2] = force.z;
+            hand.left.controller_qx = optical.x * quaternion_sign;
+            hand.left.controller_qy = optical.y * quaternion_sign;
+            hand.left.controller_qz = optical.z * quaternion_sign;
+            hand.left.controller_qw = optical.w * quaternion_sign;
+            if (right) {
+              std::swap(input.left, input.right);
+              std::swap(hand.left, hand.right);
+              hand.flags = HAND_FLAG_RIGHT_VALID;
+              hand.right.handedness = 2;
+            }
+            const auto h = tracked ? std::optional(hand) : std::nullopt;
+            return compose_runtime_controller_state(s.sequence, now, s.cfg, h, h,
+                input, std::nullopt, 9.81f, &s.state);
+          };
+          tick(0, true);
+          tick(10, true);
+          RuntimeControllerStateFrameV1 out{};
+          for (int ms = 20; ms <= 210; ms += 10) out = tick(ms, false);
+          const auto& side = right ? out.right : out.left;
+          const auto& state = right ? s.state.right : s.state.left;
+          require(state.acceleration_world_yaw_valid, "vertical pose prevented physical alignment");
+          near(std::remainder(state.acceleration_world_yaw_rad - world_yaw, 2 * kPi),
+               0, "pitch mismatch reversed physical yaw");
+          near(side.position[0], 0.02f * std::cos(world_yaw), "vertical pose reversed prediction X");
+          near(side.position[1], 0, "vertical pose leaked gravity into position");
+          near(side.position[2], -0.02f * std::sin(world_yaw), "vertical pose reversed prediction Z");
+        }
+      }
+    }
+  }
+
+  Scenario ambiguous;
+  ambiguous.hand.left.controller_qy = std::sin(0.3f);
+  ambiguous.hand.left.controller_qw = std::cos(0.3f);
+  ambiguous.tick(0, true);
+  // An optical half-turn about X is incompatible with yaw-only alignment.
+  // Retain the established frame rather than inventing a direction.
+  ambiguous.hand.left.controller_qx = 1;
+  ambiguous.hand.left.controller_qy = 0;
+  ambiguous.hand.left.controller_qw = 0;
+  ambiguous.tick(10, true);
+  near(ambiguous.state.left.acceleration_world_yaw_rad, 0.6f,
+       "ambiguous optical rotation replaced trusted physical yaw");
+
+  Scenario unaligned;
+  unaligned.hand.left.controller_qx = 1;
+  unaligned.hand.left.controller_qw = 0;
+  unaligned.tick(0, true);
+  const auto out = unaligned.tick(10, false, 1);
+  require(!unaligned.state.left.acceleration_world_yaw_valid,
+          "ambiguous optical rotation invented initial physical yaw");
+  near(out.left.position[0], 0, "unaligned force invented translation");
+}
+
 void stale_and_held_optical_frames() {
   Scenario s;
   s.cfg.left_imu_motion.hold_lost_ms = 30;
@@ -367,6 +450,7 @@ int main() {
   static_assert(sizeof(ControllerInputV3) == 1432, "controller V3 ABI changed");
   world_frame_and_yaw_continuity();
   sample_orientation_matches_force_time();
+  physical_yaw_does_not_flip_at_vertical();
   stale_and_held_optical_frames();
   camera_velocity_and_head_motion();
   interrupted_reacquire_rebases_motion();

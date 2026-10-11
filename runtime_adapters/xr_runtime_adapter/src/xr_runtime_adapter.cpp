@@ -6099,6 +6099,15 @@ int main(int argc, char** argv) {
           const auto spatial_proxy_mesh_health =
               spatial_proxy_mesh_thread ? spatial_proxy_mesh_thread->snapshot() : SpatialProxyMeshInputSnapshot{};
 
+          const auto imu_freeze_name = [](override_controller::RuntimeControllerImuPredictionFreezeReason reason) {
+            using Reason = override_controller::RuntimeControllerImuPredictionFreezeReason;
+            switch (reason) {
+              case Reason::None: return "none";
+              case Reason::MaxDistance: return "max_distance";
+              case Reason::MaxPredictionPath: return "max_path";
+            }
+            return "unknown";
+          };
           std::cout << "[xr_runtime_adapter] frame=" << consumed
                     << " rate=" << rate << "Hz"
                     << " mode=" << mode
@@ -6160,6 +6169,26 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.left.imu_stream_epoch
                     << " controller_left_imu_dropped="
                     << runtime_controller_synthesis_state.left.imu_dropped_batches
+                    << " controller_left_acceleration_yaw_valid="
+                    << (runtime_controller_synthesis_state.left.acceleration_world_yaw_valid ? "yes" : "no")
+                    << " controller_left_acceleration_yaw_deg="
+                    << (runtime_controller_synthesis_state.left.acceleration_world_yaw_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_left_imu_predicting="
+                    << (runtime_controller_synthesis_state.left.prediction_active ? "yes" : "no")
+                    << " controller_left_imu_freeze="
+                    << imu_freeze_name(runtime_controller_synthesis_state.left.prediction_freeze_reason)
+                    << " controller_left_imu_optical_samples="
+                    << runtime_controller_synthesis_state.left.position_history.sample_count()
+                    << " controller_left_imu_anchor_v=("
+                    << runtime_controller_synthesis_state.left.anchor_velocity_mps[0] << ","
+                    << runtime_controller_synthesis_state.left.anchor_velocity_mps[1] << ","
+                    << runtime_controller_synthesis_state.left.anchor_velocity_mps[2] << ")"
+                    << " controller_left_imu_acceleration_dv=("
+                    << runtime_controller_synthesis_state.left.acceleration_velocity_delta_mps[0] << ","
+                    << runtime_controller_synthesis_state.left.acceleration_velocity_delta_mps[1] << ","
+                    << runtime_controller_synthesis_state.left.acceleration_velocity_delta_mps[2] << ")"
+                    << " controller_left_imu_last_acceleration_ns="
+                    << runtime_controller_synthesis_state.left.last_acceleration_sample_timestamp_ns
                     << " controller_left_yaw_update_ns="
                     << runtime_controller_synthesis_state.left.last_yaw_correction_update_ns
                     << " controller_left_yaw_correction_deg="
@@ -6184,6 +6213,26 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.right.imu_stream_epoch
                     << " controller_right_imu_dropped="
                     << runtime_controller_synthesis_state.right.imu_dropped_batches
+                    << " controller_right_acceleration_yaw_valid="
+                    << (runtime_controller_synthesis_state.right.acceleration_world_yaw_valid ? "yes" : "no")
+                    << " controller_right_acceleration_yaw_deg="
+                    << (runtime_controller_synthesis_state.right.acceleration_world_yaw_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_right_imu_predicting="
+                    << (runtime_controller_synthesis_state.right.prediction_active ? "yes" : "no")
+                    << " controller_right_imu_freeze="
+                    << imu_freeze_name(runtime_controller_synthesis_state.right.prediction_freeze_reason)
+                    << " controller_right_imu_optical_samples="
+                    << runtime_controller_synthesis_state.right.position_history.sample_count()
+                    << " controller_right_imu_anchor_v=("
+                    << runtime_controller_synthesis_state.right.anchor_velocity_mps[0] << ","
+                    << runtime_controller_synthesis_state.right.anchor_velocity_mps[1] << ","
+                    << runtime_controller_synthesis_state.right.anchor_velocity_mps[2] << ")"
+                    << " controller_right_imu_acceleration_dv=("
+                    << runtime_controller_synthesis_state.right.acceleration_velocity_delta_mps[0] << ","
+                    << runtime_controller_synthesis_state.right.acceleration_velocity_delta_mps[1] << ","
+                    << runtime_controller_synthesis_state.right.acceleration_velocity_delta_mps[2] << ")"
+                    << " controller_right_imu_last_acceleration_ns="
+                    << runtime_controller_synthesis_state.right.last_acceleration_sample_timestamp_ns
                     << " controller_right_yaw_update_ns="
                     << runtime_controller_synthesis_state.right.last_yaw_correction_update_ns
                     << " controller_right_yaw_correction_deg="

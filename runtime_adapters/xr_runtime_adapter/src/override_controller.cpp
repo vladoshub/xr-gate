@@ -307,6 +307,22 @@ Qf yaw_q(float yaw) {
   return normalize_q({std::cos(0.5f * yaw), 0.0f, std::sin(0.5f * yaw), 0.0f});
 }
 
+bool relative_world_yaw(Qf provider, Qf optical, float& yaw) {
+  // Extract the world-Y twist of the relative rotation, rather than subtract
+  // two independently projected forward headings. A tiny pitch disagreement
+  // across vertical reverses one heading and invents a 180-degree yaw error.
+  // The common hand pose cancels in optical * inverse(provider), including
+  // when both forward vectors are vertical. The twist is also invariant to
+  // the quaternion sign and is the closest yaw-only relative rotation.
+  const Qf relative = q_mul(optical, q_conj(provider));
+  const float twist_norm_sq = relative.w * relative.w + relative.y * relative.y;
+  // A relative half-turn about a horizontal axis has no identifiable Y twist.
+  // Keep the last trusted frame instead of assigning arbitrary world yaw.
+  if (!std::isfinite(twist_norm_sq) || twist_norm_sq <= 1.0e-6f) return false;
+  yaw = wrap_pi(2.0f * std::atan2(relative.y, relative.w));
+  return std::isfinite(yaw);
+}
+
 struct RuntimeAccelerationSample {
   uint64_t timestamp_ns = 0;
   float specific_force_m_s2[3] = {};
@@ -515,11 +531,10 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
       optical_sequence != 0 && optical_sequence != state->acceleration_world_yaw_frame_sequence) {
     const float xyzw[] = {clean_optical_hand->controller_qx, clean_optical_hand->controller_qy,
                          clean_optical_hand->controller_qz, clean_optical_hand->controller_qw};
-    float provider_yaw = 0, optical_yaw = 0;
+    float world_yaw = 0;
     if (finite_q_xyzw(xyzw) && nonzero_q_xyzw(xyzw) &&
-        yaw_rad_from_q(imu.yaw_reference_orientation, provider_yaw) &&
-        yaw_rad_from_q(q_from_xyzw(xyzw), optical_yaw)) {
-      state->acceleration_world_yaw_rad = wrap_pi(optical_yaw - provider_yaw);
+        relative_world_yaw(imu.yaw_reference_orientation, q_from_xyzw(xyzw), world_yaw)) {
+      state->acceleration_world_yaw_rad = world_yaw;
       state->acceleration_world_yaw_valid = true;
       state->acceleration_world_yaw_frame_sequence = optical_sequence;
     }
