@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 
@@ -1999,9 +2000,23 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       if (runtime_state != nullptr) {
         if (runtime_state->imu_stream_identity_valid &&
             (runtime_state->imu_physical_device_hash != controller_side->physical_device_hash ||
-             runtime_state->imu_stream_epoch != epoch ||
-             runtime_state->imu_dropped_batches != dropped)) {
+             runtime_state->imu_stream_epoch != epoch)) {
+          std::cerr << "[xr_runtime_adapter][WARN] controller " << (left ? "left" : "right")
+                    << " IMU state reset: reason="
+                    << (runtime_state->imu_physical_device_hash != controller_side->physical_device_hash
+                            ? "device_change" : "epoch_change")
+                    << " epoch=" << runtime_state->imu_stream_epoch << "->" << epoch
+                    << "; yaw=reset\n";
           *runtime_state = {};
+        } else if (runtime_state->imu_stream_identity_valid &&
+                   runtime_state->imu_dropped_batches != dropped) {
+          // A dropped packet breaks acceleration integration, not the AHRS
+          // reference. Keep the optical yaw, including an active blend/check.
+          std::cerr << "[xr_runtime_adapter] controller " << (left ? "left" : "right")
+                    << " IMU prediction reset: reason=dropped_batches epoch=" << epoch
+                    << " dropped=" << runtime_state->imu_dropped_batches << "->" << dropped
+                    << "; yaw=retained\n";
+          reset_runtime_controller_imu_prediction(*runtime_state);
         }
         runtime_state->imu_stream_identity_valid = true;
         runtime_state->imu_physical_device_hash = controller_side->physical_device_hash;
@@ -2097,6 +2112,20 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 }
 
 }  // namespace
+
+void reset_runtime_controller_imu_prediction(RuntimeControllerImuSideRuntimeState& state) {
+  const auto yaw = static_cast<const RuntimeControllerImuYawState&>(state);
+  const bool identity_valid = state.imu_stream_identity_valid;
+  const uint64_t physical_hash = state.imu_physical_device_hash;
+  const uint32_t epoch = state.imu_stream_epoch;
+  const uint32_t dropped = state.imu_dropped_batches;
+  state = {};
+  static_cast<RuntimeControllerImuYawState&>(state) = yaw;
+  state.imu_stream_identity_valid = identity_valid;
+  state.imu_physical_device_hash = physical_hash;
+  state.imu_stream_epoch = epoch;
+  state.imu_dropped_batches = dropped;
+}
 
 RuntimeControllerMovementSpace parse_runtime_controller_movement_space(
     const std::string& value,

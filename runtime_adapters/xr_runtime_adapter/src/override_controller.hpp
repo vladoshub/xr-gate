@@ -141,7 +141,36 @@ enum class RuntimeControllerHmdRelativeBlendMode : uint8_t {
   Exit = 2,
 };
 
-struct RuntimeControllerImuSideRuntimeState {
+// Retained optical yaw belongs to the AHRS orientation frame. Losing an IMU
+// packet invalidates position integration, but does not change that frame.
+struct RuntimeControllerImuYawState {
+  bool yaw_correction_valid = false;
+  bool yaw_correction_requested = false;
+  bool yaw_check_active = false;
+  bool yaw_check_reacquire = false;
+  bool yaw_blend_active = false;
+  bool yaw_blend_reacquire = false;
+  uint64_t last_yaw_correction_update_ns = 0;
+  uint64_t yaw_check_last_frame_sequence = 0;
+  uint64_t yaw_trigger_hold_start_ns = 0;
+  uint64_t yaw_blend_start_ns = 0;
+  bool yaw_trigger_range_valid = false;
+  float yaw_trigger_reference_error_rad = 0.0f;
+  float yaw_trigger_min_unwrapped_error_rad = 0.0f;
+  float yaw_trigger_max_unwrapped_error_rad = 0.0f;
+  float yaw_correction_rad = 0.0f;
+  float yaw_blend_from_rad = 0.0f;
+  float yaw_blend_to_rad = 0.0f;
+  float yaw_blend_duration_ms = 0.0f;
+  float yaw_last_desired_rad = 0.0f;
+  float yaw_last_error_rad = 0.0f;
+  float yaw_last_step_rad = 0.0f;
+  uint64_t yaw_apply_count = 0;
+  uint64_t yaw_reacquire_apply_count = 0;
+  std::string yaw_last_action = "none";
+};
+
+struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   bool imu_stream_identity_valid = false;
   uint64_t imu_physical_device_hash = 0;
   uint32_t imu_stream_epoch = 0;
@@ -159,20 +188,10 @@ struct RuntimeControllerImuSideRuntimeState {
       RuntimeControllerHmdRelativeBlendMode::None;
   bool hmd_relative_last_published_pose_valid = false;
   bool hmd_relative_last_published_pose_is_hmd_relative = false;
-  bool yaw_correction_valid = false;
-  bool yaw_correction_requested = false;
-  bool yaw_check_active = false;
-  bool yaw_check_reacquire = false;
-  bool yaw_blend_active = false;
-  bool yaw_blend_reacquire = false;
   // Timestamp of the newest accelerometer sample already integrated. This
   // prevents repeated runtime ticks from integrating the same SHM frame twice.
   uint64_t last_acceleration_sample_timestamp_ns = 0;
   uint64_t last_optical_pose_ns = 0;
-  uint64_t last_yaw_correction_update_ns = 0;
-  uint64_t yaw_check_last_frame_sequence = 0;
-  uint64_t yaw_trigger_hold_start_ns = 0;
-  uint64_t yaw_blend_start_ns = 0;
   uint64_t reacquire_blend_start_ns = 0;
   uint64_t hmd_relative_blend_start_ns = 0;
   float anchor_position_m[3] = {};
@@ -203,20 +222,6 @@ struct RuntimeControllerImuSideRuntimeState {
   float hmd_relative_last_published_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
   float hmd_relative_last_published_linear_velocity_mps[3] = {};
   float hmd_relative_last_published_angular_velocity_rad_s[3] = {};
-  bool yaw_trigger_range_valid = false;
-  float yaw_trigger_reference_error_rad = 0.0f;
-  float yaw_trigger_min_unwrapped_error_rad = 0.0f;
-  float yaw_trigger_max_unwrapped_error_rad = 0.0f;
-  float yaw_correction_rad = 0.0f;
-  float yaw_blend_from_rad = 0.0f;
-  float yaw_blend_to_rad = 0.0f;
-  float yaw_blend_duration_ms = 0.0f;
-  float yaw_last_desired_rad = 0.0f;
-  float yaw_last_error_rad = 0.0f;
-  float yaw_last_step_rad = 0.0f;
-  uint64_t yaw_apply_count = 0;
-  uint64_t yaw_reacquire_apply_count = 0;
-  std::string yaw_last_action = "none";
 };
 
 struct RuntimeControllerSynthesisState {
@@ -281,6 +286,10 @@ const char* runtime_controller_orientation_source_name(RuntimeControllerOrientat
 
 LostHandPoseFallbackMode parse_lost_hand_pose_fallback_mode(const std::string& value, const char* option_name);
 const char* lost_hand_pose_fallback_mode_name(LostHandPoseFallbackMode mode);
+
+// Clear motion/optical-anchor history while retaining the yaw state and IMU
+// identity. Use a full state reset when the AHRS epoch/device/world changes.
+void reset_runtime_controller_imu_prediction(RuntimeControllerImuSideRuntimeState& state);
 
 uint32_t runtime_controller_button_mask();
 uint32_t parse_runtime_button_target(const std::string& value, const char* option_name);

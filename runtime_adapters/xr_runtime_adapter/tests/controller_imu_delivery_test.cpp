@@ -91,7 +91,10 @@ int main() {
   motion.max_prediction_path_m = 0;
   HandTrackingFrameF32V2 optical{};
   optical.sequence = 1;
+  optical.flags = HAND_FLAG_LEFT_VALID;
   optical.left.status = 1;
+  optical.left.handedness = 1;
+  optical.left.confidence = 1.0f;
   optical.left.flags = HAND_POSE_VALID;
   optical.left.controller_qw = 1;
   RuntimeControllerSynthesisState runtime;
@@ -133,6 +136,132 @@ int main() {
           runtime.left.last_acceleration_sample_timestamp_ns == 0,
           "reconnect continued old integration");
 
+  // With only initial alignment enabled, changing the packet-loss counter
+  // must invalidate position integration without learning a new optical yaw.
+  RuntimeControllerSynthesisConfig yaw_cfg = cfg;
+  yaw_cfg.left_imu_motion.yaw_correction_enabled = true;
+  yaw_cfg.left_imu_motion.yaw_correction_continuous = false;
+  yaw_cfg.left_imu_motion.yaw_correction_on_reacquire = false;
+  RuntimeControllerSynthesisState yaw_runtime;
+  auto yaw_optical = optical;
+  yaw_optical.left.controller_qy = std::sin(0.2f);
+  yaw_optical.left.controller_qw = std::cos(0.2f);
+  compose_runtime_controller_state(1, anchor_ns, yaw_cfg, yaw_optical, yaw_optical,
+      initial, std::nullopt, 9.81f, &yaw_runtime);
+  require(yaw_runtime.left.yaw_correction_valid && yaw_runtime.left.yaw_apply_count == 1,
+          "initial optical alignment failed");
+  const float retained_yaw = yaw_runtime.left.yaw_correction_rad;
+  auto yaw_input = *initial;
+  yaw_input.left.imu.sequence = 2;
+  yaw_input.left.imu.latest_sample_timestamp_ns =
+      yaw_input.left.imu.orientation_timestamp_ns = anchor_ns + 10'000'000;
+  yaw_input.left.imu.samples[0].timestamp_ns = anchor_ns + 5'000'000;
+  yaw_input.left.imu.samples[1].timestamp_ns = anchor_ns + 10'000'000;
+  compose_runtime_controller_state(2, anchor_ns + 10'000'000, yaw_cfg, std::nullopt,
+      std::nullopt, yaw_input, std::nullopt, 9.81f, &yaw_runtime);
+  require(yaw_runtime.left.prediction_active &&
+          yaw_runtime.left.acceleration_velocity_delta_mps[0] > 0,
+          "prediction did not accumulate before packet loss");
+  auto motion_runtime = yaw_runtime;
+  auto lost_packet = *initial;
+  lost_packet.left.imu.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES] = 1;
+  compose_runtime_controller_state(3, anchor_ns + 20'000'000, yaw_cfg, std::nullopt,
+      std::nullopt, lost_packet, std::nullopt, 9.81f, &motion_runtime);
+  require(!motion_runtime.left.has_position_anchor && !motion_runtime.left.prediction_active &&
+          motion_runtime.left.last_acceleration_sample_timestamp_ns == 0 &&
+          motion_runtime.left.acceleration_velocity_delta_mps[0] == 0 &&
+          motion_runtime.left.acceleration_position_delta_m[0] == 0 &&
+          motion_runtime.left.yaw_correction_valid &&
+          std::abs(motion_runtime.left.yaw_correction_rad - retained_yaw) < 1e-6f,
+          "packet loss kept stale position integration or cleared retained yaw");
+  yaw_optical.sequence = 2;
+  yaw_optical.left.controller_qy = std::sin(0.5f);
+  yaw_optical.left.controller_qw = std::cos(0.5f);
+  const auto after_loss = compose_runtime_controller_state(3, anchor_ns + 20'000'000,
+      yaw_cfg, optical, yaw_optical, lost_packet, std::nullopt, 9.81f, &yaw_runtime);
+  require(std::abs(yaw_runtime.left.yaw_correction_rad - retained_yaw) < 1e-6f &&
+          yaw_runtime.left.yaw_apply_count == 1 &&
+          std::abs(after_loss.left.orientation_xyzw[1] - std::sin(0.2f)) < 1e-6f,
+          "IMU packet loss triggered another initial yaw alignment");
+
+  // Losing samples during a yaw blend must give the same orientation as the
+  // uninterrupted stream. The local pending-history overflow uses the same reset.
+  auto blend_cfg = yaw_cfg;
+  blend_cfg.left_imu_motion.yaw_correction_continuous = true;
+  blend_cfg.left_imu_motion.yaw_correction_interval_ms = 0;
+  blend_cfg.left_imu_motion.yaw_correction_trigger_filter = false;
+  blend_cfg.left_imu_motion.yaw_correction_deadband_deg = 0;
+  blend_cfg.left_imu_motion.yaw_correction_blend_ms = 1000;
+  auto blend_runtime = yaw_runtime;
+  compose_runtime_controller_state(3, anchor_ns + 30'000'000, blend_cfg, optical,
+      yaw_optical, lost_packet, std::nullopt, 9.81f, &blend_runtime);
+  require(blend_runtime.left.yaw_blend_active, "periodic yaw blend did not start");
+  auto uninterrupted_blend = blend_runtime;
+  auto next_loss = lost_packet;
+  ++next_loss.left.imu.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES];
+  const auto blend_after_loss = compose_runtime_controller_state(4, anchor_ns + 130'000'000,
+      blend_cfg, optical, std::nullopt, next_loss, std::nullopt, 9.81f, &blend_runtime);
+  const auto blend_without_loss = compose_runtime_controller_state(4, anchor_ns + 130'000'000,
+      blend_cfg, optical, std::nullopt, lost_packet, std::nullopt, 9.81f, &uninterrupted_blend);
+  require(blend_runtime.left.yaw_blend_active &&
+          blend_runtime.left.yaw_blend_start_ns == uninterrupted_blend.left.yaw_blend_start_ns &&
+          blend_runtime.left.yaw_apply_count == uninterrupted_blend.left.yaw_apply_count &&
+          std::abs(blend_after_loss.left.orientation_xyzw[1] -
+                   blend_without_loss.left.orientation_xyzw[1]) < 1e-6f,
+          "packet loss restarted or jumped an active yaw blend");
+  uninterrupted_blend = blend_runtime;
+  reset_runtime_controller_imu_prediction(blend_runtime.left);
+  const auto blend_after_overflow = compose_runtime_controller_state(5, anchor_ns + 230'000'000,
+      blend_cfg, optical, std::nullopt, next_loss, std::nullopt, 9.81f, &blend_runtime);
+  const auto blend_without_overflow = compose_runtime_controller_state(5, anchor_ns + 230'000'000,
+      blend_cfg, optical, std::nullopt, next_loss, std::nullopt, 9.81f, &uninterrupted_blend);
+  require(blend_runtime.left.imu_stream_identity_valid &&
+          blend_runtime.left.imu_stream_epoch == 1 &&
+          blend_runtime.left.imu_dropped_batches == 2 &&
+          blend_runtime.left.yaw_blend_active &&
+          blend_runtime.left.yaw_apply_count == uninterrupted_blend.left.yaw_apply_count &&
+          std::abs(blend_after_overflow.left.orientation_xyzw[1] -
+                   blend_without_overflow.left.orientation_xyzw[1]) < 1e-6f,
+          "pending-history reset changed IMU identity or interrupted a yaw blend");
+
+  // The hold/range check also spans losses within the same AHRS epoch.
+  auto check_cfg = blend_cfg;
+  check_cfg.left_imu_motion.yaw_correction_trigger_filter = true;
+  check_cfg.left_imu_motion.yaw_correction_trigger_hold_ms = 1000;
+  auto check_runtime = yaw_runtime;
+  compose_runtime_controller_state(3, anchor_ns + 30'000'000, check_cfg, optical,
+      yaw_optical, lost_packet, std::nullopt, 9.81f, &check_runtime);
+  require(check_runtime.left.yaw_check_active && check_runtime.left.yaw_trigger_range_valid,
+          "periodic yaw hold check did not start");
+  const auto hold_start = check_runtime.left.yaw_trigger_hold_start_ns;
+  ++yaw_optical.sequence;
+  compose_runtime_controller_state(4, anchor_ns + 130'000'000, check_cfg, optical,
+      yaw_optical, next_loss, std::nullopt, 9.81f, &check_runtime);
+  require(check_runtime.left.yaw_check_active &&
+          check_runtime.left.yaw_trigger_hold_start_ns == hold_start &&
+          check_runtime.left.yaw_apply_count == 1,
+          "packet loss restarted a periodic yaw hold check");
+
+  // An actual AHRS restart or replacement is different: learn fresh yaw even
+  // with continuous/reacquire disabled, because the orientation frame changed.
+  auto yaw_restarted = lost_packet;
+  yaw_restarted.left.imu.reserved[CONTROLLER_IMU_DIAG_EPOCH] = 2;
+  const auto after_restart = compose_runtime_controller_state(3, anchor_ns + 30'000'000,
+      yaw_cfg, optical, yaw_optical, yaw_restarted, std::nullopt, 9.81f, &yaw_runtime);
+  require(yaw_runtime.left.imu_stream_epoch == 2 &&
+          std::abs(yaw_runtime.left.yaw_correction_rad - 1.0f) < 1e-6f &&
+          std::abs(after_restart.left.orientation_xyzw[1] - std::sin(0.5f)) < 1e-6f,
+          "AHRS restart reused yaw from the old orientation frame");
+  ++yaw_restarted.left.physical_device_hash;
+  ++yaw_optical.sequence;
+  yaw_optical.left.controller_qy = std::sin(0.65f);
+  yaw_optical.left.controller_qw = std::cos(0.65f);
+  const auto after_replacement = compose_runtime_controller_state(4, anchor_ns + 40'000'000,
+      yaw_cfg, optical, yaw_optical, yaw_restarted, std::nullopt, 9.81f, &yaw_runtime);
+  require(std::abs(yaw_runtime.left.yaw_correction_rad - 1.3f) < 1e-6f &&
+          std::abs(after_replacement.left.orientation_xyzw[1] - std::sin(0.65f)) < 1e-6f,
+          "controller replacement reused yaw from the previous device");
+
   for (uint64_t i = 0; i < 17; ++i) publisher.publish(output(10 + i, anchor_ns + (10 + i) * 10'000'000));
   bool overrun = false;
   try { reader.next(cursor); } catch (const std::runtime_error&) { overrun = true; }
@@ -144,5 +273,5 @@ int main() {
   bool reset = false;
   try { reader.next(cursor); } catch (const std::runtime_error&) { reset = true; }
   require(reset, "publisher restart not detected");
-  std::cout << "SHM burst delivery, runtime IMU history, duplicate/reset/overrun handling: OK\n";
+  std::cout << "SHM burst delivery, runtime IMU history, yaw continuity, duplicate/reset/overrun handling: OK\n";
 }

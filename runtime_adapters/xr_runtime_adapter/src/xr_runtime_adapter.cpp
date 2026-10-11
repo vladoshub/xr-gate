@@ -2130,6 +2130,7 @@ struct ControllerInputThreadSnapshot {
   bool connected = false;
   uint64_t frames = 0;
   uint64_t discontinuities = 0;
+  uint64_t transport_discontinuities = 0;
   uint64_t last_sequence = 0;
   uint64_t latest_receive_timestamp_ns = 0;
   double age_ms = 0.0;
@@ -2280,6 +2281,7 @@ class ControllerInputThread {
       pending_frames_.clear();
       snapshot_.latest.reset();
       ++snapshot_.discontinuities;
+      ++snapshot_.transport_discontinuities;
     }
   }
   void set_error(const std::string& error) { set_connected(false, error); }
@@ -4898,6 +4900,7 @@ int main(int argc, char** argv) {
 
     override_controller::RuntimeControllerSynthesisState runtime_controller_synthesis_state{};
     uint64_t controller_input_discontinuities = 0;
+    uint64_t controller_input_transport_discontinuities = 0;
 
     const auto start = std::chrono::steady_clock::now();
     auto next_runtime_controller_imu_control_poll =
@@ -5577,10 +5580,20 @@ int main(int argc, char** argv) {
       std::optional<ControllerInputThreadSnapshot> controller_snapshot_for_frame;
       if (controller_input_thread) {
         controller_snapshot_for_frame = controller_input_thread->snapshot_and_take_pending(controller_imu_history);
-        if (controller_snapshot_for_frame->discontinuities != controller_input_discontinuities) {
+        if (controller_snapshot_for_frame->transport_discontinuities != controller_input_transport_discontinuities) {
+          std::cerr << "[xr_runtime_adapter][WARN] controller IMU state reset: "
+                    << "reason=transport_discontinuity; yaw=reset\n";
           runtime_controller_synthesis_state = {};
-          controller_input_discontinuities = controller_snapshot_for_frame->discontinuities;
+          controller_input_transport_discontinuities = controller_snapshot_for_frame->transport_discontinuities;
+        } else if (controller_snapshot_for_frame->discontinuities != controller_input_discontinuities) {
+          // Pending-history overflow discards acceleration samples but leaves
+          // the provider's AHRS frame intact. Preserve each side's optical yaw.
+          override_controller::reset_runtime_controller_imu_prediction(runtime_controller_synthesis_state.left);
+          override_controller::reset_runtime_controller_imu_prediction(runtime_controller_synthesis_state.right);
+          std::cerr << "[xr_runtime_adapter] controller IMU prediction reset: "
+                    << "reason=history_overflow; yaw=retained\n";
         }
+        controller_input_discontinuities = controller_snapshot_for_frame->discontinuities;
       }
       if (controller_input_thread &&
           (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp)) {
@@ -6142,6 +6155,12 @@ int main(int argc, char** argv) {
                     << " controller_right_imu=" << (controller_right_imu_present ? "yes" : "no")
                     << " controller_right_imu_active=" << (controller_right_imu_active ? "yes" : "no")
                     << " controller_right_imu_status=" << xr_runtime::controller_imu_status_name(controller_right_imu_status)
+                    << " controller_left_imu_epoch="
+                    << runtime_controller_synthesis_state.left.imu_stream_epoch
+                    << " controller_left_imu_dropped="
+                    << runtime_controller_synthesis_state.left.imu_dropped_batches
+                    << " controller_left_yaw_update_ns="
+                    << runtime_controller_synthesis_state.left.last_yaw_correction_update_ns
                     << " controller_left_yaw_correction_deg="
                     << (runtime_controller_synthesis_state.left.yaw_correction_rad * 180.0 / 3.14159265358979323846)
                     << " controller_left_yaw_requested="
@@ -6160,6 +6179,12 @@ int main(int argc, char** argv) {
                     << (runtime_controller_synthesis_state.left.yaw_last_error_rad * 180.0 / 3.14159265358979323846)
                     << " controller_left_yaw_action="
                     << runtime_controller_synthesis_state.left.yaw_last_action
+                    << " controller_right_imu_epoch="
+                    << runtime_controller_synthesis_state.right.imu_stream_epoch
+                    << " controller_right_imu_dropped="
+                    << runtime_controller_synthesis_state.right.imu_dropped_batches
+                    << " controller_right_yaw_update_ns="
+                    << runtime_controller_synthesis_state.right.last_yaw_correction_update_ns
                     << " controller_right_yaw_correction_deg="
                     << (runtime_controller_synthesis_state.right.yaw_correction_rad * 180.0 / 3.14159265358979323846)
                     << " controller_right_yaw_requested="

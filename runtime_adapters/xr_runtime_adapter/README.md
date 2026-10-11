@@ -227,6 +227,40 @@ kept for position prediction and acceleration conversion, so periodic and
 reacquire yaw correction cannot move the hand in space. This also prevents presentation/mounting offsets from being learned again as yaw
 drift.
 
+To keep initial optical yaw alignment but disable subsequent periodic and
+optical-reacquire adjustments, export these values before launching the client:
+
+```bash
+export RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_CONTINUOUS=0
+export RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_ON_REACQUIRE=0
+```
+
+Keep yaw correction enabled for the IMU side to retain initial alignment.
+Verify that the runtime startup log reports both
+`runtime_controller_imu_yaw_correction_continuous: false` and
+`runtime_controller_imu_yaw_correction_on_reacquire: false`. Changing a shell
+default such as `${VARIABLE:-0}` does not override an inherited value of `1`.
+Device launchers also prefer the installed
+`bin/scripts/runtime_adapters/xr_runtime_adapter/start_xr_runtime_adapter_shm.sh`
+over the source script when the installed copy exists.
+
+IMU dropped-batch counter changes within the same device/epoch and overflow of
+the runtime's pending IMU history clear position integration and optical-anchor
+history, while preserving retained yaw and any active yaw check/blend. They do
+not cause another initial alignment. An AHRS epoch change, controller replacement,
+transport discontinuity/reader reattachment, or backend control reset still
+clears yaw because the old orientation or tracking reference may no longer be
+valid. Initial alignment can run again at those boundaries even with the two
+options above disabled.
+
+State-change logs include `reason=dropped_batches`, `reason=history_overflow`,
+`reason=epoch_change`, `reason=device_change`, or
+`reason=transport_discontinuity`, followed by `yaw=retained` or `yaw=reset`.
+Periodic status lines also expose per-side `controller_left_imu_epoch`,
+`controller_left_imu_dropped`, and `controller_left_yaw_update_ns` (and their
+right-side equivalents) to correlate an orientation jump with a state reset.
+The existing backend control reset log reports its `reset_counter` change.
+
 Controller input TCP uses the same packed `ControllerInputV3` payload as SHM
 (`CIV3`, protocol version 3, 1432-byte payload), including the complete per-side
 IMU state and up to four IMU samples.
