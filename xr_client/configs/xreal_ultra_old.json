@@ -691,7 +691,5 @@
       }
     }
   },
-  "device_env": "{root}/devices/xreal_ultra/xreal_ultra_new.env",
-  "tracking_env": "{root}/devices/xreal_ultra/xreal_ultra_new_tracking.env",
-  "tracking_env_required": true
+  "device_env": "{root}/devices/xreal_ultra/xreal_ultra.env"
 }
