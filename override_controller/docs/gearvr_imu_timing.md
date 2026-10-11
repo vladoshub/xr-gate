@@ -37,6 +37,27 @@ Gear VR). Consumers should reset integration/discard affected training segments
 when an epoch or dropped-batch counter changes. Old consumers may ignore these
 words.
 
+## Stale delivery and AHRS continuity
+
+A 250 ms receive timeout marks the public IMU state `STALE`, clears its validity
+flags and sample count, and discards unpublished old batches. It retains the
+AHRS orientation, gyro bias and device/host clock mapping. A receive pause alone
+does not start a new epoch: buffered measurements still use their device-time
+intervals when they arrive. Discarded queued batches increment the drop counter.
+
+If the device clock advances across more than 250 ms of unobserved samples, the
+provider holds its last orientation across that interval and resumes integration
+using the spacing of the returning packet. It reports at least one missing batch
+and discards unpublished pre-gap history. The exact number of lost notifications
+is unknown. With the runtime yaw-continuity fix, a drop-counter change resets
+position prediction while retaining optical yaw alignment. Motion while samples
+were missing cannot be reconstructed.
+
+A real BLE disconnect or backwards device-clock jump still resets the AHRS and
+starts a new epoch. The provider logs these reasons separately from host receive
+timeouts and recovery. A periodic core reattach scan taking at least 100 ms also
+logs how long it paused input polling, to help locate recurring transport stalls.
+
 ## Queues and runtime
 
 Each Gear VR session retains up to 256 notification batches. Publication drains
@@ -83,7 +104,9 @@ ctest --test-dir build/xr_runtime_adapter --output-on-failure
 The Gear VR test exercises real packet decoding, counter rollover, reset,
 duplicates/overlap, clock drift, jitter-independent AHRS and queue overflow.
 A fake BLE transport also checks real provider/composite routing, independent
-clocks for two controllers, reconnect and explicit flushing.
+clocks for two controllers, reconnect, explicit flushing, delayed delivery,
+stale recovery without gyro-bias reset and orientation continuity across missing
+measurements.
 The Linux runtime test uses the real publisher and POSIX SHM reader to verify
 burst delivery, per-batch acceleration orientation, deduplication, reconnect
 state reset and ring overrun/restart detection. Physical-controller validation

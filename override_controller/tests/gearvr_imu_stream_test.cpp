@@ -109,9 +109,42 @@ void overflow_and_overlap() {
   require(stream.latest.sample_count == 1, "overlapping sample processed twice");
 }
 
+void missing_measurements_preserve_ahrs_reference() {
+  GearVrImuStream stream(0.0f);
+  const uint64_t base_ns = 40'000'000'000ULL;
+  for (uint32_t i = 0; i < 30; ++i) {
+    require(stream.push(packet(10000 + i * 10000, 15000 + i * 10000),
+                        base_ns + uint64_t(i) * 10'000'000), "warmup packet rejected");
+  }
+  const auto before = stream.latest;
+  require(std::abs(before.orientation_xyzw[2]) > 0.01f,
+          "gap test did not build a non-identity orientation");
+  const uint32_t last_us = static_cast<uint32_t>(before.latest_device_timestamp_ticks);
+  GearVrImuStream reference = stream;
+  reference.clear_pending();
+  require(reference.push(packet(last_us + 5000, last_us + 10000),
+                         before.latest_sample_timestamp_ns + 10'000'000),
+          "reference packet rejected");
+  require(stream.push(packet(last_us + 995000, last_us + 1000000),
+                      before.latest_sample_timestamp_ns + 1'000'000'000),
+          "post-gap packet rejected");
+  require(stream.latest.reserved[CONTROLLER_IMU_DIAG_EPOCH] ==
+              before.reserved[CONTROLLER_IMU_DIAG_EPOCH],
+          "missing measurements changed the AHRS epoch");
+  require(stream.dropped_batches() == 31, "missing interval/abandoned history not reported");
+  for (size_t j = 0; j < 4; ++j) {
+    require(std::abs(stream.latest.orientation_xyzw[j] - reference.latest.orientation_xyzw[j]) < 1e-6f,
+            "post-gap AHRS reset or integrated gyro over the unobserved interval");
+  }
+  const auto returned = stream.consume();
+  require(returned.sequence == 31 && !stream.pending(),
+          "pre-gap history remained eligible for position integration");
+}
+
 int main() {
   wrap_reset_and_fifo();
   jitter_drift_and_ahrs();
   overflow_and_overlap();
-  std::cout << "Gear VR timestamps, clock drift, AHRS intervals and FIFO: OK\n";
+  missing_measurements_preserve_ahrs_reference();
+  std::cout << "Gear VR timestamps, drift, AHRS intervals, FIFO and measurement gaps: OK\n";
 }

@@ -6,6 +6,16 @@
 
 namespace xr_override_controller::gearvr {
 
+void GearVrImuStream::mark_stale() {
+  using namespace xr_runtime;
+  dropped_batches_ += static_cast<uint32_t>(pending_.size());
+  pending_.clear();
+  latest.status = CONTROLLER_IMU_STALE;
+  latest.data_flags = 0;
+  latest.sample_count = 0;
+  latest.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES] = dropped_batches_;
+}
+
 void GearVrImuStream::reset() {
   processor_.reset();
   clock_.reset();
@@ -59,6 +69,16 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
     previous_host_ns = host_ns[i];
   }
 
+  const bool missing_interval = had_previous && device_us.front() > previous_device_us &&
+      device_us.front() - previous_device_us > kMaxUnobservedIntervalUs;
+  if (missing_interval) {
+    // Missing measurements invalidate acceleration prediction, not the AHRS
+    // reference. Discard unpublished pre-gap history and report at least one
+    // missing batch; the exact number of lost BLE notifications is unknown.
+    dropped_batches_ += static_cast<uint32_t>(pending_.size()) + 1;
+    pending_.clear();
+  }
+
   ControllerImuStateV1 state{};
   state.status = CONTROLLER_IMU_ACTIVE;
   state.capability_flags = CONTROLLER_IMU_CAP_GYROSCOPE |
@@ -78,8 +98,13 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
     imu::RawControllerImuSample raw;
     raw.host_timestamp_ns = host_ns[i];
     raw.device_timestamp_ticks = device_us[i];
-    if (have_previous) raw.sample_interval_seconds =
-        static_cast<float>(device_us[i] - previous_us) / 1.0e6f;
+    if (have_previous) {
+      // Hold the last orientation across an unobserved interval rather than
+      // integrating the returning gyro value over that entire interval.
+      const uint64_t interval_us = missing_interval && state.sample_count == 0
+          ? packet_span_us : device_us[i] - previous_us;
+      raw.sample_interval_seconds = static_cast<float>(interval_us) / 1.0e6f;
+    }
     raw.angular_velocity_rad_s = packet.imu_samples[i].gyro_rad_s;
     raw.specific_force_m_s2 = packet.imu_samples[i].accel_m_s2;
     raw.magnetic_field_uT = packet.magnetic_uT;

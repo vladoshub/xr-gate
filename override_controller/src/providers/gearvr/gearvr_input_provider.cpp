@@ -181,6 +181,12 @@ struct GearVrInputProvider::Impl {
     } else {
       release_all_inputs(session);
       session.notifications_active = false;
+      if (session.imu_stream.latest.sequence != 0) {
+        std::cerr << "[override_controller][WARN] Gear VR IMU epoch reset for "
+                  << session.stable_id << ": reason=disconnect epoch="
+                  << session.imu_stream.epoch() << "->" << session.imu_stream.epoch() + 1
+                  << "; AHRS=reset\n";
+      }
       session.imu_stream.reset();
       session.imu_stream.latest.data_flags = 0;
       session.imu_stream.latest.sample_count = 0;
@@ -256,10 +262,8 @@ struct GearVrInputProvider::Impl {
     const uint64_t packet_host_ns = packet.timestamp_ns != 0
                                         ? packet.timestamp_ns
                                         : static_cast<uint64_t>(monotonic_now_ns());
-    if (session.last_packet_ns != 0 && packet_host_ns > session.last_packet_ns &&
-        packet_host_ns - session.last_packet_ns > kStaleNs) {
-      session.imu_stream.reset();
-    }
+    const uint64_t host_gap_ns = session.last_packet_ns != 0 &&
+        packet_host_ns > session.last_packet_ns ? packet_host_ns - session.last_packet_ns : 0;
     session.last_packet_ns = packet_host_ns;
     emit_button_changes(session, decoded->buttons, packet_host_ns);
     const bool touched = !(decoded->touch_x == 0 && decoded->touch_y == 0);
@@ -272,14 +276,40 @@ struct GearVrInputProvider::Impl {
       queue_event(session, type, code, value, packet_host_ns);
     });
 
+    const auto previous = session.imu_stream.latest;
+    const uint32_t epoch_before = session.imu_stream.epoch();
     const uint32_t dropped_before = session.imu_stream.dropped_batches();
-    session.imu_stream.push(*decoded, packet_host_ns);
+    const bool accepted = session.imu_stream.push(*decoded, packet_host_ns);
+    if (session.imu_stream.epoch() != epoch_before) {
+      std::cerr << "[override_controller][WARN] Gear VR IMU epoch reset for "
+                << session.stable_id << ": reason=device_clock_restart epoch="
+                << epoch_before << "->" << session.imu_stream.epoch()
+                << " previous_ticks=" << previous.latest_device_timestamp_ticks
+                << " newest_raw_us=" << decoded->imu_samples.back().device_timestamp_us
+                << " host_gap_ms=" << double(host_gap_ns) / 1.0e6 << "; AHRS=reset\n";
+    } else if (accepted && host_gap_ns > kStaleNs) {
+      std::cerr << "[override_controller] Gear VR IMU delivery resumed for "
+                << session.stable_id << ": reason=host_receive_gap host_gap_ms="
+                << double(host_gap_ns) / 1.0e6 << " device_gap_us="
+                << (decoded->imu_samples.back().device_timestamp_us -
+                    static_cast<uint32_t>(previous.latest_device_timestamp_ticks))
+                << " epoch=" << epoch_before << "; AHRS=retained\n";
+    }
     if (session.imu_stream.dropped_batches() != dropped_before &&
         (session.last_imu_drop_warning_ns == 0 ||
          packet_host_ns - session.last_imu_drop_warning_ns >= 1'000'000'000ull)) {
       session.last_imu_drop_warning_ns = packet_host_ns;
+      const uint32_t first_gap_us = decoded->imu_samples.front().device_timestamp_us -
+          static_cast<uint32_t>(previous.latest_device_timestamp_ticks);
+      const bool missing_interval = accepted && previous.sequence != 0 &&
+          session.imu_stream.epoch() == epoch_before &&
+          first_gap_us > 250'000u && first_gap_us < 0x80000000u;
       std::cerr << "[override_controller][WARN] Gear VR IMU batches dropped for "
-                << session.stable_id << ": " << session.imu_stream.dropped_batches() << " total\n";
+                << session.stable_id << ": " << session.imu_stream.dropped_batches()
+                << " total; reason=" << (missing_interval ? "device_sample_gap" :
+                                        accepted ? "queue_overflow" : "invalid_mapped_time")
+                << " first_gap_us=" << first_gap_us
+                << " epoch=" << session.imu_stream.epoch() << "\n";
     }
   }
 
@@ -292,14 +322,14 @@ struct GearVrInputProvider::Impl {
     for (auto& [id, session] : sessions) {
       if (session->last_packet_ns != 0 && now_ns > session->last_packet_ns + kStaleNs &&
           session->imu_stream.latest.status == xr_runtime::CONTROLLER_IMU_ACTIVE) {
-        // A long interruption invalidates AHRS timing and the runtime's
-        // integration epoch, even if BlueZ still reports a connection.
-        const auto retained = session->imu_stream.latest;
-        session->imu_stream.reset();
-        session->imu_stream.latest = retained;
-        session->imu_stream.latest.status = xr_runtime::CONTROLLER_IMU_STALE;
-        session->imu_stream.latest.data_flags = 0;
-        session->imu_stream.latest.sample_count = 0;
+        // Delivery can pause during device scans or synchronous native calls.
+        // AHRS intervals follow the IMU clock, so a host timeout does not
+        // invalidate its reference or require another optical yaw alignment.
+        session->imu_stream.mark_stale();
+        std::cerr << "[override_controller][WARN] Gear VR IMU stale for "
+                  << session->stable_id << ": reason=host_receive_timeout host_gap_ms="
+                  << double(now_ns - session->last_packet_ns) / 1.0e6
+                  << " epoch=" << session->imu_stream.epoch() << "; AHRS=retained\n";
       }
     }
   }

@@ -1,10 +1,13 @@
 #include "gearvr_ble_transport.hpp"
 #include "gearvr_input_provider.hpp"
+#include "gearvr_imu_stream.hpp"
 #include "composite_input_provider.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 using namespace xr_override_controller;
 using namespace xr_override_controller::gearvr;
@@ -29,7 +32,8 @@ class FakeTransport : public BleTransport {
     packets.pop_front();
     return true;
   }
-  void enqueue(const std::string& id, uint32_t newest_us, uint64_t host_ns) {
+  void enqueue(const std::string& id, uint32_t newest_us, uint64_t host_ns,
+               bool rotating = false) {
     BlePacket packet;
     packet.stable_id = id;
     packet.timestamp_ns = host_ns;
@@ -38,6 +42,10 @@ class FakeTransport : public BleTransport {
       const uint32_t timestamp = newest_us - (1 - i) * 5000;
       for (size_t j = 0; j < 4; ++j) packet.bytes[i * 16 + j] = (timestamp >> (j * 8)) & 0xff;
       packet.bytes[i * 16 + 9] = 8;
+      if (rotating) {
+        packet.bytes[i * 16 + 14] = 200;
+        packet.bytes[i * 16 + 15] = 3;
+      }
     }
     packets.push_back(std::move(packet));
   }
@@ -65,7 +73,7 @@ uint64_t now_ns() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-int main() {
+void routing_reconnect_and_flush() {
   std::vector<std::unique_ptr<InputProvider>> children;
   children.push_back(std::make_unique<GearVrInputProvider>(ProviderOptionValues{{"initial_scan_ms", "0"}}));
   CompositeInputProvider provider(std::move(children));
@@ -108,5 +116,73 @@ int main() {
   transport->enqueue("left", 20000, now_ns());
   provider.flush_events(devices);
   require(!provider.has_pending_imu(devices[0]), "explicit flush retained historical IMU");
-  std::cout << "Gear VR provider/composite routing, two device clocks, reconnect and flush: OK\n";
+}
+
+void require_same_orientation(const ControllerImuStateV1& a,
+                              const ControllerImuStateV1& b) {
+  for (size_t j = 0; j < 4; ++j) {
+    require(std::abs(a.orientation_xyzw[j] - b.orientation_xyzw[j]) < 1e-6f,
+            "delivery pause reset or changed device-timed AHRS");
+  }
+}
+
+void delayed_delivery_preserves_ahrs() {
+  GearVrInputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});
+  auto devices = provider.scan_devices(true);
+  GearVrImuStream clean(0.0f);
+  const uint64_t base_ns = now_ns() - 100'000'000;
+  for (uint32_t i = 0; i < 8; ++i) {
+    // The controller keeps sampling at 200 Hz; a host stall delays receipt
+    // from the fourth notification onward by 300 ms.
+    if (i == 3) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const uint64_t ideal_ns = base_ns + uint64_t(i) * 10'000'000;
+    const uint64_t received_ns = ideal_ns + (i >= 3 ? 300'000'000 : 0);
+    transport->enqueue("left", 10000 + i * 10000, received_ns, true);
+    const auto decoded = decode_packet(transport->packets.back().bytes.data(), 60);
+    require(clean.push(*decoded, ideal_ns), "reference AHRS packet rejected");
+    provider.wait_event(devices, 1, false);
+    const auto state = provider.imu_state(devices[0]);
+    require(state.reserved[CONTROLLER_IMU_DIAG_EPOCH] == 1,
+            "host receive pause changed the IMU epoch");
+    require_same_orientation(state, clean.latest);
+  }
+  for (uint64_t i = 1; i <= 8; ++i) {
+    require(provider.consume_imu_state(devices[0]).sequence == i,
+            "host receive pause discarded queued continuous measurements");
+  }
+}
+
+void stale_output_preserves_filter_and_bias() {
+  GearVrInputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});
+  auto devices = provider.scan_devices(true);
+  // Older receive timestamps make the provider stale deterministically,
+  // without waiting for a wall-clock timeout in the test.
+  const uint64_t base_ns = now_ns() - 1'000'000'000;
+  for (uint32_t i = 0; i < 30; ++i) {
+    transport->enqueue("left", 10000 + i * 10000,
+                       base_ns + uint64_t(i) * 10'000'000);
+    provider.wait_event(devices, 1, false);
+  }
+  const auto stale = provider.imu_state(devices[0]);
+  require(stale.status == CONTROLLER_IMU_STALE && stale.data_flags == 0 &&
+          stale.sample_count == 0 && !provider.has_pending_imu(devices[0]),
+          "stale provider advertises historical samples as active");
+  require(stale.reserved[CONTROLLER_IMU_DIAG_EPOCH] == 1,
+          "stale output reset the AHRS epoch");
+  transport->enqueue("left", 310000, now_ns());
+  provider.wait_event(devices, 1, false);
+  const auto resumed = provider.imu_state(devices[0]);
+  require(resumed.status == CONTROLLER_IMU_ACTIVE &&
+          (resumed.data_flags & CONTROLLER_IMU_GYROSCOPE_CALIBRATED) != 0,
+          "delivery recovery restarted gyro bias calibration");
+  require(resumed.reserved[CONTROLLER_IMU_DIAG_EPOCH] == 1,
+          "delivery recovery reset the IMU epoch a second time");
+  require_same_orientation(resumed, stale);
+}
+
+int main() {
+  routing_reconnect_and_flush();
+  delayed_delivery_preserves_ahrs();
+  stale_output_preserves_filter_and_bias();
+  std::cout << "Gear VR routing, reconnect, flush, delayed delivery and stale recovery: OK\n";
 }

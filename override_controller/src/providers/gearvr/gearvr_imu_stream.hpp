@@ -20,7 +20,11 @@ class GearVrImuStream {
   xr_runtime::ControllerImuStateV1 consume();
   bool pending() const { return !pending_.empty(); }
   void clear_pending() { pending_.clear(); }
+  // Stop advertising stale measurements without changing the AHRS reference,
+  // calibrated bias or device/host clock mapping.
+  void mark_stale();
   void reset();
+  uint32_t epoch() const { return epoch_; }
   uint32_t dropped_batches() const { return dropped_batches_; }
   xr_tracking::AffineDeviceClockMapper::Diagnostics clock_diagnostics() const {
     return clock_.diagnostics();
@@ -28,6 +32,7 @@ class GearVrImuStream {
   xr_runtime::ControllerImuStateV1 latest{};
 
  private:
+  static constexpr uint64_t kMaxUnobservedIntervalUs = 250'000;
   imu::ControllerImuProcessor processor_;
   xr_tracking::AffineDeviceClockMapper clock_;
   std::deque<xr_runtime::ControllerImuStateV1> pending_;

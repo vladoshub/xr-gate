@@ -2406,7 +2406,14 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
     if (cfg.input.reattach_devices && now >= next_reattach_check) {
       next_reattach_check = now + reattach_interval;
 
+      const auto scan_started = std::chrono::steady_clock::now();
       std::vector<DeviceInfo> candidate_devices = provider.scan_devices(true);
+      const auto scan_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - scan_started).count();
+      if (scan_ms >= 100) {
+        std::cerr << "[override_controller][WARN] reattach scan paused input polling: "
+                  << scan_ms << " ms\n";
+      }
       std::vector<RuntimeBinding> candidate_bindings = resolve_bindings(cfg, candidate_devices, false);
       std::vector<RuntimeBinding> candidate_toggle_bindings = resolve_hold_toggle_bindings(cfg, candidate_devices, false);
       std::vector<RuntimeBinding> candidate_alt_bindings = resolve_alternative_bindings(cfg, candidate_devices, false);
