@@ -11,6 +11,9 @@ Supported input providers:
 
 `xr_runtime_adapter` can combine this physical input with hand tracking poses, synthetic fallback poses, or gesture-derived controls.
 
+Gear VR sensor timestamps, buffered IMU delivery and collection settings are
+described in [Gear VR IMU timing](docs/gearvr_imu_timing.md).
+
 ## Main stream
 
 ```text

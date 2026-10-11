@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 #include <string>
 
 #include <xr_runtime/contracts/controller_input_contract.hpp>
@@ -141,6 +142,10 @@ enum class RuntimeControllerHmdRelativeBlendMode : uint8_t {
 };
 
 struct RuntimeControllerImuSideRuntimeState {
+  bool imu_stream_identity_valid = false;
+  uint64_t imu_physical_device_hash = 0;
+  uint32_t imu_stream_epoch = 0;
+  uint32_t imu_dropped_batches = 0;
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
@@ -308,6 +313,7 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     float gravity_magnitude_mps2,
-    RuntimeControllerSynthesisState* runtime_state = nullptr);
+    RuntimeControllerSynthesisState* runtime_state = nullptr,
+    const std::vector<xr_runtime::ControllerInputV3>* imu_history = nullptr);
 
 }  // namespace xr_runtime_adapter::override_controller

@@ -1564,8 +1564,19 @@ OutputState compose_state(InputProvider& provider,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
                           CounterState& counters,
-                          bool allow_shared_physical_device_sides) {
+                          bool allow_shared_physical_device_sides,
+                          bool* more_imu = nullptr) {
   OutputState out;
+  // Resolve/consume a physical device only once, even with multiple bindings
+  // or explicit sharing between the two controller sides.
+  std::map<size_t, xr_runtime::ControllerImuStateV1> imu_batches;
+  const auto consume_imu = [&](size_t index) {
+    auto it = imu_batches.find(index);
+    if (it == imu_batches.end()) {
+      it = imu_batches.emplace(index, provider.consume_imu_state(devices[index])).first;
+    }
+    return it->second;
+  };
   std::set<std::string> left_devices;
   std::set<std::string> right_devices;
   const auto imu_rank = [](const xr_runtime::ControllerImuStateV1& imu) {
@@ -1611,7 +1622,7 @@ OutputState compose_state(InputProvider& provider,
     const int device_index = resolve_device(config_device.fingerprint);
     if (device_index < 0) continue;
     const auto candidate_imu = imu::apply_orientation_calibration(
-        provider.imu_state(devices[device_index]), config_device.orientation_transform,
+        consume_imu(device_index), config_device.orientation_transform,
         config_device.orientation_offset);
     if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
     if (xr_runtime::controller_imu_is_present(candidate_imu)) {
@@ -1638,7 +1649,7 @@ OutputState compose_state(InputProvider& provider,
         imu_device_index = resolve_device(b.cfg.device);
       }
       if (imu_device_index >= 0) {
-        auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+        auto candidate_imu = consume_imu(imu_device_index);
         if (binding_device) {
           candidate_imu = imu::apply_orientation_calibration(
               candidate_imu, binding_device->orientation_transform,
@@ -1711,6 +1722,12 @@ OutputState compose_state(InputProvider& provider,
   std::memcpy(out.left.release_counters, counters.left_release, sizeof(counters.left_release));
   std::memcpy(out.right.press_counters, counters.right_press, sizeof(counters.right_press));
   std::memcpy(out.right.release_counters, counters.right_release, sizeof(counters.right_release));
+  if (more_imu) {
+    *more_imu = false;
+    for (const auto& [index, batch] : imu_batches) {
+      if (provider.has_pending_imu(devices[index])) *more_imu = true;
+    }
+  }
   return out;
 }
 
@@ -2480,9 +2497,12 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
     decay_button_hold_bindings(active_bindings_for_decay, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(provider, cfg, active_bindings_for_decay, active_toggle_bindings_for_decay,
-                                     devices, counters, cfg.input.allow_shared_physical_device_sides);
-      publisher.publish(out);
+      bool more_imu = false;
+      do {
+        const auto out = compose_state(provider, cfg, active_bindings_for_decay, active_toggle_bindings_for_decay,
+                                       devices, counters, cfg.input.allow_shared_physical_device_sides, &more_imu);
+        publisher.publish(out);
+      } while (more_imu && !g_stop);
       clear_one_frame_relative_bindings(active_bindings_for_decay);
       do {
         next_publish += period;

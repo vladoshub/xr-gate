@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -296,6 +297,50 @@ class TrackingRingReader {
       return std::nullopt;
     }
 
+    return payload;
+  }
+
+  // Sequential consumption for compact RingHeaderV1 streams. First attach
+  // starts at the latest frame; subsequent calls never intentionally skip.
+  // A ring overrun/restart is a discontinuity, not a valid IMU interval.
+  std::optional<PayloadT> next(uint64_t& cursor) const {
+    if (!shm_ || shm_.size() < sizeof(RingHeaderV1)) return std::nullopt;
+    if (expected_format_ == "HMD_POSE_F64_LE") {
+      throw std::runtime_error("sequential reader requires compact RingHeaderV1");
+    }
+    const auto* h = reinterpret_cast<const volatile RingHeaderV1*>(shm_.data());
+    const uint64_t latest_seq = h->latest_sequence;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (latest_seq == 0) return std::nullopt;
+    if (latest_seq < cursor) throw std::runtime_error("SHM ring sequence restarted");
+    if (latest_seq == cursor) return std::nullopt;
+    const uint32_t count = h->slot_count;
+    const uint32_t header = h->header_size;
+    const uint32_t stride = h->slot_stride;
+    const uint32_t slot_header = h->slot_header_size;
+    if (count == 0 || slot_header < sizeof(RingSlotHeaderV1) ||
+        stride < slot_header + sizeof(PayloadT) || header < sizeof(RingHeaderV1) ||
+        static_cast<uint64_t>(header) + static_cast<uint64_t>(count) * stride > shm_.size()) {
+      throw std::runtime_error("SHM ring metadata changed or is invalid");
+    }
+    if (cursor != 0 && latest_seq - cursor > count) {
+      throw std::runtime_error("SHM ring overrun: controller frames were lost");
+    }
+    const uint64_t wanted = cursor == 0 ? latest_seq : cursor + 1;
+    const size_t off = header + static_cast<size_t>((wanted - 1) % count) * stride;
+    const auto* slot = reinterpret_cast<const volatile RingSlotHeaderV1*>(shm_.data() + off);
+    const uint64_t begin = slot->seq_begin;
+    const uint64_t end = slot->seq_end;
+    if (begin != wanted * 2 || end != begin) {
+      if (begin > wanted * 2) throw std::runtime_error("SHM slot overwritten before read");
+      return std::nullopt;
+    }
+    std::atomic_thread_fence(std::memory_order_acquire);
+    PayloadT payload{};
+    std::memcpy(&payload, shm_.data() + off + slot_header, sizeof(payload));
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (slot->seq_begin != begin || slot->seq_end != end) return std::nullopt;
+    cursor = wanted;
     return payload;
   }
 

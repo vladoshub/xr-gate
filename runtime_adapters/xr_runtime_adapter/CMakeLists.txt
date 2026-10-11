@@ -55,3 +55,27 @@ else()
 endif()
 
 install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_runtime_adapter)
+
+option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build controller IMU delivery tests" OFF)
+if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
+  enable_testing()
+  add_executable(controller_imu_delivery_test
+    tests/controller_imu_delivery_test.cpp
+    src/override_controller.cpp
+    "${XR_TRACKING_ROOT}/override_controller/src/core/controller_input_publisher.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/core/types.cpp"
+  )
+  target_compile_features(controller_imu_delivery_test PRIVATE cxx_std_17)
+  target_include_directories(controller_imu_delivery_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${XR_TRACKING_ROOT}/override_controller/include"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(controller_imu_delivery_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(controller_imu_delivery_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  target_link_libraries(controller_imu_delivery_test PRIVATE Threads::Threads rt)
+  add_test(NAME controller_imu_delivery_test COMMAND controller_imu_delivery_test)
+endif()

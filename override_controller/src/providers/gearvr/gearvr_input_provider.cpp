@@ -10,9 +10,8 @@
 #include "gearvr_input_codes.hpp"
 #include "gearvr_options.hpp"
 #include "gearvr_protocol.hpp"
+#include "gearvr_imu_stream.hpp"
 #include "gearvr_touchpad.hpp"
-
-#include <xr_override_controller/imu/controller_imu_processor.hpp>
 
 #include <algorithm>
 #include <array>
@@ -91,17 +90,15 @@ struct GearVrInputProvider::Impl {
     bool seen = false;
     std::string error;
     DeviceFingerprint fingerprint;
-    xr_runtime::ControllerImuStateV1 imu;
-    imu::ControllerImuProcessor imu_processor;
+    GearVrImuStream imu_stream;
     TouchpadProcessor touchpad;
-    uint64_t sequence = 0;
     uint64_t last_packet_ns = 0;
-    uint64_t previous_packet_ns = 0;
+    uint64_t last_imu_drop_warning_ns = 0;
     uint8_t previous_buttons = 0;
     bool previous_touch = false;
 
     Session(float beta, TouchpadOptions touchpad_options)
-        : imu_processor(beta), touchpad(std::move(touchpad_options)) {}
+        : imu_stream(beta), touchpad(std::move(touchpad_options)) {}
   };
 
   explicit Impl(ProviderOptionValues input_options)
@@ -178,19 +175,18 @@ struct GearVrInputProvider::Impl {
     session.ever_connected = session.ever_connected || connected;
     if (connected) {
       session.error.clear();
-      if (session.imu.status != xr_runtime::CONTROLLER_IMU_ACTIVE) {
-        session.imu.status = xr_runtime::CONTROLLER_IMU_CONNECTED;
+      if (session.imu_stream.latest.status != xr_runtime::CONTROLLER_IMU_ACTIVE) {
+        session.imu_stream.latest.status = xr_runtime::CONTROLLER_IMU_CONNECTED;
       }
     } else {
       release_all_inputs(session);
       session.notifications_active = false;
-      session.imu_processor.reset();
-      session.imu.data_flags = 0;
-      session.imu.sample_count = 0;
-      session.imu.status = session.ever_connected ? xr_runtime::CONTROLLER_IMU_LOST
+      session.imu_stream.reset();
+      session.imu_stream.latest.data_flags = 0;
+      session.imu_stream.latest.sample_count = 0;
+      session.imu_stream.latest.status = session.ever_connected ? xr_runtime::CONTROLLER_IMU_LOST
                                                   : xr_runtime::CONTROLLER_IMU_CONFIGURED;
       session.last_packet_ns = 0;
-      session.previous_packet_ns = 0;
     }
   }
 
@@ -217,10 +213,10 @@ struct GearVrInputProvider::Impl {
       update_fingerprint(session);
       update_connected(session, snapshot.connected);
       if (!session.connected) {
-        session.imu.status = session.ever_connected ? xr_runtime::CONTROLLER_IMU_LOST
+        session.imu_stream.latest.status = session.ever_connected ? xr_runtime::CONTROLLER_IMU_LOST
                                                     : xr_runtime::CONTROLLER_IMU_CONFIGURED;
       } else if (session.last_packet_ns == 0) {
-        session.imu.status = xr_runtime::CONTROLLER_IMU_CONNECTED;
+        session.imu_stream.latest.status = xr_runtime::CONTROLLER_IMU_CONNECTED;
       }
     }
 
@@ -260,8 +256,10 @@ struct GearVrInputProvider::Impl {
     const uint64_t packet_host_ns = packet.timestamp_ns != 0
                                         ? packet.timestamp_ns
                                         : static_cast<uint64_t>(monotonic_now_ns());
-    ++session.sequence;
-    session.previous_packet_ns = session.last_packet_ns;
+    if (session.last_packet_ns != 0 && packet_host_ns > session.last_packet_ns &&
+        packet_host_ns - session.last_packet_ns > kStaleNs) {
+      session.imu_stream.reset();
+    }
     session.last_packet_ns = packet_host_ns;
     emit_button_changes(session, decoded->buttons, packet_host_ns);
     const bool touched = !(decoded->touch_x == 0 && decoded->touch_y == 0);
@@ -274,97 +272,14 @@ struct GearVrInputProvider::Impl {
       queue_event(session, type, code, value, packet_host_ns);
     });
 
-    // A single notification contains two timestamped accel/gyro records.
-    // Process both in wire order. Device timestamps are microsecond ticks.
-    // Anchor the newest record
-    // to the host receive time and reconstruct the two earlier host times.
-    const uint32_t newest_device_us = decoded->imu_samples.back().device_timestamp_us;
-    uint64_t fallback_spacing_ns = 5'000'000ull;  // 200 Hz IMU fallback.
-    if (session.previous_packet_ns != 0 && packet_host_ns > session.previous_packet_ns) {
-      const uint64_t packet_delta_ns = packet_host_ns - session.previous_packet_ns;
-      if (packet_delta_ns >= 1'000'000ull && packet_delta_ns <= 100'000'000ull) {
-        fallback_spacing_ns = packet_delta_ns / decoded->imu_samples.size();
-      }
-    }
-
-    std::array<uint64_t, 2> sample_host_ns{};
-    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
-      const uint32_t delta_us = newest_device_us - decoded->imu_samples[i].device_timestamp_us;
-      if (delta_us <= 100'000u) {
-        const uint64_t delta_ns = static_cast<uint64_t>(delta_us) * 1000ull;
-        sample_host_ns[i] = packet_host_ns > delta_ns ? packet_host_ns - delta_ns : packet_host_ns;
-      } else {
-        const uint64_t fallback_delta_ns =
-            fallback_spacing_ns * (decoded->imu_samples.size() - 1u - i);
-        sample_host_ns[i] = packet_host_ns > fallback_delta_ns
-                                ? packet_host_ns - fallback_delta_ns
-                                : packet_host_ns;
-      }
-      if (i > 0 && sample_host_ns[i] <= sample_host_ns[i - 1]) {
-        sample_host_ns[i] = sample_host_ns[i - 1] + std::max<uint64_t>(100'000ull, fallback_spacing_ns);
-      }
-      if (sample_host_ns[i] > packet_host_ns) sample_host_ns[i] = packet_host_ns;
-    }
-
-    imu::QuaternionXyzw orientation;
-    std::array<imu::RawControllerImuSample, 2> corrected_samples{};
-    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
-      const auto& decoded_sample = decoded->imu_samples[i];
-      imu::RawControllerImuSample raw;
-      raw.host_timestamp_ns = sample_host_ns[i];
-      raw.device_timestamp_ticks = decoded_sample.device_timestamp_us;
-      raw.angular_velocity_rad_s = decoded_sample.gyro_rad_s;
-      raw.specific_force_m_s2 = decoded_sample.accel_m_s2;
-      raw.magnetic_field_uT = decoded->magnetic_uT;
-      raw.gyroscope_valid = true;
-      raw.accelerometer_valid = true;
-      raw.magnetometer_valid = true;
-      orientation = session.imu_processor.process(raw);
-      corrected_samples[i] = session.imu_processor.corrected_sample();
-    }
-
-    auto& state = session.imu;
-    state = {};
-    state.status = xr_runtime::CONTROLLER_IMU_ACTIVE;
-    state.capability_flags = xr_runtime::CONTROLLER_IMU_CAP_GYROSCOPE |
-                             xr_runtime::CONTROLLER_IMU_CAP_ACCELEROMETER |
-                             xr_runtime::CONTROLLER_IMU_CAP_MAGNETOMETER |
-                             xr_runtime::CONTROLLER_IMU_CAP_ORIENTATION;
-    state.data_flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                       xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                       xr_runtime::CONTROLLER_IMU_MAGNETOMETER_VALID |
-                       xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID |
-                       xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
-    if (session.imu_processor.gyro_calibrated()) {
-      state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
-    }
-    state.sequence = session.sequence;
-    state.latest_sample_timestamp_ns = sample_host_ns.back();
-    state.orientation_timestamp_ns = sample_host_ns.back();
-    state.orientation_xyzw[0] = orientation.x;
-    state.orientation_xyzw[1] = orientation.y;
-    state.orientation_xyzw[2] = orientation.z;
-    state.orientation_xyzw[3] = orientation.w;
-    state.magnetic_field_uT[0] = decoded->magnetic_uT.x;
-    state.magnetic_field_uT[1] = decoded->magnetic_uT.y;
-    state.magnetic_field_uT[2] = decoded->magnetic_uT.z;
-    state.sample_count = static_cast<uint32_t>(decoded->imu_samples.size());
-    for (size_t i = 0; i < decoded->imu_samples.size(); ++i) {
-      const auto& corrected = corrected_samples[i];
-      auto& sample = state.samples[i];
-      sample.timestamp_ns = sample_host_ns[i];
-      sample.angular_velocity_rad_s[0] = corrected.angular_velocity_rad_s.x;
-      sample.angular_velocity_rad_s[1] = corrected.angular_velocity_rad_s.y;
-      sample.angular_velocity_rad_s[2] = corrected.angular_velocity_rad_s.z;
-      sample.specific_force_m_s2[0] = corrected.specific_force_m_s2.x;
-      sample.specific_force_m_s2[1] = corrected.specific_force_m_s2.y;
-      sample.specific_force_m_s2[2] = corrected.specific_force_m_s2.z;
-      sample.flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                     xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                     xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
-      if (session.imu_processor.gyro_calibrated()) {
-        sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
-      }
+    const uint32_t dropped_before = session.imu_stream.dropped_batches();
+    session.imu_stream.push(*decoded, packet_host_ns);
+    if (session.imu_stream.dropped_batches() != dropped_before &&
+        (session.last_imu_drop_warning_ns == 0 ||
+         packet_host_ns - session.last_imu_drop_warning_ns >= 1'000'000'000ull)) {
+      session.last_imu_drop_warning_ns = packet_host_ns;
+      std::cerr << "[override_controller][WARN] Gear VR IMU batches dropped for "
+                << session.stable_id << ": " << session.imu_stream.dropped_batches() << " total\n";
     }
   }
 
@@ -376,10 +291,15 @@ struct GearVrInputProvider::Impl {
   void update_stale_states(uint64_t now_ns) {
     for (auto& [id, session] : sessions) {
       if (session->last_packet_ns != 0 && now_ns > session->last_packet_ns + kStaleNs &&
-          session->imu.status == xr_runtime::CONTROLLER_IMU_ACTIVE) {
-        session->imu.status = xr_runtime::CONTROLLER_IMU_STALE;
-        session->imu.data_flags = 0;
-        session->imu.sample_count = 0;
+          session->imu_stream.latest.status == xr_runtime::CONTROLLER_IMU_ACTIVE) {
+        // A long interruption invalidates AHRS timing and the runtime's
+        // integration epoch, even if BlueZ still reports a connection.
+        const auto retained = session->imu_stream.latest;
+        session->imu_stream.reset();
+        session->imu_stream.latest = retained;
+        session->imu_stream.latest.status = xr_runtime::CONTROLLER_IMU_STALE;
+        session->imu_stream.latest.data_flags = 0;
+        session->imu_stream.latest.sample_count = 0;
       }
     }
   }
@@ -466,6 +386,7 @@ void GearVrInputProvider::flush_events(std::vector<DeviceInfo>& devices) {
   impl_->pending_events.clear();
   impl_->pump(0, false);
   impl_->pending_events.clear();
+  for (auto& [id, session] : impl_->sessions) session->imu_stream.clear_pending();
   impl_->update_device_views(devices);
 }
 
@@ -534,7 +455,17 @@ ConfigMigrationResult GearVrInputProvider::migrate_config(AppConfig& cfg) const 
 
 xr_runtime::ControllerImuStateV1 GearVrInputProvider::imu_state(const DeviceInfo& device) const {
   const auto it = impl_->sessions.find(device.fingerprint.uniq);
-  return it == impl_->sessions.end() ? xr_runtime::ControllerImuStateV1{} : it->second->imu;
+  return it == impl_->sessions.end() ? xr_runtime::ControllerImuStateV1{} : it->second->imu_stream.latest;
+}
+
+xr_runtime::ControllerImuStateV1 GearVrInputProvider::consume_imu_state(const DeviceInfo& device) {
+  const auto it = impl_->sessions.find(device.fingerprint.uniq);
+  return it == impl_->sessions.end() ? xr_runtime::ControllerImuStateV1{} : it->second->imu_stream.consume();
+}
+
+bool GearVrInputProvider::has_pending_imu(const DeviceInfo& device) const {
+  const auto it = impl_->sessions.find(device.fingerprint.uniq);
+  return it != impl_->sessions.end() && it->second->imu_stream.pending();
 }
 
 void GearVrInputProvider::close_devices(std::vector<DeviceInfo>& devices) {

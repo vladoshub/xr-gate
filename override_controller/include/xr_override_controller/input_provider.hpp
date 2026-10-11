@@ -84,6 +84,16 @@ class InputProvider {
     return {};
   }
 
+  // Consume one queued batch when the provider retains notification history.
+  // Snapshot-only providers retain their existing behavior.
+  virtual xr_runtime::ControllerImuStateV1 consume_imu_state(const DeviceInfo& device) {
+    return imu_state(device);
+  }
+  virtual bool has_pending_imu(const DeviceInfo& device) const {
+    (void)device;
+    return false;
+  }
+
   // Release provider-owned OS handles stored in DeviceInfo. This keeps reattach
   // platform-neutral: the core can rescan devices without knowing whether the
   // provider uses POSIX fds, Windows HANDLEs, or another native resource.

@@ -309,6 +309,7 @@ Qf yaw_q(float yaw) {
 struct RuntimeAccelerationSample {
   uint64_t timestamp_ns = 0;
   float specific_force_m_s2[3] = {};
+  Qf orientation{};
 };
 
 struct RuntimeImuSample {
@@ -323,9 +324,7 @@ struct RuntimeImuSample {
   // This includes orientation_offset when configured.
   Qf orientation{};
   float angular_velocity_rad_s[3] = {};
-  uint32_t acceleration_sample_count = 0;
-  std::array<RuntimeAccelerationSample,
-             xr_runtime::CONTROLLER_IMU_MAX_SAMPLES> acceleration_samples{};
+  std::vector<RuntimeAccelerationSample> acceleration_samples;
 };
 
 RuntimeImuSample runtime_imu_sample(
@@ -411,8 +410,9 @@ RuntimeImuSample runtime_imu_sample(
     }
     if (!finite_v3(specific_force)) continue;
 
-    auto& destination =
-        out.acceleration_samples[out.acceleration_sample_count++];
+    out.acceleration_samples.emplace_back();
+    auto& destination = out.acceleration_samples.back();
+    destination.orientation = orientation;
     destination.timestamp_ns = source.timestamp_ns;
     std::copy(std::begin(specific_force), std::end(specific_force),
               destination.specific_force_m_s2);
@@ -423,7 +423,7 @@ RuntimeImuSample runtime_imu_sample(
   // source timestamp makes the runtime robust to packet/provider differences.
   std::stable_sort(
       out.acceleration_samples.begin(),
-      out.acceleration_samples.begin() + out.acceleration_sample_count,
+      out.acceleration_samples.end(),
       [](const RuntimeAccelerationSample& a,
          const RuntimeAccelerationSample& b) {
         if (a.timestamp_ns == 0) return false;
@@ -805,7 +805,7 @@ bool runtime_world_linear_acceleration(
     return false;
   }
 
-  q_rotate(imu.orientation, acceleration_sample.specific_force_m_s2,
+  q_rotate(acceleration_sample.orientation, acceleration_sample.specific_force_m_s2,
            out_acceleration);
   out_acceleration[1] -= std::max(0.0f, gravity_magnitude_mps2);
   if (!finite_v3(out_acceleration)) return false;
@@ -830,7 +830,7 @@ bool runtime_world_linear_acceleration(
 
 uint64_t latest_acceleration_sample_timestamp(const RuntimeImuSample& imu) {
   uint64_t latest = 0;
-  for (uint32_t i = 0; i < imu.acceleration_sample_count; ++i) {
+  for (uint32_t i = 0; i < imu.acceleration_samples.size(); ++i) {
     latest = std::max(latest, imu.acceleration_samples[i].timestamp_ns);
   }
   return latest;
@@ -855,7 +855,7 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
     float prediction_progress) {
   AccelerationIntegrationResult result{};
   if (!cfg.acceleration_integration_enabled || !imu.orientation_valid ||
-      imu.acceleration_sample_count == 0) {
+      imu.acceleration_samples.empty()) {
     return result;
   }
 
@@ -868,7 +868,7 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
   }
 
   const float acceleration_weight = 1.0f - prediction_progress;
-  for (uint32_t i = 0; i < imu.acceleration_sample_count; ++i) {
+  for (uint32_t i = 0; i < imu.acceleration_samples.size(); ++i) {
     const auto& sample = imu.acceleration_samples[i];
     if (sample.timestamp_ns == 0 ||
         sample.timestamp_ns <= state.last_acceleration_sample_timestamp_ns) {
@@ -1908,7 +1908,8 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   const xr_runtime::ControllerInputV3* controller_input,
                   const xr_runtime::HmdPoseF64V1* hmd,
                   uint64_t timestamp_ns,
-                  RuntimeControllerImuSideRuntimeState* runtime_state) {
+                  RuntimeControllerImuSideRuntimeState* runtime_state,
+                  const std::vector<xr_runtime::ControllerInputV3>* imu_history) {
   out.role = left ? xr_runtime::CONTROLLER_SIDE_LEFT : xr_runtime::CONTROLLER_SIDE_RIGHT;
   copy_debug_source(out, xr_runtime::runtime_controller_mode_name(cfg.mode));
 
@@ -1989,8 +1990,45 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           left ? cfg.left_imu_orientation : cfg.right_imu_orientation;
       const RuntimeControllerImuMotionConfig& imu_motion_cfg =
           left ? cfg.left_imu_motion : cfg.right_imu_motion;
-      const RuntimeImuSample physical_imu =
-          runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      const bool diagnostics = (controller_side->imu.capability_flags &
+          xr_runtime::CONTROLLER_IMU_CAP_STREAM_DIAGNOSTICS) != 0u;
+      const uint32_t epoch = diagnostics ? controller_side->imu.reserved[
+          xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] : 0;
+      const uint32_t dropped = diagnostics ? controller_side->imu.reserved[
+          xr_runtime::CONTROLLER_IMU_DIAG_DROPPED_BATCHES] : 0;
+      if (runtime_state != nullptr) {
+        if (runtime_state->imu_stream_identity_valid &&
+            (runtime_state->imu_physical_device_hash != controller_side->physical_device_hash ||
+             runtime_state->imu_stream_epoch != epoch ||
+             runtime_state->imu_dropped_batches != dropped)) {
+          *runtime_state = {};
+        }
+        runtime_state->imu_stream_identity_valid = true;
+        runtime_state->imu_physical_device_hash = controller_side->physical_device_hash;
+        runtime_state->imu_stream_epoch = epoch;
+        runtime_state->imu_dropped_batches = dropped;
+      }
+      RuntimeImuSample physical_imu = runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      if (imu_history != nullptr) {
+        for (const auto& input : *imu_history) {
+          const auto& side = left ? input.left : input.right;
+          if (side.physical_device_hash != controller_side->physical_device_hash ||
+              side.imu.sequence > controller_side->imu.sequence ||
+              side.imu.latest_sample_timestamp_ns > controller_side->imu.latest_sample_timestamp_ns) continue;
+          if (diagnostics && (side.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] != epoch ||
+                              side.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_DROPPED_BATCHES] != dropped)) continue;
+          const auto batch = runtime_imu_sample(side, imu_orientation_cfg);
+          physical_imu.acceleration_samples.insert(physical_imu.acceleration_samples.end(),
+              batch.acceleration_samples.begin(), batch.acceleration_samples.end());
+        }
+        auto& samples = physical_imu.acceleration_samples;
+        std::stable_sort(samples.begin(), samples.end(), [](const auto& a, const auto& b) {
+          return a.timestamp_ns < b.timestamp_ns;
+        });
+        samples.erase(std::unique(samples.begin(), samples.end(), [](const auto& a, const auto& b) {
+          return a.timestamp_ns == b.timestamp_ns;
+        }), samples.end());
+      }
       RuntimeImuSample presentation_imu = physical_imu;
 
       // Yaw correction is a presentation-only wrist-orientation adjustment.
@@ -2311,7 +2349,8 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const std::optional<xr_runtime::ControllerInputV3>& controller_input,
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     float gravity_magnitude_mps2,
-    RuntimeControllerSynthesisState* runtime_state) {
+    RuntimeControllerSynthesisState* runtime_state,
+    const std::vector<xr_runtime::ControllerInputV3>* imu_history) {
   xr_runtime::RuntimeControllerStateFrameV1 frame{};
   frame.sequence = sequence;
   frame.timestamp_ns = timestamp_ns;
@@ -2324,10 +2363,10 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
 
   compose_side(frame.left, true, cfg, gravity_magnitude_mps2, hand, yaw_hand,
                controller, hmd, timestamp_ns,
-               runtime_state != nullptr ? &runtime_state->left : nullptr);
+               runtime_state != nullptr ? &runtime_state->left : nullptr, imu_history);
   compose_side(frame.right, false, cfg, gravity_magnitude_mps2, hand, yaw_hand,
                controller, hmd, timestamp_ns,
-               runtime_state != nullptr ? &runtime_state->right : nullptr);
+               runtime_state != nullptr ? &runtime_state->right : nullptr, imu_history);
 
   if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {
     frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_CONNECTED;

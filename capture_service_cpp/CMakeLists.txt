@@ -74,7 +74,7 @@ else()
 endif()
 
 add_executable(capture_service_cpp ${CAPTURE_SERVICE_CPP_SOURCES})
-target_include_directories(capture_service_cpp PRIVATE include ${HIDAPI_INCLUDE_DIR})
+target_include_directories(capture_service_cpp PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include" ${HIDAPI_INCLUDE_DIR})
 target_link_libraries(capture_service_cpp PRIVATE ${OpenCV_LIBS} ${HIDAPI_LIBRARY} Threads::Threads)
 
 # Small metadata-only client used by backend launchers before the main capture
@@ -186,7 +186,7 @@ if(BUILD_TESTING)
     tests/affine_device_clock_mapper_smoke.cpp
     src/timing/affine_device_clock_mapper.cpp
   )
-  target_include_directories(affine_device_clock_mapper_smoke PRIVATE include)
+  target_include_directories(affine_device_clock_mapper_smoke PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include")
   add_test(NAME affine_device_clock_mapper_smoke COMMAND affine_device_clock_mapper_smoke)
 
   add_executable(xreal_device_timing_smoke
@@ -196,7 +196,7 @@ if(BUILD_TESTING)
     src/vendor/xreal_camera_metadata.cpp
     src/vendor/xreal_imu_codec.cpp
   )
-  target_include_directories(xreal_device_timing_smoke PRIVATE include)
+  target_include_directories(xreal_device_timing_smoke PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include")
   target_link_libraries(xreal_device_timing_smoke PRIVATE Threads::Threads)
   add_test(NAME xreal_device_timing_smoke COMMAND xreal_device_timing_smoke)
 
@@ -232,7 +232,7 @@ if(BUILD_TESTING)
       src/protocols/xr_imu_v1.cpp
       src/timing/affine_device_clock_mapper.cpp
     )
-    target_include_directories(serial_imu_transport_activity_linux PRIVATE include)
+    target_include_directories(serial_imu_transport_activity_linux PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include")
     add_test(NAME serial_imu_transport_activity_linux COMMAND serial_imu_transport_activity_linux)
   endif()
 endif()

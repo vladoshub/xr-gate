@@ -25,6 +25,7 @@ add_executable(override_controller
   src/imu/controller_imu_processor.cpp
   src/imu/controller_imu_transform.cpp
   src/providers/gearvr/gearvr_input_provider.cpp
+  src/providers/gearvr/gearvr_imu_stream.cpp
   src/providers/gearvr/gearvr_config_migration.cpp
   src/providers/gearvr/gearvr_options.cpp
   src/providers/gearvr/gearvr_protocol.cpp
@@ -131,6 +132,41 @@ install(PROGRAMS ${OVERRIDE_CONTROLLER_TOOL_FILES}
 option(OVERRIDE_CONTROLLER_BUILD_TESTS "Build override_controller protocol tests" OFF)
 if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   enable_testing()
+  add_executable(gearvr_imu_stream_test
+    tests/gearvr_imu_stream_test.cpp
+    src/providers/gearvr/gearvr_imu_stream.cpp
+    src/providers/gearvr/gearvr_protocol.cpp
+    src/imu/controller_imu_processor.cpp
+    src/core/backend_control.cpp
+  )
+  target_include_directories(gearvr_imu_stream_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/include"
+    "${CMAKE_CURRENT_LIST_DIR}/src/providers/gearvr"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  target_link_libraries(gearvr_imu_stream_test PRIVATE Threads::Threads)
+  add_test(NAME gearvr_imu_stream_test COMMAND gearvr_imu_stream_test)
+  add_executable(gearvr_input_provider_test
+    tests/gearvr_input_provider_test.cpp
+    src/providers/gearvr/gearvr_input_provider.cpp
+    src/providers/gearvr/gearvr_imu_stream.cpp
+    src/providers/gearvr/gearvr_protocol.cpp
+    src/providers/gearvr/gearvr_options.cpp
+    src/providers/gearvr/gearvr_config_migration.cpp
+    src/providers/gearvr/gearvr_touchpad.cpp
+    src/platform/composite_input_provider.cpp
+    src/imu/controller_imu_processor.cpp
+    src/core/backend_control.cpp
+    src/core/types.cpp
+  )
+  target_include_directories(gearvr_input_provider_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/include"
+    "${CMAKE_CURRENT_LIST_DIR}/src/providers/gearvr"
+    "${CMAKE_CURRENT_LIST_DIR}/src/platform"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  target_link_libraries(gearvr_input_provider_test PRIVATE Threads::Threads)
+  add_test(NAME gearvr_input_provider_test COMMAND gearvr_input_provider_test)
   add_executable(xr_controller_v1_protocol_test
     tests/xr_controller_v1_protocol_test.cpp
     src/providers/xiao_nrf54l15/xr_controller_v1_protocol.cpp
