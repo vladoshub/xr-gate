@@ -18,6 +18,7 @@
 #include <linux/input.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <map>
 #include <tuple>
@@ -325,10 +326,29 @@ InputEvent make_stop_event(size_t device_index, uint16_t code) {
 
 }  // namespace
 
+LinuxEvdevInputProvider::~LinuxEvdevInputProvider() {
+  for (const auto& [fd, device] : open_devices_) {
+    (void)device;
+    close(fd);
+  }
+}
+
+void LinuxEvdevInputProvider::close_device(DeviceInfo& device) {
+  if (device.fd >= 0) {
+    open_devices_.erase(device.fd);
+    // Closing the final reference releases the kernel grab automatically.
+    // An explicit EVIOCGRAB(0) here would also ungrab the active device when
+    // this fd is only an alias belonging to a discarded scan candidate.
+    close(device.fd);
+    device.fd = -1;
+  }
+  device.readable = false;
+}
+
 std::vector<DeviceInfo> LinuxEvdevInputProvider::scan_devices(bool open_readable) {
   std::vector<DeviceInfo> out;
   std::error_code ec;
-  const fs::path input_dir("/dev/input");
+  const fs::path input_dir(input_directory_);
   if (!fs::exists(input_dir, ec)) return out;
 
   for (const auto& entry : fs::directory_iterator(input_dir, ec)) {
@@ -337,6 +357,34 @@ std::vector<DeviceInfo> LinuxEvdevInputProvider::scan_devices(bool open_readable
     if (name.rfind("event", 0) != 0) continue;
 
     DeviceInfo dev;
+    struct stat node{};
+    const bool have_node = stat(entry.path().c_str(), &node) == 0;
+    bool reused = false;
+    for (const auto& [live_fd, cached] : open_devices_) {
+      if (!have_node || !cached.node_identity_valid ||
+          cached.fingerprint.event_path != entry.path().string() ||
+          cached.node_device != static_cast<uint64_t>(node.st_dev) ||
+          cached.node_inode != static_cast<uint64_t>(node.st_ino) ||
+          cached.node_rdev != static_cast<uint64_t>(node.st_rdev)) continue;
+      struct stat live_node{};
+      if (fstat(live_fd, &live_node) != 0 || live_node.st_dev != node.st_dev ||
+          live_node.st_ino != node.st_ino || live_node.st_rdev != node.st_rdev) continue;
+
+      if (open_readable) {
+        dev.fd = fcntl(live_fd, F_DUPFD_CLOEXEC, 3);
+        if (dev.fd < 0) continue;
+        open_devices_.emplace(dev.fd, cached);
+      }
+      dev.fingerprint = cached.fingerprint;
+      dev.readable = true;
+      reused = true;
+      break;
+    }
+    if (reused) {
+      out.push_back(std::move(dev));
+      continue;
+    }
+
     std::string open_error;
     const int fd = open_evdev_readonly_nonblocking(entry.path(), open_error);
     if (fd < 0) {
@@ -352,6 +400,16 @@ std::vector<DeviceInfo> LinuxEvdevInputProvider::scan_devices(bool open_readable
     dev.readable = true;
     if (open_readable) {
       dev.fd = fd;
+      OpenDevice cached;
+      cached.fingerprint = dev.fingerprint;
+      struct stat opened_node{};
+      if (fstat(fd, &opened_node) == 0) {
+        cached.node_device = static_cast<uint64_t>(opened_node.st_dev);
+        cached.node_inode = static_cast<uint64_t>(opened_node.st_ino);
+        cached.node_rdev = static_cast<uint64_t>(opened_node.st_rdev);
+        cached.node_identity_valid = true;
+      }
+      open_devices_.emplace(fd, std::move(cached));
     } else {
       close(fd);
     }
@@ -365,6 +423,11 @@ std::vector<DeviceInfo> LinuxEvdevInputProvider::scan_devices(bool open_readable
 }
 
 void LinuxEvdevInputProvider::flush_events(std::vector<DeviceInfo>& devices) {
+  // An explicit flush follows a real reattach, where queued events may refer
+  // to indices in the old view. Candidate cleanup must not do this instead.
+  pending_events_.clear();
+  left_ctrl_down_ = false;
+  right_ctrl_down_ = false;
   input_event ev{};
   for (auto& d : devices) {
     if (d.fd < 0) continue;
@@ -373,16 +436,11 @@ void LinuxEvdevInputProvider::flush_events(std::vector<DeviceInfo>& devices) {
 }
 
 void LinuxEvdevInputProvider::close_devices(std::vector<DeviceInfo>& devices) {
-  pending_events_.clear();
-  left_ctrl_down_ = false;
-  right_ctrl_down_ = false;
-  for (auto& d : devices) {
-    if (d.fd >= 0) {
-      (void)ioctl(d.fd, EVIOCGRAB, 0);
-      close(d.fd);
-      d.fd = -1;
-    }
-    d.readable = false;
+  for (auto& d : devices) close_device(d);
+  if (open_devices_.empty()) {
+    pending_events_.clear();
+    left_ctrl_down_ = false;
+    right_ctrl_down_ = false;
   }
 }
 
@@ -498,12 +556,7 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
 
       if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         d.open_error = std::strerror(errno);
-        d.readable = false;
-        if (d.fd >= 0) {
-          (void)ioctl(d.fd, EVIOCGRAB, 0);
-          close(d.fd);
-          d.fd = -1;
-        }
+        close_device(d);
       }
     }
 

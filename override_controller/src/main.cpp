@@ -2408,12 +2408,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
 
       const auto scan_started = std::chrono::steady_clock::now();
       std::vector<DeviceInfo> candidate_devices = provider.scan_devices(true);
-      const auto scan_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - scan_started).count();
-      if (scan_ms >= 100) {
-        std::cerr << "[override_controller][WARN] reattach scan paused input polling: "
-                  << scan_ms << " ms\n";
-      }
+      const auto scan_finished = std::chrono::steady_clock::now();
       std::vector<RuntimeBinding> candidate_bindings = resolve_bindings(cfg, candidate_devices, false);
       std::vector<RuntimeBinding> candidate_toggle_bindings = resolve_hold_toggle_bindings(cfg, candidate_devices, false);
       std::vector<RuntimeBinding> candidate_alt_bindings = resolve_alternative_bindings(cfg, candidate_devices, false);
@@ -2446,6 +2441,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
       const size_t candidate_total = candidate_resolved + candidate_toggle_resolved + candidate_alt_resolved +
                                      candidate_alt_toggle_resolved + candidate_switch_resolved;
       const bool should_reattach = candidate_total != current_total || mapping_changed;
+      const auto apply_started = std::chrono::steady_clock::now();
       if (should_reattach) {
         const bool had_active_bindings = any_runtime_binding_active(bindings) ||
                                          any_runtime_binding_active(hold_toggle_bindings) ||
@@ -2494,6 +2490,21 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
         provider.flush_events(devices);
       } else {
         provider.close_devices(candidate_devices);
+      }
+      const auto reattach_finished = std::chrono::steady_clock::now();
+      const auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          reattach_finished - scan_started).count();
+      if (total_ms >= 100) {
+        const auto scan_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            scan_finished - scan_started).count();
+        const auto resolve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            apply_started - scan_finished).count();
+        const auto apply_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            reattach_finished - apply_started).count();
+        std::cerr << "[override_controller][WARN] reattach check paused input polling: total_ms="
+                  << total_ms << " scan_ms=" << scan_ms << " resolve_ms=" << resolve_ms
+                  << (should_reattach ? " replace_ms=" : " candidate_close_ms=") << apply_ms
+                  << "\n";
       }
     }
 

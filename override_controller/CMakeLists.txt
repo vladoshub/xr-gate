@@ -188,4 +188,20 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
     "${XR_SHARED_INCLUDE_DIR}"
   )
   add_test(NAME controller_imu_transform_test COMMAND controller_imu_transform_test)
+
+  if(UNIX AND NOT APPLE)
+    add_executable(evdev_rescan_test
+      tests/evdev_rescan_test.cpp
+      src/platform/linux/linux_evdev_input_provider.cpp
+      src/core/types.cpp
+    )
+    target_include_directories(evdev_rescan_test PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/include"
+      "${CMAKE_CURRENT_LIST_DIR}/src/platform/linux"
+      "${XR_SHARED_INCLUDE_DIR}"
+    )
+    target_link_libraries(evdev_rescan_test PRIVATE Threads::Threads)
+    target_link_options(evdev_rescan_test PRIVATE "-Wl,--wrap=ioctl")
+    add_test(NAME evdev_rescan_test COMMAND evdev_rescan_test)
+  endif()
 endif()
