@@ -360,8 +360,10 @@ struct XiaoNrf54l15InputProvider::Impl {
       state.capability_flags |= xr_runtime::CONTROLLER_IMU_CAP_DEVICE_TIMESTAMP;
     }
     state.data_flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                       xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                       xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
+                       xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID;
+    if (session.imu_processor.orientation_initialized()) {
+      state.data_flags |= xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
+    }
     if (timing.device_time_valid) state.data_flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (session.imu_processor.gyro_calibrated()) {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;

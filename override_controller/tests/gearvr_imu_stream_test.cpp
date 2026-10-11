@@ -141,7 +141,34 @@ void missing_measurements_preserve_ahrs_reference() {
           "pre-gap history remained eligible for position integration");
 }
 
+void gravity_reference_controls_orientation_validity() {
+  GearVrImuStream stream(0.04f);
+  const uint64_t start_ns = 60'000'000'000ULL;
+  auto moving = packet(10000, 15000);
+  require(stream.push(moving, start_ns), "moving startup packet rejected");
+  require((stream.latest.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "uninitialized startup orientation was published as valid");
+  require(stream.latest.sample_count == 2 &&
+          (stream.latest.data_flags & CONTROLLER_IMU_ACCELEROMETER_VALID) != 0u,
+          "gravity startup gate discarded timed raw measurements");
+  auto quiet = packet(20000, 25000);
+  for (auto& sample : quiet.imu_samples) {
+    sample.gyro_rad_s = {};
+    sample.accel_m_s2 = {0, 8.492808f, -4.903325f};
+  }
+  require(stream.push(quiet, start_ns + 10'000'000), "quiet startup packet rejected");
+  require((stream.latest.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0u,
+          "initialized gravity reference was not published");
+  require(stream.latest.reserved[CONTROLLER_IMU_DIAG_EPOCH] == 1,
+          "initializing unadvertised orientation changed the clock epoch");
+  stream.reset();
+  require(stream.push(moving, start_ns + 20'000'000), "post-reset packet rejected");
+  require((stream.latest.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "reset published an old gravity reference as valid");
+}
+
 int main() {
+  gravity_reference_controls_orientation_validity();
   wrap_reset_and_fifo();
   jitter_drift_and_ahrs();
   overflow_and_overlap();

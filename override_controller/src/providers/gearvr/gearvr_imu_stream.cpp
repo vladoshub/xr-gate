@@ -87,7 +87,7 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
       CONTROLLER_IMU_CAP_MULTI_SAMPLE_PACKET | CONTROLLER_IMU_CAP_STREAM_DIAGNOSTICS;
   state.data_flags = CONTROLLER_IMU_GYROSCOPE_VALID |
       CONTROLLER_IMU_ACCELEROMETER_VALID | CONTROLLER_IMU_MAGNETOMETER_VALID |
-      CONTROLLER_IMU_ORIENTATION_VALID | CONTROLLER_IMU_HOST_TIME_SYNCED;
+      CONTROLLER_IMU_HOST_TIME_SYNCED;
   state.sequence = ++sequence_;
   uint64_t previous_us = previous_device_us;
   bool have_previous = had_previous;
@@ -138,6 +138,7 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
   state.latest_sample_timestamp_ns = last_host_ns_;
   state.orientation_timestamp_ns = last_host_ns_;
   state.latest_device_timestamp_ticks = newest_us;
+  if (processor_.orientation_initialized()) state.data_flags |= CONTROLLER_IMU_ORIENTATION_VALID;
   if (processor_.gyro_calibrated()) state.data_flags |= CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
   state.magnetic_field_uT[0] = packet.magnetic_uT.x;
   state.magnetic_field_uT[1] = packet.magnetic_uT.y;

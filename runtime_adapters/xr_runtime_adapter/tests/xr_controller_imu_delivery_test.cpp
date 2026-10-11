@@ -38,7 +38,8 @@ class FakeSerial final : public ctl::SerialTransport {
     bytes = std::move(queue.front()); queue.pop_front(); return true;
   }
   void enqueue(const std::string& id, uint32_t sequence, uint64_t device_us,
-                uint64_t rx, size_t count = 3, uint8_t flags = 1, float gyro = 0) {
+                uint64_t rx, size_t count = 3, uint8_t flags = 1, float gyro = 0,
+                std::array<float, 3> force = {1, 9.81f, 0}) {
     ctl::SerialBytes bytes;
     bytes.stable_id = id; bytes.host_timestamp_ns = rx;
     for (size_t i = 0; i < count; ++i) {
@@ -46,7 +47,7 @@ class FakeSerial final : public ctl::SerialTransport {
       s.sequence = sequence + static_cast<uint32_t>(i);
       s.device_timestamp_us = device_us + i * 4808;
       s.flags = flags; s.gyro_rad_s[2] = gyro;
-      s.accel_m_s2 = {1, 9.81f, 0};
+      s.accel_m_s2 = force;
       std::array<uint8_t, cap::kXrControllerV1PacketSize> packet{};
       require(cap::encode_xr_controller_v1(s, packet.data(), packet.size()), "encode serial packet");
       bytes.bytes.insert(bytes.bytes.end(), packet.begin(), packet.end());
@@ -90,7 +91,40 @@ oc::OutputState output(const ControllerImuStateV1& imu) {
   return out;
 }
 
+void serial_gravity_reference_controls_orientation_validity() {
+  ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0.04"}});
+  auto devices = provider.scan_devices(true);
+  const uint64_t receive_ns = test_now_ns() - 40'000'000;
+  const std::array<float, 3> gravity{0, 8.492808f, -4.903325f};
+  serial->enqueue("left", 0, 1'000'000, receive_ns, 1, 1, 1.0f, gravity);
+  provider.wait_event(devices, 5, false);
+  const auto moving = provider.imu_state(devices[0]);
+  require((moving.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "serial moving startup advertised an uninitialized gravity reference");
+  require(moving.sample_count == 1 && moving.latest_device_timestamp_ticks == 1'000'000,
+          "serial gravity gate discarded timed raw measurements");
+  serial->enqueue("left", 1, 1'004'808, receive_ns + 4'808'000, 1, 1, 0, gravity);
+  provider.wait_event(devices, 5, false);
+  const auto quiet = provider.imu_state(devices[0]);
+  require((quiet.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0u,
+          "serial quiet gravity did not initialize orientation");
+  require(std::abs(quiet.orientation_xyzw[0] - 0.8660254f) < 0.0001f &&
+          std::abs(quiet.orientation_xyzw[3] - 0.5f) < 0.0001f,
+          "serial tilted startup uses an arbitrary orientation");
+  require(quiet.latest_device_timestamp_ticks == 1'004'808 &&
+          quiet.reserved[CONTROLLER_IMU_DIAG_EPOCH] == moving.reserved[CONTROLLER_IMU_DIAG_EPOCH],
+          "serial orientation initialization changed acquisition timing");
+  serial->snapshots[0].connected = false;
+  provider.wait_event(devices, 5, false);
+  serial->snapshots[0].connected = true;
+  serial->enqueue("left", 0, 0, receive_ns + 10'000'000, 1, 1, 1.0f, gravity);
+  provider.wait_event(devices, 5, false);
+  require((provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "serial reconnect retained an initialized old gravity reference");
+}
+
 int main() {
+  serial_gravity_reference_controls_orientation_validity();
   static_assert(sizeof(ControllerInputV3) == 1432, "controller ABI changed");
   ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});
   auto devices = provider.scan_devices(true);

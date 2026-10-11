@@ -2,6 +2,7 @@
 #include "hand_pose_stability_filter.hpp"
 #include "hand_tracking_freshness.hpp"
 #include "override_controller.hpp"
+#include <xr_override_controller/imu/controller_imu_processor.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -79,6 +80,62 @@ struct Scenario {
     return compose_runtime_controller_state(sequence, t, cfg, h, h, input, hmd, 9.81f, &state);
   }
 };
+
+void initialized_gravity_preserves_optical_motion() {
+  for (bool right : {false, true}) {
+    Scenario s;
+    s.cfg.left_imu_motion.hold_lost_ms = 0;
+    s.cfg.left_imu_motion.predict_lost_ms = 1000;
+    s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+    s.cfg.right_imu_motion = s.cfg.left_imu_motion;
+    xr_override_controller::imu::ControllerImuProcessor processor;
+    const auto basis = cu::q_from_axis_angle(1, 0, 0, -kPi / 2);
+    for (int epoch = 1; epoch <= 2; ++epoch) {
+      processor.reset();
+      s.state = {};
+      (right ? s.state.right : s.state.left).acceleration_world_yaw_valid = true;
+      const float tilt = epoch == 1 ? 2 * kPi / 3 : kPi;
+      const cu::V3d force{0, 9.81 * std::sin(tilt), 9.81 * std::cos(tilt)};
+      const auto converted_force = cu::q_rotate(basis, force);
+      for (int ms = 0; ms <= 600; ms += 10) {
+        const auto t = s.prepare(ms + epoch * 1000);
+        xr_override_controller::imu::RawControllerImuSample sample{};
+        sample.host_timestamp_ns = t;
+        sample.sample_interval_seconds = 0.01f;
+        sample.gyroscope_valid = sample.accelerometer_valid = true;
+        sample.specific_force_m_s2 = {float(force.x), float(force.y), float(force.z)};
+        const auto q = processor.process(sample);
+        // The provider converts AHRS world +Z and sensor axes to XR +Y.
+        const auto orientation = cu::q_mul(cu::q_mul(basis, cu::Qd{q.w, q.x, q.y, q.z}), cu::q_conj(basis));
+        auto input = s.input;
+        input.left.imu.reserved[CONTROLLER_IMU_DIAG_EPOCH] = epoch;
+        input.left.imu.orientation_xyzw[0] = orientation.x;
+        input.left.imu.orientation_xyzw[1] = orientation.y;
+        input.left.imu.orientation_xyzw[2] = orientation.z;
+        input.left.imu.orientation_xyzw[3] = orientation.w;
+        auto& force_sample = input.left.imu.samples[0];
+        force_sample.specific_force_m_s2[0] = converted_force.x;
+        force_sample.specific_force_m_s2[1] = converted_force.y;
+        force_sample.specific_force_m_s2[2] = converted_force.z;
+        auto hand = s.hand;
+        hand.left.vz = 0.6f;
+        if (right) {
+          input.right = input.left; input.left = {};
+          hand.right = hand.left; hand.left = {};
+          hand.flags = HAND_FLAG_RIGHT_VALID;
+        }
+        const auto optical = ms == 0 ? std::optional(hand) : std::nullopt;
+        const auto output = compose_runtime_controller_state(s.sequence, t, s.cfg,
+            optical, optical, input, std::nullopt, 9.81f, &s.state);
+        const auto& side = right ? output.right : output.left;
+        near(side.position[0], 0, "tilted startup invented lateral motion", 0.001f);
+        near(side.position[1], 0, "tilted startup invented vertical motion", 0.001f);
+        near(side.position[2], 0.6f * ms / 1000,
+             "tilted startup reversed optical launch velocity", 0.001f);
+      }
+    }
+  }
+}
 
 void rigid_grip_does_not_change_world_alignment() {
   for (bool right : {false, true}) {
@@ -636,6 +693,7 @@ void speed_distance_and_timeout_limits() {
 
 int main() {
   static_assert(sizeof(ControllerInputV3) == 1432, "controller V3 ABI changed");
+  initialized_gravity_preserves_optical_motion();
   rigid_grip_does_not_change_world_alignment();
   motion_alignment_uses_source_time_and_observable_rotations();
   world_frame_and_yaw_continuity();

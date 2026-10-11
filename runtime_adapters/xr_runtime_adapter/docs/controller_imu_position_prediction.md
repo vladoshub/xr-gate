@@ -20,6 +20,14 @@ loss preserves the reference, while an AHRS epoch/device change resets it.
 Until alignment is available, optical velocity can predict position but force
 in an unknown frame is not integrated.
 
+The shared controller Madgwick processor initializes pitch/roll from the first
+credible stationary gravity observation after startup or reset. Providers keep
+`CONTROLLER_IMU_ORIENTATION_VALID` clear until then, rather than advertising an
+arbitrary identity orientation as a usable gravity reference. Quiet means gyro
+below 0.20 rad/s and force magnitude within 1 m/s2 of configured gravity.
+Yaw is still identified independently from optical/IMU rotations. An explicit
+`madgwick_beta=0` retains the existing gyro-only reference and startup behavior.
+
 V3 still carries one AHRS quaternion per batch. Older sample orientations are
 approximately reconstructed backward with the corrected gyroscope and sample
 timestamps before axis/mounting transforms. This does not reproduce the

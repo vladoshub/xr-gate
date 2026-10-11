@@ -44,10 +44,12 @@ class Madgwick6Dof {
                         const Vec3f& specific_force_m_s2,
                         float dt_seconds);
   const QuaternionXyzw& orientation() const { return orientation_; }
+  bool orientation_initialized() const { return orientation_initialized_; }
 
  private:
   float beta_ = 0.04f;
   QuaternionXyzw orientation_;
+  bool orientation_initialized_ = false;
 };
 
 class ControllerImuProcessor {
@@ -58,6 +60,7 @@ class ControllerImuProcessor {
   QuaternionXyzw process(const RawControllerImuSample& sample);
 
   const QuaternionXyzw& orientation() const { return filter_.orientation(); }
+  bool orientation_initialized() const { return filter_.orientation_initialized(); }
   const Vec3f& gyro_bias_rad_s() const { return gyro_bias_rad_s_; }
   uint32_t gyro_bias_sample_count() const { return gyro_bias_sample_count_; }
   bool gyro_calibrated() const { return gyro_bias_sample_count_ >= 50; }

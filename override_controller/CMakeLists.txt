@@ -135,6 +135,14 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   add_executable(serial_imu_clock_test tests/serial_imu_clock_test.cpp)
   target_include_directories(serial_imu_clock_test PRIVATE "${XR_SHARED_INCLUDE_DIR}")
   add_test(NAME serial_imu_clock_test COMMAND serial_imu_clock_test)
+  add_executable(controller_imu_gravity_test
+    tests/controller_imu_gravity_test.cpp
+    src/imu/controller_imu_processor.cpp
+    src/core/backend_control.cpp
+  )
+  target_include_directories(controller_imu_gravity_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+  target_link_libraries(controller_imu_gravity_test PRIVATE Threads::Threads)
+  add_test(NAME controller_imu_gravity_test COMMAND controller_imu_gravity_test)
   add_executable(gearvr_imu_stream_test
     tests/gearvr_imu_stream_test.cpp
     src/providers/gearvr/gearvr_imu_stream.cpp
