@@ -136,7 +136,9 @@ QuaternionXyzw ControllerImuProcessor::process(const RawControllerImuSample& sam
   corrected_sample_.angular_velocity_rad_s.z -= gyro_bias_rad_s_.z;
 
   float dt = 1.0f / 100.0f;
-  if (previous_timestamp_ns_ != 0 && sample.host_timestamp_ns > previous_timestamp_ns_) {
+  if (std::isfinite(sample.sample_interval_seconds) && sample.sample_interval_seconds > 0.0f) {
+    dt = sample.sample_interval_seconds;
+  } else if (previous_timestamp_ns_ != 0 && sample.host_timestamp_ns > previous_timestamp_ns_) {
     dt = static_cast<float>(sample.host_timestamp_ns - previous_timestamp_ns_) / 1.0e9f;
   }
   previous_timestamp_ns_ = sample.host_timestamp_ns;

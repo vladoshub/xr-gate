@@ -3,7 +3,7 @@
 #include "capture_service_cpp/platform/serial_port.hpp"
 #include "capture_service_cpp/protocols/xr_controller_v1.hpp"
 #include "capture_service_cpp/protocols/xr_imu_v1.hpp"
-#include "capture_service_cpp/timing/affine_device_clock_mapper.hpp"
+#include <xr_tracking/timing/serial_imu_clock.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,6 +11,7 @@
 #include <iostream>
 #include <chrono>
 #include <filesystem>
+#include <deque>
 #include <set>
 #include <thread>
 #include <memory>
@@ -193,6 +194,11 @@ class SerialImuSource final : public IImuSource {
 
   void open() override {
     clock_mapper_.reset();
+    buffer_.clear();
+    pending_samples_.clear();
+    last_receive_ns_ = 0;
+    last_published_sample_ns_ = 0;
+    observed_device_uid_.clear();
     expected_device_uid_ = normalize_xr_controller_device_uid(
         cfg_.imu.serial.protocol_device_uid);
     resolved_port_ = cfg_.imu.serial.protocol == "xr_controller_v1"
@@ -210,7 +216,9 @@ class SerialImuSource final : public IImuSource {
 
   SourceReadStatus read(ImuReadResult& result) override {
     result = {};
-    if (parse_buffer(result)) return SourceReadStatus::Data;
+    if (pop_pending(result)) return SourceReadStatus::Data;
+    prepare_buffered_samples();
+    if (pop_pending(result)) return SourceReadStatus::Data;
 
     std::array<uint8_t, 1024> chunk{};
     const int count = serial_.read_timeout(chunk.data(), chunk.size(), cfg_.imu.serial.read_timeout_ms);
@@ -227,7 +235,8 @@ class SerialImuSource final : public IImuSource {
                     buffer_.end() - static_cast<std::ptrdiff_t>(std::min(buffer_.size(), keep)));
       ++resync_count_;
     }
-    if (parse_buffer(result)) return SourceReadStatus::Data;
+    prepare_buffered_samples();
+    if (pop_pending(result)) return SourceReadStatus::Data;
 
     // Transport bytes alone are not proof that the IMU is healthy. Returning a
     // distinct status prevents partial packets or an endless garbage stream
@@ -239,6 +248,50 @@ class SerialImuSource final : public IImuSource {
   void close() override { serial_.close(); }
 
  private:
+  bool pop_pending(ImuReadResult& result) {
+    while (!pending_samples_.empty()) {
+      result = std::move(pending_samples_.front());
+      pending_samples_.pop_front();
+      // The normalized capture IMU stream has no epoch field. A reconnect or
+      // reanchor can overlap previously published times; discard that prefix
+      // rather than delivering backwards acquisition times to a VIO backend.
+      if (cfg_.imu.serial.timestamp_mode == "device" &&
+          result.sample.timestamp_ns <= last_published_sample_ns_) {
+        ++invalid_count_;
+        result = {};
+        continue;
+      }
+      last_published_sample_ns_ = result.sample.timestamp_ns;
+      log_progress();
+      return true;
+    }
+    return false;
+  }
+
+  void prepare_buffered_samples() {
+    std::vector<ImuReadResult> decoded;
+    std::vector<xr_tracking::SerialImuClock::Sample> clocks;
+    ImuReadResult result;
+    while (parse_buffer(result)) {
+      clocks.push_back({result.sample.source_sequence, parsed_device_us_,
+                        result.sample.source_timestamp_valid});
+      decoded.push_back(std::move(result));
+      result = {};
+    }
+    if (decoded.empty()) return;
+    if (cfg_.imu.serial.timestamp_mode != "device") {
+      for (auto& sample : decoded) pending_samples_.push_back(std::move(sample));
+      return;
+    }
+    const auto mapped = clock_mapper_.map_batch(clocks, decoded.back().receive_timestamp_ns);
+    for (const auto& timing : mapped) {
+      auto& sample = decoded[timing.index];
+      sample.sample.timestamp_ns = timing.host_ns;
+      sample.sample.source_timestamp_valid = timing.device_time_valid;
+      pending_samples_.push_back(std::move(sample));
+    }
+  }
+
   bool parse_buffer(ImuReadResult& result) {
     if (cfg_.imu.serial.protocol == "csv_f32") return parse_csv(result);
     if (cfg_.imu.serial.protocol == "xr_imu_v1") return parse_xr_imu_v1(result);
@@ -321,17 +374,10 @@ class SerialImuSource final : public IImuSource {
       result.sample.source_sequence = decoded.sequence;
       result.sample.source_timestamp_valid =
           (decoded.flags & kXrControllerV1TimestampValid) != 0;
-      if (cfg_.imu.serial.timestamp_mode == "device" &&
-          result.sample.source_timestamp_valid) {
-        result.sample.timestamp_ns =
-            clock_mapper_.map_us(decoded.device_timestamp_us,
-                                 result.receive_timestamp_ns);
-      } else {
-        result.sample.timestamp_ns = result.receive_timestamp_ns;
-      }
+      parsed_device_us_ = decoded.device_timestamp_us;
+      result.sample.timestamp_ns = result.receive_timestamp_ns;
       result.raw_packet = std::move(packet);
       result.has_sample = true;
-      log_progress();
       return true;
     }
     return false;
@@ -377,16 +423,10 @@ class SerialImuSource final : public IImuSource {
       result.sample.source_sequence = decoded.sequence;
       result.sample.source_timestamp_valid =
           (decoded.flags & kXrImuV1TimestampValid) != 0;
-      if (cfg_.imu.serial.timestamp_mode == "device" &&
-          result.sample.source_timestamp_valid) {
-        result.sample.timestamp_ns =
-            clock_mapper_.map_us(decoded.device_timestamp_us, result.receive_timestamp_ns);
-      } else {
-        result.sample.timestamp_ns = result.receive_timestamp_ns;
-      }
+      parsed_device_us_ = decoded.device_timestamp_us;
+      result.sample.timestamp_ns = result.receive_timestamp_ns;
       result.raw_packet = std::move(packet);
       result.has_sample = true;
-      log_progress();
       return true;
     }
     return false;
@@ -434,15 +474,11 @@ class SerialImuSource final : public IImuSource {
 
         result.receive_timestamp_ns = last_receive_ns_ ? last_receive_ns_ : steady_ns();
         sample.source_timestamp_valid = timestamp_us != 0;
-        if (cfg_.imu.serial.timestamp_mode == "device" && timestamp_us != 0) {
-          sample.timestamp_ns = clock_mapper_.map_us(timestamp_us, result.receive_timestamp_ns);
-        } else {
-          sample.timestamp_ns = result.receive_timestamp_ns;
-        }
+        parsed_device_us_ = timestamp_us;
+        sample.timestamp_ns = result.receive_timestamp_ns;
         result.sample = sample;
         result.raw_packet = std::move(line_bytes);
         result.has_sample = true;
-        log_progress();
         return true;
       } catch (const std::exception&) {
         ++invalid_count_;
@@ -471,8 +507,11 @@ class SerialImuSource final : public IImuSource {
   RuntimeConfig cfg_;
   SerialPort serial_;
   std::vector<uint8_t> buffer_;
-  AffineDeviceClockMapper clock_mapper_;
+  xr_tracking::SerialImuClock clock_mapper_;
+  std::deque<ImuReadResult> pending_samples_;
+  uint64_t parsed_device_us_ = 0;
   uint64_t last_receive_ns_ = 0;
+  uint64_t last_published_sample_ns_ = 0;
   std::string resolved_port_;
   std::string expected_device_uid_;
   std::string observed_device_uid_;

@@ -60,6 +60,7 @@ mapfile -t SRC_FILES < <(
 set -x
 "$CXX" -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter \
   -I"$BACKEND_DIR/include" \
+  -I"$ROOT_PROJECT/shared/include" \
   "${SRC_FILES[@]}" \
   -o "$INSTALL_BIN_DIR/capture_service_cpp" \
   $(pkg-config --cflags opencv4 "$HIDAPI_PKG") \

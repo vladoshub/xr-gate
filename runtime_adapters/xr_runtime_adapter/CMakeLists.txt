@@ -55,3 +55,55 @@ else()
 endif()
 
 install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_runtime_adapter)
+
+option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build controller IMU delivery tests" OFF)
+if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
+  enable_testing()
+  add_executable(controller_imu_delivery_test
+    tests/controller_imu_delivery_test.cpp
+    src/override_controller.cpp
+    "${XR_TRACKING_ROOT}/override_controller/src/core/controller_input_publisher.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/core/types.cpp"
+  )
+  target_compile_features(controller_imu_delivery_test PRIVATE cxx_std_17)
+  target_include_directories(controller_imu_delivery_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${XR_TRACKING_ROOT}/override_controller/include"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(controller_imu_delivery_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(controller_imu_delivery_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  target_link_libraries(controller_imu_delivery_test PRIVATE Threads::Threads rt)
+  add_test(NAME controller_imu_delivery_test COMMAND controller_imu_delivery_test)
+
+  add_executable(xr_controller_imu_delivery_test
+    tests/xr_controller_imu_delivery_test.cpp
+    src/override_controller.cpp
+    "${XR_TRACKING_ROOT}/override_controller/src/providers/xiao_nrf54l15/xiao_nrf54l15_input_provider.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/providers/xiao_nrf54l15/xiao_nrf54l15_options.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/providers/xiao_nrf54l15/xr_controller_v1_protocol.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/imu/controller_imu_processor.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/core/controller_input_publisher.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/core/backend_control.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/core/types.cpp"
+    "${XR_TRACKING_ROOT}/capture_service_cpp/src/protocols/xr_controller_v1.cpp"
+  )
+  target_compile_features(xr_controller_imu_delivery_test PRIVATE cxx_std_17)
+  target_include_directories(xr_controller_imu_delivery_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${XR_TRACKING_ROOT}/override_controller/include"
+    "${XR_TRACKING_ROOT}/override_controller/src/providers/xiao_nrf54l15"
+    "${XR_TRACKING_ROOT}/capture_service_cpp/include"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(xr_controller_imu_delivery_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(xr_controller_imu_delivery_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  target_link_libraries(xr_controller_imu_delivery_test PRIVATE Threads::Threads rt)
+  add_test(NAME xr_controller_imu_delivery_test COMMAND xr_controller_imu_delivery_test)
+endif()

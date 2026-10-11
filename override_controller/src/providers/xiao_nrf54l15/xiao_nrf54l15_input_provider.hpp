@@ -25,6 +25,8 @@ class XiaoNrf54l15InputProvider final : public InputProvider {
                                    uint16_t type,
                                    uint16_t code) const override;
   xr_runtime::ControllerImuStateV1 imu_state(const DeviceInfo& device) const override;
+  xr_runtime::ControllerImuStateV1 consume_imu_state(const DeviceInfo& device) override;
+  bool has_pending_imu(const DeviceInfo& device) const override;
   void close_devices(std::vector<DeviceInfo>& devices) override;
   bool set_device_grab(std::vector<DeviceInfo>& devices,
                        const std::set<size_t>& device_indices,

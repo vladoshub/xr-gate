@@ -2129,6 +2129,8 @@ struct ControllerInputThreadSnapshot {
   bool enabled = false;
   bool connected = false;
   uint64_t frames = 0;
+  uint64_t discontinuities = 0;
+  uint64_t transport_discontinuities = 0;
   uint64_t last_sequence = 0;
   uint64_t latest_receive_timestamp_ns = 0;
   double age_ms = 0.0;
@@ -2155,6 +2157,7 @@ class ControllerInputThread {
       std::lock_guard<std::mutex> lock(mu_);
       snapshot_ = {};
       snapshot_.enabled = true;
+      pending_frames_.clear();
     }
     thread_ = std::thread([this] { run(); });
   }
@@ -2166,6 +2169,14 @@ class ControllerInputThread {
 
   ControllerInputThreadSnapshot snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
+    return snapshot_;
+  }
+
+  ControllerInputThreadSnapshot snapshot_and_take_pending(
+      std::vector<xr_runtime::ControllerInputV3>& frames) {
+    std::lock_guard<std::mutex> lock(mu_);
+    frames.swap(pending_frames_);
+    pending_frames_.clear();
     return snapshot_;
   }
 
@@ -2184,6 +2195,7 @@ class ControllerInputThread {
           return;
         }
       } catch (const std::exception& e) {
+        std::cerr << "[xr_runtime_adapter][WARN] controller input: " << e.what() << "\n";
         note_reattach_failure(e.what());
         set_error(e.what());
         sleep_ms(500);
@@ -2217,9 +2229,9 @@ class ControllerInputThread {
     uint64_t last_seq = 0;
     uint64_t last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
     while (!stop_) {
-      auto frame = reader.latest();
-      if (frame && frame->sequence > last_seq) {
-        last_seq = frame->sequence;
+      auto frame = reader.next(last_seq);
+      if (frame) {
+        if (frame->sequence != last_seq) throw std::runtime_error("SHM payload/slot sequence mismatch");
         last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
         observe(*frame);
       } else {
@@ -2251,6 +2263,12 @@ class ControllerInputThread {
     snapshot_.latest_receive_timestamp_ns = now_ns;
     snapshot_.age_ms = xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - frame.timestamp_ns));
     snapshot_.latest = frame;
+    if (pending_frames_.size() == kMaxPendingFrames) {
+      pending_frames_.clear();
+      ++snapshot_.discontinuities;
+      std::cerr << "[xr_runtime_adapter][WARN] controller IMU history overflow; resetting integration\n";
+    }
+    pending_frames_.push_back(frame);
     ++snapshot_.frames;
   }
 
@@ -2259,6 +2277,12 @@ class ControllerInputThread {
     snapshot_.enabled = true;
     snapshot_.connected = connected;
     snapshot_.last_error = error;
+    if (!connected) {
+      pending_frames_.clear();
+      snapshot_.latest.reset();
+      ++snapshot_.discontinuities;
+      ++snapshot_.transport_discontinuities;
+    }
   }
   void set_error(const std::string& error) { set_connected(false, error); }
   void note_reattach_attempt() { std::lock_guard<std::mutex> lock(mu_); ++snapshot_.reattach_attempts; }
@@ -2271,7 +2295,11 @@ class ControllerInputThread {
   void sleep_ms(int ms) const {
     const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (!stop_ && std::chrono::steady_clock::now() < end) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      const auto remaining = end - std::chrono::steady_clock::now();
+      if (remaining <= std::chrono::steady_clock::duration::zero()) break;
+      std::this_thread::sleep_for(std::min(
+          remaining, std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                         std::chrono::milliseconds(20))));
     }
   }
 
@@ -2280,6 +2308,8 @@ class ControllerInputThread {
   std::thread thread_;
   mutable std::mutex mu_;
   ControllerInputThreadSnapshot snapshot_;
+  static constexpr size_t kMaxPendingFrames = 512;
+  std::vector<xr_runtime::ControllerInputV3> pending_frames_;
 
 };
 
@@ -4869,6 +4899,8 @@ int main(int argc, char** argv) {
         runtime_controller_right_movement_space_imu_value;
 
     override_controller::RuntimeControllerSynthesisState runtime_controller_synthesis_state{};
+    uint64_t controller_input_discontinuities = 0;
+    uint64_t controller_input_transport_discontinuities = 0;
 
     const auto start = std::chrono::steady_clock::now();
     auto next_runtime_controller_imu_control_poll =
@@ -5544,9 +5576,28 @@ int main(int argc, char** argv) {
       uint32_t controller_right_imu_status = xr_runtime::CONTROLLER_IMU_NOT_SUPPORTED;
       uint64_t frame_controller_sequence = 0;
       std::optional<xr_runtime::ControllerInputV3> fresh_controller_input;
+      std::vector<xr_runtime::ControllerInputV3> controller_imu_history;
+      std::optional<ControllerInputThreadSnapshot> controller_snapshot_for_frame;
+      if (controller_input_thread) {
+        controller_snapshot_for_frame = controller_input_thread->snapshot_and_take_pending(controller_imu_history);
+        if (controller_snapshot_for_frame->transport_discontinuities != controller_input_transport_discontinuities) {
+          std::cerr << "[xr_runtime_adapter][WARN] controller IMU state reset: "
+                    << "reason=transport_discontinuity; yaw=reset\n";
+          runtime_controller_synthesis_state = {};
+          controller_input_transport_discontinuities = controller_snapshot_for_frame->transport_discontinuities;
+        } else if (controller_snapshot_for_frame->discontinuities != controller_input_discontinuities) {
+          // Pending-history overflow discards acceleration samples but leaves
+          // the provider's AHRS frame intact. Preserve each side's optical yaw.
+          override_controller::reset_runtime_controller_imu_prediction(runtime_controller_synthesis_state.left);
+          override_controller::reset_runtime_controller_imu_prediction(runtime_controller_synthesis_state.right);
+          std::cerr << "[xr_runtime_adapter] controller IMU prediction reset: "
+                    << "reason=history_overflow; yaw=retained\n";
+        }
+        controller_input_discontinuities = controller_snapshot_for_frame->discontinuities;
+      }
       if (controller_input_thread &&
           (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp)) {
-        const auto controller_snapshot = controller_input_thread->snapshot();
+        const auto& controller_snapshot = *controller_snapshot_for_frame;
         if (controller_snapshot.latest) {
           const bool controller_receive_stale = is_age_stale(
               frame.read_timestamp_ns,
@@ -5950,7 +6001,8 @@ int main(int argc, char** argv) {
               runtime_controller_hmd,
               static_cast<float>(
                   runtime_controller_imu_control_snapshot.gravity_magnitude),
-              &runtime_controller_synthesis_state);
+              &runtime_controller_synthesis_state,
+              &controller_imu_history);
           if (runtime_jitter_filter_enabled) {
             const bool left_imu_orientation_used =
                 (runtime_controller_state.left.source_mask &
@@ -6103,6 +6155,12 @@ int main(int argc, char** argv) {
                     << " controller_right_imu=" << (controller_right_imu_present ? "yes" : "no")
                     << " controller_right_imu_active=" << (controller_right_imu_active ? "yes" : "no")
                     << " controller_right_imu_status=" << xr_runtime::controller_imu_status_name(controller_right_imu_status)
+                    << " controller_left_imu_epoch="
+                    << runtime_controller_synthesis_state.left.imu_stream_epoch
+                    << " controller_left_imu_dropped="
+                    << runtime_controller_synthesis_state.left.imu_dropped_batches
+                    << " controller_left_yaw_update_ns="
+                    << runtime_controller_synthesis_state.left.last_yaw_correction_update_ns
                     << " controller_left_yaw_correction_deg="
                     << (runtime_controller_synthesis_state.left.yaw_correction_rad * 180.0 / 3.14159265358979323846)
                     << " controller_left_yaw_requested="
@@ -6121,6 +6179,12 @@ int main(int argc, char** argv) {
                     << (runtime_controller_synthesis_state.left.yaw_last_error_rad * 180.0 / 3.14159265358979323846)
                     << " controller_left_yaw_action="
                     << runtime_controller_synthesis_state.left.yaw_last_action
+                    << " controller_right_imu_epoch="
+                    << runtime_controller_synthesis_state.right.imu_stream_epoch
+                    << " controller_right_imu_dropped="
+                    << runtime_controller_synthesis_state.right.imu_dropped_batches
+                    << " controller_right_yaw_update_ns="
+                    << runtime_controller_synthesis_state.right.last_yaw_correction_update_ns
                     << " controller_right_yaw_correction_deg="
                     << (runtime_controller_synthesis_state.right.yaw_correction_rad * 180.0 / 3.14159265358979323846)
                     << " controller_right_yaw_requested="

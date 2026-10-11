@@ -123,6 +123,14 @@ xr_runtime::ControllerInputV3 controller_input_frame_from_output(const OutputSta
   frame.source_timestamp_ns = timestamp_ns;
   fill_side(frame.left, state.left, xr_runtime::CONTROLLER_SIDE_LEFT);
   fill_side(frame.right, state.right, xr_runtime::CONTROLLER_SIDE_RIGHT);
+  uint64_t imu_source_ns = 0;
+  if (xr_runtime::controller_imu_has_current_data(frame.left.imu)) {
+    imu_source_ns = frame.left.imu.latest_sample_timestamp_ns;
+  }
+  if (xr_runtime::controller_imu_has_current_data(frame.right.imu)) {
+    imu_source_ns = std::max(imu_source_ns, frame.right.imu.latest_sample_timestamp_ns);
+  }
+  if (imu_source_ns != 0) frame.source_timestamp_ns = imu_source_ns;
   if (frame.left.status == xr_runtime::CONTROLLER_INPUT_ACTIVE) {
     frame.active_mask |= xr_runtime::CONTROLLER_INPUT_FRAME_ACTIVE_LEFT;
   }

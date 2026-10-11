@@ -198,6 +198,8 @@ enum ControllerImuCapabilityFlags : uint32_t {
   CONTROLLER_IMU_CAP_TEMPERATURE = 1u << 4,
   CONTROLLER_IMU_CAP_DEVICE_TIMESTAMP = 1u << 5,
   CONTROLLER_IMU_CAP_MULTI_SAMPLE_PACKET = 1u << 6,
+  // reserved[] carries epoch, dropped-batch count and device ticks/second.
+  CONTROLLER_IMU_CAP_STREAM_DIAGNOSTICS = 1u << 7,
 };
 
 enum ControllerImuDataFlags : uint32_t {
@@ -214,6 +216,9 @@ enum ControllerImuDataFlags : uint32_t {
 };
 
 inline constexpr uint32_t CONTROLLER_IMU_MAX_SAMPLES = 4;
+inline constexpr size_t CONTROLLER_IMU_DIAG_EPOCH = 0;
+inline constexpr size_t CONTROLLER_IMU_DIAG_DROPPED_BATCHES = 1;
+inline constexpr size_t CONTROLLER_IMU_DIAG_TICKS_PER_SECOND = 2;
 
 enum ControllerButtonBits : uint64_t {
   CONTROLLER_BUTTON_TRIGGER = 1ull << 0,
@@ -295,6 +300,9 @@ struct ControllerImuStateV1 {
   float temperature_c = 0.0f;
 
   ControllerImuSampleV1 samples[CONTROLLER_IMU_MAX_SAMPLES] = {};
+  // When CAP_STREAM_DIAGNOSTICS is present, indices DIAG_* above carry:
+  // epoch (changes on reconnect/reset), cumulative dropped notification
+  // batches, and device tick frequency. These fields preserve the V3 layout.
   uint32_t reserved[4] = {};
 };
 

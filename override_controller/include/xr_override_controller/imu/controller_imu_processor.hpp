@@ -24,6 +24,9 @@ struct QuaternionXyzw {
 struct RawControllerImuSample {
   uint64_t host_timestamp_ns = 0;
   uint64_t device_timestamp_ticks = 0;
+  // Optional device-clock interval. AHRS integration must not follow BLE
+  // receive jitter or changes to the host/device clock mapping.
+  float sample_interval_seconds = 0.0f;
   Vec3f angular_velocity_rad_s;
   Vec3f specific_force_m_s2;
   Vec3f magnetic_field_uT;

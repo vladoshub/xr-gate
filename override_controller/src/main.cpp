@@ -1564,8 +1564,19 @@ OutputState compose_state(InputProvider& provider,
                           const std::vector<RuntimeBinding>& hold_toggle_bindings,
                           const std::vector<DeviceInfo>& devices,
                           CounterState& counters,
-                          bool allow_shared_physical_device_sides) {
+                          bool allow_shared_physical_device_sides,
+                          bool* more_imu = nullptr) {
   OutputState out;
+  // Resolve/consume a physical device only once, even with multiple bindings
+  // or explicit sharing between the two controller sides.
+  std::map<size_t, xr_runtime::ControllerImuStateV1> imu_batches;
+  const auto consume_imu = [&](size_t index) {
+    auto it = imu_batches.find(index);
+    if (it == imu_batches.end()) {
+      it = imu_batches.emplace(index, provider.consume_imu_state(devices[index])).first;
+    }
+    return it->second;
+  };
   std::set<std::string> left_devices;
   std::set<std::string> right_devices;
   const auto imu_rank = [](const xr_runtime::ControllerImuStateV1& imu) {
@@ -1611,7 +1622,7 @@ OutputState compose_state(InputProvider& provider,
     const int device_index = resolve_device(config_device.fingerprint);
     if (device_index < 0) continue;
     const auto candidate_imu = imu::apply_orientation_calibration(
-        provider.imu_state(devices[device_index]), config_device.orientation_transform,
+        consume_imu(device_index), config_device.orientation_transform,
         config_device.orientation_offset);
     if (imu_rank(candidate_imu) > imu_rank(side.imu)) side.imu = candidate_imu;
     if (xr_runtime::controller_imu_is_present(candidate_imu)) {
@@ -1638,7 +1649,7 @@ OutputState compose_state(InputProvider& provider,
         imu_device_index = resolve_device(b.cfg.device);
       }
       if (imu_device_index >= 0) {
-        auto candidate_imu = provider.imu_state(devices[imu_device_index]);
+        auto candidate_imu = consume_imu(imu_device_index);
         if (binding_device) {
           candidate_imu = imu::apply_orientation_calibration(
               candidate_imu, binding_device->orientation_transform,
@@ -1711,6 +1722,12 @@ OutputState compose_state(InputProvider& provider,
   std::memcpy(out.left.release_counters, counters.left_release, sizeof(counters.left_release));
   std::memcpy(out.right.press_counters, counters.right_press, sizeof(counters.right_press));
   std::memcpy(out.right.release_counters, counters.right_release, sizeof(counters.right_release));
+  if (more_imu) {
+    *more_imu = false;
+    for (const auto& [index, batch] : imu_batches) {
+      if (provider.has_pending_imu(devices[index])) *more_imu = true;
+    }
+  }
   return out;
 }
 
@@ -2389,7 +2406,9 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
     if (cfg.input.reattach_devices && now >= next_reattach_check) {
       next_reattach_check = now + reattach_interval;
 
+      const auto scan_started = std::chrono::steady_clock::now();
       std::vector<DeviceInfo> candidate_devices = provider.scan_devices(true);
+      const auto scan_finished = std::chrono::steady_clock::now();
       std::vector<RuntimeBinding> candidate_bindings = resolve_bindings(cfg, candidate_devices, false);
       std::vector<RuntimeBinding> candidate_toggle_bindings = resolve_hold_toggle_bindings(cfg, candidate_devices, false);
       std::vector<RuntimeBinding> candidate_alt_bindings = resolve_alternative_bindings(cfg, candidate_devices, false);
@@ -2422,6 +2441,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
       const size_t candidate_total = candidate_resolved + candidate_toggle_resolved + candidate_alt_resolved +
                                      candidate_alt_toggle_resolved + candidate_switch_resolved;
       const bool should_reattach = candidate_total != current_total || mapping_changed;
+      const auto apply_started = std::chrono::steady_clock::now();
       if (should_reattach) {
         const bool had_active_bindings = any_runtime_binding_active(bindings) ||
                                          any_runtime_binding_active(hold_toggle_bindings) ||
@@ -2471,6 +2491,21 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
       } else {
         provider.close_devices(candidate_devices);
       }
+      const auto reattach_finished = std::chrono::steady_clock::now();
+      const auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          reattach_finished - scan_started).count();
+      if (total_ms >= 100) {
+        const auto scan_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            scan_finished - scan_started).count();
+        const auto resolve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            apply_started - scan_finished).count();
+        const auto apply_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            reattach_finished - apply_started).count();
+        std::cerr << "[override_controller][WARN] reattach check paused input polling: total_ms="
+                  << total_ms << " scan_ms=" << scan_ms << " resolve_ms=" << resolve_ms
+                  << (should_reattach ? " replace_ms=" : " candidate_close_ms=") << apply_ms
+                  << "\n";
+      }
     }
 
     const int64_t now_ns = monotonic_now_ns();
@@ -2480,9 +2515,12 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
     decay_button_hold_bindings(active_bindings_for_decay, now_ns);
     now = std::chrono::steady_clock::now();
     if (now >= next_publish) {
-      const auto out = compose_state(provider, cfg, active_bindings_for_decay, active_toggle_bindings_for_decay,
-                                     devices, counters, cfg.input.allow_shared_physical_device_sides);
-      publisher.publish(out);
+      bool more_imu = false;
+      do {
+        const auto out = compose_state(provider, cfg, active_bindings_for_decay, active_toggle_bindings_for_decay,
+                                       devices, counters, cfg.input.allow_shared_physical_device_sides, &more_imu);
+        publisher.publish(out);
+      } while (more_imu && !g_stop);
       clear_one_frame_relative_bindings(active_bindings_for_decay);
       do {
         next_publish += period;

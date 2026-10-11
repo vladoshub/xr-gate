@@ -180,6 +180,16 @@ xr_runtime::ControllerImuStateV1 CompositeInputProvider::imu_state(const DeviceI
   return providers_[device.provider_slot]->imu_state(device);
 }
 
+xr_runtime::ControllerImuStateV1 CompositeInputProvider::consume_imu_state(const DeviceInfo& device) {
+  if (device.provider_slot >= providers_.size()) return {};
+  return providers_[device.provider_slot]->consume_imu_state(device);
+}
+
+bool CompositeInputProvider::has_pending_imu(const DeviceInfo& device) const {
+  return device.provider_slot < providers_.size() &&
+         providers_[device.provider_slot]->has_pending_imu(device);
+}
+
 void CompositeInputProvider::close_devices(std::vector<DeviceInfo>& devices) {
   for (size_t provider_slot = 0; provider_slot < providers_.size(); ++provider_slot) {
     auto view = make_local_view(devices, provider_slot);

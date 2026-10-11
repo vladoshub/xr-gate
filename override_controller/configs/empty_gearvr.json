@@ -397,7 +397,7 @@
     "rate_hz": 90.0,
     "registry": "/tmp/tracking_streams.json",
     "shm_name": "controller_input",
-    "slot_count": 32,
+    "slot_count": 512,
     "stream": "controller_input",
     "tcp_bind_host": "127.0.0.1",
     "tcp_port": 45672,

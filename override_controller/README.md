@@ -11,6 +11,9 @@ Supported input providers:
 
 `xr_runtime_adapter` can combine this physical input with hand tracking poses, synthetic fallback poses, or gesture-derived controls.
 
+Gear VR sensor timestamps, buffered IMU delivery and collection settings are
+described in [Gear VR IMU timing](docs/gearvr_imu_timing.md).
+
 ## Main stream
 
 ```text
@@ -107,6 +110,9 @@ frames directly from the board's SAMD11 USB CDC serial port. It validates versio
 IMU values, performs stream resynchronization after corruption, maps the device
 microsecond timestamp into the host monotonic clock, and feeds the shared
 `ControllerImuProcessor`/Madgwick pipeline.
+
+Hardware timestamp fields, buffered delivery and serial clock behaviour are
+documented in [docs/xr_controller_imu_timing.md](docs/xr_controller_imu_timing.md).
 
 List detected boards:
 
