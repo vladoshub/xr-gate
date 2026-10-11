@@ -61,3 +61,9 @@ timed batched rotation, missing gyro, mounting offset, stale/held optics,
 camera/HMD velocity, interrupted reacquire, decay/burst delivery, duplicate
 samples and speed/distance/timeout limits. The two delivery tests cover the
 Gear VR and serial xr_controller paths and their timestamp/queue behavior.
+
+`hand_optical_velocity_test` exercises the real Mercury loader and runtime gate
+with a test pose-producing C ABI library. It verifies source-time derivatives,
+rejected pose/quaternion outliers, duplicate/out-of-order frames, clock epochs,
+loss/reacquire, rolling-window noise reduction, velocity limits and both hands.
+This does not exercise neural inference or replace hardware tracking checks.

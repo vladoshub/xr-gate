@@ -56,7 +56,7 @@ endif()
 
 install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_runtime_adapter)
 
-option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build controller IMU delivery tests" OFF)
+option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build runtime tracking regression tests" OFF)
 if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   enable_testing()
   add_executable(controller_imu_delivery_test
@@ -124,4 +124,24 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   endif()
   target_link_libraries(controller_imu_prediction_test PRIVATE Threads::Threads)
   add_test(NAME controller_imu_prediction_test COMMAND controller_imu_prediction_test)
+
+  add_library(mercury_velocity_mock SHARED tests/mercury_velocity_mock.cpp)
+  add_executable(hand_optical_velocity_test tests/hand_optical_velocity_test.cpp)
+  foreach(velocity_target mercury_velocity_mock hand_optical_velocity_test)
+    target_compile_features(${velocity_target} PRIVATE cxx_std_17)
+    target_include_directories(${velocity_target} PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${XR_TRACKING_ROOT}/backends/mercury_hand_tracking/include"
+      "${XR_SHARED_INCLUDE_DIR}"
+    )
+    if(TARGET nlohmann_json::nlohmann_json)
+      target_link_libraries(${velocity_target} PRIVATE nlohmann_json::nlohmann_json)
+    else()
+      target_include_directories(${velocity_target} PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+    endif()
+    target_link_libraries(${velocity_target} PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+  endforeach()
+  add_dependencies(hand_optical_velocity_test mercury_velocity_mock)
+  add_test(NAME hand_optical_velocity_test
+    COMMAND hand_optical_velocity_test $<TARGET_FILE:mercury_velocity_mock>)
 endif()

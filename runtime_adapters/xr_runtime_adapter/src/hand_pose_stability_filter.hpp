@@ -22,6 +22,7 @@
 
 #include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
+#include "optical_hand_velocity.hpp"
 
 namespace xr_runtime_adapter::hand_filter {
 
@@ -118,6 +119,7 @@ class HandPoseStabilityFilter {
     right_v2_ = HandStateV2{};
     stats_ = HandPoseStabilityFilterStats{};
     last_events_ = HandPoseStabilityFilterEvents{};
+    v2_reset_counter_valid_ = false;
   }
 
   [[nodiscard]] const HandPoseStabilityFilterConfig& config() const { return cfg_; }
@@ -146,6 +148,13 @@ class HandPoseStabilityFilter {
   xr_runtime::HandTrackingFrameF32V2 filter(xr_runtime::HandTrackingFrameF32V2 frame) {
     last_events_ = HandPoseStabilityFilterEvents{};
     if (!cfg_.enabled) return frame;
+
+    if (v2_reset_counter_valid_ && frame.reset_counter != v2_reset_counter_) {
+      left_v2_ = HandStateV2{};
+      right_v2_ = HandStateV2{};
+    }
+    v2_reset_counter_valid_ = true;
+    v2_reset_counter_ = frame.reset_counter;
 
     ++stats_.rows;
 
@@ -312,6 +321,10 @@ class HandPoseStabilityFilter {
   };
 
   struct HandStateV2 {
+    OpticalHandVelocity optical_motion{};
+    uint64_t last_input_source_ts = 0;
+    bool has_last_output = false;
+    xr_runtime::HandSideF32V2 last_output{};
     bool has_last_good = false;
     bool raw_inactive_since_last_accept = false;
     xr_runtime::HandSideF32V2 last_good{};
@@ -1079,11 +1092,41 @@ class HandPoseStabilityFilter {
 
 
   SideDecisionV2 filter_side_v2(const xr_runtime::HandSideF32V2& input,
+                                HandStateV2& state, uint64_t source_ts,
+                                const char* hand_name) {
+    // Runtime ticks often reuse a camera frame. Do not treat repeated or older
+    // active observations as new measurements or let them replace good history.
+    if (side_pose_is_active_v2(input) && source_ts != 0 &&
+        state.has_last_output && source_ts <= state.last_input_source_ts) {
+      SideDecisionV2 d;
+      d.side = state.last_output;
+      d.orig_active = true;
+      d.gated_active = side_is_gated_valid_v2(d.side);
+      d.mode = "repeat_observation";
+      return d;
+    }
+    auto d = filter_side_v2_impl(input, state, source_ts, hand_name);
+    if (source_ts >= state.last_input_source_ts) {
+      state.last_input_source_ts = source_ts;
+      state.last_output = d.side;
+      state.has_last_output = true;
+    }
+    return d;
+  }
+
+  SideDecisionV2 filter_side_v2_impl(const xr_runtime::HandSideF32V2& input,
                                 HandStateV2& state,
                                 uint64_t source_ts,
                                 const char* hand_name) {
     SideDecisionV2 d;
     d.side = input;
+    const auto accept_motion = [&]() {
+      auto observed = state.optical_motion.observe(input, source_ts,
+          cfg_.prediction_window_mode, cfg_.prediction_window_ms,
+          cfg_.max_continuity_velocity_mps);
+      d.side = observed;
+      return observed;
+    };
     d.orig_active = side_pose_is_active_v2(input);
     const auto mark_backend_pose_accepted = [&]() {
       d.reacquired = state.raw_inactive_since_last_accept;
@@ -1097,17 +1140,18 @@ class HandPoseStabilityFilter {
     }
 
     if (d.orig_active && state.blend_active) {
+      const auto observed = accept_motion();
       const uint64_t duration_ns = std::max<uint64_t>(1, reacquire_blend_ns(cfg_));
       const uint64_t elapsed_ns = source_ts >= state.blend_start_ts ? source_ts - state.blend_start_ts : 0;
       const double t = std::clamp(static_cast<double>(elapsed_ns) / static_cast<double>(duration_ns), 0.0, 1.0);
-      xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, t);
-      update_velocity_v2(state, out, input, source_ts, cfg_);
+      xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, observed, t);
+      update_velocity_v2(state, out, observed, source_ts, cfg_);
 
       if (t >= 1.0) {
-        update_velocity_v2(state, input, input, source_ts, cfg_);
+        update_velocity_v2(state, observed, observed, source_ts, cfg_);
         state.blend_active = false;
         state.has_last_prediction = false;
-        out = input;
+        out = observed;
       }
 
       state.has_pending = false;
@@ -1123,7 +1167,8 @@ class HandPoseStabilityFilter {
     }
 
     if (d.orig_active && !state.has_last_good) {
-      update_velocity_v2(state, input, input, source_ts, cfg_);
+      const auto observed = accept_motion();
+      update_velocity_v2(state, observed, observed, source_ts, cfg_);
       state.has_pending = false;
       state.pending_count = 0;
       state.blend_active = false;
@@ -1149,6 +1194,7 @@ class HandPoseStabilityFilter {
       }
 
       if (d.jump_m <= cfg_.max_reacquire_jump_m) {
+        const auto observed = accept_motion();
         state.has_pending = false;
         state.pending_count = 0;
 
@@ -1157,8 +1203,8 @@ class HandPoseStabilityFilter {
           state.blend_from = state.last_prediction;
           state.blend_start_ts = source_ts;
           state.has_last_prediction = false;
-          xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, 0.0);
-          update_velocity_v2(state, out, input, source_ts, cfg_);
+          xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, observed, 0.0);
+          update_velocity_v2(state, out, observed, source_ts, cfg_);
 
           d.side = out;
           d.gated_active = true;
@@ -1171,7 +1217,7 @@ class HandPoseStabilityFilter {
           return d;
         }
 
-        update_velocity_v2(state, input, input, source_ts, cfg_);
+        update_velocity_v2(state, observed, observed, source_ts, cfg_);
         state.blend_active = false;
         state.has_last_prediction = false;
 
@@ -1208,6 +1254,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
       d.pending_count = state.pending_count;
 
       if (candidate_within_confirmed_gate && state.pending_count >= cfg_.confirm_frames) {
+        const auto observed = accept_motion();
         state.has_pending = false;
         state.pending_count = 0;
         stat_confirmed(hand_name)++;
@@ -1217,8 +1264,8 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           state.blend_from = state.last_prediction;
           state.blend_start_ts = source_ts;
           state.has_last_prediction = false;
-          xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, input, 0.0);
-          update_velocity_v2(state, out, input, source_ts, cfg_);
+          xr_runtime::HandSideF32V2 out = blend_side_v2(state.blend_from, observed, 0.0);
+          update_velocity_v2(state, out, observed, source_ts, cfg_);
 
           d.side = out;
           d.gated_active = true;
@@ -1231,7 +1278,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
           return d;
         }
 
-        update_velocity_v2(state, input, input, source_ts, cfg_);
+        update_velocity_v2(state, observed, observed, source_ts, cfg_);
         state.blend_active = false;
         state.has_last_prediction = false;
 
@@ -1283,6 +1330,7 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
       return d;
     }
 
+    state.optical_motion.reset();
     state.raw_inactive_since_last_accept = true;
     state.has_pending = false;
     state.pending_count = 0;
@@ -1516,6 +1564,8 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
 
   HandPoseStabilityFilterConfig cfg_;
   HandPoseStabilityFilterEvents last_events_{};
+  bool v2_reset_counter_valid_ = false;
+  uint64_t v2_reset_counter_ = 0;
   HandState left_;
   HandState right_;
   HandStateV2 left_v2_;

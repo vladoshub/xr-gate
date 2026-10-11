@@ -306,6 +306,11 @@ class MercuryRuntimeProcessor {
     frame.timestamp_ns = static_cast<uint64_t>(now_ns());
     frame.size_bytes = sizeof(HandTrackingFrameF32V2);
     frame.version = HAND_TRACKING_FORMAT_VERSION_V2;
+    if (velocity_reset_counter_valid_ && velocity_reset_counter_ != reset_counter) {
+      last_side_pose_ = {};
+    }
+    velocity_reset_counter_valid_ = true;
+    velocity_reset_counter_ = reset_counter;
     derive_controller_velocities(frame);
     return frame;
   }
@@ -456,6 +461,12 @@ class MercuryRuntimeProcessor {
       return;
     }
 
+    // A duplicate/out-of-order sample is not a new derivative anchor.
+    if (last.valid && timestamp_ns <= last.timestamp_ns) {
+      clear_linear_velocity(side);
+      clear_angular_velocity(side);
+      return;
+    }
     if (last.valid && timestamp_ns > last.timestamp_ns) {
       const double dt_s = double(timestamp_ns - last.timestamp_ns) * 1e-9;
       if (dt_s >= kMinVelocityDtS && dt_s <= kMaxVelocityDtS) {
@@ -512,6 +523,8 @@ class MercuryRuntimeProcessor {
   mercury_runtime_abi::last_error_fn last_error_ = nullptr;
   void* ctx_ = nullptr;
   std::array<LastSidePose, 2> last_side_pose_{};
+  bool velocity_reset_counter_valid_ = false;
+  uint64_t velocity_reset_counter_ = 0;
   std::string models_dir_storage_;
   std::string calib_json_storage_;
 };
