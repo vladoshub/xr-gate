@@ -42,6 +42,7 @@
 
 #include "gestures.hpp"
 #include "override_controller.hpp"
+#include "hand_tracking_freshness.hpp"
 #include "coordinate_util.hpp"
 #include "hand_pose_stability_filter.hpp"
 #include "hmd_pose_stability_filter.hpp"
@@ -1028,14 +1029,12 @@ xr_runtime::HmdPoseF64V1 make_held_hmd_pose(xr_runtime::HmdPoseF64V1 hmd,
 
 xr_runtime::HandTrackingFrameF64V1 make_held_hand_frame(xr_runtime::HandTrackingFrameF64V1 hand,
                                                         int64_t now_ns_value) {
-  hand.timestamp_ns = static_cast<uint64_t>(now_ns_value);
-  return hand;
+  return xr_runtime_adapter::held_hand_frame(hand, static_cast<uint64_t>(now_ns_value));
 }
 
 xr_runtime::HandTrackingFrameF32V2 make_held_hand_frame(xr_runtime::HandTrackingFrameF32V2 hand,
                                                         int64_t now_ns_value) {
-  hand.timestamp_ns = static_cast<uint64_t>(now_ns_value);
-  return hand;
+  return xr_runtime_adapter::held_hand_frame(hand, static_cast<uint64_t>(now_ns_value));
 }
 
 
@@ -5284,7 +5283,7 @@ int main(int argc, char** argv) {
             frame.hand_valid = hand->sequence != 0 && !hand_stale;
             if (hand_stale && hand->sequence != 0) {
               ++stale_hand_frames;
-              frame.hand.tracking_status = 2;  // lost
+              xr_runtime_adapter::mark_hand_frame_unavailable(frame.hand, frame.read_timestamp_ns);
             }
             frame.hand_frame_id = hand_reader->info().frame_id;
             if (hand->sequence != 0 && hand->sequence != last_hand_seq) {
@@ -5314,7 +5313,7 @@ int main(int argc, char** argv) {
             frame.hand_v2_valid = hand_v2->sequence != 0 && !hand_v2_stale;
             if (hand_v2_stale && hand_v2->sequence != 0) {
               ++stale_hand_frames;
-              frame.hand_v2.tracking_status = 2;  // lost
+              xr_runtime_adapter::mark_hand_frame_unavailable(frame.hand_v2, frame.read_timestamp_ns);
             }
             frame.hand_frame_id = hand_reader_v2->info().frame_id;
             if (hand_v2->sequence != 0 && hand_v2->sequence != last_hand_seq) {
@@ -5401,7 +5400,7 @@ int main(int argc, char** argv) {
             frame.hand_valid = hand->sequence != 0 && !hand_stale;
             if (hand_stale && hand->sequence != 0) {
               ++stale_hand_frames;
-              frame.hand.tracking_status = 2;  // lost
+              xr_runtime_adapter::mark_hand_frame_unavailable(frame.hand, frame.read_timestamp_ns);
             }
             frame.hand_frame_id = udp_frame_id;
             if (frame.hand_valid) {
@@ -5422,7 +5421,7 @@ int main(int argc, char** argv) {
             frame.hand_v2_valid = hand_v2->sequence != 0 && !hand_v2_stale;
             if (hand_v2_stale && hand_v2->sequence != 0) {
               ++stale_hand_frames;
-              frame.hand_v2.tracking_status = 2;  // lost
+              xr_runtime_adapter::mark_hand_frame_unavailable(frame.hand_v2, frame.read_timestamp_ns);
             }
             frame.hand_frame_id = udp_frame_id;
             if (frame.hand_v2_valid) {
@@ -5831,7 +5830,8 @@ int main(int argc, char** argv) {
                 should_apply_hand_orientation_offset(
                     hand_transform, controller_left_connected, left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_right_connected, right_uses_imu_profile));
+                    hand_transform, controller_right_connected, right_uses_imu_profile),
+                frame.hmd_valid ? &frame.hmd : nullptr);
           }
           if (frame.hand.sequence != 0) {
             const StreamTransformConfig& hand_v1_transform =
@@ -5841,7 +5841,8 @@ int main(int argc, char** argv) {
                 should_apply_hand_orientation_offset(
                     hand_v1_transform, controller_left_connected, left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_right_connected, right_uses_imu_profile));
+                    hand_v1_transform, controller_right_connected, right_uses_imu_profile),
+                frame.hmd_valid ? &frame.hmd : nullptr);
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
             // Yaw correction uses a clean optical reference: apply the normal

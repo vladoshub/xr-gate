@@ -328,6 +328,19 @@ struct RuntimeImuSample {
   std::vector<RuntimeAccelerationSample> acceleration_samples;
 };
 
+Qf transformed_imu_orientation(Qf orientation,
+                               const RuntimeControllerImuOrientationConfig& cfg) {
+  if (cfg.transform_enabled) {
+    orientation = apply_axis_inversion(orientation, cfg.invert_x, cfg.invert_y, cfg.invert_z);
+    orientation = apply_basis_transform(q_from_xyzw(cfg.basis_rotation_xyzw), orientation);
+  }
+  if (cfg.offset_enabled) {
+    const Qf offset = q_from_xyzw(cfg.offset_rotation_xyzw);
+    orientation = cfg.offset_pre_multiply ? q_mul(offset, orientation) : q_mul(orientation, offset);
+  }
+  return orientation;
+}
+
 RuntimeImuSample runtime_imu_sample(
     const xr_runtime::ControllerDeviceStateV3& controller,
     const RuntimeControllerImuOrientationConfig& cfg) {
@@ -387,9 +400,58 @@ RuntimeImuSample runtime_imu_sample(
 
   const uint32_t sample_count = std::min<uint32_t>(
       controller.imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES);
+  std::array<uint32_t, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES> sample_order{};
+  std::array<Qf, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES> sample_orientations{};
+  std::array<bool, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES> orientation_valid{};
+  for (uint32_t i = 0; i < sample_count; ++i) sample_order[i] = i;
+  std::stable_sort(sample_order.begin(), sample_order.begin() + sample_count,
+      [&](uint32_t a, uint32_t b) {
+        return controller.imu.samples[a].timestamp_ns < controller.imu.samples[b].timestamp_ns;
+      });
+
+  // The V3 ABI carries an AHRS quaternion only for the end of the batch.
+  // Reconstruct earlier orientations in sensor axes with the corrected gyro
+  // for each interval. Never apply the end quaternion to an older force when
+  // that interval has no usable gyro or spans an unobserved gap.
+  Qf provider_orientation = q_from_xyzw(controller.imu.orientation_xyzw);
+  uint64_t orientation_cursor_ns = controller.imu.orientation_timestamp_ns != 0
+      ? controller.imu.orientation_timestamp_ns : controller.imu.latest_sample_timestamp_ns;
+  const xr_runtime::ControllerImuSampleV1* interval_gyro = nullptr;
+  bool reconstructed = true;
+  for (uint32_t reverse = sample_count; reverse > 0; --reverse) {
+    const uint32_t i = sample_order[reverse - 1];
+    const auto& source = controller.imu.samples[i];
+    if (source.timestamp_ns == 0 || source.timestamp_ns > orientation_cursor_ns) continue;
+    const uint64_t dt_ns = orientation_cursor_ns - source.timestamp_ns;
+    if (dt_ns != 0 && reconstructed) {
+      const auto& gyro = interval_gyro ? *interval_gyro : source;
+      if (dt_ns > 50'000'000ULL ||
+          (gyro.flags & xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID) == 0u ||
+          !finite_v3(gyro.angular_velocity_rad_s)) {
+        reconstructed = false;
+      } else {
+        const float speed = v3_length(gyro.angular_velocity_rad_s);
+        const float dt_s = static_cast<float>(dt_ns) / 1.0e9f;
+        if (speed > 1.0e-8f) {
+          const float half_angle = -0.5f * speed * dt_s;
+          const float scale = std::sin(half_angle) / speed;
+          const Qf delta{std::cos(half_angle),
+              gyro.angular_velocity_rad_s[0] * scale,
+              gyro.angular_velocity_rad_s[1] * scale,
+              gyro.angular_velocity_rad_s[2] * scale};
+          provider_orientation = q_mul(provider_orientation, delta);
+        }
+      }
+    }
+    orientation_valid[i] = reconstructed;
+    sample_orientations[i] = transformed_imu_orientation(provider_orientation, cfg);
+    orientation_cursor_ns = source.timestamp_ns;
+    interval_gyro = &source;
+  }
   for (uint32_t i = 0; i < sample_count; ++i) {
     const auto& source = controller.imu.samples[i];
-    if ((source.flags & xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID) == 0u) {
+    if (!orientation_valid[i] ||
+        (source.flags & xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID) == 0u) {
       continue;
     }
 
@@ -413,7 +475,7 @@ RuntimeImuSample runtime_imu_sample(
 
     out.acceleration_samples.emplace_back();
     auto& destination = out.acceleration_samples.back();
-    destination.orientation = orientation;
+    destination.orientation = sample_orientations[i];
     destination.timestamp_ns = source.timestamp_ns;
     std::copy(std::begin(specific_force), std::end(specific_force),
               destination.specific_force_m_s2);
@@ -441,6 +503,37 @@ bool real_optical_hand_pose(const xr_runtime::HandSideF32V2* hand_side) {
          std::isfinite(hand_side->controller_px) &&
          std::isfinite(hand_side->controller_py) &&
          std::isfinite(hand_side->controller_pz);
+}
+
+void align_acceleration_world_frame(RuntimeImuSample& imu,
+                                    RuntimeControllerImuSideRuntimeState* state,
+                                    const xr_runtime::HandSideF32V2* confirmed_hand,
+                                    const xr_runtime::HandSideF32V2* clean_optical_hand,
+                                    uint64_t optical_sequence) {
+  if (!state || !imu.orientation_valid) return;
+  if (real_optical_hand_pose(confirmed_hand) && real_optical_hand_pose(clean_optical_hand) &&
+      optical_sequence != 0 && optical_sequence != state->acceleration_world_yaw_frame_sequence) {
+    const float xyzw[] = {clean_optical_hand->controller_qx, clean_optical_hand->controller_qy,
+                         clean_optical_hand->controller_qz, clean_optical_hand->controller_qw};
+    float provider_yaw = 0, optical_yaw = 0;
+    if (finite_q_xyzw(xyzw) && nonzero_q_xyzw(xyzw) &&
+        yaw_rad_from_q(imu.yaw_reference_orientation, provider_yaw) &&
+        yaw_rad_from_q(q_from_xyzw(xyzw), optical_yaw)) {
+      state->acceleration_world_yaw_rad = wrap_pi(optical_yaw - provider_yaw);
+      state->acceleration_world_yaw_valid = true;
+      state->acceleration_world_yaw_frame_sequence = optical_sequence;
+    }
+  }
+  if (state->acceleration_world_yaw_valid) {
+    const Qf provider_to_world = yaw_q(state->acceleration_world_yaw_rad);
+    for (auto& sample : imu.acceleration_samples) {
+      sample.orientation = q_mul(provider_to_world, sample.orientation);
+    }
+  } else {
+    // Optical velocity can still bridge a short loss, but integrating force
+    // in an unknown provider frame would invent an arbitrary world direction.
+    imu.acceleration_samples.clear();
+  }
 }
 
 uint64_t nonnegative_ms_to_ns(float value_ms);
@@ -848,12 +941,31 @@ struct AccelerationIntegrationResult {
   uint32_t integrated_sample_count = 0;
 };
 
+float prediction_weight(uint64_t timestamp_ns, uint64_t start_ns,
+                        uint64_t duration_ns, bool decay) {
+  if (!decay) return 1.0f;
+  if (duration_ns == 0) return 0.0f;
+  const uint64_t elapsed = timestamp_ns > start_ns ? timestamp_ns - start_ns : 0;
+  return 1.0f - std::clamp(static_cast<float>(elapsed) /
+                              static_cast<float>(duration_ns), 0.0f, 1.0f);
+}
+
+float weighted_prediction_interval(uint64_t from_ns, uint64_t to_ns,
+                                   uint64_t start_ns, uint64_t duration_ns,
+                                   bool decay) {
+  if (to_ns <= from_ns) return 0.0f;
+  const float dt = static_cast<float>(to_ns - from_ns) / 1.0e9f;
+  return 0.5f * dt * (prediction_weight(from_ns, start_ns, duration_ns, decay) +
+                      prediction_weight(to_ns, start_ns, duration_ns, decay));
+}
+
 AccelerationIntegrationResult integrate_new_acceleration_samples(
     const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
     float gravity_magnitude_mps2,
     RuntimeControllerImuSideRuntimeState& state,
-    float prediction_progress) {
+    uint64_t prediction_start_ns,
+    uint64_t prediction_duration_ns) {
   AccelerationIntegrationResult result{};
   if (!cfg.acceleration_integration_enabled || !imu.orientation_valid ||
       imu.acceleration_samples.empty()) {
@@ -868,7 +980,6 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
     state.last_acceleration_sample_timestamp_ns = 0;
   }
 
-  const float acceleration_weight = 1.0f - prediction_progress;
   for (uint32_t i = 0; i < imu.acceleration_samples.size(); ++i) {
     const auto& sample = imu.acceleration_samples[i];
     if (sample.timestamp_ns == 0 ||
@@ -886,6 +997,8 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
         sample.timestamp_ns - state.last_acceleration_sample_timestamp_ns;
     state.last_acceleration_sample_timestamp_ns = sample.timestamp_ns;
     dt_ns = std::min<uint64_t>(dt_ns, 50'000'000ull);
+    if (sample.timestamp_ns <= prediction_start_ns) continue;
+    dt_ns = std::min(dt_ns, sample.timestamp_ns - prediction_start_ns);
     if (dt_ns == 0) continue;
 
     float acceleration[3] = {};
@@ -895,11 +1008,18 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
     }
 
     const float dt_s = static_cast<float>(dt_ns) / 1.0e9f;
+    const float w0 = prediction_weight(sample.timestamp_ns - dt_ns,
+        prediction_start_ns, prediction_duration_ns, cfg.prediction_time_decay_enabled);
+    const float w1 = prediction_weight(sample.timestamp_ns,
+        prediction_start_ns, prediction_duration_ns, cfg.prediction_time_decay_enabled);
     for (int axis = 0; axis < 3; ++axis) {
-      const float a = acceleration[axis] * acceleration_weight;
+      const float a = acceleration[axis];
+      // Integrate v_imu(t) * weight(t), not acceleration * weight followed
+      // by a second velocity fade. This is exact for constant acceleration
+      // and a linear weight within a sample interval.
       state.acceleration_position_delta_m[axis] +=
-          state.acceleration_velocity_delta_mps[axis] * dt_s +
-          0.5f * a * dt_s * dt_s;
+          state.acceleration_velocity_delta_mps[axis] * dt_s * 0.5f * (w0 + w1) +
+          a * dt_s * dt_s * (w0 + 2.0f * w1) / 6.0f;
       state.acceleration_velocity_delta_mps[axis] += a * dt_s;
     }
     clamp_v3_length(state.acceleration_velocity_delta_mps,
@@ -994,6 +1114,26 @@ float effective_imu_prediction_velocity_limit(
   return 0.0f;
 }
 
+bool optical_position_velocity(const RuntimeControllerImuSideRuntimeState& state,
+                                const xr_runtime::HandSideF32V2& hand,
+                                const RuntimeControllerImuMotionConfig& cfg,
+                                float out[3]) {
+  std::fill(out, out + 3, 0.0f);
+  if (cfg.prediction_window_mode) {
+    double estimated[3] = {};
+    if (!state.position_history.estimate_velocity(estimated)) return false;
+    for (int axis = 0; axis < 3; ++axis) out[axis] = static_cast<float>(estimated[axis]);
+  } else {
+    if ((hand.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) == 0u ||
+        !std::isfinite(hand.vx) || !std::isfinite(hand.vy) || !std::isfinite(hand.vz)) return false;
+    out[0] = hand.vx;
+    out[1] = hand.vy;
+    out[2] = hand.vz;
+  }
+  clamp_v3_length(out, effective_imu_prediction_velocity_limit(cfg));
+  return true;
+}
+
 void accept_optical_position_anchor(
     RuntimeControllerImuSideRuntimeState& state,
     const xr_runtime::HandSideF32V2& hand_side,
@@ -1008,30 +1148,7 @@ void accept_optical_position_anchor(
   std::copy(std::begin(state.anchor_position_m),
             std::end(state.anchor_position_m), state.position_m);
 
-  if (cfg.prediction_window_mode) {
-    double estimated_velocity[3] = {};
-    if (state.position_history.estimate_velocity(estimated_velocity)) {
-      state.anchor_velocity_mps[0] = static_cast<float>(estimated_velocity[0]);
-      state.anchor_velocity_mps[1] = static_cast<float>(estimated_velocity[1]);
-      state.anchor_velocity_mps[2] = static_cast<float>(estimated_velocity[2]);
-      clamp_v3_length(state.anchor_velocity_mps,
-                      effective_imu_prediction_velocity_limit(cfg));
-    } else {
-      std::fill(std::begin(state.anchor_velocity_mps),
-                std::end(state.anchor_velocity_mps), 0.0f);
-    }
-  } else if ((hand_side.flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
-             std::isfinite(hand_side.vx) && std::isfinite(hand_side.vy) &&
-             std::isfinite(hand_side.vz)) {
-    state.anchor_velocity_mps[0] = hand_side.vx;
-    state.anchor_velocity_mps[1] = hand_side.vy;
-    state.anchor_velocity_mps[2] = hand_side.vz;
-    clamp_v3_length(state.anchor_velocity_mps,
-                    effective_imu_prediction_velocity_limit(cfg));
-  } else {
-    std::fill(std::begin(state.anchor_velocity_mps),
-              std::end(state.anchor_velocity_mps), 0.0f);
-  }
+  optical_position_velocity(state, hand_side, cfg, state.anchor_velocity_mps);
   std::copy(std::begin(state.anchor_velocity_mps),
             std::end(state.anchor_velocity_mps), state.velocity_mps);
 
@@ -1201,28 +1318,22 @@ void update_or_apply_imu_position_prediction(
     }
     float optical_velocity[3] = {};
     const bool optical_velocity_valid =
-        (hand_side->flags & xr_runtime::HAND_LINEAR_VELOCITY_VALID) != 0u &&
-        std::isfinite(hand_side->vx) && std::isfinite(hand_side->vy) &&
-        std::isfinite(hand_side->vz);
-    if (optical_velocity_valid) {
-      optical_velocity[0] = hand_side->vx;
-      optical_velocity[1] = hand_side->vy;
-      optical_velocity[2] = hand_side->vz;
-      clamp_v3_length(optical_velocity, cfg.max_prediction_velocity_mps);
-    }
+        optical_position_velocity(*state, *hand_side, cfg, optical_velocity);
 
     // Match HandPoseStabilityFilter: blend only when returning from an actual
     // prediction phase. A hand that returned during hold can be accepted
     // directly because the published coordinate never moved.
     if (!state->reacquire_blend_active && state->prediction_active &&
         blend_ns > 0 && state->has_position_anchor) {
-      state->reacquire_blend_active = true;
-      state->reacquire_blend_start_ns = timestamp_ns;
       std::copy(std::begin(state->position_m), std::end(state->position_m),
                 state->reacquire_blend_from_position_m);
       std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
                 state->reacquire_blend_from_velocity_mps);
-      state->prediction_active = false;
+      // The returning optical pose starts a new continuity anchor. Old IMU
+      // deltas and freeze reasons must not survive a loss during this blend.
+      clear_imu_position_loss_state(*state, false);
+      state->reacquire_blend_active = true;
+      state->reacquire_blend_start_ns = timestamp_ns;
     }
 
     if (state->reacquire_blend_active) {
@@ -1365,7 +1476,8 @@ void update_or_apply_imu_position_prediction(
 
   const AccelerationIntegrationResult acceleration_result =
       integrate_new_acceleration_samples(
-          imu, cfg, gravity_magnitude_mps2, *state, progress);
+          imu, cfg, gravity_magnitude_mps2, *state,
+          saturating_add_u64(state->last_optical_pose_ns, hold_ns), predict_ns);
   if (recovering_from_distance_freeze &&
       acceleration_result.integrated_sample_count == 0) {
     // Distance recovery is intentionally driven only by newly received IMU
@@ -1378,12 +1490,19 @@ void update_or_apply_imu_position_prediction(
 
   const float integrated_time_s =
       prediction_elapsed_s * (1.0f - 0.5f * progress);
+  const uint64_t prediction_start_ns = saturating_add_u64(state->last_optical_pose_ns, hold_ns);
+  const float imu_extrapolation_s = state->last_acceleration_sample_timestamp_ns >= prediction_start_ns
+      ? weighted_prediction_interval(state->last_acceleration_sample_timestamp_ns, timestamp_ns,
+                                     prediction_start_ns, predict_ns,
+                                     cfg.prediction_time_decay_enabled)
+      : 0.0f;
 
   for (int axis = 0; axis < 3; ++axis) {
     const float base_delta =
         state->anchor_velocity_mps[axis] * damping * integrated_time_s;
     state->position_m[axis] = state->anchor_position_m[axis] + base_delta +
-                              state->acceleration_position_delta_m[axis];
+                              state->acceleration_position_delta_m[axis] +
+                              state->acceleration_velocity_delta_mps[axis] * imu_extrapolation_s;
     state->velocity_mps[axis] =
         (state->anchor_velocity_mps[axis] * damping +
          state->acceleration_velocity_delta_mps[axis]) *
@@ -2057,9 +2176,10 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           presentation_imu, imu_motion_cfg, runtime_state,
           optical_yaw_hand_side, optical_yaw_frame_sequence, timestamp_ns);
 
-      // Keep the uncorrected physical IMU sample for position prediction
-      // and acceleration world transform. Periodic/reacquire yaw correction therefore
-      // cannot move the controller in space or bend its predicted trajectory.
+      // Physical acceleration needs its own provider->XR frame alignment.
+      // It remains fixed during loss, independent of presentation yaw blends.
+      align_acceleration_world_frame(physical_imu, runtime_state, hand_side,
+                                     optical_yaw_hand_side, optical_yaw_frame_sequence);
       update_or_apply_imu_position_prediction(
           out, physical_imu, imu_motion_cfg, gravity_magnitude_mps2,
           runtime_state, hand_side,
@@ -2119,12 +2239,18 @@ void reset_runtime_controller_imu_prediction(RuntimeControllerImuSideRuntimeStat
   const uint64_t physical_hash = state.imu_physical_device_hash;
   const uint32_t epoch = state.imu_stream_epoch;
   const uint32_t dropped = state.imu_dropped_batches;
+  const bool world_yaw_valid = state.acceleration_world_yaw_valid;
+  const float world_yaw = state.acceleration_world_yaw_rad;
+  const uint64_t world_yaw_sequence = state.acceleration_world_yaw_frame_sequence;
   state = {};
   static_cast<RuntimeControllerImuYawState&>(state) = yaw;
   state.imu_stream_identity_valid = identity_valid;
   state.imu_physical_device_hash = physical_hash;
   state.imu_stream_epoch = epoch;
   state.imu_dropped_batches = dropped;
+  state.acceleration_world_yaw_valid = world_yaw_valid;
+  state.acceleration_world_yaw_rad = world_yaw;
+  state.acceleration_world_yaw_frame_sequence = world_yaw_sequence;
 }
 
 RuntimeControllerMovementSpace parse_runtime_controller_movement_space(

@@ -529,12 +529,49 @@ void apply_hand_joint_transform(xr_runtime::HandJointF32V2& joint,
   }
 }
 
+void apply_hand_motion_transform(const StreamTransformConfig& cfg,
+                                 const V3d& world_position,
+                                 const V3d* hmd_position,
+                                 const Qd* hmd_orientation,
+                                 const xr_runtime::HmdPoseF64V1* hmd_motion,
+                                 V3d& velocity, V3d& angular_velocity) {
+  if (!cfg.hmd_relative.enabled) return;
+  const bool rotate = cfg.hmd_relative.rotate_with_hmd_orientation && hmd_orientation;
+  if (rotate) {
+    velocity = q_rotate(*hmd_orientation, velocity);
+    angular_velocity = q_rotate(*hmd_orientation, angular_velocity);
+  }
+  if (!hmd_motion) return;
+  if (hmd_position &&
+      (hmd_motion->flags & xr_runtime::HMD_FLAG_LINEAR_VELOCITY_VALID) != 0u &&
+      finite_v3({hmd_motion->vx, hmd_motion->vy, hmd_motion->vz})) {
+    velocity.x += hmd_motion->vx;
+    velocity.y += hmd_motion->vy;
+    velocity.z += hmd_motion->vz;
+  }
+  if (rotate &&
+      (hmd_motion->flags & xr_runtime::HMD_FLAG_ANGULAR_VELOCITY_VALID) != 0u &&
+      finite_v3({hmd_motion->wx, hmd_motion->wy, hmd_motion->wz})) {
+    const V3d r{world_position.x - (hmd_position ? hmd_position->x : 0),
+                world_position.y - (hmd_position ? hmd_position->y : 0),
+                world_position.z - (hmd_position ? hmd_position->z : 0)};
+    // d(p_hmd + R_hmd * p_camera)/dt includes the moving camera frame.
+    velocity.x += hmd_motion->wy * r.z - hmd_motion->wz * r.y;
+    velocity.y += hmd_motion->wz * r.x - hmd_motion->wx * r.z;
+    velocity.z += hmd_motion->wx * r.y - hmd_motion->wy * r.x;
+    angular_velocity.x += hmd_motion->wx;
+    angular_velocity.y += hmd_motion->wy;
+    angular_velocity.z += hmd_motion->wz;
+  }
+}
+
 void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
                                const StreamTransformConfig& cfg,
                                const V3d* hmd_position,
                                const Qd* hmd_orientation,
                                bool is_left,
-                               bool apply_orientation_offset) {
+                               bool apply_orientation_offset,
+                               const xr_runtime::HmdPoseF64V1* hmd_motion) {
   if ((side.flags & xr_runtime::HAND_POSE_VALID) != 0u) {
     V3d p = apply_stream_position_transform(cfg, {side.controller_px, side.controller_py, side.controller_pz}, hmd_position, hmd_orientation);
     assign_v3(side.controller_px, side.controller_py, side.controller_pz, p);
@@ -568,8 +605,10 @@ void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
     }
 
     V3d v = apply_stream_vector_transform(cfg, {side.vx, side.vy, side.vz});
-    assign_v3(side.vx, side.vy, side.vz, v);
     V3d w = apply_stream_vector_transform(cfg, {side.wx, side.wy, side.wz});
+    apply_hand_motion_transform(cfg, {side.controller_px, side.controller_py, side.controller_pz},
+                                hmd_position, hmd_orientation, hmd_motion, v, w);
+    assign_v3(side.vx, side.vy, side.vz, v);
     assign_v3(side.wx, side.wy, side.wz, w);
   }
 
@@ -587,7 +626,8 @@ void apply_hand_side_transform(xr_runtime::HandSideF64V1& side,
                                const V3d* hmd_position,
                                const Qd* hmd_orientation,
                                bool is_left,
-                               bool apply_orientation_offset) {
+                               bool apply_orientation_offset,
+                               const xr_runtime::HmdPoseF64V1* hmd_motion) {
   V3d p = apply_stream_position_transform(cfg, {side.palm_px, side.palm_py, side.palm_pz}, hmd_position, hmd_orientation);
   assign_v3(side.palm_px, side.palm_py, side.palm_pz, p);
   p = apply_stream_position_transform(cfg, {side.wrist_px, side.wrist_py, side.wrist_pz}, hmd_position, hmd_orientation);
@@ -601,8 +641,10 @@ void apply_hand_side_transform(xr_runtime::HandSideF64V1& side,
            apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Wrist,
                                          apply_orientation_offset));
   V3d v = apply_stream_vector_transform(cfg, {side.vx, side.vy, side.vz});
-  assign_v3(side.vx, side.vy, side.vz, v);
   V3d w = apply_stream_vector_transform(cfg, {side.wx, side.wy, side.wz});
+  apply_hand_motion_transform(cfg, {side.palm_px, side.palm_py, side.palm_pz},
+                              hmd_position, hmd_orientation, hmd_motion, v, w);
+  assign_v3(side.vx, side.vy, side.vz, v);
   assign_v3(side.wx, side.wy, side.wz, w);
   const uint32_t n = std::min<uint32_t>(side.joint_count, xr_runtime::HAND_JOINT_COUNT_V1);
   for (uint32_t i = 0; i < n; ++i) {
@@ -812,16 +854,17 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
                                 const V3d* hmd_position,
                                 const Qd* hmd_orientation,
                                 bool apply_left_hand_orientation_offset,
-                                bool apply_right_hand_orientation_offset) {
+                                bool apply_right_hand_orientation_offset,
+                                const xr_runtime::HmdPoseF64V1* hmd_motion) {
   if ((hand.flags & xr_runtime::HAND_FLAG_LEFT_VALID) != 0u &&
       hand_side_has_transformable_payload(hand.left)) {
     apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true,
-                              apply_left_hand_orientation_offset);
+                              apply_left_hand_orientation_offset, hmd_motion);
   }
   if ((hand.flags & xr_runtime::HAND_FLAG_RIGHT_VALID) != 0u &&
       hand_side_has_transformable_payload(hand.right)) {
     apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false,
-                              apply_right_hand_orientation_offset);
+                              apply_right_hand_orientation_offset, hmd_motion);
   }
 }
 
@@ -830,11 +873,12 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
                                 const V3d* hmd_position,
                                 const Qd* hmd_orientation,
                                 bool apply_left_hand_orientation_offset,
-                                bool apply_right_hand_orientation_offset) {
+                                bool apply_right_hand_orientation_offset,
+                                const xr_runtime::HmdPoseF64V1* hmd_motion) {
   apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true,
-                            apply_left_hand_orientation_offset);
+                            apply_left_hand_orientation_offset, hmd_motion);
   apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false,
-                            apply_right_hand_orientation_offset);
+                            apply_right_hand_orientation_offset, hmd_motion);
 }
 
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,

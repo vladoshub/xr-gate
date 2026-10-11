@@ -93,8 +93,9 @@ struct RuntimeControllerImuMotionConfig {
   // <= 0 disables this additional limit.
   float max_prediction_speed_mps = 2.0f;
   float prediction_damping = 1.0f;
-  // When enabled, base velocity and IMU acceleration fade linearly to zero
-  // by predict_lost_ms. When disabled, full response is kept until timeout.
+  // When enabled, total predicted velocity fades linearly to zero by
+  // predict_lost_ms; position integrates that same faded velocity.
+  // When disabled, full response is kept until timeout.
   bool prediction_time_decay_enabled = true;
   // Maximum accumulated synthetic controller path before position freeze, in metres.
   // The frozen pose remains valid until predict_lost_ms; <= 0 disables.
@@ -175,6 +176,11 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   uint64_t imu_physical_device_hash = 0;
   uint32_t imu_stream_epoch = 0;
   uint32_t imu_dropped_batches = 0;
+  // Provider->XR yaw for physical acceleration, independent of presentation
+  // yaw blends. Learn on confirmed optical frames and retain during a loss.
+  bool acceleration_world_yaw_valid = false;
+  float acceleration_world_yaw_rad = 0.0f;
+  uint64_t acceleration_world_yaw_frame_sequence = 0;
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
