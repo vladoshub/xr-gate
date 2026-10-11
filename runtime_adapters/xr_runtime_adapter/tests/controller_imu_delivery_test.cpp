@@ -98,6 +98,8 @@ int main() {
   optical.left.flags = HAND_POSE_VALID;
   optical.left.controller_qw = 1;
   RuntimeControllerSynthesisState runtime;
+  // This delivery test starts with an already identified physical frame.
+  runtime.left.acceleration_world_yaw_valid = true;
   compose_runtime_controller_state(1, anchor_ns, cfg, optical, optical, initial,
                                    std::nullopt, 9.81f, &runtime);
   require(runtime.left.has_position_anchor, "optical anchor failed");
@@ -143,6 +145,8 @@ int main() {
   yaw_cfg.left_imu_motion.yaw_correction_continuous = false;
   yaw_cfg.left_imu_motion.yaw_correction_on_reacquire = false;
   RuntimeControllerSynthesisState yaw_runtime;
+  yaw_runtime.left.acceleration_world_yaw_valid = true;
+  yaw_runtime.left.acceleration_world_yaw_rad = 0.4f;
   auto yaw_optical = optical;
   yaw_optical.left.controller_qy = std::sin(0.2f);
   yaw_optical.left.controller_qw = std::cos(0.2f);

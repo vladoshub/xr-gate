@@ -6173,6 +6173,12 @@ int main(int argc, char** argv) {
                     << (runtime_controller_synthesis_state.left.acceleration_world_yaw_valid ? "yes" : "no")
                     << " controller_left_acceleration_yaw_deg="
                     << (runtime_controller_synthesis_state.left.acceleration_world_yaw_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_left_acceleration_alignment_frames="
+                    << runtime_controller_synthesis_state.left.acceleration_world_alignment.observation_count()
+                    << " controller_left_acceleration_alignment_pairs="
+                    << runtime_controller_synthesis_state.left.acceleration_world_alignment.pair_count()
+                    << " controller_left_acceleration_alignment_coherence="
+                    << runtime_controller_synthesis_state.left.acceleration_world_alignment.coherence()
                     << " controller_left_imu_predicting="
                     << (runtime_controller_synthesis_state.left.prediction_active ? "yes" : "no")
                     << " controller_left_imu_freeze="
@@ -6217,6 +6223,12 @@ int main(int argc, char** argv) {
                     << (runtime_controller_synthesis_state.right.acceleration_world_yaw_valid ? "yes" : "no")
                     << " controller_right_acceleration_yaw_deg="
                     << (runtime_controller_synthesis_state.right.acceleration_world_yaw_rad * 180.0 / 3.14159265358979323846)
+                    << " controller_right_acceleration_alignment_frames="
+                    << runtime_controller_synthesis_state.right.acceleration_world_alignment.observation_count()
+                    << " controller_right_acceleration_alignment_pairs="
+                    << runtime_controller_synthesis_state.right.acceleration_world_alignment.pair_count()
+                    << " controller_right_acceleration_alignment_coherence="
+                    << runtime_controller_synthesis_state.right.acceleration_world_alignment.coherence()
                     << " controller_right_imu_predicting="
                     << (runtime_controller_synthesis_state.right.prediction_active ? "yes" : "no")
                     << " controller_right_imu_freeze="

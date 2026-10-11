@@ -307,22 +307,6 @@ Qf yaw_q(float yaw) {
   return normalize_q({std::cos(0.5f * yaw), 0.0f, std::sin(0.5f * yaw), 0.0f});
 }
 
-bool relative_world_yaw(Qf provider, Qf optical, float& yaw) {
-  // Extract the world-Y twist of the relative rotation, rather than subtract
-  // two independently projected forward headings. A tiny pitch disagreement
-  // across vertical reverses one heading and invents a 180-degree yaw error.
-  // The common hand pose cancels in optical * inverse(provider), including
-  // when both forward vectors are vertical. The twist is also invariant to
-  // the quaternion sign and is the closest yaw-only relative rotation.
-  const Qf relative = q_mul(optical, q_conj(provider));
-  const float twist_norm_sq = relative.w * relative.w + relative.y * relative.y;
-  // A relative half-turn about a horizontal axis has no identifiable Y twist.
-  // Keep the last trusted frame instead of assigning arbitrary world yaw.
-  if (!std::isfinite(twist_norm_sq) || twist_norm_sq <= 1.0e-6f) return false;
-  yaw = wrap_pi(2.0f * std::atan2(relative.y, relative.w));
-  return std::isfinite(yaw);
-}
-
 struct RuntimeAccelerationSample {
   uint64_t timestamp_ns = 0;
   float specific_force_m_s2[3] = {};
@@ -337,7 +321,8 @@ struct RuntimeImuSample {
   // configurable presentation/mounting orientation_offset. Yaw correction
   // compares this clean reference with the equally clean optical reference.
   Qf yaw_reference_orientation{};
-  // Final IMU orientation used by controller output and acceleration logic.
+  uint64_t yaw_reference_timestamp_ns = 0;
+  // Final IMU orientation used by controller presentation.
   // This includes orientation_offset when configured.
   Qf orientation{};
   float angular_velocity_rad_s[3] = {};
@@ -365,6 +350,8 @@ RuntimeImuSample runtime_imu_sample(
 
   const Qf basis = q_from_xyzw(cfg.basis_rotation_xyzw);
   const Qf offset = q_from_xyzw(cfg.offset_rotation_xyzw);
+  auto physical_cfg = cfg;
+  physical_cfg.offset_enabled = false;
 
   Qf orientation = q_from_xyzw(controller.imu.orientation_xyzw);
   if (cfg.transform_enabled) {
@@ -386,6 +373,7 @@ RuntimeImuSample runtime_imu_sample(
   out.timestamp_ns = controller.imu.orientation_timestamp_ns != 0
       ? controller.imu.orientation_timestamp_ns
       : controller.imu.latest_sample_timestamp_ns;
+  out.yaw_reference_timestamp_ns = out.timestamp_ns;
 
   const xr_runtime::ControllerImuSampleV1* latest_gyro = nullptr;
   if (latest_valid_imu_sample(controller.imu, xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID,
@@ -460,7 +448,7 @@ RuntimeImuSample runtime_imu_sample(
       }
     }
     orientation_valid[i] = reconstructed;
-    sample_orientations[i] = transformed_imu_orientation(provider_orientation, cfg);
+    sample_orientations[i] = transformed_imu_orientation(provider_orientation, physical_cfg);
     orientation_cursor_ns = source.timestamp_ns;
     interval_gyro = &source;
   }
@@ -483,10 +471,8 @@ RuntimeImuSample runtime_imu_sample(
       q_rotate(basis, specific_force, transformed);
       std::copy(std::begin(transformed), std::end(transformed), specific_force);
     }
-    if (cfg.offset_enabled && !cfg.offset_pre_multiply) {
-      q_rotate(q_conj(offset), specific_force, transformed);
-      std::copy(std::begin(transformed), std::end(transformed), specific_force);
-    }
+    // Presentation offsets change the rendered grip, not the physical sensor
+    // world. Force and its quaternion stay in the same canonical IMU axes.
     if (!finite_v3(specific_force)) continue;
 
     out.acceleration_samples.emplace_back();
@@ -525,19 +511,28 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
                                     RuntimeControllerImuSideRuntimeState* state,
                                     const xr_runtime::HandSideF32V2* confirmed_hand,
                                     const xr_runtime::HandSideF32V2* clean_optical_hand,
-                                    uint64_t optical_sequence) {
+                                    uint64_t optical_sequence,
+                                    uint64_t optical_timestamp_ns) {
   if (!state || !imu.orientation_valid) return;
-  if (real_optical_hand_pose(confirmed_hand) && real_optical_hand_pose(clean_optical_hand) &&
-      optical_sequence != 0 && optical_sequence != state->acceleration_world_yaw_frame_sequence) {
+  if (!real_optical_hand_pose(confirmed_hand) || !real_optical_hand_pose(clean_optical_hand)) {
+    state->acceleration_world_alignment.clear_optical_motion();
+  } else if (optical_sequence != 0 &&
+             optical_sequence != state->acceleration_world_yaw_frame_sequence) {
     const float xyzw[] = {clean_optical_hand->controller_qx, clean_optical_hand->controller_qy,
                          clean_optical_hand->controller_qz, clean_optical_hand->controller_qw};
     float world_yaw = 0;
-    if (finite_q_xyzw(xyzw) && nonzero_q_xyzw(xyzw) &&
-        relative_world_yaw(imu.yaw_reference_orientation, q_from_xyzw(xyzw), world_yaw)) {
-      state->acceleration_world_yaw_rad = world_yaw;
+    if (state->acceleration_world_alignment.observe_optical(optical_timestamp_ns, xyzw, world_yaw)) {
+      const float innovation = wrap_pi(world_yaw - state->acceleration_world_yaw_rad);
+      // This is an AHRS-world frame, not the palm's current heading. It cannot
+      // jump with the grip; slow updates accommodate yaw drift and small noise.
+      // A large coherent residual can also mean yaw drift during a long loss.
+      // Recover gradually instead of permanently rejecting the new calibration.
+      const float step = std::clamp(0.1f * innovation, -0.035f, 0.035f);
+      state->acceleration_world_yaw_rad = state->acceleration_world_yaw_valid
+          ? wrap_pi(state->acceleration_world_yaw_rad + step) : world_yaw;
       state->acceleration_world_yaw_valid = true;
-      state->acceleration_world_yaw_frame_sequence = optical_sequence;
     }
+    state->acceleration_world_yaw_frame_sequence = optical_sequence;
   }
   if (state->acceleration_world_yaw_valid) {
     const Qf provider_to_world = yaw_q(state->acceleration_world_yaw_rad);
@@ -2158,6 +2153,12 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
         runtime_state->imu_dropped_batches = dropped;
       }
       RuntimeImuSample physical_imu = runtime_imu_sample(*controller_side, imu_orientation_cfg);
+      const auto remember_imu_orientation = [runtime_state](const RuntimeImuSample& sample) {
+        if (!runtime_state || !sample.orientation_valid) return;
+        const auto q = sample.yaw_reference_orientation;
+        const float xyzw[] = {q.x, q.y, q.z, q.w};
+        runtime_state->acceleration_world_alignment.observe_imu(sample.yaw_reference_timestamp_ns, xyzw);
+      };
       if (imu_history != nullptr) {
         for (const auto& input : *imu_history) {
           const auto& side = left ? input.left : input.right;
@@ -2170,6 +2171,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           if (diagnostics && (side.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] != epoch ||
                               side.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_DROPPED_BATCHES] != dropped)) continue;
           const auto batch = runtime_imu_sample(side, imu_orientation_cfg);
+          remember_imu_orientation(batch);
           physical_imu.acceleration_samples.insert(physical_imu.acceleration_samples.end(),
               batch.acceleration_samples.begin(), batch.acceleration_samples.end());
         }
@@ -2181,6 +2183,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
           return a.timestamp_ns == b.timestamp_ns;
         }), samples.end());
       }
+      remember_imu_orientation(physical_imu);
       RuntimeImuSample presentation_imu = physical_imu;
 
       // Yaw correction is a presentation-only wrist-orientation adjustment.
@@ -2194,7 +2197,9 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       // Physical acceleration needs its own provider->XR frame alignment.
       // It remains fixed during loss, independent of presentation yaw blends.
       align_acceleration_world_frame(physical_imu, runtime_state, hand_side,
-                                     optical_yaw_hand_side, optical_yaw_frame_sequence);
+                                     optical_yaw_hand_side, optical_yaw_frame_sequence,
+                                     optical_yaw_hand != nullptr && optical_yaw_hand->source_timestamp_ns != 0
+                                         ? optical_yaw_hand->source_timestamp_ns : timestamp_ns);
       update_or_apply_imu_position_prediction(
           out, physical_imu, imu_motion_cfg, gravity_magnitude_mps2,
           runtime_state, hand_side,
@@ -2257,6 +2262,7 @@ void reset_runtime_controller_imu_prediction(RuntimeControllerImuSideRuntimeStat
   const bool world_yaw_valid = state.acceleration_world_yaw_valid;
   const float world_yaw = state.acceleration_world_yaw_rad;
   const uint64_t world_yaw_sequence = state.acceleration_world_yaw_frame_sequence;
+  const auto world_alignment = state.acceleration_world_alignment;
   state = {};
   static_cast<RuntimeControllerImuYawState&>(state) = yaw;
   state.imu_stream_identity_valid = identity_valid;
@@ -2266,6 +2272,7 @@ void reset_runtime_controller_imu_prediction(RuntimeControllerImuSideRuntimeStat
   state.acceleration_world_yaw_valid = world_yaw_valid;
   state.acceleration_world_yaw_rad = world_yaw;
   state.acceleration_world_yaw_frame_sequence = world_yaw_sequence;
+  state.acceleration_world_alignment = world_alignment;
 }
 
 RuntimeControllerMovementSpace parse_runtime_controller_movement_space(

@@ -131,6 +131,8 @@ int main() {
   optical.sequence = 1; optical.left.status = 1;
   optical.left.flags = HAND_POSE_VALID; optical.left.controller_qw = 1;
   RuntimeControllerSynthesisState runtime;
+  // Test transport/integration independently of optical motion calibration.
+  runtime.left.acceleration_world_yaw_valid = true;
   compose_runtime_controller_state(1, anchor_ns, cfg, optical, optical, initial,
       std::nullopt, 9.81f, &runtime);
 
@@ -171,6 +173,7 @@ int main() {
   }
   const auto wrapped_latest = wrapped_history.back();
   RuntimeControllerSynthesisState wrapped_runtime;
+  wrapped_runtime.left.acceleration_world_yaw_valid = true;
   compose_runtime_controller_state(1, anchor_ns, cfg, optical, optical, wrapped_initial,
       std::nullopt, 9.81f, &wrapped_runtime);
   compose_runtime_controller_state(2, wrapped_latest.source_timestamp_ns, cfg, std::nullopt,

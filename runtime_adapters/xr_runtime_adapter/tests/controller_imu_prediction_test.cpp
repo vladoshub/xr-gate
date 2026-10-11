@@ -30,6 +30,9 @@ struct Scenario {
   uint64_t sequence = 0;
 
   Scenario() {
+    // Most tests below exercise prediction with a known provider->XR frame.
+    // Automatic identification and its unobservable cases have separate tests.
+    state.left.acceleration_world_yaw_valid = true;
     cfg.left_orientation_source = RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
     auto& m = cfg.left_imu_motion;
     m.position_prediction_enabled = m.acceleration_integration_enabled = true;
@@ -77,9 +80,184 @@ struct Scenario {
   }
 };
 
+void rigid_grip_does_not_change_world_alignment() {
+  for (bool right : {false, true}) {
+    Scenario s;
+    s.state.left.acceleration_world_yaw_valid = false;
+    if (right) {
+      s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+      s.cfg.right_imu_motion = s.cfg.left_imu_motion;
+    }
+    const float world_yaw = right ? -0.95f : 0.75f;
+    const auto frame = cu::q_from_axis_angle(0, 1, 0, world_yaw);
+    const auto mount = cu::q_mul(
+        cu::q_from_axis_angle(1, 0, 0, right ? -1.3 : 1.7),
+        cu::q_from_axis_angle(0, 0, 1, right ? -0.7 : 1.4));
+    cu::Qd provider;
+    const auto tick = [&](int ms, bool tracked) {
+      const auto now = s.prepare(ms);
+      auto input = s.input;
+      auto hand = s.hand;
+      if (tracked) {
+        provider = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, 0.001 * ms),
+            cu::q_mul(cu::q_from_axis_angle(1, 0, 0, 0.8 + 0.85 * std::sin(ms / 170.0)),
+                      cu::q_from_axis_angle(0, 0, 1, 0.35 * std::sin(ms / 130.0))));
+      }
+      const auto optical = cu::q_mul(cu::q_mul(frame, provider), mount);
+      auto& imu = input.left.imu;
+      imu.orientation_xyzw[0] = provider.x;
+      imu.orientation_xyzw[1] = provider.y;
+      imu.orientation_xyzw[2] = provider.z;
+      imu.orientation_xyzw[3] = provider.w;
+      const auto force = cu::q_rotate(cu::q_conj(provider), {tracked ? 0.0 : 1.0, 9.81, 0});
+      imu.samples[0].specific_force_m_s2[0] = force.x;
+      imu.samples[0].specific_force_m_s2[1] = force.y;
+      imu.samples[0].specific_force_m_s2[2] = force.z;
+      hand.left.controller_qx = optical.x;
+      hand.left.controller_qy = optical.y;
+      hand.left.controller_qz = optical.z;
+      hand.left.controller_qw = optical.w;
+      if (right) {
+        std::swap(input.left, input.right);
+        std::swap(hand.left, hand.right);
+        hand.flags = HAND_FLAG_RIGHT_VALID;
+        hand.right.handedness = 2;
+      }
+      const auto h = tracked ? std::optional(hand) : std::nullopt;
+      return compose_runtime_controller_state(s.sequence, now, s.cfg, h, h,
+          input, std::nullopt, 9.81f, &s.state);
+    };
+    for (int ms = 0; ms <= 600; ms += 20) {
+      tick(ms, true);
+      if (ms < 200) continue;
+      const auto& state = right ? s.state.right : s.state.left;
+      require(state.acceleration_world_yaw_valid, "rigid wrist motion did not identify world yaw");
+      const float error = std::remainder(state.acceleration_world_yaw_rad - world_yaw, 2 * kPi);
+      if (std::abs(error) > 1e-4f) {
+        std::cerr << (right ? "right" : "left") << " physical yaw at " << ms << "ms: expected="
+                  << world_yaw << " actual=" << state.acceleration_world_yaw_rad << '\n';
+      }
+      near(error, 0, "fixed grip changed physical world yaw", 1e-4f);
+    }
+    auto retained = right ? s.state.right : s.state.left;
+    const auto observations = retained.acceleration_world_alignment.observation_count();
+    reset_runtime_controller_imu_prediction(retained);
+    require(retained.acceleration_world_yaw_valid &&
+            retained.acceleration_world_alignment.observation_count() == observations,
+            "delivery reset discarded orientation calibration history");
+    RuntimeControllerStateFrameV1 out;
+    for (int ms = 610; ms <= 800; ms += 10) out = tick(ms, false);
+    const auto& side = right ? out.right : out.left;
+    near(side.position[0], 0.02f * std::cos(world_yaw), "grip reversed physical prediction X");
+    near(side.position[2], -0.02f * std::sin(world_yaw), "grip reversed physical prediction Z");
+
+    // A retained frame can be far from the new estimate after a long period
+    // of AHRS yaw drift. It must recover while real optical poses are present.
+    auto& stale_frame = right ? s.state.right : s.state.left;
+    stale_frame.acceleration_world_yaw_rad = world_yaw - 1;
+    for (int ms = 820; ms <= 2600; ms += 20) tick(ms, true);
+    near(stale_frame.acceleration_world_yaw_rad, world_yaw,
+         "large coherent yaw drift left physical alignment permanently stale", 0.01f);
+  }
+}
+
+void motion_alignment_uses_source_time_and_observable_rotations() {
+  using xr_runtime_adapter::imu_alignment::WorldYawAlignment;
+  const auto provider_at = [](int ms) {
+    return cu::q_mul(cu::q_from_axis_angle(0, 1, 0, ms * 0.0015),
+        cu::q_mul(cu::q_from_axis_angle(1, 0, 0, 0.8 * std::sin(ms / 160.0)),
+                  cu::q_from_axis_angle(0, 0, 1, 0.6 * std::sin(ms / 190.0))));
+  };
+  const auto observe_imu = [](WorldYawAlignment& a, int ms, cu::Qd q, float sign = 1) {
+    const float xyzw[] = {float(q.x)*sign, float(q.y)*sign, float(q.z)*sign, float(q.w)*sign};
+    a.observe_imu(kStart + uint64_t(ms)*1'000'000, xyzw);
+  };
+  const auto observe_optical = [](WorldYawAlignment& a, int ms, cu::Qd q, float& yaw, float sign = 1) {
+    const float xyzw[] = {float(q.x)*sign, float(q.y)*sign, float(q.z)*sign, float(q.w)*sign};
+    return a.observe_optical(kStart + uint64_t(ms)*1'000'000, xyzw, yaw);
+  };
+  WorldYawAlignment timed;
+  const float expected_yaw = 1.1f;
+  const auto frame = cu::q_from_axis_angle(0, 1, 0, expected_yaw);
+  const auto mount = cu::q_mul(cu::q_from_axis_angle(1, 0, 0, 2.2),
+                              cu::q_from_axis_angle(0, 1, 0, -1.8));
+  int imu_ms = 0, identified = 0;
+  float yaw = 0;
+  for (int optical_ms = 0; optical_ms <= 1100; optical_ms += 37) {
+    // Runtime receives the image 45 ms after exposure; the newest IMU pose
+    // is already ahead of it. Interpolate the historical exposure-time pose.
+    for (; imu_ms <= optical_ms + 45; imu_ms += 10) {
+      observe_imu(timed, imu_ms, provider_at(imu_ms), imu_ms % 20 ? -1 : 1);
+    }
+    const auto optical = cu::q_mul(cu::q_mul(frame, provider_at(optical_ms)), mount);
+    if (observe_optical(timed, optical_ms, optical, yaw, optical_ms % 2 ? -1 : 1)) {
+      ++identified;
+      near(yaw, expected_yaw, "calibration used latest IMU instead of optical source time", 0.002f);
+    }
+  }
+  require(identified > 10, "delayed optical stream failed to identify physical yaw");
+  const auto count = timed.observation_count();
+  require(!observe_optical(timed, 1073, {}, yaw) && !observe_optical(timed, 1000, {}, yaw) &&
+          timed.observation_count() == count, "duplicate/older optical pose altered calibration");
+  timed.clear_optical_motion();
+  require(timed.observation_count() == 0 && !observe_optical(timed, 1073, {}, yaw),
+          "lost optics reused a cached rotation to start calibration");
+
+  WorldYawAlignment delayed_imu;
+  imu_ms = 0;
+  identified = 0;
+  for (int optical_ms = 0; optical_ms <= 1100; optical_ms += 37) {
+    for (; imu_ms <= optical_ms - 80; imu_ms += 10) {
+      observe_imu(delayed_imu, imu_ms, provider_at(imu_ms));
+    }
+    const auto optical = cu::q_mul(cu::q_mul(frame, provider_at(optical_ms)), mount);
+    if (observe_optical(delayed_imu, optical_ms, optical, yaw)) {
+      ++identified;
+      near(yaw, expected_yaw, "late IMU delivery changed physical frame", 0.002f);
+    }
+  }
+  require(identified > 8, "late IMU delivery prevented queued optical calibration");
+
+  for (bool yaw_only : {false, true}) {
+    WorldYawAlignment unobservable;
+    for (int ms = 0; ms <= 500; ms += 20) {
+      const auto provider = yaw_only ? cu::q_from_axis_angle(0, 1, 0, ms * 0.002) : cu::Qd{};
+      observe_imu(unobservable, ms, provider);
+      const auto optical = cu::q_mul(cu::q_mul(frame, provider), mount);
+      require(!observe_optical(unobservable, ms, optical, yaw),
+              "static/yaw-only poses invented a physical frame");
+    }
+  }
+
+  WorldYawAlignment inconsistent;
+  for (int ms = 0; ms <= 600; ms += 20) {
+    observe_imu(inconsistent, ms, provider_at(ms));
+    require(!observe_optical(inconsistent, ms, mount, yaw),
+            "uncorrelated optical and IMU rotations identified physical yaw");
+  }
+  WorldYawAlignment gap;
+  observe_imu(gap, 0, {});
+  observe_imu(gap, 120, provider_at(120));
+  require(!observe_optical(gap, 60, provider_at(60), yaw) && gap.observation_count() == 0,
+          "calibration interpolated across unobserved IMU gap");
+
+  Scenario velocity_only;
+  velocity_only.state.left.acceleration_world_yaw_valid = false;
+  velocity_only.cfg.left_imu_motion.prediction_window_mode = true;
+  velocity_only.tick(0, true);
+  velocity_only.hand.left.controller_px = 0.01f;
+  velocity_only.tick(20, true);
+  const auto predicted = velocity_only.tick(30, false, 12);
+  require(!velocity_only.state.left.acceleration_world_yaw_valid,
+          "unobservable poses unexpectedly identified physical frame");
+  near(predicted.left.position[0], 0.015f, "unknown frame stopped optical-velocity prediction");
+  near(predicted.left.linear_velocity[0], 0.5f, "unknown frame used arbitrary acceleration");
+}
+
 void world_frame_and_yaw_continuity() {
   for (bool presentation_correction : {false, true}) {
     Scenario s;
+    s.state.left.acceleration_world_yaw_rad = kPi / 2;
     auto& m = s.cfg.left_imu_motion;
     m.hold_lost_ms = 30;
     m.prediction_window_mode = true;
@@ -118,7 +296,8 @@ void world_frame_and_yaw_continuity() {
     s.hand.left.controller_qy = 0;
     s.hand.left.controller_qw = 1;
     s.tick(310, true);
-    near(s.state.left.acceleration_world_yaw_rad, 0, "AHRS restart retained old physical yaw");
+    require(!s.state.left.acceleration_world_yaw_valid,
+            "AHRS restart retained old physical yaw or identified it from one pose");
   }
 }
 
@@ -156,15 +335,19 @@ void sample_orientation_matches_force_time() {
       near(reordered.left.position[0], out.left.position[0], "unordered batch changed integration", 1e-7f);
     }
   }
-  // A post mounting offset must cancel with the inverse force transform.
-  Scenario s;
-  s.cfg.left_imu_orientation.offset_enabled = true;
-  s.cfg.left_imu_orientation.offset_rotation_xyzw[0] = std::sin(0.3f);
-  s.cfg.left_imu_orientation.offset_rotation_xyzw[3] = std::cos(0.3f);
-  s.tick(0, true);
-  const auto out = s.tick(10, false, 1);
-  near(out.left.position[0], 0.00005f, "mounting offset changed physical acceleration");
-  near(out.left.position[1], 0, "mounting offset created gravity leakage");
+  // Presentation offsets in either multiplication order must not rotate the
+  // physical force or change its gravity removal.
+  for (bool pre_multiply : {false, true}) {
+    Scenario s;
+    s.cfg.left_imu_orientation.offset_enabled = true;
+    s.cfg.left_imu_orientation.offset_pre_multiply = pre_multiply;
+    s.cfg.left_imu_orientation.offset_rotation_xyzw[0] = std::sin(0.3f);
+    s.cfg.left_imu_orientation.offset_rotation_xyzw[3] = std::cos(0.3f);
+    s.tick(0, true);
+    const auto out = s.tick(10, false, 1);
+    near(out.left.position[0], 0.00005f, "mounting offset changed physical acceleration");
+    near(out.left.position[1], 0, "mounting offset created gravity leakage");
+  }
 }
 
 void physical_yaw_does_not_flip_at_vertical() {
@@ -176,6 +359,9 @@ void physical_yaw_does_not_flip_at_vertical() {
       for (float world_yaw : {-kPi, -0.6f, 0.0f, 0.6f, kPi}) {
         for (float quaternion_sign : {-1.0f, 1.0f}) {
           Scenario s;
+          auto& known_frame = right ? s.state.right : s.state.left;
+          known_frame.acceleration_world_yaw_valid = true;
+          known_frame.acceleration_world_yaw_rad = world_yaw;
           if (right) {
             s.cfg.right_orientation_source = s.cfg.left_orientation_source;
             s.cfg.right_imu_motion = s.cfg.left_imu_motion;
@@ -228,6 +414,7 @@ void physical_yaw_does_not_flip_at_vertical() {
   }
 
   Scenario ambiguous;
+  ambiguous.state.left.acceleration_world_yaw_rad = 0.6f;
   ambiguous.hand.left.controller_qy = std::sin(0.3f);
   ambiguous.hand.left.controller_qw = std::cos(0.3f);
   ambiguous.tick(0, true);
@@ -241,6 +428,7 @@ void physical_yaw_does_not_flip_at_vertical() {
        "ambiguous optical rotation replaced trusted physical yaw");
 
   Scenario unaligned;
+  unaligned.state.left.acceleration_world_yaw_valid = false;
   unaligned.hand.left.controller_qx = 1;
   unaligned.hand.left.controller_qw = 0;
   unaligned.tick(0, true);
@@ -448,6 +636,8 @@ void speed_distance_and_timeout_limits() {
 
 int main() {
   static_assert(sizeof(ControllerInputV3) == 1432, "controller V3 ABI changed");
+  rigid_grip_does_not_change_world_alignment();
+  motion_alignment_uses_source_time_and_observable_rotations();
   world_frame_and_yaw_continuity();
   sample_orientation_matches_force_time();
   physical_yaw_does_not_flip_at_vertical();
@@ -456,5 +646,5 @@ int main() {
   interrupted_reacquire_rebases_motion();
   time_decay_integrates_published_velocity();
   speed_distance_and_timeout_limits();
-  std::cout << "IMU prediction: world frames, sample time, stale optics, head motion, reacquire, decay and limits: OK\n";
+  std::cout << "IMU prediction: rigid grips, timed rotation calibration, velocity fallback, sample time, stale optics, reacquire and limits: OK\n";
 }

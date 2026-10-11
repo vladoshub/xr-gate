@@ -11,6 +11,7 @@
 
 #include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
+#include "imu_world_yaw_alignment.hpp"
 
 namespace xr_runtime_adapter::override_controller {
 
@@ -177,10 +178,13 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   uint32_t imu_stream_epoch = 0;
   uint32_t imu_dropped_batches = 0;
   // Provider->XR yaw for physical acceleration, independent of presentation
-  // yaw blends. Learn on confirmed optical frames and retain during a loss.
+  // yaw blends. Identify from corresponding rotations while optical tracking
+  // is confirmed; an unknown palm->sensor mounting cancels from those motions.
+  // A single pose cannot identify this frame. Retain it during optical loss.
   bool acceleration_world_yaw_valid = false;
   float acceleration_world_yaw_rad = 0.0f;
   uint64_t acceleration_world_yaw_frame_sequence = 0;
+  imu_alignment::WorldYawAlignment acceleration_world_alignment{};
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
