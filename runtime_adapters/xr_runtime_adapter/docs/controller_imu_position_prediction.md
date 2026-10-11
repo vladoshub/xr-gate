@@ -67,3 +67,22 @@ with a test pose-producing C ABI library. It verifies source-time derivatives,
 rejected pose/quaternion outliers, duplicate/out-of-order frames, clock epochs,
 loss/reacquire, rolling-window noise reduction, velocity limits and both hands.
 This does not exercise neural inference or replace hardware tracking checks.
+
+## Hardware diagnostics
+
+For a complete diagnostic run, set `log_max_bytes` to `0` in the active XR
+client JSON profile and use `PRINT_EVERY=1`. The normal log limiter keeps only
+the tail; stopping several seconds after a failure can otherwise remove the
+loss/reacquire transition. Set the previous log limit back after the test.
+
+Per-side runtime diagnostics include the exact published position and velocity,
+pose source (`optical`, `imu_hold`, `imu_prediction`, `imu_reacquire`,
+`hmd_relative`, `invalid`), raw/accepted optical status and coordinates,
+IMU loss age, acceleration position/velocity deltas, HMD-relative blend mode
+(0 none, 1 enter, 2 exit) and button/stick input. They distinguish an IMU
+trajectory from optical reacquire and from the configured fallback after the
+short prediction window expires.
+
+Shutdown prints each controller predictor's effective settings. The separate
+`hand_stability_gate_profile: IMU` summary describes only the hand validator;
+its zero blend/window/distance settings do not describe the controller predictor.

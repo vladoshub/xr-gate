@@ -2664,6 +2664,64 @@ void select_runtime_hand_profile_sides(
 }
 
 
+void write_controller_position_diagnostics(
+    std::ostream& out, const char* side_name,
+    const xr_runtime::RuntimeControllerSideStateV1& pose, bool output_available,
+    const override_controller::RuntimeControllerImuSideRuntimeState& state,
+    const xr_runtime::HandSideF32V2* raw_optical,
+    const xr_runtime::HandSideF32V2* accepted_optical,
+    uint64_t timestamp_ns) {
+  const bool valid = output_available &&
+      (pose.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u &&
+      (pose.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID) == 0u;
+  const char* source = "invalid";
+  if (!output_available) source = "disabled";
+  else if (valid) {
+    // IMU hold/prediction may still carry the initially selected fallback bit.
+    // Last-good markers therefore take priority over HMD-relative provenance.
+    if ((pose.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE) != 0u) {
+      source = state.reacquire_blend_active ? "imu_reacquire"
+          : (pose.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION) != 0u
+              ? "imu_prediction" : "imu_hold";
+    } else if ((pose.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE) != 0u) {
+      source = "hmd_relative";
+    } else if ((pose.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_POSITION) != 0u) {
+      source = "optical";
+    } else source = "other";
+  }
+  const double loss_age_ms = state.has_position_anchor &&
+      state.last_optical_pose_ns != 0 && timestamp_ns >= state.last_optical_pose_ns
+          ? static_cast<double>(timestamp_ns - state.last_optical_pose_ns) / 1.0e6 : 0.0;
+  const std::string prefix = std::string(" controller_") + side_name;
+  out << prefix << "_pose_source=" << source
+      << prefix << "_pose_flags=" << pose.flags
+      << prefix << "_pose_sources=" << pose.source_mask
+      << prefix << "_position=(" << pose.position[0] << "," << pose.position[1] << "," << pose.position[2] << ")"
+      << prefix << "_velocity=(" << pose.linear_velocity[0] << "," << pose.linear_velocity[1] << "," << pose.linear_velocity[2] << ")"
+      << prefix << "_orientation=(" << pose.orientation_xyzw[0] << "," << pose.orientation_xyzw[1] << ","
+      << pose.orientation_xyzw[2] << "," << pose.orientation_xyzw[3] << ")"
+      << prefix << "_buttons=" << pose.buttons
+      << prefix << "_trigger=" << pose.trigger
+      << prefix << "_grip=" << pose.grip
+      << prefix << "_stick=(" << pose.thumbstick_x << "," << pose.thumbstick_y << ")"
+      << prefix << "_imu_has_anchor=" << (state.has_position_anchor ? "yes" : "no")
+      << prefix << "_imu_loss_age_ms=" << loss_age_ms
+      << prefix << "_imu_reacquire_blend=" << (state.reacquire_blend_active ? "yes" : "no")
+      << prefix << "_hmd_relative_blend=" << static_cast<int>(state.hmd_relative_blend_mode)
+      << prefix << "_imu_acceleration_dp=(" << state.acceleration_position_delta_m[0] << ","
+      << state.acceleration_position_delta_m[1] << "," << state.acceleration_position_delta_m[2] << ")"
+      << prefix << "_raw_optical_status=" << (raw_optical ? raw_optical->status : 0u)
+      << prefix << "_accepted_optical_status=" << (accepted_optical ? accepted_optical->status : 0u);
+  if (raw_optical) {
+    out << prefix << "_raw_optical_p=(" << raw_optical->controller_px << ","
+        << raw_optical->controller_py << "," << raw_optical->controller_pz << ")";
+  }
+  if (accepted_optical) {
+    out << prefix << "_accepted_optical_p=(" << accepted_optical->controller_px << ","
+        << accepted_optical->controller_py << "," << accepted_optical->controller_pz << ")";
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -5970,6 +6028,9 @@ int main(int argc, char** argv) {
           if (runtime_pose_udp_publisher) runtime_pose_udp_publisher->send_pose(runtime_pose);
           ++runtime_pose_published;
         }
+        xr_runtime::RuntimeControllerStateFrameV1 controller_state_for_log{};
+        bool controller_state_for_log_available = false;
+        std::optional<xr_runtime::HandTrackingFrameF32V2> controller_hand_for_log;
         if (runtime_controller_state_publisher || runtime_controller_state_udp_publisher) {
           poll_runtime_controller_imu_control(std::chrono::steady_clock::now());
 
@@ -6020,6 +6081,9 @@ int main(int argc, char** argv) {
                 left_imu_orientation_used,
                 right_imu_orientation_used);
           }
+          controller_state_for_log = runtime_controller_state;
+          controller_state_for_log_available = true;
+          controller_hand_for_log = runtime_controller_hand;
           if (runtime_controller_state_publisher) runtime_controller_state_publisher->publish(runtime_controller_state);
           if (runtime_controller_state_udp_publisher) runtime_controller_state_udp_publisher->send_controller_state(runtime_controller_state);
           ++runtime_controller_state_published;
@@ -6306,7 +6370,23 @@ int main(int argc, char** argv) {
                     << " video_size=" << video_health.width << "x" << video_health.height
                     << " video_gaps=" << video_health.sequence_gaps
                     << " video_error=" << video_health.last_error
-                    << "\n";
+                    << " controller_optical_source_ns="
+                    << (raw_optical_yaw_hand ? raw_optical_yaw_hand->source_timestamp_ns : 0)
+                    << " controller_tick_ns=" << frame.read_timestamp_ns;
+          const uint64_t diagnostic_timestamp_ns = static_cast<uint64_t>(frame.read_timestamp_ns);
+          write_controller_position_diagnostics(
+              std::cout, "left", controller_state_for_log.left, controller_state_for_log_available,
+              runtime_controller_synthesis_state.left,
+              raw_optical_yaw_hand ? &raw_optical_yaw_hand->left : nullptr,
+              controller_hand_for_log ? &controller_hand_for_log->left : nullptr,
+              diagnostic_timestamp_ns);
+          write_controller_position_diagnostics(
+              std::cout, "right", controller_state_for_log.right, controller_state_for_log_available,
+              runtime_controller_synthesis_state.right,
+              raw_optical_yaw_hand ? &raw_optical_yaw_hand->right : nullptr,
+              controller_hand_for_log ? &controller_hand_for_log->right : nullptr,
+              diagnostic_timestamp_ns);
+          std::cout << "\n";
         }
       }
 
@@ -6443,6 +6523,34 @@ int main(int argc, char** argv) {
     std::cout << "runtime_controller_imu_control_final_reset_counter: "
               << runtime_controller_imu_control_snapshot.reset_counter << "\n";
     std::cout << "runtime_controller_state_output: " << (runtime_controller_state_publisher ? "enabled" : "disabled") << "\n";
+    // Repeat predictor settings at shutdown: startup lines can be trimmed.
+    // The IMU hand-gate summary below describes its validator-only profile.
+    const auto write_imu_motion_summary = [&](const char* side,
+        const override_controller::RuntimeControllerImuMotionConfig& cfg) {
+      const std::string prefix = std::string("runtime_controller_") + side + "_imu_";
+      std::cout << prefix << "acceleration_integration: " << (cfg.acceleration_integration_enabled ? "true" : "false") << "\n"
+                << prefix << "position_prediction: " << (cfg.position_prediction_enabled ? "true" : "false") << "\n"
+                << prefix << "acceleration_deadband_mps2: " << cfg.acceleration_deadband_mps2 << "\n"
+                << prefix << "max_linear_acceleration_mps2: " << cfg.max_linear_acceleration_mps2 << "\n"
+                << prefix << "hold_lost_ms: " << cfg.hold_lost_ms << "\n"
+                << prefix << "predict_lost_ms: " << cfg.predict_lost_ms << "\n"
+                << prefix << "prediction_window_mode: " << (cfg.prediction_window_mode ? "true" : "false") << "\n"
+                << prefix << "prediction_window_ms: " << cfg.prediction_window_ms << "\n"
+                << prefix << "time_decay: " << (cfg.prediction_time_decay_enabled ? "true" : "false") << "\n"
+                << prefix << "max_prediction_speed_mps: " << cfg.max_prediction_speed_mps << "\n"
+                << prefix << "max_prediction_velocity_mps: " << cfg.max_prediction_velocity_mps << "\n"
+                << prefix << "prediction_damping: " << cfg.prediction_damping << "\n"
+                << prefix << "max_prediction_path_m: " << cfg.max_prediction_path_m << "\n"
+                << prefix << "max_distance_m: " << cfg.prediction_distance.max_distance_m << "\n"
+                << prefix << "reacquire_blend_ms: " << cfg.reacquire_blend_ms << "\n"
+                << prefix << "yaw_correction_enabled: " << (cfg.yaw_correction_enabled ? "true" : "false") << "\n"
+                << prefix << "yaw_correction_continuous: " << (cfg.yaw_correction_continuous ? "true" : "false") << "\n"
+                << prefix << "yaw_correction_on_reacquire: " << (cfg.yaw_correction_on_reacquire ? "true" : "false") << "\n";
+    };
+    write_imu_motion_summary("left", runtime_controller_synthesis_cfg.left_imu_motion);
+    write_imu_motion_summary("right", runtime_controller_synthesis_cfg.right_imu_motion);
+    std::cout << "runtime_controller_imu_gravity_magnitude_mps2: "
+              << runtime_controller_imu_control_snapshot.gravity_magnitude << "\n";
     std::cout << "runtime_controller_left_yaw_correction_deg: "
               << (runtime_controller_synthesis_state.left.yaw_correction_rad * 180.0 / 3.14159265358979323846) << "\n";
     std::cout << "runtime_controller_left_yaw_apply_count: "

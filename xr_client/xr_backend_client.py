@@ -360,7 +360,11 @@ class Launcher:
 
         env = os.environ.copy()
         env.update(spec.env)
-        log_file = log_path.open("wb")
+        # The limiter truncates the same inode while the child keeps its fd.
+        # Append mode makes subsequent child writes follow the new EOF instead
+        # of creating a sparse NUL-filled gap at the old file offset.
+        log_file = log_path.open("ab", buffering=0)
+        log_file.truncate(0)
         try:
             proc = subprocess.Popen(
                 spec.command,
