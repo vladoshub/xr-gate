@@ -106,4 +106,22 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   endif()
   target_link_libraries(xr_controller_imu_delivery_test PRIVATE Threads::Threads rt)
   add_test(NAME xr_controller_imu_delivery_test COMMAND xr_controller_imu_delivery_test)
+
+  add_executable(controller_imu_prediction_test
+    tests/controller_imu_prediction_test.cpp
+    src/override_controller.cpp
+    src/coordinate_util.cpp
+  )
+  target_compile_features(controller_imu_prediction_test PRIVATE cxx_std_17)
+  target_include_directories(controller_imu_prediction_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(controller_imu_prediction_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(controller_imu_prediction_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  target_link_libraries(controller_imu_prediction_test PRIVATE Threads::Threads)
+  add_test(NAME controller_imu_prediction_test COMMAND controller_imu_prediction_test)
 endif()
