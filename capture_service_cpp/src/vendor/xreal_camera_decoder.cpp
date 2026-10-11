@@ -33,12 +33,17 @@ void init_xreal_camera_tables() {
   for (size_t i = 0; i < kChunkAmount; ++i) g_reverse_chunk_map[kChunkMap[i]] = static_cast<uint8_t>(i);
 }
 
-bool decode_xreal_eye(const cv::Mat& frame, cv::Mat& eye, bool& is_right) {
+bool decode_xreal_eye(const cv::Mat& frame, cv::Mat& eye, bool& is_right,
+                      XrealCameraMetadata* metadata) {
   if (frame.empty()) return false;
-  if (static_cast<size_t>(frame.total() * frame.elemSize()) < kCamBufferSize) return false;
+  if (!frame.isContinuous() || !eye.isContinuous() || eye.type() != CV_8UC1 ||
+      eye.cols != kXrealEyeWidth || eye.rows != kXrealEyeHeight ||
+      static_cast<size_t>(frame.total() * frame.elemSize()) != kCamBufferSize) return false;
   const uint8_t* blocks = frame.ptr<uint8_t>();
   uint8_t* data = eye.ptr<uint8_t>();
   const uint8_t* header = blocks + kCamImageDataSize;
+  if (metadata && !decode_xreal_camera_metadata(header, kCamBufferSize - kCamImageDataSize,
+                                               *metadata)) return false;
   is_right = (*(header + 0x3B)) != 0;
 
   size_t offset = 0;

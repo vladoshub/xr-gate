@@ -699,7 +699,11 @@ int main(int argc, char** argv) {
       throw std::runtime_error("unknown --transport: " + transport_type + "; expected shm, tcp, or capture_tcp");
     }
     std::cout << "[capture_basalt_backend] capture transport ready: " << capture_transport->type() << "\n";
-    capture_client::StereoImuSynchronizer sync(*capture_transport, 1'000'000, 0.05, use_imu);
+    const int64_t camera_time_offset_ns = use_imu ? calib.cam_time_offset_ns : 0;
+    std::cout << "[capture_basalt_backend] cam_time_offset_ns=" << camera_time_offset_ns
+              << " applied_once_before_imu_window (t_imu = t_camera + offset)\n";
+    capture_client::StereoImuSynchronizer sync(
+        *capture_transport, 1'000'000, 0.05, use_imu, camera_time_offset_ns, true);
 
     std::unique_ptr<xr_runtime::HmdPoseShmPublisher> pose_pub;
     if (publish_pose_shm) {

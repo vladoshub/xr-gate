@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -13,6 +15,16 @@
 #include <capture_client/transports/transport.hpp>
 
 namespace capture_client {
+
+inline int64_t shift_camera_timestamp_ns(int64_t timestamp_ns, int64_t offset_ns) {
+  if ((offset_ns > 0 && timestamp_ns > std::numeric_limits<int64_t>::max() - offset_ns) ||
+      (offset_ns < 0 && timestamp_ns < std::numeric_limits<int64_t>::min() - offset_ns)) {
+    throw std::overflow_error("camera timestamp plus calibration offset overflows int64");
+  }
+  const int64_t shifted = timestamp_ns + offset_ns;
+  if (shifted < 0) throw std::runtime_error("camera calibration offset produces a negative timestamp");
+  return shifted;
+}
 
 struct StereoPair {
   int64_t timestamp_ns = 0;
@@ -37,9 +49,11 @@ struct SyncedStereoImu {
 class StereoImuSynchronizer {
  public:
   StereoImuSynchronizer(ICaptureTransport& transport, int64_t max_stereo_delta_ns = 1'000'000,
-                        double wait_for_imu_s = 0.05, bool use_imu = true)
+                        double wait_for_imu_s = 0.05, bool use_imu = true,
+                        int64_t camera_time_offset_ns = 0, bool include_imu_after_frame = false)
       : transport_(transport), max_stereo_delta_ns_(max_stereo_delta_ns),
-        wait_for_imu_s_(wait_for_imu_s), use_imu_(use_imu) {
+        wait_for_imu_s_(wait_for_imu_s), use_imu_(use_imu),
+        camera_time_offset_ns_(camera_time_offset_ns), include_imu_after_frame_(include_imu_after_frame) {
     last_pair_seq_ = std::min(transport_.cam0().latest_sequence(), transport_.cam1().latest_sequence());
     if (use_imu_) last_imu_seq_ = transport_.imu().latest_sequence();
   }
@@ -79,7 +93,10 @@ class StereoImuSynchronizer {
         const int64_t delta = c0.timestamp_ns - c1.timestamp_ns;
         if (std::llabs(delta) <= max_stereo_delta_ns_) {
           StereoPair p;
-          p.timestamp_ns = std::max(c0.timestamp_ns, c1.timestamp_ns);
+          // Kalibr/Basalt convention: t_imu = t_camera + offset. Shift here,
+          // before waiting for and selecting the IMU window, exactly once.
+          p.timestamp_ns = shift_camera_timestamp_ns(
+              std::max(c0.timestamp_ns, c1.timestamp_ns), camera_time_offset_ns_);
           p.cam0 = std::move(c0);
           p.cam1 = std::move(c1);
           return p;
@@ -95,7 +112,8 @@ class StereoImuSynchronizer {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeout_s);
     while (std::chrono::steady_clock::now() < deadline) {
       ImuSample s;
-      if (transport_.imu().read_latest_imu(s) && s.timestamp_ns >= timestamp_ns) return;
+      if (transport_.imu().read_latest_imu(s) &&
+          (include_imu_after_frame_ ? s.timestamp_ns > timestamp_ns : s.timestamp_ns >= timestamp_ns)) return;
       std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
   }
@@ -109,9 +127,12 @@ class StereoImuSynchronizer {
     for (uint64_t seq = last_imu_seq_ + 1; seq <= latest; ++seq) {
       ImuSample s;
       if (!transport_.imu().read_imu_sequence(seq, s)) continue;
-      if (s.timestamp_ns <= timestamp_ns) {
+      if (s.timestamp_ns <= timestamp_ns || include_imu_after_frame_) {
         samples.push_back(s);
         new_last = seq;
+        // Basalt needs the first sample strictly after the frame to finish
+        // interpolation/preintegration without waiting for the next image.
+        if (s.timestamp_ns > timestamp_ns) break;
       } else {
         break;
       }
@@ -124,6 +145,8 @@ class StereoImuSynchronizer {
   int64_t max_stereo_delta_ns_ = 1'000'000;
   double wait_for_imu_s_ = 0.05;
   bool use_imu_ = true;
+  int64_t camera_time_offset_ns_ = 0;
+  bool include_imu_after_frame_ = false;
   uint64_t last_pair_seq_ = 0;
   uint64_t last_imu_seq_ = 0;
   std::optional<int64_t> previous_camera_timestamp_ns_;

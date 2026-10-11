@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace xr_capture_cpp {
+class XrealDeviceClock;
 
 struct StereoFrame {
   cv::Mat left;
@@ -26,6 +27,7 @@ class ICameraSource {
   virtual void close() = 0;
 };
 
-std::unique_ptr<ICameraSource> create_camera_source(const RuntimeConfig& cfg);
+std::unique_ptr<ICameraSource> create_camera_source(
+    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> xreal_clock = {});
 
 }  // namespace xr_capture_cpp

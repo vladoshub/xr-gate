@@ -4,6 +4,7 @@
 #include "capture_service_cpp/sources/camera_source.hpp"
 #include "capture_service_cpp/sources/imu_source.hpp"
 #include "capture_service_cpp/stream_publishers.hpp"
+#include "capture_service_cpp/timing/xreal_device_clock.hpp"
 
 #include <csignal>
 #include <iostream>
@@ -30,8 +31,9 @@ int main(int argc, char** argv) {
 
     std::unique_ptr<ICameraSource> camera_source;
     std::unique_ptr<IImuSource> imu_source;
-    if (cfg.camera.enabled) camera_source = create_camera_source(cfg);
-    if (cfg.imu.enabled) imu_source = create_imu_source(cfg);
+    auto xreal_clock = std::make_shared<XrealDeviceClock>();
+    if (cfg.camera.enabled) camera_source = create_camera_source(cfg, xreal_clock);
+    if (cfg.imu.enabled) imu_source = create_imu_source(cfg, xreal_clock);
 
     StreamPublishers publishers(cfg);
     if (camera_source) {
@@ -51,7 +53,9 @@ int main(int argc, char** argv) {
     std::cerr << "[capture_service_cpp] config=" << cfg.config_path
               << " profile=" << (cfg.profile_name.empty() ? "<none>" : cfg.profile_name)
               << " camera=" << (cfg.camera.enabled ? cfg.camera.driver : "disabled")
+              << " camera_timestamp_mode=" << cfg.camera.timestamp_mode
               << " imu=" << (cfg.imu.enabled ? cfg.imu.driver : "disabled")
+              << " xreal_imu_timestamp_mode=" << cfg.imu.xreal_hid.timestamp_mode
               << " backend_control_file=" << cfg.backend_control_file
               << " backend_control_poll_ms=" << cfg.backend_control_poll_ms << std::endl;
 

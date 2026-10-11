@@ -49,6 +49,16 @@ uint64_t AffineDeviceClockMapper::map_ns(uint64_t device_ns, uint64_t host_recei
   return mapped;
 }
 
+std::optional<uint64_t> AffineDeviceClockMapper::project_ns(uint64_t device_ns) const {
+  if (!initialized_) return std::nullopt;
+  const long double mapped = static_cast<long double>(scale_) * device_ns + offset_ns_;
+  if (!std::isfinite(mapped) || mapped <= 0.0L ||
+      mapped > static_cast<long double>(std::numeric_limits<int64_t>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<uint64_t>(mapped);
+}
+
 void AffineDeviceClockMapper::reset() {
   initialized_ = false;
   window_active_ = false;

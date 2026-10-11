@@ -11,6 +11,7 @@ Usage: $0 [--target NAME] COMMAND [COMMAND OPTIONS]
 
 Targets:
   xreal_ultra
+  xreal_ultra_device_time
   leap_motion_uvc_nrf54l15
 
 Commands:
