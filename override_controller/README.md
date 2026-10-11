@@ -111,6 +111,9 @@ IMU values, performs stream resynchronization after corruption, maps the device
 microsecond timestamp into the host monotonic clock, and feeds the shared
 `ControllerImuProcessor`/Madgwick pipeline.
 
+Hardware timestamp fields, buffered delivery and serial clock behaviour are
+documented in [docs/xr_controller_imu_timing.md](docs/xr_controller_imu_timing.md).
+
 List detected boards:
 
 ```bash

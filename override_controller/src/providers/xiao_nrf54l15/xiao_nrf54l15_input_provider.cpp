@@ -6,6 +6,7 @@
 #include "xr_controller_v1_protocol.hpp"
 
 #include <xr_override_controller/imu/controller_imu_processor.hpp>
+#include <xr_tracking/timing/serial_imu_clock.hpp>
 
 #include <algorithm>
 #include <array>
@@ -63,64 +64,6 @@ std::string abs_name(uint16_t code) {
     default: return "XCTL_ABS_" + std::to_string(code);
   }
 }
-
-struct DeviceClockSync {
-  bool initialized = false;
-  uint64_t offset_ns = 0;
-
-  void reset() {
-    initialized = false;
-    offset_ns = 0;
-  }
-
-  static uint64_t candidate_offset(uint64_t device_timestamp_us,
-                                   uint64_t receive_timestamp_ns,
-                                   uint64_t estimated_wire_ns) {
-    const uint64_t device_ns = device_timestamp_us * 1000ull;
-    const uint64_t adjusted_receive_ns =
-        receive_timestamp_ns > estimated_wire_ns
-            ? receive_timestamp_ns - estimated_wire_ns
-            : receive_timestamp_ns;
-    return adjusted_receive_ns > device_ns ? adjusted_receive_ns - device_ns : 0;
-  }
-
-  void prime(uint64_t newest_device_timestamp_us,
-             uint64_t receive_timestamp_ns,
-             uint64_t estimated_wire_ns) {
-    if (initialized) return;
-    initialized = true;
-    offset_ns = candidate_offset(newest_device_timestamp_us,
-                                 receive_timestamp_ns,
-                                 estimated_wire_ns);
-  }
-
-  uint64_t map(uint64_t device_timestamp_us,
-               uint64_t receive_timestamp_ns,
-               uint64_t estimated_wire_ns) {
-    const uint64_t device_ns = device_timestamp_us * 1000ull;
-    const uint64_t candidate = candidate_offset(
-        device_timestamp_us, receive_timestamp_ns, estimated_wire_ns);
-
-    if (!initialized) {
-      initialized = true;
-      offset_ns = candidate;
-    } else if (candidate < offset_ns) {
-      // Lower observed latency is safe to accept immediately.
-      offset_ns = candidate;
-    } else {
-      // Track normal MCU/host clock drift without following transient serial or
-      // scheduler latency spikes. At 208 Hz this permits about 0.4 ms/s of
-      // upward correction, far above crystal drift but below transport jitter.
-      constexpr uint64_t kMaxUpwardSlewPerSampleNs = 2000;
-      offset_ns += std::min(candidate - offset_ns,
-                            kMaxUpwardSlewPerSampleNs);
-    }
-
-    const uint64_t mapped = device_ns + offset_ns;
-    return std::min(mapped, receive_timestamp_ns);
-  }
-};
-
 }  // namespace
 
 struct XiaoNrf54l15InputProvider::Impl {
@@ -141,14 +84,14 @@ struct XiaoNrf54l15InputProvider::Impl {
     bool protocol_seen = false;
     std::string protocol_device_uid;
     bool controls_valid = false;
-    bool have_sequence = false;
-    uint32_t previous_sequence = 0;
     uint32_t previous_buttons = 0;
     std::array<int16_t, kXrControllerV1AxisCount> previous_axes{};
     uint64_t last_packet_ns = 0;
-    uint64_t last_sample_ns = 0;
     XrControllerV1StreamDecoder decoder;
-    DeviceClockSync clock_sync;
+    xr_tracking::SerialImuClock clock;
+    std::deque<xr_runtime::ControllerImuStateV1> pending_imu;
+    uint32_t queue_dropped = 0;
+    uint64_t last_drop_warning_ns = 0;
     imu::ControllerImuProcessor imu_processor;
     xr_runtime::ControllerImuStateV1 imu;
   };
@@ -255,11 +198,8 @@ struct XiaoNrf54l15InputProvider::Impl {
       release_all_inputs(session, static_cast<uint64_t>(monotonic_now_ns()));
     }
     session.decoder.reset();
-    session.clock_sync.reset();
-    session.imu_processor.reset();
-    session.have_sequence = false;
+    reset_packet_timing(session);
     session.last_packet_ns = 0;
-    session.last_sample_ns = 0;
     session.imu.data_flags = 0;
     session.imu.sample_count = 0;
     if (session.protocol_seen) {
@@ -355,16 +295,14 @@ struct XiaoNrf54l15InputProvider::Impl {
     session.controls_valid = true;
   }
 
-  uint64_t estimated_wire_ns() const {
-    return (kXrControllerV1PacketSize * 10ull * 1'000'000'000ull) /
-           std::max<uint32_t>(1u, options.baud_rate);
-  }
-
   void reset_packet_timing(Session& session) {
-    session.clock_sync.reset();
+    session.clock.reset();
     session.imu_processor.reset();
-    session.last_sample_ns = 0;
-    session.have_sequence = false;
+    session.pending_imu.clear();
+    session.imu.data_flags = 0;
+    session.imu.sample_count = 0;
+    if (session.connected) session.imu.status = xr_runtime::CONTROLLER_IMU_CONNECTED;
+    session.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] = session.clock.epoch();
   }
 
   void handle_identity(Session& session,
@@ -378,6 +316,10 @@ struct XiaoNrf54l15InputProvider::Impl {
                 << session.protocol_device_uid << " to " << uid << std::endl;
     }
     if (session.protocol_device_uid != uid) {
+      if (!session.protocol_device_uid.empty()) {
+        release_all_inputs(session, static_cast<uint64_t>(monotonic_now_ns()));
+        reset_packet_timing(session);
+      }
       session.protocol_device_uid = uid;
       update_fingerprint(session);
       std::cerr << "[xiao_nrf54l15] device_uid=" << uid
@@ -387,37 +329,15 @@ struct XiaoNrf54l15InputProvider::Impl {
 
   void handle_packet(Session& session,
                      const XrControllerV1Packet& packet,
-                     uint64_t receive_timestamp_ns) {
-    session.protocol_seen = true;
+                     uint64_t receive_timestamp_ns,
+                     const xr_tracking::SerialImuClock::MappedSample& timing) {
     session.last_packet_ns = receive_timestamp_ns;
-
-    if (session.have_sequence) {
-      const uint32_t delta = packet.sequence - session.previous_sequence;
-      if (delta == 0) return;
-      // Unsigned wrap naturally produces a small positive delta. A large delta
-      // means a device reboot/backward sequence and must reset the AHRS clock.
-      if (delta > 0x80000000u) {
-        reset_packet_timing(session);
-      }
-    }
-    session.have_sequence = true;
-    session.previous_sequence = packet.sequence;
-
-    const uint64_t wire_ns = estimated_wire_ns();
-    uint64_t sample_timestamp_ns = receive_timestamp_ns;
-    if ((packet.flags & kFlagTimestampValid) != 0 && packet.timestamp_us != 0) {
-      sample_timestamp_ns = session.clock_sync.map(
-          packet.timestamp_us, receive_timestamp_ns, wire_ns);
-    }
-    if (session.last_sample_ns != 0 &&
-        sample_timestamp_ns <= session.last_sample_ns) {
-      sample_timestamp_ns = session.last_sample_ns + 1;
-    }
-    session.last_sample_ns = sample_timestamp_ns;
+    const uint64_t sample_timestamp_ns = timing.host_ns;
 
     imu::RawControllerImuSample raw;
     raw.host_timestamp_ns = sample_timestamp_ns;
-    raw.device_timestamp_ticks = packet.timestamp_us;
+    raw.device_timestamp_ticks = timing.device_time_valid ? packet.timestamp_us : 0;
+    raw.sample_interval_seconds = timing.device_interval_seconds;
     raw.angular_velocity_rad_s = {
         packet.gyro_rad_s[0], packet.gyro_rad_s[1], packet.gyro_rad_s[2]};
     raw.specific_force_m_s2 = {
@@ -434,15 +354,20 @@ struct XiaoNrf54l15InputProvider::Impl {
     state.status = xr_runtime::CONTROLLER_IMU_ACTIVE;
     state.capability_flags = xr_runtime::CONTROLLER_IMU_CAP_GYROSCOPE |
                              xr_runtime::CONTROLLER_IMU_CAP_ACCELEROMETER |
-                             xr_runtime::CONTROLLER_IMU_CAP_ORIENTATION;
+                             xr_runtime::CONTROLLER_IMU_CAP_ORIENTATION |
+                             xr_runtime::CONTROLLER_IMU_CAP_STREAM_DIAGNOSTICS;
+    if (timing.device_time_valid) {
+      state.capability_flags |= xr_runtime::CONTROLLER_IMU_CAP_DEVICE_TIMESTAMP;
+    }
     state.data_flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
                        xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                       xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID |
-                       xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
+                       xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
+    if (timing.device_time_valid) state.data_flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (session.imu_processor.gyro_calibrated()) {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
     }
     state.sequence = packet.sequence;
+    state.latest_device_timestamp_ticks = raw.device_timestamp_ticks;
     state.latest_sample_timestamp_ns = sample_timestamp_ns;
     state.orientation_timestamp_ns = sample_timestamp_ns;
     state.orientation_xyzw[0] = orientation.x;
@@ -452,6 +377,7 @@ struct XiaoNrf54l15InputProvider::Impl {
     state.sample_count = 1;
     auto& sample = state.samples[0];
     sample.timestamp_ns = sample_timestamp_ns;
+    sample.device_timestamp_ticks = raw.device_timestamp_ticks;
     sample.angular_velocity_rad_s[0] = corrected.angular_velocity_rad_s.x;
     sample.angular_velocity_rad_s[1] = corrected.angular_velocity_rad_s.y;
     sample.angular_velocity_rad_s[2] = corrected.angular_velocity_rad_s.z;
@@ -459,13 +385,28 @@ struct XiaoNrf54l15InputProvider::Impl {
     sample.specific_force_m_s2[1] = corrected.specific_force_m_s2.y;
     sample.specific_force_m_s2[2] = corrected.specific_force_m_s2.z;
     sample.flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                   xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                   xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
+                   xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID;
+    if (timing.device_time_valid) sample.flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (session.imu_processor.gyro_calibrated()) {
       sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
     }
 
-    handle_controls(session, packet, sample_timestamp_ns);
+    if (session.pending_imu.size() == 256) {
+      session.pending_imu.pop_front();
+      ++session.queue_dropped;
+      if (!session.last_drop_warning_ns ||
+          receive_timestamp_ns - session.last_drop_warning_ns >= 1'000'000'000ULL) {
+        std::cerr << "[xiao_nrf54l15] warning: IMU queue overflow on "
+                  << session.snapshot.port_path << "; dropped=" << session.queue_dropped << std::endl;
+        session.last_drop_warning_ns = receive_timestamp_ns;
+      }
+    }
+    state.reserved[xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] = session.clock.epoch();
+    state.reserved[xr_runtime::CONTROLLER_IMU_DIAG_DROPPED_BATCHES] =
+        session.clock.dropped_samples() + session.queue_dropped;
+    state.reserved[xr_runtime::CONTROLLER_IMU_DIAG_TICKS_PER_SECOND] =
+        timing.device_time_valid ? 1'000'000 : 0;
+    session.pending_imu.push_back(state);
   }
 
   void drain_transport_bytes() {
@@ -488,27 +429,34 @@ struct XiaoNrf54l15InputProvider::Impl {
       }
       if (packets.empty()) continue;
 
-      if (session.have_sequence) {
-        const uint32_t delta = packets.front().sequence - session.previous_sequence;
-        if (delta > 0x80000000u) reset_packet_timing(session);
+      session.protocol_seen = true;
+      const uint64_t receive_ns = bytes.host_timestamp_ns
+          ? bytes.host_timestamp_ns : static_cast<uint64_t>(monotonic_now_ns());
+      if (session.last_packet_ns && receive_ns > session.last_packet_ns &&
+          receive_ns - session.last_packet_ns > static_cast<uint64_t>(options.stale_ms) * 1'000'000ULL) {
+        reset_packet_timing(session);
       }
-
-      // A serial read may contain several complete packets. Anchor the newest
-      // device timestamp to the end of the read before processing the batch in
-      // wire order, preserving the real 208 Hz spacing even on the first read.
-      const auto newest_timestamp = std::find_if(
-          packets.rbegin(), packets.rend(), [](const XrControllerV1Packet& packet) {
-            return (packet.flags & kFlagTimestampValid) != 0 && packet.timestamp_us != 0;
-          });
-      if (newest_timestamp != packets.rend()) {
-        session.clock_sync.prime(newest_timestamp->timestamp_us,
-                                 bytes.host_timestamp_ns,
-                                 estimated_wire_ns());
-      }
-
+      std::vector<xr_tracking::SerialImuClock::Sample> clocks;
+      clocks.reserve(packets.size());
       for (const auto& packet : packets) {
-        handle_packet(session, packet, bytes.host_timestamp_ns);
+        clocks.push_back({packet.sequence, packet.timestamp_us,
+                          (packet.flags & kFlagTimestampValid) != 0});
       }
+      const auto epoch = session.clock.epoch();
+      const auto mapped = session.clock.map_batch(clocks, receive_ns);
+      if (session.clock.epoch() != epoch) {
+        session.imu_processor.reset();
+        session.pending_imu.clear();
+        session.imu.data_flags = 0;
+        session.imu.sample_count = 0;
+        session.imu.status = xr_runtime::CONTROLLER_IMU_CONNECTED;
+        session.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] = session.clock.epoch();
+      }
+      for (const auto& timing : mapped) {
+        handle_packet(session, packets[timing.index], receive_ns, timing);
+      }
+      // Buttons remain responsive even when an IMU timestamp is rejected.
+      for (const auto& packet : packets) handle_controls(session, packet, receive_ns);
     }
   }
 
@@ -517,9 +465,8 @@ struct XiaoNrf54l15InputProvider::Impl {
     for (auto& [id, session] : sessions) {
       if (session->last_packet_ns != 0 && now_ns > session->last_packet_ns + stale_ns) {
         if (session->imu.status == xr_runtime::CONTROLLER_IMU_ACTIVE) {
+          reset_packet_timing(*session);
           session->imu.status = xr_runtime::CONTROLLER_IMU_STALE;
-          session->imu.data_flags = 0;
-          session->imu.sample_count = 0;
         }
         if (session->controls_valid) {
           release_all_inputs(*session, now_ns);
@@ -684,6 +631,7 @@ void XiaoNrf54l15InputProvider::flush_events(
   impl_->pending_events.clear();
   impl_->pump(0, false);
   impl_->pending_events.clear();
+  for (auto& [id, session] : impl_->sessions) session->pending_imu.clear();
   impl_->update_device_views(devices);
 }
 
@@ -757,6 +705,25 @@ xr_runtime::ControllerImuStateV1 XiaoNrf54l15InputProvider::imu_state(
     }
   }
   return xr_runtime::ControllerImuStateV1{};
+}
+
+xr_runtime::ControllerImuStateV1 XiaoNrf54l15InputProvider::consume_imu_state(
+    const DeviceInfo& device) {
+  for (auto& [id, session] : impl_->sessions) {
+    if (session->fingerprint.uniq != device.fingerprint.uniq) continue;
+    if (session->pending_imu.empty()) return session->imu;
+    auto state = session->pending_imu.front();
+    session->pending_imu.pop_front();
+    state.reserved[xr_runtime::CONTROLLER_IMU_DIAG_DROPPED_BATCHES] =
+        session->clock.dropped_samples() + session->queue_dropped;
+    return state;
+  }
+  return {};
+}
+
+bool XiaoNrf54l15InputProvider::has_pending_imu(const DeviceInfo& device) const {
+  const auto* session = impl_->session_for_device_uniq(device.fingerprint.uniq);
+  return session && !session->pending_imu.empty();
 }
 
 void XiaoNrf54l15InputProvider::close_devices(

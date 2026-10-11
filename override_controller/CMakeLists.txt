@@ -132,6 +132,9 @@ install(PROGRAMS ${OVERRIDE_CONTROLLER_TOOL_FILES}
 option(OVERRIDE_CONTROLLER_BUILD_TESTS "Build override_controller protocol tests" OFF)
 if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   enable_testing()
+  add_executable(serial_imu_clock_test tests/serial_imu_clock_test.cpp)
+  target_include_directories(serial_imu_clock_test PRIVATE "${XR_SHARED_INCLUDE_DIR}")
+  add_test(NAME serial_imu_clock_test COMMAND serial_imu_clock_test)
   add_executable(gearvr_imu_stream_test
     tests/gearvr_imu_stream_test.cpp
     src/providers/gearvr/gearvr_imu_stream.cpp

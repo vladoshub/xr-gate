@@ -234,5 +234,14 @@ if(BUILD_TESTING)
     )
     target_include_directories(serial_imu_transport_activity_linux PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include")
     add_test(NAME serial_imu_transport_activity_linux COMMAND serial_imu_transport_activity_linux)
+    add_executable(serial_imu_timing_linux
+      tests/serial_imu_timing_linux.cpp
+      src/sources/serial_imu_source.cpp
+      src/platform/linux/serial_port_linux.cpp
+      src/protocols/xr_controller_v1.cpp
+      src/protocols/xr_imu_v1.cpp
+    )
+    target_include_directories(serial_imu_timing_linux PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include")
+    add_test(NAME serial_imu_timing_linux COMMAND serial_imu_timing_linux)
   endif()
 endif()

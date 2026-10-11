@@ -2012,8 +2012,11 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       if (imu_history != nullptr) {
         for (const auto& input : *imu_history) {
           const auto& side = left ? input.left : input.right;
+          // Compare wire sequence numbers modulo 2^32 so history preceding
+          // a normal 0xffffffff -> 0 wrap remains eligible for integration.
+          const uint32_t sequence_age = controller_side->imu.sequence - side.imu.sequence;
           if (side.physical_device_hash != controller_side->physical_device_hash ||
-              side.imu.sequence > controller_side->imu.sequence ||
+              sequence_age > 0x80000000u ||
               side.imu.latest_sample_timestamp_ns > controller_side->imu.latest_sample_timestamp_ns) continue;
           if (diagnostics && (side.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_EPOCH] != epoch ||
                               side.imu.reserved[xr_runtime::CONTROLLER_IMU_DIAG_DROPPED_BATCHES] != dropped)) continue;
