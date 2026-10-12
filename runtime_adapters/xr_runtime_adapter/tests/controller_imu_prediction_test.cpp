@@ -311,6 +311,87 @@ void motion_alignment_uses_source_time_and_observable_rotations() {
   near(predicted.left.linear_velocity[0], 0.5f, "unknown frame used arbitrary acceleration");
 }
 
+void rejected_new_rotations_do_not_reapply_old_calibration_evidence() {
+  using xr_runtime_adapter::imu_alignment::WorldYawAlignment;
+  WorldYawAlignment alignment;
+  const auto world = cu::q_from_axis_angle(0, 1, 0, 0.6);
+  const auto mount = cu::q_from_axis_angle(0, 0, 1, 1.2);
+  float yaw = 0;
+  auto observe = [&](int ms, bool corrupted) {
+    const auto imu = cu::q_from_axis_angle(1, 0, 0, ms * 0.003);
+    auto optical = cu::q_mul(cu::q_mul(world, imu), mount);
+    if (corrupted) optical = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, kPi), mount);
+    const float iq[] = {float(imu.x), float(imu.y), float(imu.z), float(imu.w)};
+    const float oq[] = {float(optical.x), float(optical.y), float(optical.z), float(optical.w)};
+    const auto ns = kStart + uint64_t(ms) * 1'000'000;
+    alignment.observe_imu(ns, iq);
+    return alignment.observe_optical(ns, oq, yaw);
+  };
+  bool calibrated = false;
+  for (int ms = 0; ms <= 220; ms += 20) calibrated = observe(ms, false) || calibrated;
+  require(calibrated, "consistent rotations did not establish calibration");
+  near(yaw, 0.6f, "known rigid rotation calibrated wrong yaw");
+  for (int ms = 240; ms <= 420; ms += 20) {
+    require(!observe(ms, true),
+            "rejected optical rotations repeatedly reused old calibration pairs");
+  }
+  require(observe(440, false), "fresh corresponding rotations did not resume calibration");
+  near(yaw, 0.6f, "rejected rotations changed the resumed physical frame");
+}
+
+void optical_hold_retains_measured_velocity_change() {
+  for (bool right : {false, true}) {
+    // Regular arrival, a queued multi-sample batch, and one sample interval
+    // spanning the hold boundary must describe the same physical motion.
+    for (int delivery = 0; delivery < 3; ++delivery) {
+      Scenario s;
+      s.cfg.left_imu_motion.hold_lost_ms = 30;
+      s.cfg.right_imu_motion = s.cfg.left_imu_motion;
+      s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+      s.state.right.acceleration_world_yaw_valid = true;
+      auto tick = [&](int ms, bool optical, bool all_samples = false) {
+        const auto ns = s.prepare(ms, 4);
+        auto input = s.input;
+        auto hand = s.hand;
+        if (all_samples) {
+          input.left.imu.sample_count = 4;
+          for (uint32_t i = 0; i < 4; ++i) {
+            auto& sample = input.left.imu.samples[i];
+            sample.timestamp_ns = kStart + (i + 1) * 10'000'000ULL;
+            sample.flags = CONTROLLER_IMU_ACCELEROMETER_VALID | CONTROLLER_IMU_GYROSCOPE_VALID;
+            sample.specific_force_m_s2[0] = 4;
+            sample.specific_force_m_s2[1] = 9.81f;
+          }
+        }
+        if (right) {
+          input.right = input.left; input.left = {};
+          hand.right = hand.left; hand.left = {};
+          hand.flags = HAND_FLAG_RIGHT_VALID;
+          hand.right.handedness = 2;
+        }
+        const auto h = optical ? std::optional(hand) : std::nullopt;
+        return compose_runtime_controller_state(s.sequence, ns, s.cfg, h, h,
+            input, std::nullopt, 9.81f, &s.state);
+      };
+      tick(0, true);
+      if (delivery == 0) {
+        for (int ms = 10; ms <= 30; ms += 10) {
+          const auto out = tick(ms, false);
+          const auto& side = right ? out.right : out.left;
+          near(side.position[0], 0, "measured acceleration moved held output");
+          near(side.linear_velocity[0], 0, "hold exposed velocity to downstream prediction");
+        }
+      }
+      const auto out = tick(40, false, delivery == 1);
+      const auto& side = right ? out.right : out.left;
+      // Constant 4 m/s2 for 40 ms: actual velocity is 0.16 m/s. Position stays
+      // held for 30 ms, then advances by 0.12 * 0.01 + 0.5 * 4 * 0.01^2.
+      near(side.linear_velocity[0], 0.16f, "hold discarded measured velocity change");
+      near(side.position[0], 0.0014f, "prediction restarted velocity after optical hold");
+    }
+  }
+}
+
 void world_frame_and_yaw_continuity() {
   for (bool presentation_correction : {false, true}) {
     Scenario s;
@@ -326,7 +407,9 @@ void world_frame_and_yaw_continuity() {
     RuntimeControllerStateFrameV1 out{};
     for (int t = 20; t <= 250; t += 10) out = s.tick(t, false, 1);
     near(out.left.position[0], 0, "IMU acceleration used provider X as world X");
-    near(out.left.position[2], -0.02205f, "IMU acceleration not aligned with XR yaw");
+    // The 30 ms hold retains 0.03 m/s of acceleration-induced velocity.
+    // Over the following 210 ms: 0.03 * 0.21 + 0.5 * 0.21^2 = 0.02835 m.
+    near(out.left.position[2], -0.02835f, "IMU acceleration not aligned with XR yaw");
     require(s.state.left.acceleration_world_yaw_valid, "physical world alignment missing");
     near(s.state.left.acceleration_world_yaw_rad, kPi / 2, "physical yaw alignment wrong");
     if (presentation_correction) near(out.left.orientation_xyzw[1], std::sqrt(0.5f), "presentation yaw changed");
@@ -775,6 +858,8 @@ int main() {
   initialized_gravity_preserves_optical_motion();
   rigid_grip_does_not_change_world_alignment();
   motion_alignment_uses_source_time_and_observable_rotations();
+  rejected_new_rotations_do_not_reapply_old_calibration_evidence();
+  optical_hold_retains_measured_velocity_change();
   world_frame_and_yaw_continuity();
   sample_orientation_matches_force_time();
   physical_yaw_does_not_flip_at_vertical();

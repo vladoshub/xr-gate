@@ -19,6 +19,9 @@ presentation yaw blends cannot rotate an active position trajectory. Packet
 loss preserves the reference, while an AHRS epoch/device change resets it.
 Until alignment is available, optical velocity can predict position but force
 in an unknown frame is not integrated.
+Each alignment update requires a corresponding rotation pair newer than the
+evidence used by the previous update. Newly rejected optical rotations cannot
+repeatedly reapply a coherent estimate made from old pairs still in the window.
 
 The shared controller Madgwick processor initializes pitch/roll from the first
 credible stationary gravity observation after startup or reset. Providers keep
@@ -53,6 +56,12 @@ also obeys that speed limit. A distant target may take longer than
 The moving correction publishes its actual step velocity, so another loss
 continues from the position and motion that were published. A zero/negative
 speed limit retains the previous unrestricted blending behavior.
+
+During hold, the published position and velocity remain frozen. Timed IMU
+measurements still update the internal velocity, which is retained when the
+prediction phase starts. A batch spanning the hold/prediction boundary is split
+at that boundary: pre-boundary acceleration changes velocity, while only the
+post-boundary interval changes the published coordinate.
 
 ## Time decay
 

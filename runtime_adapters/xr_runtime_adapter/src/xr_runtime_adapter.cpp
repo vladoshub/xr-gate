@@ -6265,6 +6265,8 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.left.acceleration_world_alignment.observation_count()
                     << " controller_left_acceleration_alignment_pairs="
                     << runtime_controller_synthesis_state.left.acceleration_world_alignment.pair_count()
+                    << " controller_left_acceleration_alignment_fresh_pairs="
+                    << runtime_controller_synthesis_state.left.acceleration_world_alignment.fresh_pair_count()
                     << " controller_left_acceleration_alignment_coherence="
                     << runtime_controller_synthesis_state.left.acceleration_world_alignment.coherence()
                     << " controller_left_imu_predicting="
@@ -6315,6 +6317,8 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.right.acceleration_world_alignment.observation_count()
                     << " controller_right_acceleration_alignment_pairs="
                     << runtime_controller_synthesis_state.right.acceleration_world_alignment.pair_count()
+                    << " controller_right_acceleration_alignment_fresh_pairs="
+                    << runtime_controller_synthesis_state.right.acceleration_world_alignment.fresh_pair_count()
                     << " controller_right_acceleration_alignment_coherence="
                     << runtime_controller_synthesis_state.right.acceleration_world_alignment.coherence()
                     << " controller_right_imu_predicting="

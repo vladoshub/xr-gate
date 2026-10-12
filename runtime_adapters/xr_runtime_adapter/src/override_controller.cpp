@@ -1007,8 +1007,6 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
         sample.timestamp_ns - state.last_acceleration_sample_timestamp_ns;
     state.last_acceleration_sample_timestamp_ns = sample.timestamp_ns;
     dt_ns = std::min<uint64_t>(dt_ns, 50'000'000ull);
-    if (sample.timestamp_ns <= prediction_start_ns) continue;
-    dt_ns = std::min(dt_ns, sample.timestamp_ns - prediction_start_ns);
     if (dt_ns == 0) continue;
 
     float acceleration[3] = {};
@@ -1017,8 +1015,19 @@ AccelerationIntegrationResult integrate_new_acceleration_samples(
       continue;
     }
 
-    const float dt_s = static_cast<float>(dt_ns) / 1.0e9f;
-    const float w0 = prediction_weight(sample.timestamp_ns - dt_ns,
+    const uint64_t interval_start_ns = sample.timestamp_ns - dt_ns;
+    const uint64_t before_prediction_ns = interval_start_ns < prediction_start_ns
+        ? std::min(sample.timestamp_ns, prediction_start_ns) - interval_start_ns : 0;
+    // Hold freezes the published coordinate, not the controller's physical
+    // velocity. Retain measured acceleration before the prediction boundary;
+    // it becomes the initial velocity when the held coordinate starts moving.
+    const float held_dt_s = static_cast<float>(before_prediction_ns) / 1.0e9f;
+    for (int axis = 0; axis < 3; ++axis) {
+      state.acceleration_velocity_delta_mps[axis] += acceleration[axis] * held_dt_s;
+    }
+    const uint64_t moving_dt_ns = dt_ns - before_prediction_ns;
+    const float dt_s = static_cast<float>(moving_dt_ns) / 1.0e9f;
+    const float w0 = prediction_weight(sample.timestamp_ns - moving_dt_ns,
         prediction_start_ns, prediction_duration_ns, cfg.prediction_time_decay_enabled);
     const float w1 = prediction_weight(sample.timestamp_ns,
         prediction_start_ns, prediction_duration_ns, cfg.prediction_time_decay_enabled);
@@ -1458,7 +1467,12 @@ void update_or_apply_imu_position_prediction(
   // Phase 1 is identical to image-based hand prediction: hold the last good
   // optical coordinate and expose no stale velocity to downstream prediction.
   if (elapsed_ns <= hold_ns || predict_ns == 0) {
-    advance_acceleration_sample_cursor(imu, *state);
+    if (predict_ns != 0) {
+      integrate_new_acceleration_samples(imu, cfg, gravity_magnitude_mps2, *state,
+          saturating_add_u64(state->last_optical_pose_ns, hold_ns), predict_ns);
+    } else {
+      advance_acceleration_sample_cursor(imu, *state);
+    }
     state->prediction_active = false;
     state->prediction_started = false;
     std::copy(std::begin(state->anchor_position_m),
@@ -1506,8 +1520,8 @@ void update_or_apply_imu_position_prediction(
     state->prediction_started = true;
     std::fill(std::begin(state->acceleration_position_delta_m),
               std::end(state->acceleration_position_delta_m), 0.0f);
-    std::fill(std::begin(state->acceleration_velocity_delta_mps),
-              std::end(state->acceleration_velocity_delta_mps), 0.0f);
+    // Velocity accumulated while holding belongs to this loss cycle. Optical
+    // acceptance/reset already clears it; resetting here discards real motion.
     state->prediction_path_active = true;
     state->prediction_path_m = 0.0f;
     std::copy(std::begin(state->anchor_position_m),

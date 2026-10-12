@@ -34,6 +34,7 @@ class WorldYawAlignment {
     observation_count_ = 0;
     pending_count_ = 0;
     pair_count_ = 0;
+    fresh_pair_count_ = 0;
     coherence_ = 0;
   }
 
@@ -71,6 +72,7 @@ class WorldYawAlignment {
 
   std::size_t observation_count() const { return observation_count_; }
   std::size_t pair_count() const { return pair_count_; }
+  std::size_t fresh_pair_count() const { return fresh_pair_count_; }
   float coherence() const { return coherence_; }
 
  private:
@@ -146,10 +148,12 @@ class WorldYawAlignment {
 
   bool estimate(float& yaw_rad) {
     pair_count_ = 0;
+    fresh_pair_count_ = 0;
     coherence_ = 0;
     if (observation_count_ < 6 ||
         observations_[observation_count_ - 1].timestamp_ns - observations_[0].timestamp_ns < 150'000'000ULL) return false;
     double sum_cos = 0, sum_sin = 0, sum_weight = 0;
+    uint64_t newest_support_timestamp_ns = last_fit_support_timestamp_ns_;
     std::array<bool, 32> used{};
     for (std::size_t a = 0; a + 1 < observation_count_; ++a) {
       for (std::size_t b = a + 1; b < observation_count_; ++b) {
@@ -175,22 +179,34 @@ class WorldYawAlignment {
         sum_weight += weight;
         used[a] = used[b] = true;
         ++pair_count_;
+        if (observations_[b].timestamp_ns > last_fit_support_timestamp_ns_) {
+          ++fresh_pair_count_;
+          newest_support_timestamp_ns = std::max(newest_support_timestamp_ns,
+                                                 observations_[b].timestamp_ns);
+        }
       }
     }
     if (pair_count_ < 5 || std::count(used.begin(), used.end(), true) < 5 || sum_weight <= 0) return false;
     coherence_ = static_cast<float>(std::min(1.0, std::hypot(sum_cos, sum_sin) / sum_weight));
     // A noisy/inconsistent palm track must not rotate a previously calibrated
     // force frame. Require several agreeing observations in the motion window.
-    if (coherence_ < 0.985f) return false;
+    // Adding a rejected/non-corresponding optical pose is not fresh evidence.
+    // The old coherent pairs remain in the window for diagnostics, but must
+    // not drive another smoothing step every time an unrelated pose arrives.
+    if (coherence_ < 0.985f || fresh_pair_count_ == 0) return false;
     yaw_rad = static_cast<float>(std::atan2(sum_sin, sum_cos));
-    return std::isfinite(yaw_rad);
+    if (!std::isfinite(yaw_rad)) return false;
+    last_fit_support_timestamp_ns_ = newest_support_timestamp_ns;
+    return true;
   }
 
   std::array<ImuObservation, 256> imu_{};
   std::array<ImuObservation, 16> pending_{};
   std::array<OpticalObservation, 32> observations_{};
   std::size_t imu_count_ = 0, pending_count_ = 0, observation_count_ = 0, pair_count_ = 0;
+  std::size_t fresh_pair_count_ = 0;
   uint64_t last_optical_timestamp_ns_ = 0;
+  uint64_t last_fit_support_timestamp_ns_ = 0;
   float coherence_ = 0;
 };
 
