@@ -1,0 +1,78 @@
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.cpp b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+index 93a8e2e..f1e33f5 100644
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -1645,6 +1645,27 @@ callback_process_unsafe(HandTracking *hgt,
+ 			}
+ 		}
+ 
++		xr_mercury_quality::Sample quality_sample;
++		if (hgt->xr_quality_filter.enabled) {
++			for (int view = 0; view < 2; ++view) {
++				const auto &observation = hgt->keypoint_outputs[hand_idx].views[view];
++				quality_sample.active[view] = observation.active;
++				if (!observation.active) continue;
++				double sum = 0;
++				for (int joint = 0; joint < 21; ++joint) {
++					sum += observation.keypoints_in_scaled_stereographic[joint].confidence_xy;
++				}
++				quality_sample.mean_xy[view] = sum / 21;
++			}
++			if (xr_mercury_quality::reject_keypoints(hgt->xr_quality_filter, quality_sample)) {
++				hgt->this_frame_hand_detected[hand_idx] = false;
++				if (hgt->xr_tracking_diag.enabled()) {
++					hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::quality_rejected);
++				}
++				continue;
++			}
++		}
++
+ 		if (hgt->tuneable_values.scribble_keypoint_model_outputs && hgt->debug_scribble) {
+ 			for (int view_idx = 0; view_idx < 2; view_idx++) {
+ 
+@@ -1714,6 +1735,14 @@ callback_process_unsafe(HandTracking *hgt,
+ 
+ 
+ 
++		if (xr_mercury_quality::reject_fit(hgt->xr_quality_filter, quality_sample, reprojection_error)) {
++			hgt->this_frame_hand_detected[hand_idx] = false;
++			if (hgt->xr_tracking_diag.enabled()) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::quality_rejected);
++			}
++			continue;
++		}
++
+ 		if (reprojection_error > reprojection_error_threshold) {
+ 			HG_DEBUG(hgt, "Reprojection error above threshold!");
+ 			hgt->this_frame_hand_detected[hand_idx] = false;
+@@ -2058,6 +2087,10 @@ t_hand_tracking_sync_mercury_create(struct t_stereo_camera_calibration *calib,
+ 	hgt->tuneable_values.min_detection_confidence.step = 0.01f;
+ 	hgt->tuneable_values.min_detection_confidence.val = debug_get_float_option_mercury_min_detection_confidence();
+ 	hgt->xr_tracking_diag.configure_from_environment();
++	hgt->xr_quality_filter = xr_mercury_quality::Config::from_environment();
++	U_LOG_I("[mercury_quality_filter] enabled=%d min_mean_xy=%.3f weak_mean_xy=%.3f max_weak_reprojection=%.3f",
++	        int(hgt->xr_quality_filter.enabled), hgt->xr_quality_filter.min_mean_xy,
++	        hgt->xr_quality_filter.weak_mean_xy, hgt->xr_quality_filter.max_weak_reprojection_error);
+ 
+ 	const char *xr_detector_debug_csv = getenv("MERCURY_XR_DETECTOR_DEBUG_CSV");
+ 	if (xr_detector_debug_csv != nullptr && xr_detector_debug_csv[0] != '\0') {
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.hpp b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+index f09330d..b1ff976 100644
+--- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+@@ -13,6 +13,7 @@
+ #include "hg_interface.h"
+ #include "hg_debug_instrumentation.hpp"
+ #include "xr_mercury_tracking_diagnostics.hpp"
++#include "xr_mercury_quality_filter.hpp"
+ 
+ #include "tracking/t_hand_tracking.h"
+ #include "tracking/t_camera_models.h"
+@@ -348,6 +349,7 @@ public:
+ 
+ 	// Optional per-frame diagnostics; no effect on tracking decisions.
+ 	xr_mercury_diag::CsvLogger xr_tracking_diag;
++	xr_mercury_quality::Config xr_quality_filter;
+ 
+ 	// XR/Mercury offline detector diagnostics. Enabled by
+ 	// MERCURY_XR_DETECTOR_DEBUG_CSV=/path/to/file.csv.
