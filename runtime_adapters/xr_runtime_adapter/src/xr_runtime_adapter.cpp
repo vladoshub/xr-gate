@@ -1,3 +1,4 @@
+#include <xr_tracking/debug/hand_pose_diagnostics.hpp>
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -2749,6 +2750,8 @@ void write_controller_position_diagnostics(
 }  // namespace
 
 int main(int argc, char** argv) {
+  const bool hand_pose_diagnostics = xr_tracking::hand_pose_diagnostics::enabled("XR_HAND_POSE_DIAGNOSTICS");
+  if (hand_pose_diagnostics) std::cerr << "[hand_pose_diag] runtime_enabled=yes\n";
   std::string registry_path = xr_runtime::default_tracking_registry_path();
   std::string hmd_stream = "hmd_pose";
   std::string hand_stream = "hand_tracking";
@@ -5186,6 +5189,10 @@ int main(int argc, char** argv) {
     uint64_t runtime_hand_published = 0;
     uint64_t runtime_controller_state_published = 0;
     uint64_t runtime_hand_output_sequence = 0;
+    uint64_t diag_sequence = 0, diag_source = 0, diag_reset = 0;
+    bool diag_seen = false;
+    runtime_hand_stability_filter_hand_tracking.set_diagnostics_enabled(hand_pose_diagnostics);
+    runtime_hand_stability_filter_imu.set_diagnostics_enabled(hand_pose_diagnostics);
     uint64_t runtime_hand_clear_reset_counter = 0;
     bool runtime_last_hand_output_had_hands = false;
     uint64_t skeleton26_frames_used = 0;
@@ -5588,6 +5595,24 @@ int main(int argc, char** argv) {
         raw_optical_yaw_hand = gestures::runtime_hand_v2_from_runtime_v1(frame.hand);
       }
 
+      const bool trace_hand = hand_pose_diagnostics && raw_optical_yaw_hand &&
+          (!diag_seen || diag_sequence != raw_optical_yaw_hand->sequence ||
+           diag_source != raw_optical_yaw_hand->source_timestamp_ns ||
+           diag_reset != raw_optical_yaw_hand->reset_counter);
+      const auto trace_sequence = raw_optical_yaw_hand ? raw_optical_yaw_hand->sequence : 0;
+      const auto trace_source = raw_optical_yaw_hand ? raw_optical_yaw_hand->source_timestamp_ns : 0;
+      auto trace_pose = [&](const char* stage, const auto& pose) {
+        if (trace_hand) xr_tracking::hand_pose_diagnostics::write_frame(
+            std::cerr, stage, pose, frame.read_timestamp_ns, trace_sequence, trace_source);
+      };
+      if (trace_hand) {
+        diag_seen = true;
+        diag_sequence = trace_sequence;
+        diag_source = trace_source;
+        diag_reset = raw_optical_yaw_hand->reset_counter;
+        trace_pose("runtime_input", *raw_optical_yaw_hand);
+      }
+
       if (runtime_hand_stability_gate && frame.hand_v2.sequence != 0) {
         const auto hand_tracking_filtered =
             runtime_hand_stability_filter_hand_tracking.filter(frame.hand_v2);
@@ -5617,6 +5642,8 @@ int main(int argc, char** argv) {
           runtime_visual_hand_tracking_fresh = false;
         }
       }
+
+      trace_pose("runtime_gate_local", frame.hand_v2);
 
       const bool clear_left_visual_gestures =
           runtime_ignore_backend_hand_gestures || !effective_runtime_left_hand_gestures_enabled;
@@ -5950,6 +5977,28 @@ int main(int argc, char** argv) {
                                 frame.hand_v2.hand_count > 0;
         }
 
+        if (trace_hand) {
+          if (raw_optical_yaw_hand) trace_pose("runtime_raw_transformed", *raw_optical_yaw_hand);
+          trace_pose("runtime_gated_transformed", frame.hand_v2);
+          const auto& left = (left_uses_imu_profile ? runtime_hand_stability_filter_imu :
+              runtime_hand_stability_filter_hand_tracking).last_diagnostics().left;
+          const auto& right = (right_uses_imu_profile ? runtime_hand_stability_filter_imu :
+              runtime_hand_stability_filter_hand_tracking).last_diagnostics().right;
+          std::cerr << "[hand_pose_diag] stage=runtime_gate input_sequence=" << trace_sequence
+                    << " input_source_ns=" << trace_source << " enabled=" << runtime_hand_stability_gate
+                    << " left_imu_profile=" << left_uses_imu_profile
+                    << " right_imu_profile=" << right_uses_imu_profile
+                    << " left_mode=" << left.mode << " left_jump_m=" << left.jump_m
+                    << " left_velocity_mps=" << left.velocity_mps << " left_pending=" << left.pending_count
+                    << " left_frozen=" << left.prediction_frozen
+                    << " right_mode=" << right.mode << " right_jump_m=" << right.jump_m
+                    << " right_velocity_mps=" << right.velocity_mps << " right_pending=" << right.pending_count
+                    << " right_frozen=" << right.prediction_frozen
+                    << " hmd_source_ns=" << frame.hmd.source_timestamp_ns
+                    << " hmd_p=(" << frame.hmd.px << "," << frame.hmd.py << "," << frame.hmd.pz << ")"
+                    << " hmd_q=(" << frame.hmd.qx << "," << frame.hmd.qy << "," << frame.hmd.qz << "," << frame.hmd.qw << ")\n";
+        }
+
         if (runtime_jitter_filter_enabled) {
           if (frame.hand_v2.sequence != 0) {
             auto hand_tracking_filtered = frame.hand_v2;
@@ -6137,6 +6186,7 @@ int main(int argc, char** argv) {
           runtime_hand.sequence = ++runtime_hand_output_sequence;
           runtime_hand.reset_counter += runtime_hand_clear_reset_counter;
 
+          trace_pose("runtime_output", runtime_hand);
           if (runtime_hand_publisher) runtime_hand_publisher->publish(runtime_hand);
           if (runtime_hand_udp_publisher) runtime_hand_udp_publisher->send_hand(runtime_hand);
           ++runtime_hand_published;

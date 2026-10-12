@@ -87,6 +87,18 @@ struct HandPoseStabilityFilterEvents {
   bool right_reacquired = false;
 };
 
+struct HandGateSideDiagnostics {
+  std::string mode = "disabled";
+  double jump_m = std::numeric_limits<double>::quiet_NaN();
+  double velocity_mps = std::numeric_limits<double>::quiet_NaN();
+  uint32_t pending_count = 0;
+  bool prediction_frozen = false;
+};
+
+struct HandGateDiagnostics {
+  HandGateSideDiagnostics left, right;
+};
+
 class HandPoseStabilityFilter {
  public:
   HandPoseStabilityFilter() = default;
@@ -118,6 +130,7 @@ class HandPoseStabilityFilter {
     left_v2_ = HandStateV2{};
     right_v2_ = HandStateV2{};
     stats_ = HandPoseStabilityFilterStats{};
+    last_diagnostics_ = {};
     last_events_ = HandPoseStabilityFilterEvents{};
     v2_reset_counter_valid_ = false;
   }
@@ -125,15 +138,25 @@ class HandPoseStabilityFilter {
   [[nodiscard]] const HandPoseStabilityFilterConfig& config() const { return cfg_; }
   [[nodiscard]] const HandPoseStabilityFilterStats& stats() const { return stats_; }
   [[nodiscard]] const HandPoseStabilityFilterEvents& last_events() const { return last_events_; }
+  void set_diagnostics_enabled(bool enabled) {
+    diagnostics_enabled_ = enabled;
+    last_diagnostics_ = {};
+  }
+  [[nodiscard]] const HandGateDiagnostics& last_diagnostics() const { return last_diagnostics_; }
 
   xr_runtime::HandTrackingFrameF64V1 filter(xr_runtime::HandTrackingFrameF64V1 frame) {
     last_events_ = HandPoseStabilityFilterEvents{};
+    if (diagnostics_enabled_) last_diagnostics_ = {};
     if (!cfg_.enabled) return frame;
 
     ++stats_.rows;
 
     const auto left = filter_side(frame.left, left_, frame.source_timestamp_ns, "left");
     const auto right = filter_side(frame.right, right_, frame.source_timestamp_ns, "right");
+    if (diagnostics_enabled_) {
+      last_diagnostics_.left = {left.mode, left.jump_m, left.velocity_mps, left.pending_count, false};
+      last_diagnostics_.right = {right.mode, right.jump_m, right.velocity_mps, right.pending_count, false};
+    }
 
     frame.left = left.side;
     frame.right = right.side;
@@ -147,6 +170,7 @@ class HandPoseStabilityFilter {
 
   xr_runtime::HandTrackingFrameF32V2 filter(xr_runtime::HandTrackingFrameF32V2 frame) {
     last_events_ = HandPoseStabilityFilterEvents{};
+    if (diagnostics_enabled_) last_diagnostics_ = {};
     if (!cfg_.enabled) return frame;
 
     if (v2_reset_counter_valid_ && frame.reset_counter != v2_reset_counter_) {
@@ -160,6 +184,10 @@ class HandPoseStabilityFilter {
 
     const auto left = filter_side_v2(frame.left, left_v2_, frame.source_timestamp_ns, "left");
     const auto right = filter_side_v2(frame.right, right_v2_, frame.source_timestamp_ns, "right");
+    if (diagnostics_enabled_) {
+      last_diagnostics_.left = {left.mode, left.jump_m, left.velocity_mps, left.pending_count, left_v2_.prediction_frozen};
+      last_diagnostics_.right = {right.mode, right.jump_m, right.velocity_mps, right.pending_count, right_v2_.prediction_frozen};
+    }
 
     frame.left = left.side;
     frame.right = right.side;
@@ -252,6 +280,10 @@ class HandPoseStabilityFilter {
     apply_side(frame.left, left_v2_, apply_left);
     apply_side(frame.right, right_v2_, apply_right);
     recompute_frame_status_v2(frame);
+    if (diagnostics_enabled_) {
+      last_diagnostics_.left.prediction_frozen = left_v2_.prediction_frozen;
+      last_diagnostics_.right.prediction_frozen = right_v2_.prediction_frozen;
+    }
   }
 
   std::string summary_string() const {
@@ -1564,6 +1596,8 @@ const bool lost_output_window_expired_for_reacquire = !within_lost_output_window
 
   HandPoseStabilityFilterConfig cfg_;
   HandPoseStabilityFilterEvents last_events_{};
+  bool diagnostics_enabled_ = false;
+  HandGateDiagnostics last_diagnostics_{};
   bool v2_reset_counter_valid_ = false;
   uint64_t v2_reset_counter_ = 0;
   HandState left_;
