@@ -205,6 +205,8 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   uint64_t reacquire_blend_start_ns = 0;
   uint64_t hmd_relative_blend_start_ns = 0;
   float anchor_position_m[3] = {};
+  // Physical velocity from accepted optical measurements; never seed it from
+  // the rendered correction's step velocity stored in velocity_mps.
   float anchor_velocity_mps[3] = {};
   prediction_window::PositionWindowEstimator<> position_history{};
   uint64_t position_history_last_frame_sequence = 0;

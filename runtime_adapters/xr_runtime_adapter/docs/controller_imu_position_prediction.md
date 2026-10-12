@@ -48,14 +48,21 @@ the gate clock even when the backend sequence stopped advancing.
 
 Optical reacquire clears the preceding prediction's acceleration integrals
 and freeze reason before blending. If tracking disappears mid-blend, prediction
-starts from the last published blended position and velocity. Both normal
-anchors and blend targets respect the configured optical velocity window.
+starts from the last published blended position with the velocity measured
+from accepted optical samples. Both normal anchors and blend targets respect
+the configured optical velocity window. The velocity history uses the matching
+source-time optical frame before output smoothing, only while the hand gate
+accepts a real optical pose. An older optical/yaw reference cannot seed it.
 With a positive `max_prediction_speed_mps`, the returning optical correction
 also obeys that speed limit. A distant target may take longer than
 `reacquire_blend_ms`; reaching the nominal deadline cannot snap to the target.
-The moving correction publishes its actual step velocity, so another loss
-continues from the position and motion that were published. A zero/negative
-speed limit retains the previous unrestricted blending behavior.
+The moving correction publishes its actual step velocity for output consumers,
+but this synthetic velocity does not become the next prediction's launch
+velocity. A short optical return followed by another loss must not extrapolate
+the correction toward an uncertain target for a new prediction window.
+With insufficient fresh optical samples, launch velocity is zero; fresh IMU
+acceleration remains available. A zero/negative speed limit retains the previous
+unrestricted blending behavior.
 
 During hold, the published position and velocity remain frozen. Timed IMU
 measurements still update the internal velocity, which is retained when the

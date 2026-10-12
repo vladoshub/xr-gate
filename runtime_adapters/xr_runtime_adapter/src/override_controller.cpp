@@ -1156,6 +1156,7 @@ bool optical_position_velocity(const RuntimeControllerImuSideRuntimeState& state
 void accept_optical_position_anchor(
     RuntimeControllerImuSideRuntimeState& state,
     const xr_runtime::HandSideF32V2& hand_side,
+    const xr_runtime::HandSideF32V2& measured_hand_side,
     const RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& cfg,
     uint64_t timestamp_ns) {
@@ -1167,7 +1168,7 @@ void accept_optical_position_anchor(
   std::copy(std::begin(state.anchor_position_m),
             std::end(state.anchor_position_m), state.position_m);
 
-  optical_position_velocity(state, hand_side, cfg, state.anchor_velocity_mps);
+  optical_position_velocity(state, measured_hand_side, cfg, state.anchor_velocity_mps);
   std::copy(std::begin(state.anchor_velocity_mps),
             std::end(state.anchor_velocity_mps), state.velocity_mps);
 
@@ -1306,6 +1307,7 @@ void update_or_apply_imu_position_prediction(
     float gravity_magnitude_mps2,
     RuntimeControllerImuSideRuntimeState* state,
     const xr_runtime::HandSideF32V2* hand_side,
+    const xr_runtime::HandSideF32V2* measured_hand_side,
     const xr_runtime::HmdPoseF64V1* hmd,
     uint64_t timestamp_ns,
     uint64_t hand_frame_sequence,
@@ -1318,6 +1320,10 @@ void update_or_apply_imu_position_prediction(
   const uint64_t blend_ns = nonnegative_ms_to_ns(cfg.reacquire_blend_ms);
 
   if (real_optical_hand_pose(hand_side)) {
+    // The accepted output can already contain jitter/reacquire correction.
+    // Estimate physical motion from the matching, unsmoothed optical sample.
+    const auto& measured = real_optical_hand_pose(measured_hand_side)
+        ? *measured_hand_side : *hand_side;
     const float optical_position[3] = {
         hand_side->controller_px,
         hand_side->controller_py,
@@ -1329,15 +1335,15 @@ void update_or_apply_imu_position_prediction(
       const uint64_t sample_timestamp_ns =
           hand_source_timestamp_ns != 0 ? hand_source_timestamp_ns : timestamp_ns;
       state->position_history.add(sample_timestamp_ns,
-                                  optical_position[0],
-                                  optical_position[1],
-                                  optical_position[2],
+                                  measured.controller_px,
+                                  measured.controller_py,
+                                  measured.controller_pz,
                                   cfg.prediction_window_ms);
       state->position_history_last_frame_sequence = hand_frame_sequence;
     }
     float optical_velocity[3] = {};
     const bool optical_velocity_valid =
-        optical_position_velocity(*state, *hand_side, cfg, optical_velocity);
+        optical_position_velocity(*state, measured, cfg, optical_velocity);
 
     // Match HandPoseStabilityFilter: blend only when returning from an actual
     // prediction phase. A hand that returned during hold can be accepted
@@ -1398,9 +1404,8 @@ void update_or_apply_imu_position_prediction(
           }
           correction_limited = true;
         }
-        // Once the correction is moving, expose the velocity of the published
-        // trajectory. A second loss must not launch from an unrelated blend of
-        // old IMU velocity and the optical target's velocity.
+        // Expose the actual correction speed to consumers, but keep it out of
+        // the physical velocity used to predict another optical loss.
         if (t > 0.0f) {
           for (int axis = 0; axis < 3; ++axis) state->velocity_mps[axis] = step[axis] / dt_s;
         }
@@ -1409,15 +1414,16 @@ void update_or_apply_imu_position_prediction(
 
       if (t < 1.0f || correction_limited) {
         // As in HandPoseStabilityFilter, the blended output becomes the latest
-        // continuity anchor. If optical tracking drops again mid-blend, the
-        // next hold/predict cycle starts from what was actually published.
+        // position anchor. If optical tracking drops again mid-blend, continue
+        // from this coordinate with measured optical velocity. Continuing the
+        // synthetic correction speed would turn estimation error into motion.
         // The nominal blend deadline is not permission to snap: keep following
         // the current optical target until the bounded correction reaches it.
         state->has_position_anchor = true;
         state->last_optical_pose_ns = timestamp_ns;
         std::copy(std::begin(state->position_m), std::end(state->position_m),
                   state->anchor_position_m);
-        std::copy(std::begin(state->velocity_mps), std::end(state->velocity_mps),
+        std::copy(std::begin(optical_velocity), std::end(optical_velocity),
                   state->anchor_velocity_mps);
         state->prediction_output_history_active = true;
         std::copy(std::begin(state->position_m), std::end(state->position_m),
@@ -1436,7 +1442,7 @@ void update_or_apply_imu_position_prediction(
       }
     }
 
-    accept_optical_position_anchor(*state, *hand_side, imu, cfg, timestamp_ns);
+    accept_optical_position_anchor(*state, *hand_side, measured, imu, cfg, timestamp_ns);
     return;
   }
 
@@ -2246,9 +2252,15 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                                      optical_yaw_hand_side, optical_yaw_frame_sequence,
                                      optical_yaw_hand != nullptr && optical_yaw_hand->source_timestamp_ns != 0
                                          ? optical_yaw_hand->source_timestamp_ns : timestamp_ns);
+      // Require the same optical frame so an older yaw reference cannot seed
+      // velocity. This source-time sample precedes presentation smoothing.
+      const bool matching_optical_measurement = hand != nullptr && optical_yaw_hand != nullptr &&
+          hand->sequence == optical_yaw_hand->sequence &&
+          hand->source_timestamp_ns == optical_yaw_hand->source_timestamp_ns;
       update_or_apply_imu_position_prediction(
           out, physical_imu, imu_motion_cfg, gravity_magnitude_mps2,
           runtime_state, hand_side,
+          matching_optical_measurement ? optical_yaw_hand_side : hand_side,
           hmd,
           timestamp_ns, hand != nullptr ? hand->sequence : 0,
           hand != nullptr ? hand->source_timestamp_ns : 0);

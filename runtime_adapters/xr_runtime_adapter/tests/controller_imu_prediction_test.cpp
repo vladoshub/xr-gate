@@ -672,7 +672,8 @@ void interrupted_reacquire_rebases_motion() {
   const auto before = s.tick(210, true);
   const auto after = s.tick(220, false);
   near(before.left.position[0], 0.02f, "reacquire did not start at published pose");
-  near(after.left.position[0], 0.022f, "interrupted blend added old IMU deltas twice");
+  near(after.left.position[0], before.left.position[0],
+       "interrupted blend extrapolated old prediction instead of measured rest");
 
   Scenario frozen;
   auto& m = frozen.cfg.left_imu_motion;
@@ -772,6 +773,167 @@ void distant_reacquire_respects_speed_and_finishes_without_snap() {
           "loss during extended reacquire did not continue from published pose");
 }
 
+void interrupted_correction_does_not_launch_stationary_hand() {
+  for (bool right : {false, true}) {
+    for (bool window : {false, true}) {
+      for (float speed_limit : {0.0f, 2.0f}) {
+        Scenario s;
+        auto& motion = s.cfg.left_imu_motion;
+        motion.hold_lost_ms = 0;
+        motion.reacquire_blend_ms = 180;
+        motion.prediction_window_mode = window;
+        motion.prediction_window_ms = 120;
+        motion.max_prediction_speed_mps = speed_limit;
+        s.cfg.right_imu_motion = motion;
+        s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+        s.state.right.acceleration_world_yaw_valid = true;
+        auto tick = [&](int ms, bool optical) {
+          const auto now = s.prepare(ms);
+          auto input = s.input;
+          auto hand = s.hand;
+          if (right) {
+            input.right = input.left; input.left = {};
+            hand.right = hand.left; hand.left = {};
+            hand.flags = HAND_FLAG_RIGHT_VALID;
+            hand.right.handedness = 2;
+          }
+          const auto h = optical ? std::optional(hand) : std::nullopt;
+          return compose_runtime_controller_state(s.sequence, now, s.cfg, h, h,
+              input, std::nullopt, 9.81f, &s.state);
+        };
+        tick(0, true);
+        tick(33, true);
+        for (int ms = 43; ms <= 203; ms += 10) tick(ms, false);
+        s.hand.left.controller_px = -0.12f;
+        tick(210, true);
+        RuntimeControllerStateFrameV1 before;
+        for (int ms = 220; ms <= 260; ms += 10) before = tick(ms, true);
+        const auto& state = right ? s.state.right : s.state.left;
+        const auto& side = right ? before.right : before.left;
+        require(state.reacquire_blend_active, "stationary target did not enter correction");
+        require(side.position[0] < 0 && side.position[0] > -0.12f,
+                "stationary target was not reached through a partial correction");
+        near(state.anchor_velocity_mps[0], 0,
+             "position correction became stationary hand's prediction velocity");
+        if (speed_limit > 0) require(side.linear_velocity[0] < -0.1f,
+             "moving correction stopped reporting its actual output velocity");
+        const auto after = tick(270, false);
+        const auto& lost = right ? after.right : after.left;
+        near(lost.position[0], side.position[0],
+             "loss during correction launched a physically stationary hand");
+        near(lost.linear_velocity[0], 0,
+             "synthetic correction velocity survived into physical prediction");
+      }
+    }
+  }
+}
+
+void optical_prediction_uses_measurements_before_output_smoothing() {
+  for (bool right : {false, true}) {
+    for (bool window : {false, true}) {
+      Scenario s;
+      auto& motion = s.cfg.left_imu_motion;
+      motion.hold_lost_ms = 0;
+      motion.reacquire_blend_ms = 180;
+      motion.prediction_window_mode = window;
+      motion.prediction_window_ms = 120;
+      motion.max_prediction_speed_mps = 2;
+      s.cfg.right_imu_motion = motion;
+      s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+      s.state.right.acceleration_world_yaw_valid = true;
+      s.hand.left.controller_pz = 0.285391f;
+      auto initial_tick = [&](int ms, bool optical) {
+        const auto now = s.prepare(ms);
+        auto input = s.input;
+        auto hand = s.hand;
+        if (right) {
+          input.right = input.left; input.left = {};
+          hand.right = hand.left; hand.left = {};
+          hand.flags = HAND_FLAG_RIGHT_VALID;
+          hand.right.handedness = 2;
+        }
+        const auto h = optical ? std::optional(hand) : std::nullopt;
+        return compose_runtime_controller_state(s.sequence, now, s.cfg, h, h,
+            input, std::nullopt, 9.81f, &s.state);
+      };
+      initial_tick(0, true);
+      initial_tick(33, true);
+      for (int ms = 43; ms <= 203; ms += 10) initial_tick(ms, false);
+
+      RuntimeControllerStateFrameV1 before;
+      for (int ms = 210; ms <= 287; ms += 11) {
+        const auto now = s.prepare(ms);
+        const int source_ms = ms >= 277 ? 277 : (ms >= 243 ? 243 : 210);
+        auto measured = s.hand;
+        measured.sequence = 100 + (source_ms == 210 ? 0 : (source_ms == 243 ? 1 : 2));
+        measured.source_timestamp_ns = kStart + uint64_t(source_ms) * 1'000'000;
+        measured.left.controller_pz = 0.134558f - 0.26f * float(source_ms - 210) / 1000;
+        measured.left.vz = -0.26f;
+        if (source_ms == 210) measured.left.flags &= ~HAND_LINEAR_VELOCITY_VALID;
+        auto displayed = measured;
+        // The three accepted positions are moved by the preceding output
+        // smoother. Their slope must not become physical controller velocity.
+        displayed.left.controller_pz = source_ms == 210 ? 0.157955f
+            : (source_ms == 243 ? 0.130088f : 0.119767f);
+        displayed.left.vz = -1.0f;
+        auto input = s.input;
+        if (right) {
+          input.right = input.left; input.left = {};
+          for (auto* hand : {&measured, &displayed}) {
+            hand->right = hand->left; hand->left = {};
+            hand->flags = HAND_FLAG_RIGHT_VALID;
+            hand->right.handedness = 2;
+          }
+        }
+        before = compose_runtime_controller_state(s.sequence, now, s.cfg,
+            displayed, measured, input, std::nullopt, 9.81f, &s.state);
+      }
+      const auto& state = right ? s.state.right : s.state.left;
+      near(state.anchor_velocity_mps[2], -0.26f,
+           "output smoothing contaminated the measured optical velocity");
+      const auto previous = right ? before.right : before.left;
+      const auto now = s.prepare(298);
+      auto input = s.input;
+      if (right) { input.right = input.left; input.left = {}; }
+      const auto after = compose_runtime_controller_state(s.sequence, now, s.cfg,
+          std::nullopt, std::nullopt, input, std::nullopt, 9.81f, &s.state);
+      const auto& side = right ? after.right : after.left;
+      near(side.position[2], previous.position[2] - 0.26f * 0.011f,
+           "second loss extrapolated correction instead of measured motion");
+      near(side.linear_velocity[2], -0.26f,
+           "second loss published artificial correction speed");
+    }
+  }
+}
+
+void optical_velocity_requires_matching_accepted_measurement() {
+  Scenario s;
+  s.hand.left.vx = 0.1f;
+  s.tick(0, true);
+  auto now = s.prepare(10);
+  auto older = s.hand;
+  older.sequence -= 1;
+  older.source_timestamp_ns -= 10'000'000;
+  older.left.vx = -5;
+  compose_runtime_controller_state(s.sequence, now, s.cfg, s.hand, older,
+      s.input, std::nullopt, 9.81f, &s.state);
+  near(s.state.left.anchor_velocity_mps[0], 0.1f,
+       "an older yaw-reference frame seeded the optical velocity");
+
+  now = s.prepare(20);
+  auto measured = s.hand;
+  measured.left.controller_px = 100;
+  measured.left.vx = -5;
+  auto rejected = s.hand;
+  rejected.left.status = 2;
+  const auto out = compose_runtime_controller_state(s.sequence, now, s.cfg,
+      rejected, measured, s.input, std::nullopt, 9.81f, &s.state);
+  near(s.state.left.anchor_velocity_mps[0], 0.1f,
+       "a gate-rejected optical measurement replaced launch velocity");
+  near(out.left.position[0], 0.001f,
+       "a rejected optical position became a new prediction anchor");
+}
+
 void time_decay_integrates_published_velocity() {
   Scenario s;
   s.cfg.left_imu_motion.prediction_time_decay_enabled = true;
@@ -867,6 +1029,9 @@ int main() {
   camera_velocity_and_head_motion();
   interrupted_reacquire_rebases_motion();
   distant_reacquire_respects_speed_and_finishes_without_snap();
+  interrupted_correction_does_not_launch_stationary_hand();
+  optical_prediction_uses_measurements_before_output_smoothing();
+  optical_velocity_requires_matching_accepted_measurement();
   time_decay_integrates_published_velocity();
   speed_distance_and_timeout_limits();
   std::cout << "IMU prediction: rigid grips, timed rotation calibration, velocity fallback, sample time, stale optics, reacquire and limits: OK\n";
