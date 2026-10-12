@@ -16,6 +16,11 @@ class GearVrImuStream {
   static constexpr size_t kMaxPendingBatches = 256;
   explicit GearVrImuStream(float beta) : processor_(beta) {}
 
+  void set_accelerometer_calibration(const imu::AccelerometerCalibration& calibration) {
+    processor_.set_accelerometer_calibration(calibration);
+    if (have_device_time_) reset();
+  }
+
   bool push(const DecodedPacket& packet, uint64_t host_receive_ns);
   xr_runtime::ControllerImuStateV1 consume();
   bool pending() const { return !pending_.empty(); }

@@ -12,6 +12,7 @@
 #include "gearvr_protocol.hpp"
 #include "gearvr_imu_stream.hpp"
 #include "gearvr_touchpad.hpp"
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 
 #include <algorithm>
 #include <array>
@@ -206,6 +207,8 @@ struct GearVrInputProvider::Impl {
         session_ptr = std::make_unique<Session>(
             static_cast<float>(options.madgwick_beta), touchpad_options());
         session_ptr->stable_id = snapshot.stable_id;
+        session_ptr->imu_stream.set_accelerometer_calibration(
+            imu::load_accelerometer_calibration(snapshot.stable_id));
       }
       Session& session = *session_ptr;
       session.seen = true;

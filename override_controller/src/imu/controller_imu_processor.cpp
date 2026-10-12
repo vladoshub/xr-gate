@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace xr_override_controller::imu {
 namespace {
@@ -128,6 +129,25 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
 ControllerImuProcessor::ControllerImuProcessor(float madgwick_beta)
     : filter_(madgwick_beta) {}
 
+void ControllerImuProcessor::set_accelerometer_calibration(
+    const AccelerometerCalibration& calibration) {
+  const auto valid_axis = [](float bias, float scale) {
+    return std::isfinite(bias) && std::abs(bias) <= 2.0f &&
+           std::isfinite(scale) && scale >= 0.5f && scale <= 2.0f;
+  };
+  if (calibration.enabled &&
+      (!valid_axis(calibration.bias_m_s2.x, calibration.scale.x) ||
+       !valid_axis(calibration.bias_m_s2.y, calibration.scale.y) ||
+       !valid_axis(calibration.bias_m_s2.z, calibration.scale.z))) {
+    throw std::invalid_argument("invalid controller accelerometer calibration");
+  }
+  accelerometer_calibration_ = calibration;
+  // The gravity direction was learned from the old force. Reinitialize AHRS
+  // and gyro acquisition when changing the calibration, retaining its values
+  // through subsequent reconnect/AHRS resets on this physical device.
+  reset();
+}
+
 void ControllerImuProcessor::reset() {
   filter_.reset();
   corrected_sample_ = {};
@@ -141,7 +161,8 @@ void ControllerImuProcessor::update_initial_gyro_bias(const RawControllerImuSamp
   const float gyro_magnitude = vector_norm(sample.angular_velocity_rad_s);
   const float accel_magnitude = vector_norm(sample.specific_force_m_s2);
   const float gravity_magnitude = current_backend_control_snapshot().gravity_magnitude;
-  if (gyro_magnitude >= 0.20f || std::abs(accel_magnitude - gravity_magnitude) >= 1.0f) return;
+  if (!std::isfinite(gyro_magnitude) || !std::isfinite(accel_magnitude) ||
+      gyro_magnitude >= 0.20f || std::abs(accel_magnitude - gravity_magnitude) >= 1.0f) return;
 
   ++gyro_bias_sample_count_;
   const float alpha = 1.0f / static_cast<float>(gyro_bias_sample_count_);
@@ -151,8 +172,15 @@ void ControllerImuProcessor::update_initial_gyro_bias(const RawControllerImuSamp
 }
 
 QuaternionXyzw ControllerImuProcessor::process(const RawControllerImuSample& sample) {
-  update_initial_gyro_bias(sample);
   corrected_sample_ = sample;
+  if (sample.accelerometer_valid && accelerometer_calibration_.enabled) {
+    const auto& c = accelerometer_calibration_;
+    auto& f = corrected_sample_.specific_force_m_s2;
+    f.x = (f.x - c.bias_m_s2.x) * c.scale.x;
+    f.y = (f.y - c.bias_m_s2.y) * c.scale.y;
+    f.z = (f.z - c.bias_m_s2.z) * c.scale.z;
+  }
+  update_initial_gyro_bias(corrected_sample_);
   corrected_sample_.angular_velocity_rad_s.x -= gyro_bias_rad_s_.x;
   corrected_sample_.angular_velocity_rad_s.y -= gyro_bias_rad_s_.y;
   corrected_sample_.angular_velocity_rad_s.z -= gyro_bias_rad_s_.z;

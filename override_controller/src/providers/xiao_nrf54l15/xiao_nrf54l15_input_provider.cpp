@@ -6,6 +6,7 @@
 #include "xr_controller_v1_protocol.hpp"
 
 #include <xr_override_controller/imu/controller_imu_processor.hpp>
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 #include <xr_tracking/timing/serial_imu_clock.hpp>
 
 #include <algorithm>
@@ -219,6 +220,8 @@ struct XiaoNrf54l15InputProvider::Impl {
         session_ptr = std::make_unique<Session>(
             static_cast<float>(options.madgwick_beta));
         session_ptr->stable_id = snapshot.stable_id;
+        session_ptr->imu_processor.set_accelerometer_calibration(
+            imu::load_accelerometer_calibration(snapshot.stable_id));
       }
       Session& session = *session_ptr;
       session.seen = true;
@@ -368,6 +371,9 @@ struct XiaoNrf54l15InputProvider::Impl {
     if (session.imu_processor.gyro_calibrated()) {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
     }
+    if (session.imu_processor.accelerometer_calibrated()) {
+      state.data_flags |= xr_runtime::CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
+    }
     state.sequence = packet.sequence;
     state.latest_device_timestamp_ticks = raw.device_timestamp_ticks;
     state.latest_sample_timestamp_ns = sample_timestamp_ns;
@@ -391,6 +397,9 @@ struct XiaoNrf54l15InputProvider::Impl {
     if (timing.device_time_valid) sample.flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (session.imu_processor.gyro_calibrated()) {
       sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+    }
+    if (session.imu_processor.accelerometer_calibrated()) {
+      sample.flags |= xr_runtime::CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
     }
 
     if (session.pending_imu.size() == 256) {

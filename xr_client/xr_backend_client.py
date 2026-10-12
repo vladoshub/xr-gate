@@ -62,6 +62,11 @@ IS_WINDOWS = os.name == "nt"
 
 BASALT_MODE_OPTION = "--mode"
 BASALT_LEGACY_MODE_FLAGS = ("--no-imu", "--vo", "--vio")
+CONTROLLER_IMU_ALIGNMENT_STATUS = re.compile(
+    rb"^\[xr_runtime_adapter\]\[imu-alignment\] "
+    rb"controller_left_acceleration_yaw_valid=(yes|no) "
+    rb"controller_right_acceleration_yaw_valid=(yes|no)$"
+)
 
 
 def normalize_basalt_mode(value: str) -> str:
@@ -336,6 +341,36 @@ class Launcher:
             return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # type: ignore[attr-defined]
         return {}
 
+    def forward_controller_imu_status(self, item: RunningProcess) -> None:
+        """Follow only alignment transitions; keep service stdout in its log."""
+        pending = b""
+        last_status = None
+        try:
+            with item.log_path.open("rb") as source:
+                while not item.limiter_stop.is_set():
+                    if os.fstat(source.fileno()).st_size < source.tell():
+                        # The existing log limiter truncates this same inode.
+                        source.seek(0)
+                        pending = b""
+                    chunk = source.read(64 * 1024)
+                    if chunk:
+                        lines = (pending + chunk).split(b"\n")
+                        pending = lines.pop()
+                        # A partial verbose frame never grows without bound.
+                        if len(pending) > 16 * 1024:
+                            pending = pending[-16 * 1024:]
+                        for line in lines:
+                            match = CONTROLLER_IMU_ALIGNMENT_STATUS.fullmatch(line.rstrip(b"\r"))
+                            if match is not None and match.groups() != last_status:
+                                last_status = match.groups()
+                                log(line.decode("ascii").rstrip())
+                        continue
+                    if item.limiter_stop.is_set() or item.process.poll() is not None:
+                        return
+                    item.limiter_stop.wait(0.1)
+        except OSError as exc:
+            log(f"[xr_client][WARN] cannot follow controller IMU status: {exc}")
+
     def start_service(self, spec: ServiceSpec) -> bool:
         if not spec.enabled:
             log(f"Skipping {spec.name}: disabled")
@@ -380,6 +415,13 @@ class Launcher:
 
         item = RunningProcess(spec=spec, process=proc, log_path=log_path, log_file=log_file)
         self.running.append(item)
+        if spec.name == "xr_runtime_adapter":
+            threading.Thread(
+                target=self.forward_controller_imu_status,
+                args=(item,),
+                name="controller-imu-status",
+                daemon=True,
+            ).start()
         time.sleep(spec.start_delay_s)
         if proc.poll() is not None:
             self.print_log_tail(log_path)

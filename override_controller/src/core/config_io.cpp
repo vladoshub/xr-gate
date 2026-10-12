@@ -423,6 +423,9 @@ std::vector<fs::path> list_config_files(const fs::path& dir) {
   if (!fs::exists(dir)) return out;
   for (const auto& entry : fs::directory_iterator(dir)) {
     if (!entry.is_regular_file()) continue;
+    // Per-sensor calibration shares the user directory but is not a bindings
+    // profile. Do not turn one configured controller into an ambiguous choice.
+    if (entry.path().filename() == "controller_imu_calibration.json") continue;
     const auto ext = entry.path().extension().string();
     if (ext == ".json") out.push_back(entry.path());
   }

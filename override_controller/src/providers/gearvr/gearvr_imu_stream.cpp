@@ -123,6 +123,7 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
     sample.flags = CONTROLLER_IMU_GYROSCOPE_VALID |
         CONTROLLER_IMU_ACCELEROMETER_VALID | CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (processor_.gyro_calibrated()) sample.flags |= CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+    if (processor_.accelerometer_calibrated()) sample.flags |= CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
     state.orientation_xyzw[0] = orientation.x;
     state.orientation_xyzw[1] = orientation.y;
     state.orientation_xyzw[2] = orientation.z;
@@ -140,6 +141,7 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
   state.latest_device_timestamp_ticks = newest_us;
   if (processor_.orientation_initialized()) state.data_flags |= CONTROLLER_IMU_ORIENTATION_VALID;
   if (processor_.gyro_calibrated()) state.data_flags |= CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+  if (processor_.accelerometer_calibrated()) state.data_flags |= CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
   state.magnetic_field_uT[0] = packet.magnetic_uT.x;
   state.magnetic_field_uT[1] = packet.magnetic_uT.y;
   state.magnetic_field_uT[2] = packet.magnetic_uT.z;

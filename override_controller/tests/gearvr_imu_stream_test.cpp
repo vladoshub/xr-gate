@@ -167,7 +167,47 @@ void gravity_reference_controls_orientation_validity() {
           "reset published an old gravity reference as valid");
 }
 
+void accelerometer_calibration_survives_clock_reset() {
+  GearVrImuStream stream(0.04f);
+  xr_override_controller::imu::AccelerometerCalibration calibration;
+  calibration.enabled = true;
+  calibration.bias_m_s2 = {0.1f, -0.2f, 0.4f};
+  calibration.scale = {0.99f, 1.01f, 0.98f};
+  stream.set_accelerometer_calibration(calibration);
+  const uint64_t base_ns = 70'000'000'000ULL;
+  auto biased_packet = [](uint32_t first_us) {
+    auto decoded = packet(first_us, first_us + 5000);
+    for (auto& sample : decoded.imu_samples) {
+      sample.gyro_rad_s = {};
+      sample.accel_m_s2 = {0.1f, -0.2f, 9.80665f / 0.98f + 0.4f};
+    }
+    return decoded;
+  };
+  for (int reset = 0; reset < 2; ++reset) {
+    require(stream.push(biased_packet(reset == 0 ? 10000 : 100),
+                        base_ns + uint64_t(reset) * 100'000'000),
+            "calibrated packet rejected");
+    const auto state = stream.consume();
+    require((state.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED) != 0,
+            "batch calibration flag missing");
+    require((state.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0,
+            "calibrated gravity did not initialize AHRS");
+    for (size_t i = 0; i < state.sample_count; ++i) {
+      const auto& sample = state.samples[i];
+      require((sample.flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED) != 0,
+              "timed sample calibration flag missing");
+      require(std::abs(sample.specific_force_m_s2[0]) < 1e-5f &&
+              std::abs(sample.specific_force_m_s2[1]) < 1e-5f &&
+              std::abs(sample.specific_force_m_s2[2] - 9.80665f) < 1e-4f,
+              "published timed force lost device calibration on reset");
+    }
+    require(state.reserved[CONTROLLER_IMU_DIAG_EPOCH] == uint32_t(reset + 1),
+            "clock reset did not create a new epoch");
+  }
+}
+
 int main() {
+  accelerometer_calibration_survives_clock_reset();
   gravity_reference_controls_orientation_validity();
   wrap_reset_and_fifo();
   jitter_drift_and_ahrs();

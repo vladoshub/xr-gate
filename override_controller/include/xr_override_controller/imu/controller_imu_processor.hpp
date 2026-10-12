@@ -18,6 +18,15 @@ struct QuaternionXyzw {
   float w = 1.0f;
 };
 
+// Fixed, device-specific correction in native sensor axes, before any provider
+// basis/mounting transform. Do not normalize each force sample: that would
+// remove the linear acceleration needed for position prediction.
+struct AccelerometerCalibration {
+  bool enabled = false;
+  Vec3f bias_m_s2{};
+  Vec3f scale{1.0f, 1.0f, 1.0f};
+};
+
 // Transport-neutral IMU sample. A Gear VR, MPU-6050 serial/BLE, or another
 // motion-controller provider only has to convert native units into SI units
 // and feed this structure to ControllerImuProcessor.
@@ -58,6 +67,9 @@ class ControllerImuProcessor {
 
   void reset();
   QuaternionXyzw process(const RawControllerImuSample& sample);
+  void set_accelerometer_calibration(const AccelerometerCalibration& calibration);
+  const AccelerometerCalibration& accelerometer_calibration() const { return accelerometer_calibration_; }
+  bool accelerometer_calibrated() const { return accelerometer_calibration_.enabled; }
 
   const QuaternionXyzw& orientation() const { return filter_.orientation(); }
   bool orientation_initialized() const { return filter_.orientation_initialized(); }
@@ -70,6 +82,7 @@ class ControllerImuProcessor {
   void update_initial_gyro_bias(const RawControllerImuSample& sample);
 
   Madgwick6Dof filter_;
+  AccelerometerCalibration accelerometer_calibration_{};
   RawControllerImuSample corrected_sample_;
   Vec3f gyro_bias_rad_s_;
   uint32_t gyro_bias_sample_count_ = 0;

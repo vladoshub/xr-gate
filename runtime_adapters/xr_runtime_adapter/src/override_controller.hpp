@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <vector>
 #include <string>
@@ -12,6 +13,7 @@
 #include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
 #include "imu_world_yaw_alignment.hpp"
+#include "imu_translation_yaw_check.hpp"
 
 namespace xr_runtime_adapter::override_controller {
 
@@ -78,6 +80,7 @@ struct RuntimeControllerImuMotionConfig {
   bool acceleration_integration_enabled = false;
   bool position_prediction_enabled = false;
   bool yaw_correction_enabled = false;
+  bool translation_yaw_check_enabled = true;
 
   // specific_force_m_s2 includes gravity. Runtime tracking space uses +Y up.
   // Gravity magnitude is supplied per frame from BackendControlSnapshot.
@@ -185,6 +188,8 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   float acceleration_world_yaw_rad = 0.0f;
   uint64_t acceleration_world_yaw_frame_sequence = 0;
   imu_alignment::WorldYawAlignment acceleration_world_alignment{};
+  imu_alignment::TranslationYawCheck acceleration_translation_yaw_check{};
+  uint32_t acceleration_yaw_half_turn_corrections = 0;
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
@@ -208,6 +213,24 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   // Physical velocity from accepted optical measurements; never seed it from
   // the rendered correction's step velocity stored in velocity_mps.
   float anchor_velocity_mps[3] = {};
+  // Bounded timed force history advances a windowed optical velocity to the
+  // exact IMU cursor used at loss. It never contains rendered correction speed.
+  struct AccelerationObservation {
+    uint64_t interval_start_ns = 0;
+    uint64_t timestamp_ns = 0;
+    float acceleration_mps2[3] = {};
+    float world_yaw_rad = 0.0f;
+  };
+  std::array<AccelerationObservation, 512> acceleration_history{};
+  uint32_t acceleration_history_count = 0;
+  uint64_t acceleration_history_cursor_ns = 0;
+  float anchor_velocity_alignment_delta_mps[3] = {};
+  uint32_t anchor_velocity_alignment_samples = 0;
+  // Separate physical motion origin from the optical loss/deadline clock.
+  // A distance freeze holds the displayed coordinate while retaining momentum.
+  uint64_t prediction_motion_anchor_ns = 0;
+  float prediction_base_velocity_mps[3] = {};
+  bool distance_recovery_output_active = false;
   prediction_window::PositionWindowEstimator<> position_history{};
   uint64_t position_history_last_frame_sequence = 0;
   float position_m[3] = {};

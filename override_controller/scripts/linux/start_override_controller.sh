@@ -27,6 +27,9 @@ OVERRIDE_CONTROLLER_BIN="$(expand_tilde "$OVERRIDE_CONTROLLER_BIN")"            
 
 CONFIG_DIR="${CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/xr_tracking/override_controller}" # directory with trained controller bindings/configs
 CONFIG_DIR="$(expand_tilde "$CONFIG_DIR")"                                                  # normalize ~/ in config directory
+OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE="${OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE:-$CONFIG_DIR/controller_imu_calibration.json}"
+OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE="$(expand_tilde "$OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE")"
+export OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE
 
 CONFIG_PATH="${CONFIG_PATH:-}"                                                              # optional explicit config file path; empty means use CONFIG_DIR/CONFIG_NAME
 if [[ -n "$CONFIG_PATH" ]]; then
@@ -197,6 +200,7 @@ log "ROOT_PROJECT=$ROOT_PROJECT"
 log "OVERRIDE_CONTROLLER_DIR=$OVERRIDE_CONTROLLER_DIR"
 log "BIN=$OVERRIDE_CONTROLLER_BIN"
 log "CONFIG_DIR=$CONFIG_DIR"
+log "IMU_CALIBRATION_FILE=$OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE"
 if [[ -n "$CONFIG_PATH" ]]; then
   log "CONFIG_PATH=$CONFIG_PATH"
 fi
@@ -219,7 +223,7 @@ if [[ "$USE_SUDO" == "1" && "${EUID:-$(id -u)}" -ne 0 ]]; then
   command -v sudo >/dev/null 2>&1 || fatal "sudo not found; cannot run with USE_SUDO=1"
   log "Running override_controller via sudo. Config path remains: $CONFIG_DIR"
   set +e
-  sudo "$OVERRIDE_CONTROLLER_BIN" "${args[@]}" "$@"
+  sudo env OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE="$OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE" "$OVERRIDE_CONTROLLER_BIN" "${args[@]}" "$@"
   status=$?
   set -e
   if [[ -d "$CONFIG_DIR" ]]; then

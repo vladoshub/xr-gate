@@ -143,6 +143,21 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   target_include_directories(controller_imu_gravity_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
   target_link_libraries(controller_imu_gravity_test PRIVATE Threads::Threads)
   add_test(NAME controller_imu_gravity_test COMMAND controller_imu_gravity_test)
+  add_executable(controller_imu_calibration_test
+    tests/controller_imu_calibration_test.cpp
+    src/imu/controller_imu_processor.cpp
+    src/core/backend_control.cpp
+    src/core/config_io.cpp
+    src/core/types.cpp
+  )
+  target_include_directories(controller_imu_calibration_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(controller_imu_calibration_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(controller_imu_calibration_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  target_link_libraries(controller_imu_calibration_test PRIVATE Threads::Threads)
+  add_test(NAME controller_imu_calibration_test COMMAND controller_imu_calibration_test)
   add_executable(gearvr_imu_stream_test
     tests/gearvr_imu_stream_test.cpp
     src/providers/gearvr/gearvr_imu_stream.cpp
@@ -177,6 +192,11 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
     "${XR_SHARED_INCLUDE_DIR}"
   )
   target_link_libraries(gearvr_input_provider_test PRIVATE Threads::Threads)
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(gearvr_input_provider_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(gearvr_input_provider_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
   add_test(NAME gearvr_input_provider_test COMMAND gearvr_input_provider_test)
   add_executable(xr_controller_v1_protocol_test
     tests/xr_controller_v1_protocol_test.cpp

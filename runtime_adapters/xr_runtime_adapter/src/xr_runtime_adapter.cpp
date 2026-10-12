@@ -2843,6 +2843,7 @@ int main(int argc, char** argv) {
   bool runtime_controller_left_imu_position_prediction = false;
   bool runtime_controller_right_imu_position_prediction = false;
   bool runtime_controller_imu_prediction_window_mode = false;
+  bool runtime_controller_imu_translation_yaw_check = true;
   double runtime_controller_imu_prediction_window_ms = 500.0;
   bool runtime_controller_imu_time_decay = true;
   double runtime_controller_imu_max_prediction_speed_mps = 2.0;
@@ -3278,6 +3279,8 @@ int main(int argc, char** argv) {
                  "Enable right-controller out-of-FOV position prediction from the last optical pose. Requires active IMU_OVERRIDE_CONTROLLER_RUNTIME; accelerometer contribution additionally requires acceleration integration.");
   app.add_option("--runtime-controller-imu-prediction-window-mode", runtime_controller_imu_prediction_window_mode,
                  "Estimate both IMU-controller anchor velocities from all real optical controller poses in a rolling time window instead of the backend instantaneous velocity");
+  app.add_option("--runtime-controller-imu-translation-yaw-check", runtime_controller_imu_translation_yaw_check,
+                 "Validate the acceleration yaw hemisphere against coherent low-rotation optical translation before applying IMU force");
   app.add_option("--runtime-controller-imu-prediction-window-ms", runtime_controller_imu_prediction_window_ms,
                  "Rolling real optical-pose history duration used by controller IMU prediction-window mode");
   app.add_option("--runtime-controller-imu-time-decay", runtime_controller_imu_time_decay,
@@ -4229,6 +4232,8 @@ int main(int argc, char** argv) {
               << (runtime_controller_right_imu_position_prediction ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_prediction_window_mode: "
               << (runtime_controller_imu_prediction_window_mode ? "true" : "false") << "\n";
+    std::cout << "runtime_controller_imu_translation_yaw_check: "
+              << (runtime_controller_imu_translation_yaw_check ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_prediction_window_ms: "
               << runtime_controller_imu_prediction_window_ms << "\n";
     std::cout << "runtime_controller_imu_time_decay: "
@@ -4928,6 +4933,7 @@ int main(int argc, char** argv) {
       dst.prediction_damping = static_cast<float>(
           std::clamp(runtime_hand_gate_prediction_damping, 0.0, 1.0));
       dst.prediction_window_mode = runtime_controller_imu_prediction_window_mode;
+      dst.translation_yaw_check_enabled = runtime_controller_imu_translation_yaw_check;
       dst.prediction_window_ms = static_cast<float>(
           std::max(0.0, runtime_controller_imu_prediction_window_ms));
       dst.prediction_time_decay_enabled = runtime_controller_imu_time_decay;
@@ -4983,6 +4989,25 @@ int main(int argc, char** argv) {
         runtime_controller_right_movement_space_imu_value;
 
     override_controller::RuntimeControllerSynthesisState runtime_controller_synthesis_state{};
+    bool controller_imu_alignment_status_printed = false;
+    bool last_left_acceleration_yaw_valid = false;
+    bool last_right_acceleration_yaw_valid = false;
+    const auto report_controller_imu_alignment_status = [&]() {
+      if (!publish_runtime_controller_state_shm && !publish_runtime_controller_state_udp) return;
+      const bool left = runtime_controller_synthesis_state.left.acceleration_world_yaw_valid;
+      const bool right = runtime_controller_synthesis_state.right.acceleration_world_yaw_valid;
+      if (controller_imu_alignment_status_printed &&
+          left == last_left_acceleration_yaw_valid &&
+          right == last_right_acceleration_yaw_valid) return;
+      std::cout << "[xr_runtime_adapter][imu-alignment] controller_left_acceleration_yaw_valid="
+                << (left ? "yes" : "no")
+                << " controller_right_acceleration_yaw_valid=" << (right ? "yes" : "no")
+                << std::endl;
+      controller_imu_alignment_status_printed = true;
+      last_left_acceleration_yaw_valid = left;
+      last_right_acceleration_yaw_valid = right;
+    };
+    report_controller_imu_alignment_status();
     uint64_t controller_input_discontinuities = 0;
     uint64_t controller_input_transport_discontinuities = 0;
 
@@ -6138,6 +6163,7 @@ int main(int argc, char** argv) {
                   runtime_controller_imu_control_snapshot.gravity_magnitude),
               &runtime_controller_synthesis_state,
               &controller_imu_history);
+          report_controller_imu_alignment_status();
           if (runtime_jitter_filter_enabled) {
             const bool left_imu_orientation_used =
                 (runtime_controller_state.left.source_mask &
@@ -6309,6 +6335,14 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.left.imu_dropped_batches
                     << " controller_left_acceleration_yaw_valid="
                     << (runtime_controller_synthesis_state.left.acceleration_world_yaw_valid ? "yes" : "no")
+                    << " controller_left_acceleration_translation_yaw_valid="
+                    << (runtime_controller_synthesis_state.left.acceleration_translation_yaw_check.valid() ? "yes" : "no")
+                    << " controller_left_acceleration_translation_yaw_deg="
+                    << (runtime_controller_synthesis_state.left.acceleration_translation_yaw_check.yaw_hint_rad() * 180.0 / 3.14159265358979323846)
+                    << " controller_left_acceleration_translation_coherence="
+                    << runtime_controller_synthesis_state.left.acceleration_translation_yaw_check.coherence()
+                    << " controller_left_acceleration_yaw_half_turn_corrections="
+                    << runtime_controller_synthesis_state.left.acceleration_yaw_half_turn_corrections
                     << " controller_left_acceleration_yaw_deg="
                     << (runtime_controller_synthesis_state.left.acceleration_world_yaw_rad * 180.0 / 3.14159265358979323846)
                     << " controller_left_acceleration_alignment_frames="
@@ -6329,6 +6363,12 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.left.anchor_velocity_mps[0] << ","
                     << runtime_controller_synthesis_state.left.anchor_velocity_mps[1] << ","
                     << runtime_controller_synthesis_state.left.anchor_velocity_mps[2] << ")"
+                    << " controller_left_imu_anchor_alignment_dv=("
+                    << runtime_controller_synthesis_state.left.anchor_velocity_alignment_delta_mps[0] << ","
+                    << runtime_controller_synthesis_state.left.anchor_velocity_alignment_delta_mps[1] << ","
+                    << runtime_controller_synthesis_state.left.anchor_velocity_alignment_delta_mps[2] << ")"
+                    << " controller_left_imu_anchor_alignment_samples="
+                    << runtime_controller_synthesis_state.left.anchor_velocity_alignment_samples
                     << " controller_left_imu_acceleration_dv=("
                     << runtime_controller_synthesis_state.left.acceleration_velocity_delta_mps[0] << ","
                     << runtime_controller_synthesis_state.left.acceleration_velocity_delta_mps[1] << ","
@@ -6361,6 +6401,14 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.right.imu_dropped_batches
                     << " controller_right_acceleration_yaw_valid="
                     << (runtime_controller_synthesis_state.right.acceleration_world_yaw_valid ? "yes" : "no")
+                    << " controller_right_acceleration_translation_yaw_valid="
+                    << (runtime_controller_synthesis_state.right.acceleration_translation_yaw_check.valid() ? "yes" : "no")
+                    << " controller_right_acceleration_translation_yaw_deg="
+                    << (runtime_controller_synthesis_state.right.acceleration_translation_yaw_check.yaw_hint_rad() * 180.0 / 3.14159265358979323846)
+                    << " controller_right_acceleration_translation_coherence="
+                    << runtime_controller_synthesis_state.right.acceleration_translation_yaw_check.coherence()
+                    << " controller_right_acceleration_yaw_half_turn_corrections="
+                    << runtime_controller_synthesis_state.right.acceleration_yaw_half_turn_corrections
                     << " controller_right_acceleration_yaw_deg="
                     << (runtime_controller_synthesis_state.right.acceleration_world_yaw_rad * 180.0 / 3.14159265358979323846)
                     << " controller_right_acceleration_alignment_frames="
@@ -6381,6 +6429,12 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.right.anchor_velocity_mps[0] << ","
                     << runtime_controller_synthesis_state.right.anchor_velocity_mps[1] << ","
                     << runtime_controller_synthesis_state.right.anchor_velocity_mps[2] << ")"
+                    << " controller_right_imu_anchor_alignment_dv=("
+                    << runtime_controller_synthesis_state.right.anchor_velocity_alignment_delta_mps[0] << ","
+                    << runtime_controller_synthesis_state.right.anchor_velocity_alignment_delta_mps[1] << ","
+                    << runtime_controller_synthesis_state.right.anchor_velocity_alignment_delta_mps[2] << ")"
+                    << " controller_right_imu_anchor_alignment_samples="
+                    << runtime_controller_synthesis_state.right.anchor_velocity_alignment_samples
                     << " controller_right_imu_acceleration_dv=("
                     << runtime_controller_synthesis_state.right.acceleration_velocity_delta_mps[0] << ","
                     << runtime_controller_synthesis_state.right.acceleration_velocity_delta_mps[1] << ","

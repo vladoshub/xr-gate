@@ -98,6 +98,51 @@ class PositionWindowEstimator {
 
   [[nodiscard]] std::size_t sample_count() const { return count_; }
 
+  [[nodiscard]] uint64_t first_timestamp_ns() const {
+    return count_ != 0 ? samples_[0].timestamp_ns : 0;
+  }
+  [[nodiscard]] uint64_t latest_timestamp_ns() const {
+    return count_ != 0 ? samples_[count_ - 1].timestamp_ns : 0;
+  }
+
+  // The fitted slope is a weighted historical velocity, not velocity at the
+  // newest IMU sample. For x(t_i), w_i=(t_i-mean(t))/sum((t_i-mean(t))^2),
+  // the acceleration correction kernel is -sum(w_i*max(0,t-t_i)). Integrate
+  // it over a constant-acceleration sample interval; after the last optical
+  // observation its weight is one. This also handles irregular camera times.
+  double velocity_alignment_interval_seconds(uint64_t from_ns,
+                                              uint64_t to_ns) const {
+    if (count_ < 2 || to_ns <= from_ns) return 0.0;
+    const uint64_t first = first_timestamp_ns(), last = latest_timestamp_ns();
+    if (last <= first || to_ns <= first) return 0.0;
+    from_ns = std::max(from_ns, first);
+    double result = to_ns > last
+        ? static_cast<double>(to_ns - std::max(from_ns, last)) / 1.0e9 : 0.0;
+    const uint64_t optical_end = std::min(to_ns, last);
+    if (optical_end <= from_ns) return result;
+
+    double mean_t = 0.0;
+    for (std::size_t i = 0; i < count_; ++i) {
+      mean_t += static_cast<double>(samples_[i].timestamp_ns - first) / 1.0e9;
+    }
+    mean_t /= static_cast<double>(count_);
+    double denominator = 0.0;
+    for (std::size_t i = 0; i < count_; ++i) {
+      const double dt = static_cast<double>(samples_[i].timestamp_ns - first) / 1.0e9 - mean_t;
+      denominator += dt * dt;
+    }
+    if (!std::isfinite(denominator) || denominator <= 1.0e-12) return 0.0;
+    const double begin = static_cast<double>(from_ns - first) / 1.0e9;
+    const double end = static_cast<double>(optical_end - first) / 1.0e9;
+    for (std::size_t i = 0; i < count_; ++i) {
+      const double t = static_cast<double>(samples_[i].timestamp_ns - first) / 1.0e9;
+      const double a = std::max(0.0, begin - t), b = std::max(0.0, end - t);
+      result -= 0.5 * (t - mean_t) / denominator * (b * b - a * a);
+    }
+    const double duration = static_cast<double>(to_ns - from_ns) / 1.0e9;
+    return std::clamp(result, 0.0, duration);
+  }
+
  private:
   struct Sample {
     uint64_t timestamp_ns = 0;
