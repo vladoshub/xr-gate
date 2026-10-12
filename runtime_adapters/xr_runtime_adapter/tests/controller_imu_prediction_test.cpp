@@ -610,6 +610,85 @@ void interrupted_reacquire_rebases_motion() {
   require(restarted.left.position[0] > returned.left.position[0], "new loss remained frozen after reacquire");
 }
 
+void distant_reacquire_respects_speed_and_finishes_without_snap() {
+  for (bool right : {false, true}) {
+    Scenario s;
+    auto& m = s.cfg.left_imu_motion;
+    m.max_prediction_speed_mps = 2;
+    m.reacquire_blend_ms = 180;
+    s.cfg.right_imu_motion = m;
+    s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+    s.state.right.acceleration_world_yaw_valid = true;
+    s.hand.left.controller_px = -0.563f;
+    s.hand.left.controller_py = 2.112f;
+    s.hand.left.controller_pz = -0.579f;
+    auto tick = [&](int ms, bool optical) {
+      const auto t = s.prepare(ms);
+      auto input = s.input;
+      auto hand = s.hand;
+      if (right) {
+        input.right = input.left; input.left = {};
+        hand.right = hand.left; hand.left = {};
+        hand.flags = HAND_FLAG_RIGHT_VALID;
+        hand.right.handedness = 2;
+      }
+      const auto h = optical ? std::optional(hand) : std::nullopt;
+      return compose_runtime_controller_state(s.sequence, t, s.cfg, h, h,
+          input, std::nullopt, 9.81f, &s.state);
+    };
+    auto out = tick(0, true);
+    for (int ms = 10; ms <= 300; ms += 10) out = tick(ms, false);
+    s.hand.left.controller_px = -0.126f;
+    s.hand.left.controller_py = 1.808f;
+    s.hand.left.controller_pz = -0.860f;
+    auto previous = right ? out.right : out.left;
+    for (int ms = 310; ms <= 900; ms += 10) {
+      // A moving optical target must also be followed without a snap at the
+      // nominal 180 ms deadline. This reproduces the roughly 60 cm mismatch
+      // of the left controller's first reacquire in the hardware log.
+      s.hand.left.controller_px += 0.002f;
+      out = tick(ms, true);
+      const auto& side = right ? out.right : out.left;
+      float step_sq = 0, velocity_sq = 0;
+      for (int axis = 0; axis < 3; ++axis) {
+        const float step = side.position[axis] - previous.position[axis];
+        step_sq += step * step;
+        velocity_sq += side.linear_velocity[axis] * side.linear_velocity[axis];
+      }
+      require(std::sqrt(step_sq) <= 0.02001f,
+              "optical reacquire exceeded configured output speed");
+      require(std::sqrt(velocity_sq) <= 2.00001f,
+              "reacquire published velocity above output speed");
+      const auto& state = right ? s.state.right : s.state.left;
+      if (ms == 490) require(state.reacquire_blend_active,
+          "reacquire snapped to a distant target at the nominal deadline");
+      previous = side;
+    }
+    const auto& state = right ? s.state.right : s.state.left;
+    const auto& side = right ? out.right : out.left;
+    require(!state.reacquire_blend_active, "rate-limited reacquire never completed");
+    near(side.position[0], s.hand.left.controller_px, "reacquire missed moving target");
+    near(side.position[1], s.hand.left.controller_py, "reacquire missed target height");
+    near(side.position[2], s.hand.left.controller_pz, "reacquire missed target depth");
+  }
+
+  Scenario interrupted;
+  interrupted.cfg.left_imu_motion.max_prediction_speed_mps = 2;
+  interrupted.cfg.left_imu_motion.reacquire_blend_ms = 180;
+  interrupted.tick(0, true);
+  for (int ms = 10; ms <= 200; ms += 10) interrupted.tick(ms, false);
+  interrupted.hand.left.controller_px = 0.6f;
+  interrupted.tick(210, true);
+  RuntimeControllerStateFrameV1 before;
+  for (int ms = 220; ms <= 400; ms += 10) before = interrupted.tick(ms, true);
+  require(interrupted.state.left.reacquire_blend_active,
+          "distant correction ended before reaching its target");
+  const auto after = interrupted.tick(410, false);
+  require(after.left.position[0] >= before.left.position[0] &&
+          after.left.position[0] - before.left.position[0] <= 0.02001f,
+          "loss during extended reacquire did not continue from published pose");
+}
+
 void time_decay_integrates_published_velocity() {
   Scenario s;
   s.cfg.left_imu_motion.prediction_time_decay_enabled = true;
@@ -702,6 +781,7 @@ int main() {
   stale_and_held_optical_frames();
   camera_velocity_and_head_motion();
   interrupted_reacquire_rebases_motion();
+  distant_reacquire_respects_speed_and_finishes_without_snap();
   time_decay_integrates_published_velocity();
   speed_distance_and_timeout_limits();
   std::cout << "IMU prediction: rigid grips, timed rotation calibration, velocity fallback, sample time, stale optics, reacquire and limits: OK\n";

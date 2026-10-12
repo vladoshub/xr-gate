@@ -1368,10 +1368,42 @@ void update_or_apply_imu_position_prediction(
              state->reacquire_blend_from_velocity_mps[axis]) * t;
       }
 
-      if (t < 1.0f) {
+      bool correction_limited = false;
+      const float max_speed = cfg.max_prediction_speed_mps;
+      if (std::isfinite(max_speed) && max_speed > 0.0f &&
+          state->prediction_output_history_active &&
+          timestamp_ns > state->prediction_output_last_timestamp_ns) {
+        const float dt_s = static_cast<float>(
+            timestamp_ns - state->prediction_output_last_timestamp_ns) / 1.0e9f;
+        float step[3] = {};
+        for (int axis = 0; axis < 3; ++axis) {
+          step[axis] = state->position_m[axis] - state->prediction_output_last_position_m[axis];
+        }
+        const float distance = v3_length(step);
+        const float allowed = max_speed * dt_s;
+        if (std::isfinite(distance) && distance > allowed && distance > 1.0e-6f) {
+          const float scale = allowed / distance;
+          for (int axis = 0; axis < 3; ++axis) {
+            step[axis] *= scale;
+            state->position_m[axis] = state->prediction_output_last_position_m[axis] + step[axis];
+          }
+          correction_limited = true;
+        }
+        // Once the correction is moving, expose the velocity of the published
+        // trajectory. A second loss must not launch from an unrelated blend of
+        // old IMU velocity and the optical target's velocity.
+        if (t > 0.0f) {
+          for (int axis = 0; axis < 3; ++axis) state->velocity_mps[axis] = step[axis] / dt_s;
+        }
+        clamp_v3_length(state->velocity_mps, max_speed);
+      }
+
+      if (t < 1.0f || correction_limited) {
         // As in HandPoseStabilityFilter, the blended output becomes the latest
         // continuity anchor. If optical tracking drops again mid-blend, the
         // next hold/predict cycle starts from what was actually published.
+        // The nominal blend deadline is not permission to snap: keep following
+        // the current optical target until the bounded correction reaches it.
         state->has_position_anchor = true;
         state->last_optical_pose_ns = timestamp_ns;
         std::copy(std::begin(state->position_m), std::end(state->position_m),

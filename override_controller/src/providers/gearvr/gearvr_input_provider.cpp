@@ -280,6 +280,16 @@ struct GearVrInputProvider::Impl {
     const uint32_t epoch_before = session.imu_stream.epoch();
     const uint32_t dropped_before = session.imu_stream.dropped_batches();
     const bool accepted = session.imu_stream.push(*decoded, packet_host_ns);
+    if (accepted && options.madgwick_beta > 0 &&
+        (session.imu_stream.latest.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) != 0u &&
+        ((previous.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) == 0u ||
+         session.imu_stream.epoch() != epoch_before)) {
+      const auto& q = session.imu_stream.latest.orientation_xyzw;
+      std::cerr << "[override_controller] Gear VR gravity reference initialized for "
+                << session.stable_id << " epoch=" << session.imu_stream.epoch()
+                << " orientation_ns=" << session.imu_stream.latest.orientation_timestamp_ns
+                << " orientation_xyzw=(" << q[0] << "," << q[1] << "," << q[2] << "," << q[3] << ")\n";
+    }
     if (session.imu_stream.epoch() != epoch_before) {
       std::cerr << "[override_controller][WARN] Gear VR IMU epoch reset for "
                 << session.stable_id << ": reason=device_clock_restart epoch="
@@ -398,7 +408,11 @@ struct GearVrInputProvider::Impl {
 };
 
 GearVrInputProvider::GearVrInputProvider(ProviderOptionValues options)
-    : impl_(std::make_unique<Impl>(std::move(options))) {}
+    : impl_(std::make_unique<Impl>(std::move(options))) {
+  std::cerr << "[override_controller][gearvr_ble] madgwick_beta=" << impl_->options.madgwick_beta
+            << " gravity_initialization=" << (impl_->options.madgwick_beta > 0 ? "stationary_force" : "gyro_only")
+            << " imu_continuity_revision=2\n";
+}
 
 GearVrInputProvider::~GearVrInputProvider() = default;
 

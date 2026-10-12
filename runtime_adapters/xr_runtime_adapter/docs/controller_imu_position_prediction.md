@@ -47,6 +47,12 @@ Optical reacquire clears the preceding prediction's acceleration integrals
 and freeze reason before blending. If tracking disappears mid-blend, prediction
 starts from the last published blended position and velocity. Both normal
 anchors and blend targets respect the configured optical velocity window.
+With a positive `max_prediction_speed_mps`, the returning optical correction
+also obeys that speed limit. A distant target may take longer than
+`reacquire_blend_ms`; reaching the nominal deadline cannot snap to the target.
+The moving correction publishes its actual step velocity, so another loss
+continues from the position and motion that were published. A zero/negative
+speed limit retains the previous unrestricted blending behavior.
 
 ## Time decay
 
@@ -90,6 +96,13 @@ IMU loss age, acceleration position/velocity deltas, HMD-relative blend mode
 (0 none, 1 enter, 2 exit) and button/stick input. They distinguish an IMU
 trajectory from optical reacquire and from the configured fallback after the
 short prediction window expires.
+
+Diagnostics also include the provider-frame IMU quaternion, latest timed force
+and gyro with validity flags, clean optical quaternion, and HMD quaternion
+(all quaternions are xyzw). These separate a force/attitude/alignment error from
+a wrong optical pose; the latest raw sample logged at a runtime tick is not a
+full recording of all IMU batches. Gear VR startup prints effective Madgwick
+beta and logs successful gravity initialization after each AHRS reset.
 
 Shutdown prints each controller predictor's effective settings. The separate
 `hand_stability_gate_profile: IMU` summary describes only the hand validator;

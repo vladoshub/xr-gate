@@ -89,8 +89,8 @@ struct RuntimeControllerImuMotionConfig {
   float hold_lost_ms = 0.0f;
   float predict_lost_ms = 600.0f;
   float max_prediction_velocity_mps = 3.0f;
-  // Maximum IMU-controller prediction speed. It constrains the launch/base
-  // velocity and the final synthetic output after acceleration integration.
+  // Maximum IMU-controller prediction/correction speed. It constrains the
+  // launch/base velocity, final synthetic output and optical reacquire blend.
   // <= 0 disables this additional limit.
   float max_prediction_speed_mps = 2.0f;
   float prediction_damping = 1.0f;

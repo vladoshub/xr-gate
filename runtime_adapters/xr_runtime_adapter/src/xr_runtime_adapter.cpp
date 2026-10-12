@@ -2668,6 +2668,7 @@ void write_controller_position_diagnostics(
     std::ostream& out, const char* side_name,
     const xr_runtime::RuntimeControllerSideStateV1& pose, bool output_available,
     const override_controller::RuntimeControllerImuSideRuntimeState& state,
+    const xr_runtime::ControllerDeviceStateV3* controller_input,
     const xr_runtime::HandSideF32V2* raw_optical,
     const xr_runtime::HandSideF32V2* accepted_optical,
     uint64_t timestamp_ns) {
@@ -2714,11 +2715,34 @@ void write_controller_position_diagnostics(
       << prefix << "_accepted_optical_status=" << (accepted_optical ? accepted_optical->status : 0u);
   if (raw_optical) {
     out << prefix << "_raw_optical_p=(" << raw_optical->controller_px << ","
-        << raw_optical->controller_py << "," << raw_optical->controller_pz << ")";
+        << raw_optical->controller_py << "," << raw_optical->controller_pz << ")"
+        << prefix << "_raw_optical_q=(" << raw_optical->controller_qx << ","
+        << raw_optical->controller_qy << "," << raw_optical->controller_qz << ","
+        << raw_optical->controller_qw << ")";
   }
   if (accepted_optical) {
     out << prefix << "_accepted_optical_p=(" << accepted_optical->controller_px << ","
         << accepted_optical->controller_py << "," << accepted_optical->controller_pz << ")";
+  }
+  if (controller_input) {
+    const auto& imu = controller_input->imu;
+    out << prefix << "_imu_data_flags=" << imu.data_flags
+        << prefix << "_imu_orientation_ns=" << imu.orientation_timestamp_ns
+        << prefix << "_imu_q=(" << imu.orientation_xyzw[0] << "," << imu.orientation_xyzw[1]
+        << "," << imu.orientation_xyzw[2] << "," << imu.orientation_xyzw[3] << ")";
+    const xr_runtime::ControllerImuSampleV1* latest = nullptr;
+    for (uint32_t i = 0; i < std::min<uint32_t>(imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES); ++i) {
+      if (imu.samples[i].timestamp_ns != 0 &&
+          (!latest || imu.samples[i].timestamp_ns > latest->timestamp_ns)) latest = &imu.samples[i];
+    }
+    if (latest) {
+      out << prefix << "_imu_sample_ns=" << latest->timestamp_ns
+          << prefix << "_imu_sample_flags=" << latest->flags
+          << prefix << "_imu_force=(" << latest->specific_force_m_s2[0] << ","
+          << latest->specific_force_m_s2[1] << "," << latest->specific_force_m_s2[2] << ")"
+          << prefix << "_imu_gyro=(" << latest->angular_velocity_rad_s[0] << ","
+          << latest->angular_velocity_rad_s[1] << "," << latest->angular_velocity_rad_s[2] << ")";
+    }
   }
 }
 
@@ -6373,16 +6397,20 @@ int main(int argc, char** argv) {
                     << " controller_optical_source_ns="
                     << (raw_optical_yaw_hand ? raw_optical_yaw_hand->source_timestamp_ns : 0)
                     << " controller_tick_ns=" << frame.read_timestamp_ns;
+          std::cout << " hmd_q=(" << frame.hmd.qx << "," << frame.hmd.qy << ","
+                    << frame.hmd.qz << "," << frame.hmd.qw << ")";
           const uint64_t diagnostic_timestamp_ns = static_cast<uint64_t>(frame.read_timestamp_ns);
           write_controller_position_diagnostics(
               std::cout, "left", controller_state_for_log.left, controller_state_for_log_available,
               runtime_controller_synthesis_state.left,
+              fresh_controller_input ? &fresh_controller_input->left : nullptr,
               raw_optical_yaw_hand ? &raw_optical_yaw_hand->left : nullptr,
               controller_hand_for_log ? &controller_hand_for_log->left : nullptr,
               diagnostic_timestamp_ns);
           write_controller_position_diagnostics(
               std::cout, "right", controller_state_for_log.right, controller_state_for_log_available,
               runtime_controller_synthesis_state.right,
+              fresh_controller_input ? &fresh_controller_input->right : nullptr,
               raw_optical_yaw_hand ? &raw_optical_yaw_hand->right : nullptr,
               controller_hand_for_log ? &controller_hand_for_log->right : nullptr,
               diagnostic_timestamp_ns);
