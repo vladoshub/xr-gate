@@ -85,3 +85,17 @@ physically clicking the pad.
 Every missing timing field defaults to `0`; `pulse_mode` defaults to `false`,
 and `button_pulse_startup_types` defaults to an empty list. The old timing
 fields under the top-level `input` object are not used by schema version 5.
+
+## Accelerometer calibration
+
+The selected profile can contain an `imu_calibrations` array. Each record uses
+`device_id` to refer to `devices[].id` and carries `enabled`,
+`accelerometer_bias_m_s2` and `accelerometer_scale` in native sensor axes.
+Runtime uses only this profile, verifies actual IMU capabilities and applies
+correction before AHRS. No separate calibration file or BLE UUID is used as
+the coefficient source/key. Training and `--connect-devices` preserve records.
+
+The generic Gear VR template includes the measured corrections for IDs 1/2;
+copy the array into an existing trained profile to retain its bindings.
+See [the calibration guide](../docs/imu_accelerometer_calibration.md) for the
+six-position Python capture tool, validation and restart procedure.

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace xr_override_controller::imu {
 namespace {
@@ -24,9 +25,15 @@ QuaternionXyzw normalize_quaternion(QuaternionXyzw q) {
 
 }  // namespace
 
-Madgwick6Dof::Madgwick6Dof(float beta) : beta_(std::max(0.0f, beta)) {}
+Madgwick6Dof::Madgwick6Dof(float beta) : beta_(std::max(0.0f, beta)) {
+  // beta=0 explicitly selects the existing gyro-only reference.
+  orientation_initialized_ = beta_ == 0.0f;
+}
 
-void Madgwick6Dof::reset() { orientation_ = {}; }
+void Madgwick6Dof::reset() {
+  orientation_ = {};
+  orientation_initialized_ = beta_ == 0.0f;
+}
 
 QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
                                     const Vec3f& accel,
@@ -38,6 +45,23 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
   float ax = accel.x;
   float ay = accel.y;
   float az = accel.z;
+  const float accel_norm = vector_norm(accel);
+  const float gravity = current_backend_control_snapshot().gravity_magnitude;
+
+  if (!orientation_initialized_ && std::isfinite(accel_norm) && accel_norm > 1.0e-6f &&
+      std::abs(accel_norm - gravity) < 1.0f && vector_norm(gyro) < 0.20f) {
+    // Initialize the gravity reference at the measurement time. Starting every
+    // grip at identity leaves a large tilt error for tens of seconds at normal
+    // beta, so rotating force and subtracting gravity invents linear motion.
+    // This shortest rotation maps measured body gravity to AHRS world +Z;
+    // absolute yaw remains unobservable and is aligned separately by runtime.
+    const float nx = ax / accel_norm, ny = ay / accel_norm, nz = az / accel_norm;
+    orientation_ = nz < -0.999999f
+        ? QuaternionXyzw{1.0f, 0.0f, 0.0f, 0.0f}
+        : normalize_quaternion({ny, -nx, 0.0f, 1.0f + nz});
+    orientation_initialized_ = true;
+    return orientation_;
+  }
 
   // Keep the implementation in the same xyzw convention used by
   // ControllerInputV3 while using the Madgwick paper's q0=w, q1=x, q2=y, q3=z.
@@ -51,13 +75,12 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
   float qdot2 = 0.5f * (q0 * gy - q1 * gz + q3 * gx);
   float qdot3 = 0.5f * (q0 * gz + q1 * gy - q2 * gx);
 
-  const float accel_norm = std::sqrt(ax * ax + ay * ay + az * az);
   // Hand motion adds linear acceleration to gravity. Applying the full
   // accelerometer correction during those periods makes the controller wobble.
   // Use it only while the measured magnitude remains plausibly gravity-like;
   // gyro integration continues at full rate outside this window.
-  if (accel_norm > 1.0e-6f && std::isfinite(accel_norm) &&
-      std::abs(accel_norm - current_backend_control_snapshot().gravity_magnitude) <= 3.0f) {
+  if (orientation_initialized_ && accel_norm > 1.0e-6f && std::isfinite(accel_norm) &&
+      std::abs(accel_norm - gravity) <= 3.0f) {
     ax /= accel_norm;
     ay /= accel_norm;
     az /= accel_norm;
@@ -106,6 +129,25 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
 ControllerImuProcessor::ControllerImuProcessor(float madgwick_beta)
     : filter_(madgwick_beta) {}
 
+void ControllerImuProcessor::set_accelerometer_calibration(
+    const AccelerometerCalibration& calibration) {
+  const auto valid_axis = [](float bias, float scale) {
+    return std::isfinite(bias) && std::abs(bias) <= 2.0f &&
+           std::isfinite(scale) && scale >= 0.5f && scale <= 2.0f;
+  };
+  if (calibration.enabled &&
+      (!valid_axis(calibration.bias_m_s2.x, calibration.scale.x) ||
+       !valid_axis(calibration.bias_m_s2.y, calibration.scale.y) ||
+       !valid_axis(calibration.bias_m_s2.z, calibration.scale.z))) {
+    throw std::invalid_argument("invalid controller accelerometer calibration");
+  }
+  accelerometer_calibration_ = calibration;
+  // The gravity direction was learned from the old force. Reinitialize AHRS
+  // and gyro acquisition when changing the calibration, retaining its values
+  // through subsequent reconnect/AHRS resets on this physical device.
+  reset();
+}
+
 void ControllerImuProcessor::reset() {
   filter_.reset();
   corrected_sample_ = {};
@@ -119,7 +161,8 @@ void ControllerImuProcessor::update_initial_gyro_bias(const RawControllerImuSamp
   const float gyro_magnitude = vector_norm(sample.angular_velocity_rad_s);
   const float accel_magnitude = vector_norm(sample.specific_force_m_s2);
   const float gravity_magnitude = current_backend_control_snapshot().gravity_magnitude;
-  if (gyro_magnitude >= 0.20f || std::abs(accel_magnitude - gravity_magnitude) >= 1.0f) return;
+  if (!std::isfinite(gyro_magnitude) || !std::isfinite(accel_magnitude) ||
+      gyro_magnitude >= 0.20f || std::abs(accel_magnitude - gravity_magnitude) >= 1.0f) return;
 
   ++gyro_bias_sample_count_;
   const float alpha = 1.0f / static_cast<float>(gyro_bias_sample_count_);
@@ -129,8 +172,15 @@ void ControllerImuProcessor::update_initial_gyro_bias(const RawControllerImuSamp
 }
 
 QuaternionXyzw ControllerImuProcessor::process(const RawControllerImuSample& sample) {
-  update_initial_gyro_bias(sample);
   corrected_sample_ = sample;
+  if (sample.accelerometer_valid && accelerometer_calibration_.enabled) {
+    const auto& c = accelerometer_calibration_;
+    auto& f = corrected_sample_.specific_force_m_s2;
+    f.x = (f.x - c.bias_m_s2.x) * c.scale.x;
+    f.y = (f.y - c.bias_m_s2.y) * c.scale.y;
+    f.z = (f.z - c.bias_m_s2.z) * c.scale.z;
+  }
+  update_initial_gyro_bias(corrected_sample_);
   corrected_sample_.angular_velocity_rad_s.x -= gyro_bias_rad_s_.x;
   corrected_sample_.angular_velocity_rad_s.y -= gyro_bias_rad_s_.y;
   corrected_sample_.angular_velocity_rad_s.z -= gyro_bias_rad_s_.z;

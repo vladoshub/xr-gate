@@ -22,9 +22,14 @@ inline constexpr Command kCommandLpmEnable{0x06, 0x00};
 inline constexpr Command kCommandLpmDisable{0x07, 0x00};
 inline constexpr Command kCommandVrMode{0x08, 0x00};
 
+// Measured on the two tested Gear VR controllers: the 32-bit microsecond
+// field rolls over every 25 * 2^24 us, rather than at UINT32_MAX + 1.
+inline constexpr uint32_t kTimestampWrapUs = 25u * (1u << 24);
+
 struct DecodedImuSample {
   // The first 32 bytes contain two timestamped accel/gyro samples.
-  // Timestamps are unsigned 32-bit microsecond ticks and may wrap.
+  // Timestamps occupy a 32-bit microsecond field. Tested firmware wraps at
+  // kTimestampWrapUs; the stream also accepts ordinary uint32 rollover.
   uint32_t device_timestamp_us = 0;
   imu::Vec3f accel_m_s2;
   imu::Vec3f gyro_rad_s;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <xr_tracking/publishers/hand_tracking_shm_publisher.hpp>
+#include <xr_tracking/debug/hand_pose_diagnostics.hpp>
 
 #include <algorithm>
 #include <array>
@@ -261,6 +262,10 @@ class MercuryRuntimeProcessor {
     if (!ctx_) {
       throw std::runtime_error("xr_mercury_runtime_create failed");
     }
+    if (pose_diagnostics_) {
+      std::clog << "[hand_pose_diag] mercury_enabled=yes orientation0=" << cfg_.orientation0
+                << " orientation1=" << cfg_.orientation1 << " swap_cameras=" << cfg_.swap_cameras << "\n";
+    }
   }
 
   ~MercuryRuntimeProcessor() {
@@ -306,12 +311,20 @@ class MercuryRuntimeProcessor {
     frame.timestamp_ns = static_cast<uint64_t>(now_ns());
     frame.size_bytes = sizeof(HandTrackingFrameF32V2);
     frame.version = HAND_TRACKING_FORMAT_VERSION_V2;
+    if (pose_diagnostics_) {
+      hand_pose_diagnostics::write_frame(std::clog, "mercury_raw", frame, frame.timestamp_ns,
+                                        pair.sequence(), static_cast<uint64_t>(pair.timestamp_ns));
+    }
     if (velocity_reset_counter_valid_ && velocity_reset_counter_ != reset_counter) {
       last_side_pose_ = {};
     }
     velocity_reset_counter_valid_ = true;
     velocity_reset_counter_ = reset_counter;
     derive_controller_velocities(frame);
+    if (pose_diagnostics_) {
+      hand_pose_diagnostics::write_frame(std::clog, "mercury_velocity", frame, frame.timestamp_ns,
+                                        pair.sequence(), static_cast<uint64_t>(pair.timestamp_ns));
+    }
     return frame;
   }
 
@@ -516,6 +529,7 @@ class MercuryRuntimeProcessor {
   }
 
   MercuryRuntimeConfig cfg_;
+  bool pose_diagnostics_ = hand_pose_diagnostics::enabled("XR_MERCURY_POSE_DIAGNOSTICS");
   DynamicLibrary lib_;
   mercury_runtime_abi::create_fn create_ = nullptr;
   mercury_runtime_abi::destroy_fn destroy_ = nullptr;

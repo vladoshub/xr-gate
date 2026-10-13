@@ -4,6 +4,7 @@
 #include "capture_service_cpp/protocols/xr_controller_v1.hpp"
 
 #include <xr_override_controller/controller_input_publisher.hpp>
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -38,7 +39,8 @@ class FakeSerial final : public ctl::SerialTransport {
     bytes = std::move(queue.front()); queue.pop_front(); return true;
   }
   void enqueue(const std::string& id, uint32_t sequence, uint64_t device_us,
-                uint64_t rx, size_t count = 3, uint8_t flags = 1, float gyro = 0) {
+                uint64_t rx, size_t count = 3, uint8_t flags = 1, float gyro = 0,
+                std::array<float, 3> force = {1, 9.81f, 0}) {
     ctl::SerialBytes bytes;
     bytes.stable_id = id; bytes.host_timestamp_ns = rx;
     for (size_t i = 0; i < count; ++i) {
@@ -46,7 +48,7 @@ class FakeSerial final : public ctl::SerialTransport {
       s.sequence = sequence + static_cast<uint32_t>(i);
       s.device_timestamp_us = device_us + i * 4808;
       s.flags = flags; s.gyro_rad_s[2] = gyro;
-      s.accel_m_s2 = {1, 9.81f, 0};
+      s.accel_m_s2 = force;
       std::array<uint8_t, cap::kXrControllerV1PacketSize> packet{};
       require(cap::encode_xr_controller_v1(s, packet.data(), packet.size()), "encode serial packet");
       bytes.bytes.insert(bytes.bytes.end(), packet.begin(), packet.end());
@@ -90,7 +92,85 @@ oc::OutputState output(const ControllerImuStateV1& imu) {
   return out;
 }
 
+void serial_gravity_reference_controls_orientation_validity() {
+  ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0.04"}});
+  auto devices = provider.scan_devices(true);
+  const uint64_t receive_ns = test_now_ns() - 40'000'000;
+  const std::array<float, 3> gravity{0, 8.492808f, -4.903325f};
+  serial->enqueue("left", 0, 1'000'000, receive_ns, 1, 1, 1.0f, gravity);
+  provider.wait_event(devices, 5, false);
+  const auto moving = provider.imu_state(devices[0]);
+  require((moving.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "serial moving startup advertised an uninitialized gravity reference");
+  require(moving.sample_count == 1 && moving.latest_device_timestamp_ticks == 1'000'000,
+          "serial gravity gate discarded timed raw measurements");
+  serial->enqueue("left", 1, 1'004'808, receive_ns + 4'808'000, 1, 1, 0, gravity);
+  provider.wait_event(devices, 5, false);
+  const auto quiet = provider.imu_state(devices[0]);
+  require((quiet.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0u,
+          "serial quiet gravity did not initialize orientation");
+  require(std::abs(quiet.orientation_xyzw[0] - 0.8660254f) < 0.0001f &&
+          std::abs(quiet.orientation_xyzw[3] - 0.5f) < 0.0001f,
+          "serial tilted startup uses an arbitrary orientation");
+  require(quiet.latest_device_timestamp_ticks == 1'004'808 &&
+          quiet.reserved[CONTROLLER_IMU_DIAG_EPOCH] == moving.reserved[CONTROLLER_IMU_DIAG_EPOCH],
+          "serial orientation initialization changed acquisition timing");
+  serial->snapshots[0].connected = false;
+  provider.wait_event(devices, 5, false);
+  serial->snapshots[0].connected = true;
+  serial->enqueue("left", 0, 0, receive_ns + 10'000'000, 1, 1, 1.0f, gravity);
+  provider.wait_event(devices, 5, false);
+  require((provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "serial reconnect retained an initialized old gravity reference");
+}
+
+void serial_config_calibration_resets_once_and_reaches_native_samples() {
+  ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}});
+  auto devices = provider.scan_devices(true);
+  const uint64_t receive_ns = test_now_ns() - 40'000'000;
+  serial->enqueue("left", 0, 1'000'000, receive_ns, 1);
+  provider.wait_event(devices, 1, false);
+  oc::AppConfig cfg;
+  oc::ConfigDevice d;
+  d.id = 12; d.fingerprint = devices[0].fingerprint;
+  cfg.devices.push_back(d);
+  cfg.imu_calibrations.push_back({12, {true, {.1f,.2f,.3f}, {.99f,1.01f,1.02f}}});
+  oc::imu::configure_imu_calibrations(provider, cfg, devices);
+  require(!provider.has_pending_imu(devices[0]) && provider.imu_state(devices[0]).sample_count == 0,
+          "serial calibration retained queued uncorrected samples");
+  serial->enqueue("left", 1, 1'004'808, receive_ns + 4'808'000, 1);
+  provider.wait_event(devices, 1, false);
+  auto state = provider.imu_state(devices[0]);
+  const auto epoch = state.reserved[CONTROLLER_IMU_DIAG_EPOCH];
+  require(state.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED,
+          "serial ignored device_id calibration");
+  require(std::abs(state.samples[0].specific_force_m_s2[1] - (9.81f - .2f) * 1.01f) < 1e-5f,
+          "serial applied calibration after basis transform or more than once");
+  oc::imu::configure_imu_calibrations(provider, cfg, devices);
+  require(provider.has_pending_imu(devices[0]) &&
+          provider.imu_state(devices[0]).reserved[CONTROLLER_IMU_DIAG_EPOCH] == epoch,
+          "serial restarted AHRS for unchanged calibration");
+  serial->snapshots[0].connected = false;
+  provider.wait_event(devices, 1, false);
+  serial->snapshots[0].connected = true;
+  serial->enqueue("left", 0, 0, receive_ns + 10'000'000, 1);
+  provider.wait_event(devices, 1, false);
+  require(provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED,
+          "serial reconnect lost coefficients");
+  cfg.imu_calibrations.clear();
+  oc::imu::configure_imu_calibrations(provider, cfg, devices);
+  serial->enqueue("left", 1, 4808, receive_ns + 14'808'000, 1);
+  provider.wait_event(devices, 1, false);
+  state = provider.imu_state(devices[0]);
+  require(!(state.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED),
+          "serial retained coefficients absent from selected config");
+  require(std::abs(state.samples[0].specific_force_m_s2[1] - 9.81f) < 1e-5f,
+          "serial disabled correction still changed force");
+}
+
 int main() {
+  serial_config_calibration_resets_once_and_reaches_native_samples();
+  serial_gravity_reference_controls_orientation_validity();
   static_assert(sizeof(ControllerInputV3) == 1432, "controller ABI changed");
   ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});
   auto devices = provider.scan_devices(true);
@@ -131,6 +211,8 @@ int main() {
   optical.sequence = 1; optical.left.status = 1;
   optical.left.flags = HAND_POSE_VALID; optical.left.controller_qw = 1;
   RuntimeControllerSynthesisState runtime;
+  // Test transport/integration independently of optical motion calibration.
+  runtime.left.acceleration_world_yaw_valid = true;
   compose_runtime_controller_state(1, anchor_ns, cfg, optical, optical, initial,
       std::nullopt, 9.81f, &runtime);
 
@@ -171,6 +253,7 @@ int main() {
   }
   const auto wrapped_latest = wrapped_history.back();
   RuntimeControllerSynthesisState wrapped_runtime;
+  wrapped_runtime.left.acceleration_world_yaw_valid = true;
   compose_runtime_controller_state(1, anchor_ns, cfg, optical, optical, wrapped_initial,
       std::nullopt, 9.81f, &wrapped_runtime);
   compose_runtime_controller_state(2, wrapped_latest.source_timestamp_ns, cfg, std::nullopt,

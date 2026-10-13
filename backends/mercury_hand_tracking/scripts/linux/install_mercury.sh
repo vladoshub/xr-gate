@@ -49,6 +49,8 @@ MONADO_DIR="${MONADO_DIR:-$THIRD_PARTY_DIR/monado}"
 MERCURY_DRIVER_DIR="${MERCURY_DRIVER_DIR:-$THIRD_PARTY_DIR/mercury_steamvr_driver}"
 PROJECT_OVERLAY="${PROJECT_OVERLAY:-$BACKEND_DIR/monado_overlay}"
 MONADO_PATCH="${MONADO_PATCH:-$BACKEND_DIR/patches/monado/mercury_xr_upstream_changes.patch}"
+MONADO_DIAGNOSTICS_PATCH="${MONADO_DIAGNOSTICS_PATCH:-$BACKEND_DIR/patches/monado/mercury_tracking_diagnostics.patch}"
+MONADO_QUALITY_PATCH="${MONADO_QUALITY_PATCH:-$BACKEND_DIR/patches/monado/mercury_quality_filter.patch}"
 
 BACKEND_DIR="$(expand_tilde "$BACKEND_DIR")"
 THIRD_PARTY_DIR="$(expand_tilde "$THIRD_PARTY_DIR")"
@@ -56,6 +58,8 @@ MONADO_DIR="$(expand_tilde "$MONADO_DIR")"
 MERCURY_DRIVER_DIR="$(expand_tilde "$MERCURY_DRIVER_DIR")"
 PROJECT_OVERLAY="$(expand_tilde "$PROJECT_OVERLAY")"
 MONADO_PATCH="$(expand_tilde "$MONADO_PATCH")"
+MONADO_DIAGNOSTICS_PATCH="$(expand_tilde "$MONADO_DIAGNOSTICS_PATCH")"
+MONADO_QUALITY_PATCH="$(expand_tilde "$MONADO_QUALITY_PATCH")"
 
 # Third-party source refs.
 MONADO_REPO_URL="${MONADO_REPO_URL:-https://gitlab.freedesktop.org/monado/monado.git}"
@@ -159,6 +163,8 @@ require_file "$PROJECT_OVERLAY/src/xrt/tracking/hand/mercury/xr_mercury_runtime_
 require_file "$PROJECT_OVERLAY/src/xrt/tracking/hand/mercury/xr_mercury_runtime_c_api.h"
 require_file "$PROJECT_OVERLAY/src/xrt/tracking/hand/mercury/xr_mercury_dataset_probe.cpp"
 require_file "$MONADO_PATCH"
+require_file "$MONADO_DIAGNOSTICS_PATCH"
+require_file "$MONADO_QUALITY_PATCH"
 
 if [[ "$INSTALL_APT_DEPS" == "1" ]]; then
   log "Installing apt dependencies"
@@ -225,12 +231,33 @@ require_file "$MONADO_DIR/src/xrt/tracking/hand/mercury/xr_mercury_dataset_probe
 
 log "Applying upstream Monado/Mercury patch"
 cd "$MONADO_DIR"
-if git apply --reverse --check "$MONADO_PATCH" >/dev/null 2>&1; then
+if git apply --reverse --check "$MONADO_QUALITY_PATCH" >/dev/null 2>&1 || \
+   git apply --reverse --check "$MONADO_DIAGNOSTICS_PATCH" >/dev/null 2>&1 || \
+   git apply --reverse --check "$MONADO_PATCH" >/dev/null 2>&1; then
   echo "[OK] mercury_xr_upstream_changes.patch already applied"
 else
   git apply --check "$MONADO_PATCH"
   git apply "$MONADO_PATCH"
   echo "[OK] mercury_xr_upstream_changes.patch applied"
+fi
+
+log "Applying optional-at-runtime Mercury tracking diagnostics"
+if git apply --reverse --check "$MONADO_QUALITY_PATCH" >/dev/null 2>&1 || \
+   git apply --reverse --check "$MONADO_DIAGNOSTICS_PATCH" >/dev/null 2>&1; then
+  echo "[OK] mercury_tracking_diagnostics.patch already applied"
+else
+  git apply --check "$MONADO_DIAGNOSTICS_PATCH"
+  git apply "$MONADO_DIAGNOSTICS_PATCH"
+  echo "[OK] mercury_tracking_diagnostics.patch applied"
+fi
+
+log "Applying optional-at-runtime Mercury quality filter"
+if git apply --reverse --check "$MONADO_QUALITY_PATCH" >/dev/null 2>&1; then
+  echo "[OK] mercury_quality_filter.patch already applied"
+else
+  git apply --check "$MONADO_QUALITY_PATCH"
+  git apply "$MONADO_QUALITY_PATCH"
+  echo "[OK] mercury_quality_filter.patch applied"
 fi
 
 log "Checking patched CMakeLists"

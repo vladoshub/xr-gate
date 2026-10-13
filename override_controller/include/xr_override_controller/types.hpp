@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <xr_runtime/contracts/controller_input_contract.hpp>
+#include <xr_override_controller/imu/controller_imu_processor.hpp>
 
 namespace xr_override_controller {
 
@@ -164,6 +165,13 @@ struct BindingConfig {
   InputBindingSpec input;
 };
 
+// Refers to devices[].id, just like button bindings. No transport identity or
+// hand side is part of a calibration record.
+struct DeviceImuCalibration {
+  int device_id = 0;
+  imu::AccelerometerCalibration accelerometer;
+};
+
 struct LayoutSwitchConfig {
   bool enabled = false;
   int device_id = 0;
@@ -215,6 +223,7 @@ struct AppConfig {
   PublishConfig publish;
   InputConfig input;
   std::vector<ConfigDevice> devices;
+  std::vector<DeviceImuCalibration> imu_calibrations;
   LayoutSwitchConfig layout_switch;
   std::vector<BindingConfig> bindings;
   std::vector<BindingConfig> alternative_bindings;

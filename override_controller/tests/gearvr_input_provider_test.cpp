@@ -2,6 +2,7 @@
 #include "gearvr_input_provider.hpp"
 #include "gearvr_imu_stream.hpp"
 #include "composite_input_provider.hpp"
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -73,7 +74,27 @@ uint64_t now_ns() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+void firmware_wrap_keeps_provider_epoch_and_raw_history() {
+  GearVrInputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});
+  auto devices = provider.scan_devices(true);
+  const uint64_t host = now_ns() - 40'000'000;
+  transport->enqueue("left", kTimestampWrapUs - 10000, host, true);
+  provider.wait_event(devices, 1, false);
+  const auto before = provider.imu_state(devices[0]);
+  transport->enqueue("left", 7000, host + 17'000'000, true);
+  provider.wait_event(devices, 1, false);
+  const auto after = provider.imu_state(devices[0]);
+  require(after.reserved[CONTROLLER_IMU_DIAG_EPOCH] == before.reserved[CONTROLLER_IMU_DIAG_EPOCH] &&
+          after.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES] == before.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES],
+          "provider firmware rollover advertised an AHRS reset or packet loss");
+  require(after.latest_device_timestamp_ticks == uint64_t(kTimestampWrapUs) + 7000 &&
+          provider.consume_imu_state(devices[0]).sequence == before.sequence &&
+          provider.consume_imu_state(devices[0]).sequence == after.sequence,
+          "provider firmware rollover discarded FIFO history or truncated extended ticks");
+}
+
 void routing_reconnect_and_flush() {
+  firmware_wrap_keeps_provider_epoch_and_raw_history();
   std::vector<std::unique_ptr<InputProvider>> children;
   children.push_back(std::make_unique<GearVrInputProvider>(ProviderOptionValues{{"initial_scan_ms", "0"}}));
   CompositeInputProvider provider(std::move(children));
@@ -180,9 +201,61 @@ void stale_output_preserves_filter_and_bias() {
   require_same_orientation(resumed, stale);
 }
 
+void config_calibration_discards_old_batches_and_survives_reconnect() {
+  std::vector<std::unique_ptr<InputProvider>> children;
+  children.push_back(std::make_unique<GearVrInputProvider>(ProviderOptionValues{{"initial_scan_ms", "0"}}));
+  CompositeInputProvider provider(std::move(children));
+  auto devices = provider.scan_devices(true);
+  AppConfig cfg;
+  ConfigDevice configured;
+  configured.id = 17;
+  configured.fingerprint = devices[0].fingerprint;
+  cfg.devices.push_back(configured);
+  const imu::AccelerometerCalibration c{true, {.1f,.2f,.3f}, {.99f,1.01f,1.02f}};
+  cfg.imu_calibrations.push_back({17, c});
+  transport->enqueue("left", 10000, now_ns() - 20'000'000);
+  provider.wait_event(devices, 1, false);
+  require(provider.has_pending_imu(devices[0]), "fixture did not queue uncalibrated packet");
+  imu::configure_imu_calibrations(provider, cfg, devices);
+  require(!provider.has_pending_imu(devices[0]) && provider.imu_state(devices[0]).sample_count == 0,
+          "old orientation/force remained queued after correction changed");
+  transport->enqueue("left", 20000, now_ns() - 10'000'000);
+  const auto raw = decode_packet(transport->packets.back().bytes.data(), 60);
+  provider.wait_event(devices, 1, false);
+  auto corrected = provider.imu_state(devices[0]);
+  require(corrected.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED,
+          "composite did not apply config correction in provider");
+  require(std::abs(corrected.samples[0].specific_force_m_s2[2] -
+      (raw->imu_samples[0].accel_m_s2.z - c.bias_m_s2.z) * c.scale.z) < 1e-5f,
+      "provider correction was absent or applied twice");
+  const auto epoch = corrected.reserved[CONTROLLER_IMU_DIAG_EPOCH];
+  imu::configure_imu_calibrations(provider, cfg, devices);
+  require(provider.has_pending_imu(devices[0]) &&
+          provider.imu_state(devices[0]).reserved[CONTROLLER_IMU_DIAG_EPOCH] == epoch,
+          "unchanged config reset live AHRS or discarded new samples");
+  transport->snapshots[0].connected = false;
+  provider.wait_event(devices, 1, false);
+  provider.flush_events(devices);  // Drain disconnect button releases before reconnecting.
+  transport->snapshots[0].connected = true;
+  transport->enqueue("left", 10000, now_ns());
+  provider.wait_event(devices, 1, false);
+  require(provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED,
+          "BLE reconnect discarded config correction");
+  cfg.imu_calibrations.clear();
+  imu::configure_imu_calibrations(provider, cfg, devices);
+  transport->enqueue("left", 20000, now_ns());
+  provider.wait_event(devices, 1, false);
+  corrected = provider.imu_state(devices[0]);
+  require(!(corrected.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED),
+          "missing config entry retained sensor correction");
+  require(std::abs(corrected.samples[0].specific_force_m_s2[2] - raw->imu_samples[0].accel_m_s2.z) < 1e-5f,
+          "disabled correction still changed raw force");
+}
+
 int main() {
   routing_reconnect_and_flush();
   delayed_delivery_preserves_ahrs();
   stale_output_preserves_filter_and_bias();
+  config_calibration_discards_old_batches_and_survives_reconnect();
   std::cout << "Gear VR routing, reconnect, flush, delayed delivery and stale recovery: OK\n";
 }

@@ -6,6 +6,7 @@
 #include "xr_controller_v1_protocol.hpp"
 
 #include <xr_override_controller/imu/controller_imu_processor.hpp>
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 #include <xr_tracking/timing/serial_imu_clock.hpp>
 
 #include <algorithm>
@@ -360,11 +361,16 @@ struct XiaoNrf54l15InputProvider::Impl {
       state.capability_flags |= xr_runtime::CONTROLLER_IMU_CAP_DEVICE_TIMESTAMP;
     }
     state.data_flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
-                       xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID |
-                       xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
+                       xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID;
+    if (session.imu_processor.orientation_initialized()) {
+      state.data_flags |= xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
+    }
     if (timing.device_time_valid) state.data_flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (session.imu_processor.gyro_calibrated()) {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+    }
+    if (session.imu_processor.accelerometer_calibrated()) {
+      state.data_flags |= xr_runtime::CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
     }
     state.sequence = packet.sequence;
     state.latest_device_timestamp_ticks = raw.device_timestamp_ticks;
@@ -389,6 +395,9 @@ struct XiaoNrf54l15InputProvider::Impl {
     if (timing.device_time_valid) sample.flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;
     if (session.imu_processor.gyro_calibrated()) {
       sample.flags |= xr_runtime::CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
+    }
+    if (session.imu_processor.accelerometer_calibrated()) {
+      sample.flags |= xr_runtime::CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
     }
 
     if (session.pending_imu.size() == 256) {
@@ -724,6 +733,19 @@ xr_runtime::ControllerImuStateV1 XiaoNrf54l15InputProvider::consume_imu_state(
 bool XiaoNrf54l15InputProvider::has_pending_imu(const DeviceInfo& device) const {
   const auto* session = impl_->session_for_device_uniq(device.fingerprint.uniq);
   return session && !session->pending_imu.empty();
+}
+
+bool XiaoNrf54l15InputProvider::set_accelerometer_calibration(
+    const DeviceInfo& device, const imu::AccelerometerCalibration& calibration) {
+  for (auto& [id, session] : impl_->sessions) {
+    if (session->fingerprint.uniq != device.fingerprint.uniq) continue;
+    if (imu::same_accelerometer_calibration(
+            session->imu_processor.accelerometer_calibration(), calibration)) return false;
+    session->imu_processor.set_accelerometer_calibration(calibration);
+    impl_->reset_packet_timing(*session);
+    return true;
+  }
+  return false;
 }
 
 void XiaoNrf54l15InputProvider::close_devices(

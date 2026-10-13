@@ -1,10 +1,12 @@
 #include <xr_override_controller/config_io.hpp>
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -423,6 +425,9 @@ std::vector<fs::path> list_config_files(const fs::path& dir) {
   if (!fs::exists(dir)) return out;
   for (const auto& entry : fs::directory_iterator(dir)) {
     if (!entry.is_regular_file()) continue;
+    // Legacy separate calibration files remain excluded from profile selection.
+    // They are no longer a source of sensor correction.
+    if (entry.path().filename() == "controller_imu_calibration.json") continue;
     const auto ext = entry.path().extension().string();
     if (ext == ".json") out.push_back(entry.path());
   }
@@ -515,6 +520,40 @@ AppConfig load_config_file(const fs::path& path) {
   for (const auto& bj : j.value("alternative_hold_toggle_bindings", nlohmann::json::array())) {
     cfg.alternative_hold_toggle_bindings.push_back(binding_from_json(bj));
   }
+  const auto calibrations = j.value("imu_calibrations", nlohmann::json::array());
+  if (!calibrations.is_array()) throw std::runtime_error("imu_calibrations must be an array");
+  const auto read_vector = [](const nlohmann::json& v) {
+    if (!v.is_array() || v.size() != 3) {
+      throw std::runtime_error("expected three accelerometer sensor-axis values");
+    }
+    return imu::Vec3f{v.at(0).get<float>(), v.at(1).get<float>(), v.at(2).get<float>()};
+  };
+  for (const auto& cj : calibrations) {
+    DeviceImuCalibration entry;
+    if (!cj.at("device_id").is_number_integer()) {
+      throw std::runtime_error("imu_calibrations.device_id must be an integer");
+    }
+    const auto id = cj.at("device_id").get<int64_t>();
+    if (id <= 0 || id > std::numeric_limits<int>::max()) {
+      throw std::runtime_error("imu_calibrations.device_id is out of range");
+    }
+    entry.device_id = cj.at("device_id").get<int>();
+    const auto count = std::count_if(cfg.devices.begin(), cfg.devices.end(),
+        [&](const ConfigDevice& d) { return d.id == entry.device_id; });
+    if (entry.device_id <= 0 || count != 1) {
+      throw std::runtime_error("imu_calibrations.device_id must reference one devices[].id");
+    }
+    for (const auto& previous : cfg.imu_calibrations) {
+      if (previous.device_id == entry.device_id) {
+        throw std::runtime_error("duplicate imu_calibrations.device_id");
+      }
+    }
+    entry.accelerometer.enabled = cj.value("enabled", true);
+    entry.accelerometer.bias_m_s2 = read_vector(cj.at("accelerometer_bias_m_s2"));
+    entry.accelerometer.scale = read_vector(cj.at("accelerometer_scale"));
+    imu::validate_accelerometer_calibration(entry.accelerometer);
+    cfg.imu_calibrations.push_back(entry);
+  }
   return cfg;
 }
 
@@ -543,6 +582,15 @@ void save_config_file(const AppConfig& cfg, const fs::path& path) {
   j["devices"] = nlohmann::json::array();
   for (const auto& d : cfg.devices) {
     j["devices"].push_back(config_device_to_json(d));
+  }
+  j["imu_calibrations"] = nlohmann::json::array();
+  for (const auto& entry : cfg.imu_calibrations) {
+    const auto& c = entry.accelerometer;
+    j["imu_calibrations"].push_back({
+        {"device_id", entry.device_id}, {"enabled", c.enabled},
+        {"accelerometer_bias_m_s2", {c.bias_m_s2.x, c.bias_m_s2.y, c.bias_m_s2.z}},
+        {"accelerometer_scale", {c.scale.x, c.scale.y, c.scale.z}},
+    });
   }
 
   if (cfg.layout_switch.enabled) {

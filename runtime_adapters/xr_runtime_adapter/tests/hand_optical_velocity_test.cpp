@@ -85,12 +85,15 @@ void accepted_pose_velocity(const char* library, bool window) {
   Fixture f(library);
   hand::HandPoseStabilityFilter gate(config(window));
   require(!valid_v(gate.filter(f.tick(1000,0)).left),"first accepted pose has velocity");
+  gate.set_diagnostics_enabled(true);
   auto rejected=gate.filter(f.tick(1033,.3f,1));
+  require(gate.last_diagnostics().left.mode.find("reject_")==0, "diagnostics lost outlier rejection reason");
   require(rejected.left.status!=1,"position outlier was accepted");
   require(!valid_v(rejected.left),"held outlier retained velocity");
   auto raw=f.tick(1066,.066f,.066f);
   require(raw.left.vx<-7,"fixture no longer reproduces backend contamination");
   auto accepted=gate.filter(raw);
+  require(gate.last_diagnostics().left.mode.find("accept_")==0, "diagnostics lost accepted pose decision");
   require(accepted.left.status==1 && valid_v(accepted.left),"good pose not accepted");
   near(accepted.left.vx,1,"rejected position poisoned published velocity");
   near(accepted.left.wy,1,"rejected quaternion poisoned published angular velocity");

@@ -1,0 +1,300 @@
+diff --git a/src/xrt/tracking/hand/mercury/hg_model.cpp b/src/xrt/tracking/hand/mercury/hg_model.cpp
+index b6f226f..30877cc 100644
+--- a/src/xrt/tracking/hand/mercury/hg_model.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
+@@ -1296,6 +1296,9 @@ run_keypoint_estimation_unsafe(keypoint_estimation_run_info &info)
+ 	int view_idx = info.view->view;
+ 	int hand_idx = info.hand_idx;
+ 	one_frame_one_view &this_output = hgt->keypoint_outputs[hand_idx].views[view_idx];
++	if (hgt->xr_tracking_diag.enabled()) {
++		hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx].model_ran = 1;
++	}
+ 	MLOutput2D &px_coord = this_output.keypoints_in_scaled_stereographic;
+ 	// Factor out starting here
+ 
+@@ -1527,6 +1530,11 @@ run_keypoint_estimation_unsafe(keypoint_estimation_run_info &info)
+ 	}
+ 
+ 	this_output.active = is_hand;
++	if (hgt->xr_tracking_diag.enabled()) {
++		auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx];
++		diag.is_hand_probability = is_hand_explicit;
++		diag.keypoint_active = is_hand;
++	}
+ 
+ 
+ 	float *out_data_curls = nullptr;
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.cpp b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+index 7a8f735..93a8e2e 100644
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -1192,6 +1192,15 @@ predict_new_regions_of_interest(struct HandTracking *hgt)
+ 		add *= (dt_now * hgt->tuneable_values.amount_to_lerp_prediction.val) / dt_past;
+ 
+ 		hgt->pose_predicted_keypoints[hand_idx] = n_minus_one + add;
++		if (hgt->xr_tracking_diag.enabled()) {
++			auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx];
++			diag.roi_dt_past_ms = dt_past * 1000;
++			diag.roi_dt_now_ms = dt_now * 1000;
++			diag.roi_prediction_multiplier = (dt_now * hgt->tuneable_values.amount_to_lerp_prediction.val) / dt_past;
++			diag.predicted_wrist_x = hgt->pose_predicted_keypoints[hand_idx](0, 0);
++			diag.predicted_wrist_y = hgt->pose_predicted_keypoints[hand_idx](1, 0);
++			diag.predicted_wrist_z = hgt->pose_predicted_keypoints[hand_idx](2, 0);
++		}
+ 
+ 
+ 		int num_outside[2];
+@@ -1203,6 +1212,9 @@ predict_new_regions_of_interest(struct HandTracking *hgt)
+ 			hand_region_of_interest &hroi = hgt->views[view_idx].regions_of_interest_this_frame[hand_idx];
+ 			auto &masks_view = masks.views[view_idx];
+ 			auto &masks_hand = masks_view.hands[hand_idx];
++			if (hgt->xr_tracking_diag.enabled()) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx].predicted_outside_joints = num_outside[view_idx];
++			}
+ 
+ 			masks_view.enabled = true;
+ 
+@@ -1253,6 +1265,16 @@ stop_everything_if_hands_are_overlapping(struct HandTracking *hgt)
+ 		box_iou::Box this_nbox(left_box.center_px, right_box.size_px);
+ 		box_iou::Box other_nbox(right_box.center_px, right_box.size_px);
+ 		float iou = box_iou::boxIOU(this_nbox, other_nbox);
++		if (hgt->xr_tracking_diag.enabled()) {
++			// Compare with the correct left-box size without changing the existing decision.
++			box_iou::Box correct_left_box(left_box.center_px, left_box.size_px);
++			const float correct_iou = box_iou::boxIOU(correct_left_box, other_nbox);
++			for (auto &diag : hgt->xr_tracking_diag.frame.hands) {
++				diag.views[view_idx].overlap_iou_used = iou;
++				diag.views[view_idx].overlap_iou_correct_size = correct_iou;
++				if (iou > hgt->tuneable_values.mpiou_any.val) diag.reject(xr_mercury_diag::overlap);
++			}
++		}
+ 		if (iou > hgt->tuneable_values.mpiou_any.val) {
+ 			HG_DEBUG(hgt, "Stopped tracking because iou was %f in view %d", iou, view_idx);
+ 			ok = false;
+@@ -1443,24 +1465,67 @@ callback_process_unsafe(HandTracking *hgt,
+ 	}
+ 
+ 	check_new_user_event(hgt);
++	if (hgt->xr_tracking_diag.enabled()) {
++		auto &frame = hgt->xr_tracking_diag.frame;
++		frame = {};
++		frame.timestamp_ns = hgt->current_frame_timestamp;
++		frame.camera0_ns = left_frame->timestamp;
++		frame.camera1_ns = right_frame->timestamp;
++		frame.width = view_width;
++		frame.height = view_height;
++		for (int hand_idx = 0; hand_idx < 2; ++hand_idx) {
++			auto &diag = frame.hands[hand_idx];
++			diag.previous_detected = hgt->last_frame_hand_detected[hand_idx];
++			diag.history_frames = hgt->history_hands[hand_idx].size();
++			diag.tracked_frames_before = hgt->hand_tracked_for_num_frames[hand_idx];
++			diag.target_hand_size = hgt->target_hand_size;
++			diag.outside_limit = hgt->tuneable_values.max_num_outside_view;
++			diag.overlap_limit = hgt->tuneable_values.mpiou_any.val;
++		}
++	}
+ 
+ 
+ 
+ 	// Every now and then if we're not already tracking both hands, try to detect new hands.
+ 	bool saw_both_hands_last_frame = hgt->last_frame_hand_detected[0] && hgt->last_frame_hand_detected[1];
+ 	if (!saw_both_hands_last_frame) {
++		if (hgt->xr_tracking_diag.enabled()) {
++			for (auto &diag : hgt->xr_tracking_diag.frame.hands) diag.detector_ran = 1;
++		}
+ 		dispatch_and_process_hand_detections(hgt);
+ 	}
+ 
++	if (hgt->xr_tracking_diag.enabled()) {
++		for (int hand_idx = 0; hand_idx < 2; ++hand_idx) {
++			for (int view_idx = 0; view_idx < 2; ++view_idx) {
++				const auto &roi = hgt->views[view_idx].regions_of_interest_this_frame[hand_idx];
++				auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx];
++				diag.roi_before_overlap_found = roi.found;
++				diag.roi_provenance = roi.provenance;
++				diag.roi_cx = roi.center_px.x;
++				diag.roi_cy = roi.center_px.y;
++				diag.roi_size = roi.size_px;
++			}
++		}
++	}
+ 	stop_everything_if_hands_are_overlapping(hgt);
+ 
+ 	//!@todo does this go here?
+ 	// If no hand regions of interest were found anywhere, there's no hand - register that in the state
+ 	// tracker
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
++		if (hgt->xr_tracking_diag.enabled()) {
++			for (int view_idx = 0; view_idx < 2; ++view_idx) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx].roi_input_found =
++				    hgt->views[view_idx].regions_of_interest_this_frame[hand_idx].found;
++			}
++		}
+ 		if (!(hgt->views[0].regions_of_interest_this_frame[hand_idx].found ||
+ 		      hgt->views[1].regions_of_interest_this_frame[hand_idx].found)) {
+ 			hgt->this_frame_hand_detected[hand_idx] = false;
++			if (hgt->xr_tracking_diag.enabled()) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::no_roi);
++			}
+ 		}
+ 	}
+ 
+@@ -1482,6 +1547,31 @@ callback_process_unsafe(HandTracking *hgt,
+ 	u_worker_group_wait_all(hgt->group);
+ 
+ 	// Spaghetti logic for optimizing hand size
++	if (hgt->xr_tracking_diag.enabled()) {
++		for (int hand_idx = 0; hand_idx < 2; ++hand_idx) {
++			for (int view_idx = 0; view_idx < 2; ++view_idx) {
++				auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx];
++				const auto &kp = hgt->keypoint_outputs[hand_idx].views[view_idx];
++				diag.keypoint_active = diag.roi_input_found == 1 && kp.active;
++				// A failed model run must not report stale confidence from the preceding frame.
++				if (diag.model_ran != 1 || !std::isfinite(diag.is_hand_probability)) continue;
++				double xy_sum = 0, depth_sum = 0;
++				double xy_min = std::numeric_limits<double>::infinity();
++				double depth_min = std::numeric_limits<double>::infinity();
++				for (int joint = 0; joint < 21; ++joint) {
++					const auto &point = kp.keypoints_in_scaled_stereographic[joint];
++					xy_sum += point.confidence_xy;
++					depth_sum += point.confidence_depth;
++					xy_min = std::min(xy_min, double(point.confidence_xy));
++					depth_min = std::min(depth_min, double(point.confidence_depth));
++				}
++				diag.confidence_xy_mean = xy_sum / 21;
++				diag.confidence_xy_min = xy_min;
++				diag.confidence_depth_mean = depth_sum / 21;
++				diag.confidence_depth_min = depth_min;
++			}
++		}
++	}
+ 	bool any_hands_are_only_visible_in_one_view = false;
+ 
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+@@ -1537,6 +1627,9 @@ callback_process_unsafe(HandTracking *hgt,
+ 			if (!hgt->keypoint_outputs[hand_idx].views[view_idx].active) {
+ 				HG_DEBUG(hgt, "Removing hand %d because keypoint estimator said to!", hand_idx);
+ 				hgt->this_frame_hand_detected[hand_idx] = false;
++				if (hgt->xr_tracking_diag.enabled()) {
++					hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::keypoint_rejected);
++				}
+ 			}
+ 		}
+ 
+@@ -1600,18 +1693,42 @@ callback_process_unsafe(HandTracking *hgt,
+ 		                  *put_in_set,   //
+ 		                  out_hand_size, //
+ 		                  reprojection_error);
++		if (hgt->xr_tracking_diag.enabled()) {
++			auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx];
++			diag.optimizer_ran = 1;
++			diag.observation_views = int(hgt->keypoint_outputs[hand_idx].views[0].active) +
++			                         int(hgt->keypoint_outputs[hand_idx].views[1].active);
++			diag.reprojection_error = reprojection_error;
++			diag.reprojection_limit = reprojection_error_threshold;
++			diag.smoothing_factor = smoothing_factor;
++			diag.depth_weight = hgt->tuneable_values.amt_use_depth.val;
++			diag.optimize_hand_size = optimize_hand_size;
++			diag.result_hand_size = out_hand_size;
++			const auto &palm = put_in_set->values.hand_joint_set_default[XRT_HAND_JOINT_PALM].relation.pose;
++			const auto &wrist = put_in_set->values.hand_joint_set_default[XRT_HAND_JOINT_WRIST].relation.pose;
++			diag.palm_x = palm.position.x; diag.palm_y = palm.position.y; diag.palm_z = palm.position.z;
++			diag.palm_qx = palm.orientation.x; diag.palm_qy = palm.orientation.y;
++			diag.palm_qz = palm.orientation.z; diag.palm_qw = palm.orientation.w;
++			diag.wrist_x = wrist.position.x; diag.wrist_y = wrist.position.y; diag.wrist_z = wrist.position.z;
++		}
+ 
+ 
+ 
+ 		if (reprojection_error > reprojection_error_threshold) {
+ 			HG_DEBUG(hgt, "Reprojection error above threshold!");
+ 			hgt->this_frame_hand_detected[hand_idx] = false;
++			if (hgt->xr_tracking_diag.enabled()) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::reprojection_rejected);
++			}
+ 			continue;
+ 		}
+ 
+ 		if (hand_too_far(hgt, *put_in_set)) {
+ 			HG_DEBUG(hgt, "Hand too far away");
+ 			hgt->this_frame_hand_detected[hand_idx] = false;
++			if (hgt->xr_tracking_diag.enabled()) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::distance_rejected);
++			}
+ 			continue;
+ 		}
+ 
+@@ -1659,6 +1776,10 @@ callback_process_unsafe(HandTracking *hgt,
+ 	// State tracker tweaks
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+ 		out_xrt_hands[hand_idx]->is_active = hgt->this_frame_hand_detected[hand_idx];
++		if (hgt->xr_tracking_diag.enabled()) {
++			hgt->xr_tracking_diag.frame.hands[hand_idx].tracked_before_roi_prediction =
++			    hgt->this_frame_hand_detected[hand_idx];
++		}
+ 		hgt->last_frame_hand_detected[hand_idx] = hgt->this_frame_hand_detected[hand_idx];
+ 
+ 		hgt->hand_seen_before[hand_idx] =
+@@ -1692,9 +1813,32 @@ callback_process_unsafe(HandTracking *hgt,
+ 		// Don't send the hand to OpenXR until it's been tracked for 4 frames
+ 		if (hgt->hand_tracked_for_num_frames[hand_idx] < hgt->tuneable_values.num_frames_before_display) {
+ 			out_xrt_hands[hand_idx]->is_active = false;
++			if (hgt->xr_tracking_diag.enabled() && hgt->this_frame_hand_detected[hand_idx]) {
++				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::display_warmup);
++			}
+ 		}
+ 	}
+ 
++	if (hgt->xr_tracking_diag.enabled()) {
++		for (int hand_idx = 0; hand_idx < 2; ++hand_idx) {
++			auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx];
++			diag.final_active = out_xrt_hands[hand_idx]->is_active;
++			if (diag.tracked_before_roi_prediction == 1 &&
++			    !(hgt->views[0].regions_of_interest_this_frame[hand_idx].found ||
++			      hgt->views[1].regions_of_interest_this_frame[hand_idx].found)) {
++				diag.reject(xr_mercury_diag::predicted_outside);
++			}
++			for (int view_idx = 0; view_idx < 2; ++view_idx) {
++				const auto &roi = hgt->views[view_idx].regions_of_interest_this_frame[hand_idx];
++				auto &view = diag.views[view_idx];
++				view.roi_next_found = roi.found;
++				view.roi_next_cx = roi.center_px.x;
++				view.roi_next_cy = roi.center_px.y;
++				view.roi_next_size = roi.size_px;
++			}
++		}
++		hgt->xr_tracking_diag.write_frame();
++	}
+ 	// If the debug UI is active, push to the frame-timing widget
+ 	u_frame_times_widget_push_sample(&hgt->ft_widget, hgt->current_frame_timestamp);
+ 
+@@ -1913,6 +2057,7 @@ t_hand_tracking_sync_mercury_create(struct t_stereo_camera_calibration *calib,
+ 	hgt->tuneable_values.min_detection_confidence.min = 0.0f;
+ 	hgt->tuneable_values.min_detection_confidence.step = 0.01f;
+ 	hgt->tuneable_values.min_detection_confidence.val = debug_get_float_option_mercury_min_detection_confidence();
++	hgt->xr_tracking_diag.configure_from_environment();
+ 
+ 	const char *xr_detector_debug_csv = getenv("MERCURY_XR_DETECTOR_DEBUG_CSV");
+ 	if (xr_detector_debug_csv != nullptr && xr_detector_debug_csv[0] != '\0') {
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.hpp b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+index 7d7960e..f09330d 100644
+--- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+@@ -12,6 +12,7 @@
+ 
+ #include "hg_interface.h"
+ #include "hg_debug_instrumentation.hpp"
++#include "xr_mercury_tracking_diagnostics.hpp"
+ 
+ #include "tracking/t_hand_tracking.h"
+ #include "tracking/t_camera_models.h"
+@@ -345,6 +346,9 @@ public:
+ 
+ 	struct hg_tuneable_values tuneable_values;
+ 
++	// Optional per-frame diagnostics; no effect on tracking decisions.
++	xr_mercury_diag::CsvLogger xr_tracking_diag;
++
+ 	// XR/Mercury offline detector diagnostics. Enabled by
+ 	// MERCURY_XR_DETECTOR_DEBUG_CSV=/path/to/file.csv.
+ 	bool xr_detector_debug_enabled = false;

@@ -111,10 +111,13 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
     tests/controller_imu_prediction_test.cpp
     src/override_controller.cpp
     src/coordinate_util.cpp
+    "${XR_TRACKING_ROOT}/override_controller/src/imu/controller_imu_processor.cpp"
+    "${XR_TRACKING_ROOT}/override_controller/src/core/backend_control.cpp"
   )
   target_compile_features(controller_imu_prediction_test PRIVATE cxx_std_17)
   target_include_directories(controller_imu_prediction_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${XR_TRACKING_ROOT}/override_controller/include"
     "${XR_SHARED_INCLUDE_DIR}"
   )
   if(TARGET nlohmann_json::nlohmann_json)
