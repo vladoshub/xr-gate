@@ -75,6 +75,22 @@ class WorldYawAlignment {
   std::size_t fresh_pair_count() const { return fresh_pair_count_; }
   float coherence() const { return coherence_; }
 
+  // Expose only the latest source-time pair already matched by this estimator.
+  // Startup confirmation must not compare a camera pose with the latest IMU
+  // quaternion when the two streams have different delivery delays.
+  bool latest_matched_pose(uint64_t& timestamp_ns, float provider_xyzw[4],
+                           float optical_xyzw[4]) const {
+    if (observation_count_ == 0) return false;
+    const auto& pose = observations_[observation_count_ - 1];
+    timestamp_ns = pose.timestamp_ns;
+    const auto copy = [](Rotation q, float out[4]) {
+      out[0] = q.x; out[1] = q.y; out[2] = q.z; out[3] = q.w;
+    };
+    copy(pose.provider, provider_xyzw);
+    copy(pose.optical, optical_xyzw);
+    return true;
+  }
+
  private:
   struct Rotation { float w = 1, x = 0, y = 0, z = 0; };
   struct ImuObservation { uint64_t timestamp_ns = 0; Rotation orientation; };

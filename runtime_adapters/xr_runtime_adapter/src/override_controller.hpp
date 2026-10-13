@@ -14,6 +14,7 @@
 #include "prediction_window_estimator.hpp"
 #include "imu_world_yaw_alignment.hpp"
 #include "imu_translation_yaw_check.hpp"
+#include "imu_yaw_stability_confirmation.hpp"
 
 namespace xr_runtime_adapter::override_controller {
 
@@ -81,6 +82,10 @@ struct RuntimeControllerImuMotionConfig {
   bool position_prediction_enabled = false;
   bool yaw_correction_enabled = false;
   bool translation_yaw_check_enabled = true;
+  // Confirm the first physical yaw with continuously matched poses. Zero
+  // preserves immediate initialization; confirmed frames survive optical loss.
+  float acceleration_yaw_stable_ms = 4000.0f;
+  float acceleration_yaw_stable_max_range_deg = 8.0f;
 
   // specific_force_m_s2 includes gravity. Runtime tracking space uses +Y up.
   // Gravity magnitude is supplied per frame from BackendControlSnapshot.
@@ -189,6 +194,7 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   uint64_t acceleration_world_yaw_frame_sequence = 0;
   imu_alignment::WorldYawAlignment acceleration_world_alignment{};
   imu_alignment::TranslationYawCheck acceleration_translation_yaw_check{};
+  imu_alignment::YawStabilityConfirmation acceleration_yaw_confirmation{};
   uint32_t acceleration_yaw_half_turn_corrections = 0;
   bool has_position_anchor = false;
   bool prediction_active = false;

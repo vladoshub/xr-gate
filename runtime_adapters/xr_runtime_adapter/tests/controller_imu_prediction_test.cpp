@@ -81,6 +81,173 @@ struct Scenario {
   }
 };
 
+bool observe_startup_yaw(xr_runtime_adapter::imu_alignment::YawStabilityConfirmation& check,
+                        int ms, std::optional<float> estimate, cu::Qd provider,
+                        cu::Qd optical, float duration = 4000) {
+  const float iq[] = {float(provider.x), float(provider.y), float(provider.z), float(provider.w)};
+  const float oq[] = {float(optical.x), float(optical.y), float(optical.z), float(optical.w)};
+  return check.observe(kStart + uint64_t(ms)*1'000'000, iq, oq, estimate, duration, 8);
+}
+
+void startup_yaw_waits_for_stability_without_freezing_real_motion() {
+  using xr_runtime_adapter::imu_alignment::YawStabilityConfirmation;
+  const float yaw = 0.35f;
+  const auto world = cu::q_from_axis_angle(0, 1, 0, yaw);
+  const auto mount = cu::q_from_axis_angle(0, 0, 1, 0.7);
+  for (int duration : {3000, 4000, 5000}) {
+    for (bool moving : {false, true}) {
+      YawStabilityConfirmation check;
+      for (int ms = 0; ms <= duration; ms += 50) {
+        const auto provider = moving ? cu::q_mul(cu::q_from_axis_angle(0, 1, 0, ms*0.002),
+            cu::q_from_axis_angle(1, 0, 0, 0.6*std::sin(ms/150.0))) : cu::Qd{};
+        auto optical = cu::q_mul(cu::q_mul(world, provider), mount);
+        if (ms % 100) {
+          optical.w = -optical.w; optical.x = -optical.x;
+          optical.y = -optical.y; optical.z = -optical.z;
+        }
+        const bool ready = observe_startup_yaw(check, ms, ms == 0 ? std::optional(yaw) : std::nullopt,
+                                               provider, optical, duration);
+        require(ready == (ms == duration), "startup yaw confirmed early or rejected a stable moving grip");
+      }
+      near(check.candidate_rad(), yaw, "quiet confirmation invented a different physical yaw");
+    }
+  }
+  YawStabilityConfirmation unobservable;
+  for (int ms = 0; ms <= 6000; ms += 50) {
+    require(!observe_startup_yaw(unobservable, ms, std::nullopt, {}, world),
+            "waiting on a static pose invented a yaw estimate");
+  }
+  require(!unobservable.pending(), "unobservable poses started the confirmation clock");
+
+  YawStabilityConfirmation wrapped;
+  const auto opposite = cu::q_from_axis_angle(0, 1, 0, kPi);
+  for (int ms = 0; ms <= 4000; ms += 50) {
+    const float candidate = ms % 100 ? -kPi + 0.01f : kPi - 0.01f;
+    const bool ready = observe_startup_yaw(wrapped, ms, candidate, {}, opposite);
+    require(ready == (ms == 4000), "yaw wraparound/sign changed a stable confirmation interval");
+  }
+}
+
+void startup_yaw_restarts_for_jumps_gaps_and_cached_frames() {
+  using xr_runtime_adapter::imu_alignment::YawStabilityConfirmation;
+  for (bool pose_jump : {false, true}) {
+    YawStabilityConfirmation check;
+    for (int ms = 0; ms <= 5500; ms += 50) {
+      const float estimate = pose_jump ? 0.0f : ms >= 1500 ? 0.3f : 0.0f;
+      const auto optical = pose_jump && ms >= 1500 ? cu::q_from_axis_angle(1, 0, 0, 0.3) : cu::Qd{};
+      const bool ready = observe_startup_yaw(check, ms, estimate, {}, optical);
+      require(ready == (ms == 5500), "yaw/optical pose jump did not restart the full confirmation interval");
+      if (ms == 1500) near(check.elapsed_ms(), 0, "jump retained pre-jump waiting time");
+    }
+  }
+  YawStabilityConfirmation drifting;
+  for (int ms = 0; ms <= 6000; ms += 50) {
+    require(!observe_startup_yaw(drifting, ms, ms*0.0001f, {}, {}),
+            "small consecutive steps hid an unstable accumulated yaw range");
+  }
+  YawStabilityConfirmation cached;
+  for (int ms = 0; ms <= 3950; ms += 50) {
+    require(!observe_startup_yaw(cached, ms, 0, {}, {}), "startup confirmed before four seconds");
+  }
+  for (int i = 0; i < 1000; ++i) {
+    require(!observe_startup_yaw(cached, 3950, 0, {}, {}) &&
+            !observe_startup_yaw(cached, 3900, 0, {}, {}), "cached/older pose completed confirmation");
+  }
+  near(cached.elapsed_ms(), 3950, "runtime ticks advanced the source-time clock");
+  require(!observe_startup_yaw(cached, 4200, std::nullopt, {}, {}) && !cached.pending(),
+          "unobserved interval retained the initial yaw candidate");
+  for (int ms = 4250; ms <= 8250; ms += 50) {
+    require(observe_startup_yaw(cached, ms, ms == 4250 ? std::optional(0.0f) : std::nullopt, {}, {}) ==
+            (ms == 8250), "gap recovery did not require a complete new interval");
+  }
+  cached.reset();
+  require(!observe_startup_yaw(cached, 8300, std::nullopt, {}, {}) && !cached.pending(),
+          "reset reused an unsupported pending candidate");
+  YawStabilityConfirmation disabled;
+  require(observe_startup_yaw(disabled, 0, 0.4f, {}, cu::q_from_axis_angle(0, 1, 0, 0.4), 0),
+          "zero duration did not preserve immediate initialization");
+}
+
+void first_yaw_confirmation_controls_force_integration_on_both_sides() {
+  for (bool right : {false, true}) {
+    for (bool interrupted : {false, true}) {
+      Scenario s;
+      s.state.left.acceleration_world_yaw_valid = false;
+      auto& m = s.cfg.left_imu_motion;
+      m.translation_yaw_check_enabled = false;
+      m.predict_lost_ms = 1200;
+      s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+      s.cfg.right_imu_motion = m;
+      auto& state = right ? s.state.right : s.state.left;
+      const float yaw = 0.35f;
+      const auto world = cu::q_from_axis_angle(0, 1, 0, yaw);
+      const auto mount = cu::q_from_axis_angle(0, 0, 1, 0.7);
+      int waiting_started = -1;
+      auto tick = [&](int ms, bool optical, float acceleration = 0, uint32_t epoch = 1,
+                      uint32_t dropped = 0) {
+        const auto ns = s.prepare(ms);
+        auto input = s.input; auto hand = s.hand;
+        const double angle = interrupted && ms >= 1200
+            ? 0.24 + std::min(400, ms - 1200)*0.0008 : std::min(ms, 300)*0.0008;
+        const auto provider = cu::q_from_axis_angle(1, 0, 0, angle);
+        const auto optical_q = cu::q_mul(cu::q_mul(world, provider), mount);
+        auto& imu = input.left.imu;
+        imu.orientation_xyzw[0] = provider.x; imu.orientation_xyzw[1] = provider.y;
+        imu.orientation_xyzw[2] = provider.z; imu.orientation_xyzw[3] = provider.w;
+        imu.reserved[CONTROLLER_IMU_DIAG_EPOCH] = epoch;
+        imu.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES] = dropped;
+        const auto force = cu::q_rotate(cu::q_conj(provider), cu::V3d{acceleration, 9.81, 0});
+        imu.samples[0].specific_force_m_s2[0] = force.x;
+        imu.samples[0].specific_force_m_s2[1] = force.y;
+        imu.samples[0].specific_force_m_s2[2] = force.z;
+        hand.left.controller_qx = optical_q.x; hand.left.controller_qy = optical_q.y;
+        hand.left.controller_qz = optical_q.z; hand.left.controller_qw = optical_q.w;
+        if (right) {
+          input.right = input.left; input.left = {};
+          hand.right = hand.left; hand.left = {};
+          hand.flags = HAND_FLAG_RIGHT_VALID; hand.right.handedness = 2;
+        }
+        const auto h = optical ? std::optional(hand) : std::nullopt;
+        return compose_runtime_controller_state(s.sequence, ns, s.cfg, h, h,
+            input, std::nullopt, 9.81f, &s.state);
+      };
+      int ready_ms = -1;
+      for (int ms = 0; ms <= 6500; ms += 20) {
+        const bool tracked = !interrupted || ms < 1000 || ms >= 1200;
+        const auto out = tick(ms, tracked, tracked ? 0 : 1);
+        if (!tracked) {
+          require(!state.acceleration_world_yaw_valid && !state.acceleration_yaw_confirmation.pending(),
+                  "initial optical loss retained an unfinished confirmation");
+          near((right ? out.right : out.left).position[0], 0,
+               "unknown startup frame integrated accelerometer force");
+        }
+        if (state.acceleration_yaw_confirmation.pending() && waiting_started < 0 &&
+            (!interrupted || ms >= 1200)) waiting_started = ms;
+        if (!state.acceleration_world_yaw_valid) continue;
+        require(waiting_started >= 0 && ms - waiting_started >= 4000,
+                "native runtime marked initial yaw valid before four stable seconds");
+        ready_ms = ms;
+        break;
+      }
+      require(ready_ms > 0, "held grip never completed native startup confirmation");
+      near(state.acceleration_world_yaw_rad, yaw, "stable startup selected an incorrect frame", 1e-4f);
+      require(s.cfg.left_imu_motion.acceleration_integration_enabled &&
+              s.cfg.right_imu_motion.acceleration_integration_enabled, "confirmation disabled an integration setting");
+      RuntimeControllerStateFrameV1 out;
+      for (int ms = ready_ms + 20; ms <= ready_ms + 200; ms += 20) out = tick(ms, false, 1);
+      const auto& pose = right ? out.right : out.left;
+      require(state.acceleration_world_yaw_valid, "ordinary camera loss reset a confirmed yaw");
+      near(pose.position[0], 0.02f*std::cos(yaw), "confirmed startup did not integrate world acceleration X", 2e-5f);
+      near(pose.position[2], -0.02f*std::sin(yaw), "confirmed startup did not integrate world acceleration Z", 2e-5f);
+      tick(ready_ms + 220, false, 1, 1, 1);
+      require(state.acceleration_world_yaw_valid, "packet drop discarded the confirmed frame");
+      tick(ready_ms + 240, true, 0, 2, 1);
+      require(!state.acceleration_world_yaw_valid && !state.acceleration_yaw_confirmation.pending(),
+              "AHRS epoch reset inherited a previous confirmation");
+    }
+  }
+}
+
 void translation_checks_direction_with_source_time_and_unknown_velocity() {
   using xr_runtime_adapter::imu_alignment::TranslationYawCheck;
   // A legitimate provider frame near 180 degrees must remain usable too.
@@ -432,6 +599,9 @@ void rigid_grip_does_not_change_world_alignment() {
   for (bool right : {false, true}) {
     Scenario s;
     s.state.left.acceleration_world_yaw_valid = false;
+    // This test isolates the rotation estimator; startup waiting has its own
+    // native tests with the default four-second confirmation above.
+    s.cfg.left_imu_motion.acceleration_yaw_stable_ms = 0;
     if (right) {
       s.cfg.right_orientation_source = s.cfg.left_orientation_source;
       s.cfg.right_imu_motion = s.cfg.left_imu_motion;
@@ -1389,6 +1559,9 @@ void distance_recovery_does_not_spend_frozen_time_as_speed_budget() {
 }
 
 int main() {
+  startup_yaw_waits_for_stability_without_freezing_real_motion();
+  startup_yaw_restarts_for_jumps_gaps_and_cached_frames();
+  first_yaw_confirmation_controls_force_integration_on_both_sides();
   translation_checks_direction_with_source_time_and_unknown_velocity();
   translation_rejects_unobservable_or_incomplete_motion();
   checked_force_frame_survives_rotation_refits_and_resets();
@@ -1414,5 +1587,5 @@ int main() {
   optical_velocity_requires_matching_accepted_measurement();
   time_decay_integrates_published_velocity();
   speed_distance_and_timeout_limits();
-  std::cout << "IMU prediction: force-frame direction, rigid grips, timed calibration, velocity fallback, sample time, stale optics, reacquire and limits: OK\n";
+  std::cout << "IMU prediction: startup confirmation, force-frame direction, rigid grips, timed calibration, velocity fallback, sample time, stale optics, reacquire and limits: OK\n";
 }

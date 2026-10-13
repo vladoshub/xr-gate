@@ -404,5 +404,35 @@
     "transport": "shm",
     "unlink_existing": true
   },
-  "version": 5
+  "version": 5,
+  "imu_calibrations": [
+    {
+      "device_id": 1,
+      "enabled": true,
+      "accelerometer_bias_m_s2": [
+        -0.10727315221999417,
+        -0.07759059316454936,
+        0.43145744469370995
+      ],
+      "accelerometer_scale": [
+        0.9901908343953932,
+        0.9945465923680491,
+        0.9861235801271121
+      ]
+    },
+    {
+      "device_id": 2,
+      "enabled": true,
+      "accelerometer_bias_m_s2": [
+        -0.024739397245250663,
+        -0.14209063940018027,
+        0.4120050224560371
+      ],
+      "accelerometer_scale": [
+        0.9930650889457322,
+        0.9905282616068416,
+        0.987228851631989
+      ]
+    }
+  ]
 }

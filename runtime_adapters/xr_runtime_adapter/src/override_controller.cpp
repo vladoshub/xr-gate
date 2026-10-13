@@ -526,7 +526,11 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
                                     const RuntimeControllerImuMotionConfig& cfg,
                                     float gravity_magnitude_mps2,
                                     bool matching_optical_measurement) {
-  if (!state || !imu.orientation_valid) return;
+  if (!state) return;
+  if (!imu.orientation_valid) {
+    if (!state->acceleration_world_yaw_valid) state->acceleration_yaw_confirmation.reset();
+    return;
+  }
   auto& translation = state->acceleration_translation_yaw_check;
   if (cfg.translation_yaw_check_enabled && cfg.acceleration_integration_enabled) {
     for (const auto& sample : imu.acceleration_samples) {
@@ -550,22 +554,41 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
   }
   if (!real_optical_hand_pose(confirmed_hand) || !real_optical_hand_pose(clean_optical_hand)) {
     state->acceleration_world_alignment.clear_optical_motion();
+    state->acceleration_yaw_confirmation.reset();
+  } else if (!state->acceleration_world_yaw_valid && !matching_optical_measurement) {
+    state->acceleration_world_alignment.clear_optical_motion();
+    state->acceleration_yaw_confirmation.reset();
   } else if (optical_sequence != 0 &&
              optical_sequence != state->acceleration_world_yaw_frame_sequence) {
     const float xyzw[] = {clean_optical_hand->controller_qx, clean_optical_hand->controller_qy,
                          clean_optical_hand->controller_qz, clean_optical_hand->controller_qw};
     float world_yaw = 0;
+    std::optional<float> initial_estimate;
     if (state->acceleration_world_alignment.observe_optical(optical_timestamp_ns, xyzw, world_yaw)) {
       if (cfg.translation_yaw_check_enabled) world_yaw = translation.select_hemisphere(world_yaw);
-      const float innovation = wrap_pi(world_yaw - state->acceleration_world_yaw_rad);
-      // This is an AHRS-world frame, not the palm's current heading. It cannot
-      // jump with the grip; slow updates accommodate yaw drift and small noise.
-      // A large coherent residual can also mean yaw drift during a long loss.
-      // Recover gradually instead of permanently rejecting the new calibration.
-      const float step = std::clamp(0.1f * innovation, -0.035f, 0.035f);
-      state->acceleration_world_yaw_rad = state->acceleration_world_yaw_valid
-          ? wrap_pi(state->acceleration_world_yaw_rad + step) : world_yaw;
-      state->acceleration_world_yaw_valid = true;
+      if (state->acceleration_world_yaw_valid) {
+        // Refine an already confirmed AHRS-world frame slowly during motion.
+        const float innovation = wrap_pi(world_yaw - state->acceleration_world_yaw_rad);
+        const float step = std::clamp(0.1f * innovation, -0.035f, 0.035f);
+        state->acceleration_world_yaw_rad = wrap_pi(state->acceleration_world_yaw_rad + step);
+      } else {
+        initial_estimate = world_yaw;
+      }
+    }
+    if (!state->acceleration_world_yaw_valid) {
+      auto& confirmation = state->acceleration_yaw_confirmation;
+      if (!initial_estimate && confirmation.pending() && cfg.translation_yaw_check_enabled) {
+        initial_estimate = translation.select_hemisphere(confirmation.candidate_rad());
+      }
+      uint64_t pose_ns = 0;
+      float provider_xyzw[4] = {}, optical_xyzw[4] = {};
+      if (state->acceleration_world_alignment.latest_matched_pose(pose_ns, provider_xyzw, optical_xyzw) &&
+          confirmation.observe(pose_ns, provider_xyzw, optical_xyzw, initial_estimate,
+              cfg.acceleration_yaw_stable_ms, cfg.acceleration_yaw_stable_max_range_deg)) {
+        state->acceleration_world_yaw_rad = wrap_pi(confirmation.candidate_rad());
+        state->acceleration_world_yaw_valid = true;
+        confirmation.reset();
+      }
     }
     state->acceleration_world_yaw_frame_sequence = optical_sequence;
   }
@@ -2402,6 +2425,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       // Drop the old optical anchor so a later IMU reconnect cannot resume a
       // prediction from stale coordinates.
       clear_imu_position_loss_state(*runtime_state, true);
+      if (!runtime_state->acceleration_world_yaw_valid) runtime_state->acceleration_yaw_confirmation.reset();
     }
 
     const RuntimeControllerMovementSpace movement_space =
