@@ -94,6 +94,16 @@ class InputProvider {
     return false;
   }
 
+  // Apply in native sensor axes before AHRS. Return true only when changed;
+  // repeated config synchronization must not restart the filter. Providers
+  // clear queued measurements learned with the old calibration on a change.
+  virtual bool set_accelerometer_calibration(
+      const DeviceInfo& device, const imu::AccelerometerCalibration& calibration) {
+    (void)device;
+    (void)calibration;
+    return false;
+  }
+
   // Release provider-owned OS handles stored in DeviceInfo. This keeps reattach
   // platform-neutral: the core can rescan devices without knowing whether the
   // provider uses POSIX fds, Windows HANDLEs, or another native resource.

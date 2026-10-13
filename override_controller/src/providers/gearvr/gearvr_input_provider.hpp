@@ -28,6 +28,8 @@ class GearVrInputProvider final : public InputProvider {
   xr_runtime::ControllerImuStateV1 imu_state(const DeviceInfo& device) const override;
   xr_runtime::ControllerImuStateV1 consume_imu_state(const DeviceInfo& device) override;
   bool has_pending_imu(const DeviceInfo& device) const override;
+  bool set_accelerometer_calibration(
+      const DeviceInfo& device, const imu::AccelerometerCalibration& calibration) override;
   void close_devices(std::vector<DeviceInfo>& devices) override;
   bool set_device_grab(std::vector<DeviceInfo>& devices,
                        const std::set<size_t>& device_indices,

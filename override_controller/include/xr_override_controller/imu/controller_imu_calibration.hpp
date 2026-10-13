@@ -1,67 +1,90 @@
 #pragma once
 
-#include <xr_override_controller/imu/controller_imu_processor.hpp>
-#include <nlohmann/json.hpp>
+#include <xr_override_controller/input_provider.hpp>
 
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
-#include <string>
 
 namespace xr_override_controller::imu {
 
-inline std::filesystem::path controller_imu_calibration_path() {
-  const char* explicit_path = std::getenv("OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE");
-  if (explicit_path && *explicit_path) return explicit_path;
-  const char* config_home = std::getenv("XDG_CONFIG_HOME");
-  if (config_home && *config_home) {
-    return std::filesystem::path(config_home) / "xr_tracking/override_controller/controller_imu_calibration.json";
+inline void validate_accelerometer_calibration(const AccelerometerCalibration& c) {
+  const auto valid_axis = [](float bias, float scale) {
+    return std::isfinite(bias) && std::abs(bias) <= 2.0f &&
+           std::isfinite(scale) && scale >= 0.5f && scale <= 2.0f;
+  };
+  if (!valid_axis(c.bias_m_s2.x, c.scale.x) ||
+      !valid_axis(c.bias_m_s2.y, c.scale.y) ||
+      !valid_axis(c.bias_m_s2.z, c.scale.z)) {
+    throw std::invalid_argument("invalid controller accelerometer calibration");
   }
-  const char* user_home = std::getenv("HOME");
-  if (user_home && *user_home) {
-    return std::filesystem::path(user_home) / ".config/xr_tracking/override_controller/controller_imu_calibration.json";
-  }
-  return {};
 }
 
-// Load once when a physical session is created, not in the sensor loop. Keys
-// are provider stable IDs, so changing left/right bindings cannot swap sensors'
-// measured bias. A missing optional file/device retains the uncalibrated path.
-inline AccelerometerCalibration load_accelerometer_calibration(const std::string& device_id) {
-  const auto path = controller_imu_calibration_path();
-  if (path.empty() || path == "none") return {};
-  std::ifstream input(path);
-  if (!input) return {};
-  try {
-    nlohmann::json document;
-    input >> document;
-    if (document.at("schema_version").get<int>() != 1 || !document.at("devices").is_object()) {
-      throw std::invalid_argument("expected schema_version=1 and devices object");
+inline bool same_accelerometer_calibration(const AccelerometerCalibration& a,
+                                          const AccelerometerCalibration& b) {
+  return a.enabled == b.enabled && (!a.enabled ||
+      (a.bias_m_s2.x == b.bias_m_s2.x && a.bias_m_s2.y == b.bias_m_s2.y &&
+       a.bias_m_s2.z == b.bias_m_s2.z && a.scale.x == b.scale.x &&
+       a.scale.y == b.scale.y && a.scale.z == b.scale.z));
+}
+
+// Use the same unique fingerprint match required for button and IMU routing.
+// device_id selects the config device; its current live match selects where
+// to apply the values. An unconnected/ambiguous template has no live match.
+inline int resolve_imu_config_device(const DeviceFingerprint& wanted,
+                                    const std::vector<DeviceInfo>& devices) {
+  int best_score = -1;
+  int best_index = -1;
+  bool ambiguous = false;
+  for (size_t i = 0; i < devices.size(); ++i) {
+    if (!devices[i].readable && !devices[i].identity_known) continue;
+    const int score = fingerprint_match_score(wanted, devices[i].fingerprint);
+    if (score > best_score) {
+      best_score = score;
+      best_index = static_cast<int>(i);
+      ambiguous = false;
+    } else if (score == best_score && score > 0) {
+      ambiguous = true;
     }
-    const auto& devices = document.at("devices");
-    const auto entry = devices.find(device_id);
-    if (entry == devices.end()) return {};
-    const auto read_vector = [](const nlohmann::json& value) {
-      if (!value.is_array() || value.size() != 3) throw std::invalid_argument("expected three sensor-axis values");
-      return Vec3f{value.at(0).get<float>(), value.at(1).get<float>(), value.at(2).get<float>()};
-    };
-    AccelerometerCalibration calibration;
-    calibration.enabled = true;
-    calibration.bias_m_s2 = read_vector(entry->at("accelerometer_bias_m_s2"));
-    calibration.scale = read_vector(entry->at("accelerometer_scale"));
-    ControllerImuProcessor validation;
-    validation.set_accelerometer_calibration(calibration);
-    std::cerr << "[override_controller] accelerometer calibration loaded for " << device_id
-              << " file=" << path << " bias_m_s2=(" << calibration.bias_m_s2.x << ','
-              << calibration.bias_m_s2.y << ',' << calibration.bias_m_s2.z << ") scale=("
-              << calibration.scale.x << ',' << calibration.scale.y << ',' << calibration.scale.z << ")\n";
-    return calibration;
-  } catch (const std::exception& error) {
-    std::cerr << "[override_controller][WARN] ignoring accelerometer calibration for "
-              << device_id << " file=" << path << ": " << error.what() << '\n';
-    return {};
+  }
+  return best_score >= 55 && !ambiguous ? best_index : -1;
+}
+
+// Synchronize before consuming any output. A provider may discover its IMU
+// only after the first packet; changing calibration discards that old output
+// so uncorrected orientation/force cannot be published as calibrated data.
+inline void configure_imu_calibrations(InputProvider& provider, const AppConfig& cfg,
+                                       const std::vector<DeviceInfo>& devices) {
+  std::vector<AccelerometerCalibration> wanted(devices.size());
+  std::vector<int> configured_ids(devices.size(), 0);
+  for (const auto& entry : cfg.imu_calibrations) {
+    if (!entry.accelerometer.enabled) continue;
+    const ConfigDevice* configured = nullptr;
+    for (const auto& d : cfg.devices) {
+      if (d.id == entry.device_id) configured = &d;
+    }
+    if (!configured) throw std::invalid_argument("IMU calibration references unknown device_id");
+    const int index = resolve_imu_config_device(configured->fingerprint, devices);
+    if (index < 0) continue;
+    if (configured_ids[index] != 0) {
+      throw std::invalid_argument("multiple calibrated device_id values resolve to the same IMU");
+    }
+    configured_ids[index] = entry.device_id;
+    wanted[index] = entry.accelerometer;
+  }
+  constexpr uint32_t required = xr_runtime::CONTROLLER_IMU_CAP_GYROSCOPE |
+                                xr_runtime::CONTROLLER_IMU_CAP_ACCELEROMETER;
+  for (size_t i = 0; i < devices.size(); ++i) {
+    // A button-only controller must never receive accelerometer correction.
+    if ((provider.imu_state(devices[i]).capability_flags & required) != required) continue;
+    if (provider.set_accelerometer_calibration(devices[i], wanted[i])) {
+      const auto& c = wanted[i];
+      std::cerr << "[override_controller] accelerometer calibration configured: device_id="
+                << configured_ids[i] << " enabled=" << (c.enabled ? "true" : "false")
+                << " source=config bias_m_s2=(" << c.bias_m_s2.x << ',' << c.bias_m_s2.y
+                << ',' << c.bias_m_s2.z << ") scale=(" << c.scale.x << ',' << c.scale.y
+                << ',' << c.scale.z << "); AHRS=reset\n";
+    }
   }
 }
 

@@ -206,7 +206,148 @@ void accelerometer_calibration_survives_clock_reset() {
   }
 }
 
+void captured_firmware_rollovers_keep_ahrs_epoch_and_history() {
+  struct Event { uint32_t before, after; uint64_t gap_ns; };
+  // Exact counter transitions and receive gaps from the 2026-10-13 capture.
+  const Event events[] = {{419394225,7000,41'927'100},
+                         {419429475,27850,23'136'600},
+                         {419421425,34200,40'917'900},
+                         {419420300,18675,28'540'100}};
+  for (const auto& event : events) {
+    GearVrImuStream wrapped(0.0f), reference(0.0f);
+    const uint64_t host = 90'000'000'000ULL;
+    require(wrapped.push(packet(event.before - 5000, event.before), host), "pre-wrap packet rejected");
+    require(reference.push(packet(event.before - 5000, event.before), host), "reference pre-wrap rejected");
+    const uint64_t extended = uint64_t(kTimestampWrapUs) + event.after;
+    require(wrapped.push(packet(event.after - 5000, event.after), host + event.gap_ns),
+            "captured Gear VR counter rollover rejected");
+    require(reference.push(packet(uint32_t(extended - 5000), uint32_t(extended)), host + event.gap_ns),
+            "continuous reference rejected");
+    require(wrapped.epoch() == 1 && wrapped.clock_wraps() == 1,
+            "normal 419430400-us rollover restarted AHRS epoch");
+    require(wrapped.latest.latest_device_timestamp_ticks == extended && wrapped.dropped_batches() == 0,
+            "rollover did not extend time or invented a measurement gap");
+    for (size_t axis = 0; axis < 4; ++axis) {
+      require(std::abs(wrapped.latest.orientation_xyzw[axis] - reference.latest.orientation_xyzw[axis]) < 1e-6f,
+              "rollover reset/integrated a wrong AHRS interval");
+    }
+    require(wrapped.consume().sequence == 1 && wrapped.consume().sequence == 2 && !wrapped.pending(),
+            "rollover discarded unpublished history");
+    require(!wrapped.push(packet(event.after - 5000, event.after), host + event.gap_ns + 1000),
+            "duplicate boundary packet counted twice");
+    require(wrapped.clock_wraps() == 1, "duplicate incremented rollover count");
+  }
+}
+
+void firmware_rollover_inside_notification_and_at_startup() {
+  for (bool startup : {false, true}) {
+    GearVrImuStream wrapped(0.0f), reference(0.0f);
+    const uint64_t host = 95'000'000'000ULL;
+    if (!startup) {
+      require(wrapped.push(packet(kTimestampWrapUs - 11000, kTimestampWrapUs - 6000), host),
+              "pre-boundary packet rejected");
+      require(reference.push(packet(kTimestampWrapUs - 11000, kTimestampWrapUs - 6000), host),
+              "reference packet rejected");
+    }
+    const auto boundary = packet(kTimestampWrapUs - 1975, 3025);
+    require(wrapped.push(boundary, host + 10'000'000), "rollover inside BLE notification rejected");
+    require(reference.push(packet(kTimestampWrapUs - 1975, kTimestampWrapUs + 3025), host + 10'000'000),
+            "reference boundary packet rejected");
+    require(wrapped.epoch() == 1 && wrapped.clock_wraps() == 1 && wrapped.latest.sample_count == 2,
+            "intra-notification rollover changed epoch/sample count");
+    require(wrapped.latest.samples[0].device_timestamp_ticks == kTimestampWrapUs - 1975 &&
+            wrapped.latest.samples[1].device_timestamp_ticks == uint64_t(kTimestampWrapUs) + 3025,
+            "boundary samples lost their chronological acquisition times");
+    for (size_t axis = 0; axis < 4; ++axis) {
+      require(std::abs(wrapped.latest.orientation_xyzw[axis] - reference.latest.orientation_xyzw[axis]) < 1e-6f,
+              "intra-notification rollover changed AHRS");
+    }
+  }
+}
+
+void two_firmware_periods_preserve_clock_mapping_and_filter() {
+  GearVrImuStream wrapped(0.0f), reference(0.0f);
+  const uint64_t host = 100'000'000'000ULL;
+  uint64_t last_host = 0;
+  const uint64_t end = uint64_t(kTimestampWrapUs) * 2 + 50'000;
+  for (uint64_t first = 10000; first < end; first += 10000) {
+    const uint64_t receive = host + (first - 10000) * 1000;
+    require(wrapped.push(packet(uint32_t(first % kTimestampWrapUs),
+                                uint32_t((first + 5000) % kTimestampWrapUs)), receive),
+            "continuous two-period firmware stream rejected a packet");
+    require(reference.push(packet(uint32_t(first), uint32_t(first + 5000)), receive),
+            "two-period reference rejected a packet");
+    const auto state = wrapped.consume(); reference.consume();
+    require(wrapped.epoch() == 1 && wrapped.dropped_batches() == 0,
+            "long-running counter rollover changed epoch or dropped data");
+    require(state.latest_device_timestamp_ticks == first + 5000,
+            "second firmware rollover lost the accumulated device time");
+    for (size_t i = 0; i < state.sample_count; ++i) {
+      require(state.samples[i].timestamp_ns > last_host && state.samples[i].timestamp_ns <= receive,
+              "rollover produced reversed/future host sample time");
+      last_host = state.samples[i].timestamp_ns;
+    }
+    for (size_t axis = 0; axis < 4; ++axis) {
+      require(std::abs(state.orientation_xyzw[axis] - reference.latest.orientation_xyzw[axis]) < 1e-6f,
+              "long-running rollover changed the AHRS trajectory");
+    }
+  }
+  require(wrapped.clock_wraps() == 2, "two firmware counter periods were not detected exactly once");
+  require(std::abs(wrapped.clock_diagnostics().scale - reference.clock_diagnostics().scale) < 1e-10,
+          "firmware rollover restarted/changed the affine clock model");
+}
+
+void boundary_overlap_before_startup_origin_skips_only_the_old_record() {
+  GearVrImuStream wrapped(0.0f), reference(0.0f);
+  const uint64_t host = 105'000'000'000ULL;
+  require(wrapped.push(packet(1000,6000),host), "post-wrap startup rejected");
+  require(reference.push(packet(1000,6000),host), "overlap reference startup rejected");
+  require(wrapped.push(packet(kTimestampWrapUs - 3000,7000),host + 1'000'000),
+          "older pre-startup boundary record prevented fresh sample delivery");
+  require(reference.push(packet(6000,7000),host + 1'000'000), "overlap reference rejected");
+  require(wrapped.epoch() == 1 && wrapped.clock_wraps() == 0 && wrapped.latest.sample_count == 1 &&
+          wrapped.latest.samples[0].device_timestamp_ticks == 7000,
+          "pre-startup overlap underflowed time or reprocessed old data");
+  for (size_t axis = 0; axis < 4; ++axis) {
+    require(std::abs(wrapped.latest.orientation_xyzw[axis] - reference.latest.orientation_xyzw[axis]) < 1e-6f,
+            "pre-startup overlap invented a huge AHRS interval");
+  }
+}
+
+void real_restart_and_measurement_gap_near_firmware_boundary() {
+  const uint64_t host = 110'000'000'000ULL;
+  GearVrImuStream restarted(0.0f);
+  require(restarted.push(packet(kTimestampWrapUs - 1000000, kTimestampWrapUs - 995000), host),
+          "pre-restart packet rejected");
+  require(restarted.push(packet(50000,55000), host + 10'000'000), "real reboot packet rejected");
+  require(restarted.epoch() == 2 && restarted.clock_wraps() == 0 &&
+          restarted.latest.latest_device_timestamp_ticks == 55000,
+          "real counter reboot was incorrectly treated as continuous rollover");
+  GearVrImuStream gap(0.0f), reference(0.0f);
+  const uint32_t previous = kTimestampWrapUs - 100000;
+  require(gap.push(packet(previous - 5000, previous), host), "pre-gap packet rejected");
+  require(reference.push(packet(previous - 5000, previous), host), "reference pre-gap rejected");
+  require(gap.push(packet(295000,300000), host + 400'000'000), "gap across rollover rejected");
+  require(reference.push(packet(previous + 5000, previous + 10000), host + 10'000'000),
+          "gap reference rejected");
+  require(gap.epoch() == 1 && gap.clock_wraps() == 1 && gap.dropped_batches() == 2,
+          "rollover concealed a real missing interval or restarted AHRS");
+  for (size_t axis = 0; axis < 4; ++axis) {
+    require(std::abs(gap.latest.orientation_xyzw[axis] - reference.latest.orientation_xyzw[axis]) < 1e-6f,
+            "missing interval at rollover was integrated or reset AHRS");
+  }
+  const auto epoch = gap.epoch();
+  require(!gap.push(packet(kTimestampWrapUs - 1000,200000), host + 410'000'000),
+          "malformed boundary notification was accepted");
+  require(gap.epoch() == epoch, "rejected malformed packet changed epoch");
+}
+
 int main() {
+  captured_firmware_rollovers_keep_ahrs_epoch_and_history();
+  firmware_rollover_inside_notification_and_at_startup();
+  two_firmware_periods_preserve_clock_mapping_and_filter();
+  boundary_overlap_before_startup_origin_skips_only_the_old_record();
+  real_restart_and_measurement_gap_near_firmware_boundary();
   accelerometer_calibration_survives_clock_reset();
   gravity_reference_controls_orientation_validity();
   wrap_reset_and_fifo();

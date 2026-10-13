@@ -114,6 +114,8 @@ if(EXISTS "${OVERRIDE_CONTROLLER_CONFIG_SOURCE_DIR}")
 endif()
 
 set(OVERRIDE_CONTROLLER_TOOL_FILES
+  "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_controller_accelerometer.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/record_controller_imu.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_imu_axes.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_controller_orientation_offset.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/watch_controller_input_stream.py"
@@ -150,7 +152,8 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
     src/core/config_io.cpp
     src/core/types.cpp
   )
-  target_include_directories(controller_imu_calibration_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+  target_include_directories(controller_imu_calibration_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/include" "${XR_SHARED_INCLUDE_DIR}")
   if(TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(controller_imu_calibration_test PRIVATE nlohmann_json::nlohmann_json)
   else()
@@ -158,6 +161,11 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   endif()
   target_link_libraries(controller_imu_calibration_test PRIVATE Threads::Threads)
   add_test(NAME controller_imu_calibration_test COMMAND controller_imu_calibration_test)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME calibrate_controller_accelerometer_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/calibrate_controller_accelerometer_test.py")
+  endif()
   add_executable(gearvr_imu_stream_test
     tests/gearvr_imu_stream_test.cpp
     src/providers/gearvr/gearvr_imu_stream.cpp

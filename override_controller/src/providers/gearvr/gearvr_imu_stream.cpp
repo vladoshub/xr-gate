@@ -5,6 +5,30 @@
 #include <cmath>
 
 namespace xr_override_controller::gearvr {
+namespace {
+
+constexpr uint64_t kMaxPacketSpanUs = 100'000;
+
+struct TimestampDelta {
+  uint32_t us;
+  bool firmware_wrap;
+};
+
+TimestampDelta timestamp_delta(uint32_t previous, uint32_t current,
+                               uint64_t max_wrap_interval_us) {
+  if (current < previous && previous < kTimestampWrapUs && current < kTimestampWrapUs) {
+    const uint32_t continued = kTimestampWrapUs - previous + current;
+    // A real restart away from the boundary must still reset AHRS. Accept
+    // firmware rollover only when its forward interval fits the receive gap
+    // (plus a small allowance for BLE jitter and batched delivery).
+    if (continued < kTimestampWrapUs / 2 && continued <= max_wrap_interval_us) {
+      return {continued, true};
+    }
+  }
+  return {current - previous, false};
+}
+
+}  // namespace
 
 void GearVrImuStream::mark_stale() {
   using namespace xr_runtime;
@@ -24,6 +48,7 @@ void GearVrImuStream::reset() {
   last_raw_us_ = 0;
   last_device_us_ = 0;
   last_host_ns_ = 0;
+  last_receive_ns_ = 0;
   latest = {};
   ++epoch_;
 }
@@ -33,21 +58,30 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
   if (host_receive_ns == 0) return false;
   const uint32_t first_raw = packet.imu_samples.front().device_timestamp_us;
   const uint32_t newest_raw = packet.imu_samples.back().device_timestamp_us;
-  const uint32_t packet_span_us = newest_raw - first_raw;
-  // Reject malformed/reversed records, but accept a wrap inside a packet.
-  if (packet_span_us == 0 || packet_span_us > 100'000u) return false;
+  const auto packet_delta = timestamp_delta(first_raw, newest_raw, kMaxPacketSpanUs);
+  const uint32_t packet_span_us = packet_delta.us;
+  // Reject malformed/reversed records, but accept either rollover inside
+  // the two-sample notification without dropping a measurement.
+  if (packet_span_us == 0 || packet_span_us > kMaxPacketSpanUs) return false;
 
+  TimestampDelta forward{0, false};
   if (have_device_time_) {
-    const uint32_t forward_us = newest_raw - last_raw_us_;
-    if (forward_us == 0) return false;  // Duplicate notification.
-    if (forward_us >= 0x80000000u) reset();  // Device clock restarted.
+    const uint64_t receive_gap_us = host_receive_ns > last_receive_ns_
+        ? (host_receive_ns - last_receive_ns_) / 1000 : 0;
+    forward = timestamp_delta(last_raw_us_, newest_raw, receive_gap_us + kMaxPacketSpanUs);
+    if (forward.us == 0) return false;  // Duplicate notification.
+    if (forward.us >= 0x80000000u) reset();  // Genuine restart/backwards clock.
   }
   const bool had_previous = have_device_time_;
   const uint64_t previous_device_us = last_device_us_;
   const uint64_t newest_us = had_previous
-      ? last_device_us_ + static_cast<uint32_t>(newest_raw - last_raw_us_)
+      ? last_device_us_ + forward.us
       : static_cast<uint64_t>(first_raw) + packet_span_us;
-  const std::array<uint64_t, 2> device_us{newest_us - packet_span_us, newest_us};
+  // Startup may begin just after rollover, followed by an overlapping
+  // notification whose older record predates our epoch origin. Skip that
+  // already-old record; do not let unsigned subtraction invent a huge tick.
+  const std::array<uint64_t, 2> device_us{
+      newest_us >= packet_span_us ? newest_us - packet_span_us : 0, newest_us};
   const uint64_t newest_host_ns = clock_.map_us(newest_us, host_receive_ns);
   const double scale = clock_.diagnostics().scale;
   std::array<uint64_t, 2> host_ns{};
@@ -134,8 +168,12 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
   }
   if (state.sample_count == 0) return false;
   have_device_time_ = true;
+  if ((had_previous && forward.firmware_wrap) || (!had_previous && packet_delta.firmware_wrap)) {
+    ++clock_wraps_;
+  }
   last_raw_us_ = newest_raw;
   last_device_us_ = newest_us;
+  last_receive_ns_ = host_receive_ns;
   state.latest_sample_timestamp_ns = last_host_ns_;
   state.orientation_timestamp_ns = last_host_ns_;
   state.latest_device_timestamp_ticks = newest_us;

@@ -2,6 +2,7 @@
 #include <xr_override_controller/config_io.hpp>
 #include <xr_override_controller/controller_input_publisher.hpp>
 #include <xr_override_controller/input_provider.hpp>
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 #include <xr_override_controller/imu/controller_imu_transform.hpp>
 #include <xr_override_controller/types.hpp>
 #include <xr_runtime/registry/runtime_paths.hpp>
@@ -1567,6 +1568,7 @@ OutputState compose_state(InputProvider& provider,
                           bool allow_shared_physical_device_sides,
                           bool* more_imu = nullptr) {
   OutputState out;
+  imu::configure_imu_calibrations(provider, cfg, devices);
   // Resolve/consume a physical device only once, even with multiple bindings
   // or explicit sharing between the two controller sides.
   std::map<size_t, xr_runtime::ControllerImuStateV1> imu_batches;

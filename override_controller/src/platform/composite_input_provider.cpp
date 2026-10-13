@@ -185,6 +185,12 @@ xr_runtime::ControllerImuStateV1 CompositeInputProvider::consume_imu_state(const
   return providers_[device.provider_slot]->consume_imu_state(device);
 }
 
+bool CompositeInputProvider::set_accelerometer_calibration(
+    const DeviceInfo& device, const imu::AccelerometerCalibration& calibration) {
+  return device.provider_slot < providers_.size() &&
+      providers_[device.provider_slot]->set_accelerometer_calibration(device, calibration);
+}
+
 bool CompositeInputProvider::has_pending_imu(const DeviceInfo& device) const {
   return device.provider_slot < providers_.size() &&
          providers_[device.provider_slot]->has_pending_imu(device);

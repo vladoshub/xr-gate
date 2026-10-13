@@ -20,6 +20,9 @@ class GearVrImuStream {
     processor_.set_accelerometer_calibration(calibration);
     if (have_device_time_) reset();
   }
+  const imu::AccelerometerCalibration& accelerometer_calibration() const {
+    return processor_.accelerometer_calibration();
+  }
 
   bool push(const DecodedPacket& packet, uint64_t host_receive_ns);
   xr_runtime::ControllerImuStateV1 consume();
@@ -31,6 +34,7 @@ class GearVrImuStream {
   void reset();
   uint32_t epoch() const { return epoch_; }
   uint32_t dropped_batches() const { return dropped_batches_; }
+  uint32_t clock_wraps() const { return clock_wraps_; }
   xr_tracking::AffineDeviceClockMapper::Diagnostics clock_diagnostics() const {
     return clock_.diagnostics();
   }
@@ -45,9 +49,11 @@ class GearVrImuStream {
   uint32_t last_raw_us_ = 0;
   uint64_t last_device_us_ = 0;
   uint64_t last_host_ns_ = 0;
+  uint64_t last_receive_ns_ = 0;
   uint64_t sequence_ = 0;
   uint32_t epoch_ = 1;
   uint32_t dropped_batches_ = 0;
+  uint32_t clock_wraps_ = 0;
 };
 
 }  // namespace xr_override_controller::gearvr

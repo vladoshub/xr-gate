@@ -4,6 +4,7 @@
 #include "capture_service_cpp/protocols/xr_controller_v1.hpp"
 
 #include <xr_override_controller/controller_input_publisher.hpp>
+#include <xr_override_controller/imu/controller_imu_calibration.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -123,7 +124,52 @@ void serial_gravity_reference_controls_orientation_validity() {
           "serial reconnect retained an initialized old gravity reference");
 }
 
+void serial_config_calibration_resets_once_and_reaches_native_samples() {
+  ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}});
+  auto devices = provider.scan_devices(true);
+  const uint64_t receive_ns = test_now_ns() - 40'000'000;
+  serial->enqueue("left", 0, 1'000'000, receive_ns, 1);
+  provider.wait_event(devices, 1, false);
+  oc::AppConfig cfg;
+  oc::ConfigDevice d;
+  d.id = 12; d.fingerprint = devices[0].fingerprint;
+  cfg.devices.push_back(d);
+  cfg.imu_calibrations.push_back({12, {true, {.1f,.2f,.3f}, {.99f,1.01f,1.02f}}});
+  oc::imu::configure_imu_calibrations(provider, cfg, devices);
+  require(!provider.has_pending_imu(devices[0]) && provider.imu_state(devices[0]).sample_count == 0,
+          "serial calibration retained queued uncorrected samples");
+  serial->enqueue("left", 1, 1'004'808, receive_ns + 4'808'000, 1);
+  provider.wait_event(devices, 1, false);
+  auto state = provider.imu_state(devices[0]);
+  const auto epoch = state.reserved[CONTROLLER_IMU_DIAG_EPOCH];
+  require(state.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED,
+          "serial ignored device_id calibration");
+  require(std::abs(state.samples[0].specific_force_m_s2[1] - (9.81f - .2f) * 1.01f) < 1e-5f,
+          "serial applied calibration after basis transform or more than once");
+  oc::imu::configure_imu_calibrations(provider, cfg, devices);
+  require(provider.has_pending_imu(devices[0]) &&
+          provider.imu_state(devices[0]).reserved[CONTROLLER_IMU_DIAG_EPOCH] == epoch,
+          "serial restarted AHRS for unchanged calibration");
+  serial->snapshots[0].connected = false;
+  provider.wait_event(devices, 1, false);
+  serial->snapshots[0].connected = true;
+  serial->enqueue("left", 0, 0, receive_ns + 10'000'000, 1);
+  provider.wait_event(devices, 1, false);
+  require(provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED,
+          "serial reconnect lost coefficients");
+  cfg.imu_calibrations.clear();
+  oc::imu::configure_imu_calibrations(provider, cfg, devices);
+  serial->enqueue("left", 1, 4808, receive_ns + 14'808'000, 1);
+  provider.wait_event(devices, 1, false);
+  state = provider.imu_state(devices[0]);
+  require(!(state.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED),
+          "serial retained coefficients absent from selected config");
+  require(std::abs(state.samples[0].specific_force_m_s2[1] - 9.81f) < 1e-5f,
+          "serial disabled correction still changed force");
+}
+
 int main() {
+  serial_config_calibration_resets_once_and_reaches_native_samples();
   serial_gravity_reference_controls_orientation_validity();
   static_assert(sizeof(ControllerInputV3) == 1432, "controller ABI changed");
   ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});

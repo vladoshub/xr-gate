@@ -220,8 +220,6 @@ struct XiaoNrf54l15InputProvider::Impl {
         session_ptr = std::make_unique<Session>(
             static_cast<float>(options.madgwick_beta));
         session_ptr->stable_id = snapshot.stable_id;
-        session_ptr->imu_processor.set_accelerometer_calibration(
-            imu::load_accelerometer_calibration(snapshot.stable_id));
       }
       Session& session = *session_ptr;
       session.seen = true;
@@ -735,6 +733,19 @@ xr_runtime::ControllerImuStateV1 XiaoNrf54l15InputProvider::consume_imu_state(
 bool XiaoNrf54l15InputProvider::has_pending_imu(const DeviceInfo& device) const {
   const auto* session = impl_->session_for_device_uniq(device.fingerprint.uniq);
   return session && !session->pending_imu.empty();
+}
+
+bool XiaoNrf54l15InputProvider::set_accelerometer_calibration(
+    const DeviceInfo& device, const imu::AccelerometerCalibration& calibration) {
+  for (auto& [id, session] : impl_->sessions) {
+    if (session->fingerprint.uniq != device.fingerprint.uniq) continue;
+    if (imu::same_accelerometer_calibration(
+            session->imu_processor.accelerometer_calibration(), calibration)) return false;
+    session->imu_processor.set_accelerometer_calibration(calibration);
+    impl_->reset_packet_timing(*session);
+    return true;
+  }
+  return false;
 }
 
 void XiaoNrf54l15InputProvider::close_devices(

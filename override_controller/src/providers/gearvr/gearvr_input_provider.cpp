@@ -207,8 +207,6 @@ struct GearVrInputProvider::Impl {
         session_ptr = std::make_unique<Session>(
             static_cast<float>(options.madgwick_beta), touchpad_options());
         session_ptr->stable_id = snapshot.stable_id;
-        session_ptr->imu_stream.set_accelerometer_calibration(
-            imu::load_accelerometer_calibration(snapshot.stable_id));
       }
       Session& session = *session_ptr;
       session.seen = true;
@@ -282,6 +280,7 @@ struct GearVrInputProvider::Impl {
     const auto previous = session.imu_stream.latest;
     const uint32_t epoch_before = session.imu_stream.epoch();
     const uint32_t dropped_before = session.imu_stream.dropped_batches();
+    const uint32_t wraps_before = session.imu_stream.clock_wraps();
     const bool accepted = session.imu_stream.push(*decoded, packet_host_ns);
     if (accepted && options.madgwick_beta > 0 &&
         (session.imu_stream.latest.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) != 0u &&
@@ -300,20 +299,29 @@ struct GearVrInputProvider::Impl {
                 << " previous_ticks=" << previous.latest_device_timestamp_ticks
                 << " newest_raw_us=" << decoded->imu_samples.back().device_timestamp_us
                 << " host_gap_ms=" << double(host_gap_ns) / 1.0e6 << "; AHRS=reset\n";
+    } else if (accepted && session.imu_stream.clock_wraps() != wraps_before) {
+      std::cerr << "[override_controller] Gear VR IMU clock wrap for "
+                << session.stable_id << ": reason=clock_wrap period_us=" << kTimestampWrapUs
+                << " wraps=" << session.imu_stream.clock_wraps()
+                << " epoch=" << epoch_before
+                << " extended_ticks=" << session.imu_stream.latest.latest_device_timestamp_ticks
+                << "; AHRS=retained yaw=retained\n";
     } else if (accepted && host_gap_ns > kStaleNs) {
       std::cerr << "[override_controller] Gear VR IMU delivery resumed for "
                 << session.stable_id << ": reason=host_receive_gap host_gap_ms="
                 << double(host_gap_ns) / 1.0e6 << " device_gap_us="
-                << (decoded->imu_samples.back().device_timestamp_us -
-                    static_cast<uint32_t>(previous.latest_device_timestamp_ticks))
+                << (session.imu_stream.latest.latest_device_timestamp_ticks -
+                    previous.latest_device_timestamp_ticks)
                 << " epoch=" << epoch_before << "; AHRS=retained\n";
     }
     if (session.imu_stream.dropped_batches() != dropped_before &&
         (session.last_imu_drop_warning_ns == 0 ||
          packet_host_ns - session.last_imu_drop_warning_ns >= 1'000'000'000ull)) {
       session.last_imu_drop_warning_ns = packet_host_ns;
-      const uint32_t first_gap_us = decoded->imu_samples.front().device_timestamp_us -
-          static_cast<uint32_t>(previous.latest_device_timestamp_ticks);
+      const auto& current = session.imu_stream.latest;
+      const uint64_t first_gap_us = accepted && current.sample_count != 0 &&
+          current.samples[0].device_timestamp_ticks > previous.latest_device_timestamp_ticks
+              ? current.samples[0].device_timestamp_ticks - previous.latest_device_timestamp_ticks : 0;
       const bool missing_interval = accepted && previous.sequence != 0 &&
           session.imu_stream.epoch() == epoch_before &&
           first_gap_us > 250'000u && first_gap_us < 0x80000000u;
@@ -513,6 +521,16 @@ xr_runtime::ControllerImuStateV1 GearVrInputProvider::consume_imu_state(const De
 bool GearVrInputProvider::has_pending_imu(const DeviceInfo& device) const {
   const auto it = impl_->sessions.find(device.fingerprint.uniq);
   return it != impl_->sessions.end() && it->second->imu_stream.pending();
+}
+
+bool GearVrInputProvider::set_accelerometer_calibration(
+    const DeviceInfo& device, const imu::AccelerometerCalibration& calibration) {
+  const auto it = impl_->sessions.find(device.fingerprint.uniq);
+  if (it == impl_->sessions.end()) return false;
+  auto& stream = it->second->imu_stream;
+  if (imu::same_accelerometer_calibration(stream.accelerometer_calibration(), calibration)) return false;
+  stream.set_accelerometer_calibration(calibration);
+  return true;
 }
 
 void GearVrInputProvider::close_devices(std::vector<DeviceInfo>& devices) {

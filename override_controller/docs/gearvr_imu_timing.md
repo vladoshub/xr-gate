@@ -53,7 +53,7 @@ is unknown. With the runtime yaw-continuity fix, a drop-counter change resets
 position prediction while retaining optical yaw alignment. Motion while samples
 were missing cannot be reconstructed.
 
-A real BLE disconnect or backwards device-clock jump still resets the AHRS and
+A real BLE disconnect or non-rollover backwards device-clock jump still resets the AHRS and
 starts a new epoch. The provider logs these reasons separately from host receive
 timeouts and recovery. A periodic core reattach scan taking at least 100 ms also
 logs how long it paused input polling, to help locate recurring transport stalls.
@@ -111,3 +111,31 @@ The Linux runtime test uses the real publisher and POSIX SHM reader to verify
 burst delivery, per-batch acceleration orientation, deduplication, reconnect
 state reset and ring overrun/restart detection. Physical-controller validation
 is still required for actual transport latency and firmware behavior.
+
+## Gear VR firmware counter rollover
+
+The two controllers in the 2026-10-13 capture roll their timestamp field at
+419,430,400 microseconds (`25 * 2^24`, about 6 min 59.43 sec), despite the field
+occupying four bytes. Treating this as ordinary uint32 time classified each
+rollover as a device restart, reset AHRS/epoch, and cleared runtime world-yaw
+alignment. Both controllers repeated the transition at the same boundary.
+
+The stream extends this observed firmware period both between notifications
+and between the two samples inside one notification. It accepts a firmware
+rollover only when the resulting interval fits the host receive gap plus
+100 ms of allowance for BLE jitter/batched delivery. Within a notification,
+the existing 100 ms sample-span limit still applies. Ordinary full-uint32
+rollover remains supported. A genuine reset away from the expected boundary
+continues to start a new epoch; disconnects retain their existing reset policy.
+
+Normal rollover preserves AHRS, gyro/accelerometer calibration, clock fitting,
+queued history, sample intervals and epoch. `reason=clock_wrap` is logged once
+per rollover with `AHRS=retained yaw=retained`. Published device ticks remain
+monotonic in uint64, while the existing one-million-ticks-per-second ABI and
+sample layout stay the same. A real missing interval through the boundary
+still increments drop diagnostics and restarts position prediction without
+clearing the confirmed yaw.
+
+Regression tests replay all four captured clock transitions, startup and
+intra-notification rollovers, pre-startup overlap, two complete firmware
+periods, duplicate packets, real MCU restart, and missing/invalid records.

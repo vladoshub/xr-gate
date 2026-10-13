@@ -1,70 +1,124 @@
-# Per-device accelerometer calibration
+# Accelerometer calibration in the controller config
 
-Position prediction needs specific force in SI units. A stationary controller
-with a force magnitude of 10.3 m/s2 instead of 9.80665 m/s2 creates roughly
-0.5 m/s2 of false acceleration after gravity subtraction. Integrating that
-error for 1.2 seconds can move the position by tens of centimetres.
+The selected controller profile (`--config` / `CONFIG_PATH`) is the only source
+of persistent accelerometer corrections. The old separate
+`controller_imu_calibration.json` and `OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE`
+are not read. Legacy side files are still excluded from profile selection.
 
-Use six stationary orientations spanning positive and negative X, Y and Z
-to fit a fixed bias and scale for each physical sensor. The correction is
-`corrected_force[axis] = (measured_force[axis] - bias[axis]) * scale[axis]`.
-It runs before AHRS gravity initialization, Madgwick updates and publication
-of timed acceleration samples. It does not normalize individual measurements
-to gravity; real linear acceleration must remain available.
-
-## File and physical identity
-
-The default file is
-`$XDG_CONFIG_HOME/xr_tracking/override_controller/controller_imu_calibration.json`,
-or `~/.config/xr_tracking/override_controller/controller_imu_calibration.json`.
-The launcher uses `CONFIG_DIR/controller_imu_calibration.json` and passes its
-absolute path through sudo. Override the path with
-`OVERRIDE_CONTROLLER_IMU_CALIBRATION_FILE`; set it to `none` to disable loading.
-Restart the provider after changing the file.
-The canonical filename is excluded from controller bindings/profile discovery.
-Keep a custom calibration filename outside the bindings directory.
+Each record refers to `devices[].id`, using the same integer `device_id` as
+button bindings. No BLE UUID/address or side name is stored in a calibration:
 
 ```json
-{
-  "schema_version": 1,
-  "devices": {
-    "gearvr_ble:AA:BB:CC:DD:EE:FF": {
-      "accelerometer_bias_m_s2": [0.0, 0.0, 0.0],
-      "accelerometer_scale": [1.0, 1.0, 1.0]
-    }
+"imu_calibrations": [
+  {
+    "device_id": 1,
+    "enabled": true,
+    "accelerometer_bias_m_s2": [-0.10727315, -0.07759059, 0.43145744],
+    "accelerometer_scale": [0.99019083, 0.99454659, 0.98612358]
   }
-}
+]
 ```
 
-Keys are provider stable device IDs, not left/right roles or the hexadecimal
-device hashes in the recorder CSV. Gear VR IDs include the Bluetooth address.
-Changing hand bindings cannot move one sensor's calibration onto another.
-The serial xr_controller provider uses the same optional file and correction.
+`override_controller/configs/empty_gearvr.json` includes the previously measured
+coefficients for configured device 1 (left) and device 2 (right), with generic
+empty device fingerprints. Use `--connect-devices` to associate a template's
+configured IDs with actual controllers. Calibration does not replace that
+normal connection step. If a trained profile is already in use, copy only the
+`imu_calibrations` array into that profile; keep its devices and bindings.
 
-Values use **native sensor axes before provider basis/mounting transforms**.
-The recorder CSV already contains the configured provider basis. For the usual
-Gear VR basis rotation of -90 degrees about X, recorded vectors are
-`(native_x, native_z, -native_y)`. Convert fitted recorded-axis bias back to
-`(bias_x, -bias_z, bias_y)` and scale back to `(scale_x, scale_z, scale_y)`.
-For another transform, invert that transform before fitting native values.
+## Application and validation
 
-A missing file or unmatched device retains the existing uncalibrated behavior.
-Malformed entries, non-finite values, bias magnitude above 2 m/s2 on any axis,
-or scale outside [0.5, 2] are rejected. Loading/rejection logs occur when a
-physical session is created, not for every measurement. Valid calibration
-survives AHRS, device-clock and reconnect resets. Batch and timed-sample flags
-include `CONTROLLER_IMU_ACCELEROMETER_CALIBRATED` when applied.
+Corrections operate on **native sensor axes**, in SI units, before gravity
+initialization, gyro bias acquisition and Madgwick integration:
+
+```text
+corrected[i] = (raw[i] - accelerometer_bias_m_s2[i]) * accelerometer_scale[i]
+```
+
+Per-device `orientation_transform` is applied later, before publication.
+`orientation_offset` changes only the published quaternion. Correction does
+not normalize force or remove the real acceleration used for prediction.
+
+The core uniquely resolves the configured device and verifies that the actual
+provider exposes both gyroscope and accelerometer capabilities. Button-only
+providers receive no calibration. Ambiguous matches receive no correction;
+two enabled calibrated IDs resolving to one IMU are rejected. Missing/disabled
+entries use the uncalibrated path. Unknown/duplicate IDs, malformed vectors,
+nonfinite values, bias outside ±2 m/s² and scale outside 0.5..2 are rejected
+when loading a profile.
+
+Gear VR BLE and XR Controller serial providers apply these values once to each
+fresh native sample. Changing correction clears old queued measurements and
+reinitializes AHRS/gyro acquisition. Repeated synchronization with identical
+values keeps the filter and queue. Reconnects retain the selected correction.
+Samples and state set `CONTROLLER_IMU_ACCELEROMETER_CALIBRATED` (64) when applied.
+The startup/first-live-packet message reports `device_id`, `source=config` and
+the values; it is not emitted for every frame.
+
+The coefficients follow the configured integer ID after `--connect-devices`.
+When that ID is assigned to another physical controller, measure its correction
+again. Device fingerprints may still be used for ordinary connection routing;
+they are not calibration keys.
+
+## Obtain a calibration on Linux
+
+`debug/calibrate_controller_accelerometer.py` uses Python 3 standard-library
+modules and `debug/record_controller_imu.py`, installed together under
+`bin/override_controller/tools/`. Cameras, `tracking.csv`, and optical poses
+are not required. Use the same connected profile as the running publisher.
+
+1. In `imu_calibrations`, set `enabled: false` for the device being measured
+   (or remove its entry). Leave the other controller's correction alone.
+2. Restart `override_controller` with that profile. Live raw IMU samples must
+   be available in the Linux `controller_input` SHM stream.
+3. Run from the repository root, replacing the profile path as needed:
+
+```bash
+python3 override_controller/debug/calibrate_controller_accelerometer.py \
+  --config ~/.config/xr_tracking/override_controller/gearvr.json \
+  --device-id 1 --output ./gearvr-device-1-capture.json --write-config
+```
+
+4. Follow six prompts: `+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`. The tool displays
+   **native** XYZ readings; rotate until the requested axis is approximately
+   +9.8 or -9.8 and the others are near zero. Hold still, preferably supported
+   on a surface, for 3 seconds per pose. Small placement tilts are accepted.
+5. The tool fits a diagonal gravity ellipsoid from all stationary samples,
+   validates spread/residuals and runtime limits, and writes only the selected
+   `imu_calibrations` record. It preserves other profile fields and IDs, creates
+   a timestamped `.bak`, and refuses to overwrite a concurrently changed profile.
+6. Restart `override_controller` to load the new record. Repeat with
+   `--device-id 2` after disabling/restarting for that device.
+
+`--write-config` is optional: without it, the script only prints the result and
+saves the requested report. Reports contain integer IDs and native-axis samples,
+not Bluetooth identities. Keep them outside the controller profile directory.
+Refit a saved capture without another hardware session:
+
+```bash
+python3 override_controller/debug/calibrate_controller_accelerometer.py \
+  --config ~/.config/xr_tracking/override_controller/gearvr.json \
+  --device-id 1 --samples ./gearvr-device-1-capture.json --write-config
+```
+
+Use `--registry` / `--stream` for custom SHM settings. If backend
+`gravity_magnitude` differs from 9.80665, pass that value via `--gravity`.
+Captures that still carry calibrated flags are rejected instead of applying a
+second correction. Movement, sample gaps, epoch changes, duplicate timestamps
+and missing poses cannot count toward a stationary hold.
+
+This fixed sensor calibration is separate from runtime optical/IMU world-yaw
+alignment and its stability wait. That alignment still happens during normal
+tracking.
 
 ## Verification
 
-Build with `OVERRIDE_CONTROLLER_BUILD_TESTS=ON`. The calibration test checks
-all six gravity directions, real acceleration, resets, physical device lookup
-and malformed scale rejection. The Gear VR stream test checks corrected timed
-forces and flags across a device-clock reset. Existing provider, gravity and
-delivery tests remain applicable.
+With `OVERRIDE_CONTROLLER_BUILD_TESTS=ON`, the calibration/provider tests cover
+ID routing independently of side/session order, roundtrip serialization,
+capability guards, invalid/ambiguous IDs, applying correction before AHRS,
+queued-data invalidation, duplicate application and reconnects. When Python 3
+is available, CTest also runs the fit/capture/config-write tests. Run directly:
 
-Validate the fitted values on separate stationary data, then repeat movement
-with both controllers' acceleration integration enabled. Sensor calibration
-reduces force bias; it does not measure constant Bluetooth/camera delay or
-remove attitude, launch-velocity and sensor-to-grip offset errors. Keep the
-normal prediction timeout, speed, path and distance limits.
+```bash
+python3 override_controller/tests/calibrate_controller_accelerometer_test.py
+```
