@@ -227,6 +227,43 @@ kept for position prediction and acceleration conversion, so periodic and
 reacquire yaw correction cannot move the hand in space. This also prevents presentation/mounting offsets from being learned again as yaw
 drift.
 
+The runtime defaults to smooth yaw correction. It compares interpolated IMU
+orientation with an accepted optical pose at the camera source timestamp, then
+advances only the retained yaw offset each runtime tick. Gyro motion is not
+scaled or low-pass filtered. Initial alignment is immediate; later correction,
+including optical reacquire, has a degrees-per-second limit. Source timestamps
+are required in smooth mode; legacy timestamp-less producers can use periodic
+mode instead.
+
+```bash
+export RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_SMOOTH=1
+export RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_DEADBAND_DEG=1
+export RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_MAX_SPEED_DEG_S=2
+export RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_TAU_MS=2000
+```
+
+The deadband is soft: only the residual outside it contributes to correction.
+The time constant sets an exponential response; MAX_SPEED_DEG_S limits its
+speed even for large errors. These values are an initial aiming-oriented
+profile, not hardware-validated tuning. Raw gyro response remains unchanged.
+The new options also read these environment variables directly through CLI11,
+so installed launch scripts from before this change can use them without being
+replaced. The startup log reports `runtime_controller_imu_yaw_correction_mode`.
+
+Rejected/predicted/held optical poses, confidence below MIN_CONFIDENCE (default
+0.5), source age over 150 ms and nearly vertical headings suspend correction.
+Optical yaw innovations above MAX_JUMP_DEG (default 15) must remain within
+3 degrees of the candidate for JUMP_HOLD_MS (default 200) before becoming a target. These
+checks compare matched yaw differences, so a real rigid turn is not a jump.
+Stale targets cannot resume correction until a fresh pair arrives; long runtime
+stalls do not accumulate a catch-up correction budget. This presentation yaw
+does not change the physical frame used by acceleration/position prediction.
+
+Set `RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_SMOOTH=0` to select the previous
+periodic hold/interval/blend mechanism. Those periodic settings are ignored in
+smooth mode. The existing CONTINUOUS and ON_REACQUIRE switches still control
+whether subsequent corrections are enabled.
+
 To keep initial optical yaw alignment but disable subsequent periodic and
 optical-reacquire adjustments, export these values before launching the client:
 

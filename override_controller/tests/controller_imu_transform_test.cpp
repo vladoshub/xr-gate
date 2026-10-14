@@ -77,6 +77,47 @@ int main() {
       state, xr_override_controller::OrientationTransformConfig{}, post);
   require_identity(combined, "combined offset");
 
+  xr_runtime::ControllerImuStateV1 force{};
+  force.data_flags = xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
+  force.orientation_xyzw[0] = static_cast<float>(half);
+  force.orientation_xyzw[3] = static_cast<float>(half);
+  force.sample_count = 2;
+  force.samples[0].specific_force_m_s2[0] = 2;
+  force.samples[0].specific_force_m_s2[1] = 3;
+  force.samples[0].specific_force_m_s2[2] = 4;
+  force.samples[1].angular_velocity_rad_s[0] = -1;
+  force.samples[1].angular_velocity_rad_s[1] = 2;
+  force.samples[1].angular_velocity_rad_s[2] = 5;
+  force.magnetic_field_uT[0] = 7;
+  force.magnetic_field_uT[1] = -3;
+  force.magnetic_field_uT[2] = 1;
+  order_offset.multiply_order = "post";
+  const auto body = xr_override_controller::imu::apply_orientation_offset(force, order_offset);
+  // +90 X followed by +90 local Y maps (x,y,z) to (z,x,y).
+  // Thus calibrated (-4,3,2) and original (2,3,4) both give world (2,-4,3).
+  require_near(body.samples[0].specific_force_m_s2[0], -4, "mount force x");
+  require_near(body.samples[0].specific_force_m_s2[1], 3, "mount force y");
+  require_near(body.samples[0].specific_force_m_s2[2], 2, "mount force z");
+  require_near(body.samples[1].angular_velocity_rad_s[0], -5, "mount gyro x");
+  require_near(body.samples[1].angular_velocity_rad_s[1], 2, "mount gyro y");
+  require_near(body.samples[1].angular_velocity_rad_s[2], -1, "mount gyro z");
+  require_near(body.magnetic_field_uT[0], -1, "mount magnetic x");
+  require_near(body.magnetic_field_uT[1], -3, "mount magnetic y");
+  require_near(body.magnetic_field_uT[2], 7, "mount magnetic z");
+  order_offset.quaternion_xyzw[1] = -half;
+  const auto restored = xr_override_controller::imu::apply_orientation_offset(body, order_offset);
+  for (size_t i = 0; i < force.sample_count; ++i) {
+    for (int axis = 0; axis < 3; ++axis) {
+      require_near(restored.samples[i].specific_force_m_s2[axis],
+                   force.samples[i].specific_force_m_s2[axis], "force round trip");
+      require_near(restored.samples[i].angular_velocity_rad_s[axis],
+                   force.samples[i].angular_velocity_rad_s[axis], "gyro round trip");
+    }
+  }
+  order_offset.multiply_order = "pre";
+  const auto world = xr_override_controller::imu::apply_orientation_offset(force, order_offset);
+  require_near(world.samples[0].specific_force_m_s2[2], 4, "pre offset leaves body force unchanged");
+
   std::cout << "controller_imu_transform_test: OK\n";
   return 0;
 }

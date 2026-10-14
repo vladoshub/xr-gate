@@ -126,6 +126,15 @@ struct RuntimeControllerImuMotionConfig {
   // never a sample captured at the beginning of the hold.
   bool yaw_correction_continuous = true;
   bool yaw_correction_on_reacquire = true;
+  // Smooth mode updates only the retained world-yaw offset, never the gyro
+  // response. PERIODIC hold/interval/blend settings remain for legacy mode.
+  bool yaw_correction_smooth = false;
+  float yaw_smooth_time_constant_ms = 2000.0f;
+  float yaw_smooth_max_speed_deg_s = 2.0f;
+  float yaw_smooth_deadband_deg = 1.0f;
+  float yaw_smooth_min_confidence = 0.5f;
+  float yaw_smooth_max_jump_deg = 15.0f;
+  float yaw_smooth_jump_hold_ms = 200.0f;
   float yaw_correction_deadband_deg = 10.0f;
   float yaw_correction_blend_ms = 500.0f;
   bool yaw_correction_trigger_filter = true;
@@ -178,9 +187,25 @@ struct RuntimeControllerImuYawState {
   uint64_t yaw_apply_count = 0;
   uint64_t yaw_reacquire_apply_count = 0;
   std::string yaw_last_action = "none";
+  bool yaw_smooth_target_valid = false;
+  bool yaw_smooth_reference_valid = false;
+  bool yaw_smooth_jump_pending = false;
+  bool yaw_smooth_reacquire_active = false;
+  uint64_t yaw_smooth_last_source_ns = 0;
+  uint64_t yaw_smooth_target_source_ns = 0;
+  uint64_t yaw_smooth_last_tick_ns = 0;
+  uint64_t yaw_smooth_jump_start_ns = 0;
+  float yaw_smooth_target_rad = 0.0f;
+  float yaw_smooth_reference_rad = 0.0f;
+  float yaw_smooth_jump_candidate_rad = 0.0f;
+  float yaw_smooth_confidence = 0.0f;
 };
 
 struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
+  // Camera-time pairs for presentation yaw, independent of force alignment.
+  imu_alignment::WorldYawAlignment yaw_pose_alignment{};
+  uint64_t yaw_pose_submitted_sequence = 0;
+  uint64_t yaw_matched_source_timestamp_ns = 0;
   bool imu_stream_identity_valid = false;
   uint64_t imu_physical_device_hash = 0;
   uint32_t imu_stream_epoch = 0;

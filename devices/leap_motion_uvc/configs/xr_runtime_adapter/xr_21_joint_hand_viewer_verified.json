@@ -358,6 +358,30 @@
         "z": -0.35
       }
     },
+    "imu_orientation": {
+      "left": {
+        "orientation_offset": {
+          "enabled": true,
+          "multiply_order": "post",
+          "rotation_deg": {
+            "rx_deg": 0.0,
+            "ry_deg": 0.0,
+            "rz_deg": -40.0
+          }
+        }
+      },
+      "right": {
+        "orientation_offset": {
+          "enabled": true,
+          "multiply_order": "post",
+          "rotation_deg": {
+            "rx_deg": 0.0,
+            "ry_deg": 0.0,
+            "rz_deg": 40.0
+          }
+        }
+      }
+    },
     "static_orientation": {
       "left_euler_deg": {
         "roll": 0.0,

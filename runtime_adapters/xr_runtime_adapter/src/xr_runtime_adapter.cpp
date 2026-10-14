@@ -2863,6 +2863,13 @@ int main(int argc, char** argv) {
   double runtime_controller_imu_max_linear_acceleration_mps2 = 12.0;
   bool runtime_controller_imu_yaw_correction_continuous = true;
   bool runtime_controller_imu_yaw_correction_on_reacquire = true;
+  bool runtime_controller_imu_yaw_correction_smooth = true;
+  double runtime_controller_imu_yaw_smooth_time_constant_ms = 2000.0;
+  double runtime_controller_imu_yaw_smooth_max_speed_deg_s = 2.0;
+  double runtime_controller_imu_yaw_smooth_deadband_deg = 1.0;
+  double runtime_controller_imu_yaw_smooth_min_confidence = 0.5;
+  double runtime_controller_imu_yaw_smooth_max_jump_deg = 15.0;
+  double runtime_controller_imu_yaw_smooth_jump_hold_ms = 200.0;
   double runtime_controller_imu_yaw_correction_deadband_deg = 10.0;
   double runtime_controller_imu_yaw_correction_blend_ms = 500.0;
   bool runtime_controller_imu_yaw_correction_trigger_filter = true;
@@ -3317,6 +3324,27 @@ int main(int argc, char** argv) {
                  "IMU linear-acceleration magnitude deadband after gravity removal");
   app.add_option("--runtime-controller-imu-max-linear-acceleration-mps2", runtime_controller_imu_max_linear_acceleration_mps2,
                  "Clamp for IMU-derived world linear acceleration; <=0 disables clamp");
+  app.add_option("--runtime-controller-imu-yaw-correction-smooth", runtime_controller_imu_yaw_correction_smooth,
+                 "Use rate-limited complementary yaw correction; false selects legacy periodic correction")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_SMOOTH");
+  app.add_option("--runtime-controller-imu-yaw-smooth-time-constant-ms", runtime_controller_imu_yaw_smooth_time_constant_ms,
+                 "Smooth yaw time constant in milliseconds")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_TAU_MS")->check(CLI::Range(1.0, 60000.0));
+  app.add_option("--runtime-controller-imu-yaw-smooth-max-speed-deg-s", runtime_controller_imu_yaw_smooth_max_speed_deg_s,
+                 "Smooth yaw maximum correction speed in degrees per second")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_MAX_SPEED_DEG_S")->check(CLI::Range(0.0, 360.0));
+  app.add_option("--runtime-controller-imu-yaw-smooth-deadband-deg", runtime_controller_imu_yaw_smooth_deadband_deg,
+                 "Smooth yaw soft deadband in degrees")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_DEADBAND_DEG")->check(CLI::Range(0.0, 180.0));
+  app.add_option("--runtime-controller-imu-yaw-smooth-min-confidence", runtime_controller_imu_yaw_smooth_min_confidence,
+                 "Smooth yaw minimum accepted optical confidence")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_MIN_CONFIDENCE")->check(CLI::Range(0.0, 1.0));
+  app.add_option("--runtime-controller-imu-yaw-smooth-max-jump-deg", runtime_controller_imu_yaw_smooth_max_jump_deg,
+                 "Smooth yaw maximum unconfirmed optical yaw innovation in degrees")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_MAX_JUMP_DEG")->check(CLI::Range(0.1, 180.0));
+  app.add_option("--runtime-controller-imu-yaw-smooth-jump-hold-ms", runtime_controller_imu_yaw_smooth_jump_hold_ms,
+                 "Smooth yaw confirmation time for a persistent optical yaw jump")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_JUMP_HOLD_MS")->check(CLI::Range(0.0, 5000.0));
   app.add_option("--runtime-controller-imu-yaw-correction-continuous", runtime_controller_imu_yaw_correction_continuous,
                  "Enable periodic retained optical yaw correction in addition to initial alignment.");
   app.add_option("--runtime-controller-imu-yaw-correction-on-reacquire", runtime_controller_imu_yaw_correction_on_reacquire,
@@ -3905,6 +3933,14 @@ int main(int argc, char** argv) {
        (runtime_controller_right_imu_acceleration_integration ||
         runtime_controller_right_imu_position_prediction ||
         runtime_controller_right_imu_yaw_correction));
+  if (!std::isfinite(runtime_controller_imu_yaw_smooth_time_constant_ms) ||
+      !std::isfinite(runtime_controller_imu_yaw_smooth_max_speed_deg_s) ||
+      !std::isfinite(runtime_controller_imu_yaw_smooth_deadband_deg) ||
+      !std::isfinite(runtime_controller_imu_yaw_smooth_min_confidence) ||
+      !std::isfinite(runtime_controller_imu_yaw_smooth_max_jump_deg) ||
+      !std::isfinite(runtime_controller_imu_yaw_smooth_jump_hold_ms)) {
+    throw std::runtime_error("Smooth yaw settings must be finite");
+  }
   if (runtime_controller_imu_control_poll_ms < 0.0) {
     throw std::runtime_error("--runtime-controller-imu-control-poll-ms must be >= 0");
   }
@@ -4284,6 +4320,14 @@ int main(int argc, char** argv) {
     std::cout << "runtime_controller_imu_acceleration_deadband_mps2: " << runtime_controller_imu_acceleration_deadband_mps2 << "\n";
     std::cout << "runtime_controller_imu_max_linear_acceleration_mps2: " << runtime_controller_imu_max_linear_acceleration_mps2 << "\n";
     std::cout << "runtime_controller_imu_prediction_timing_source: runtime_hand_gate_imu_profile\n";
+    std::cout << "runtime_controller_imu_yaw_correction_mode: "
+              << (runtime_controller_imu_yaw_correction_smooth ? "smooth" : "periodic") << "\n";
+    std::cout << "runtime_controller_imu_yaw_smooth_time_constant_ms: " << runtime_controller_imu_yaw_smooth_time_constant_ms << "\n";
+    std::cout << "runtime_controller_imu_yaw_smooth_max_speed_deg_s: " << runtime_controller_imu_yaw_smooth_max_speed_deg_s << "\n";
+    std::cout << "runtime_controller_imu_yaw_smooth_deadband_deg: " << runtime_controller_imu_yaw_smooth_deadband_deg << "\n";
+    std::cout << "runtime_controller_imu_yaw_smooth_min_confidence: " << runtime_controller_imu_yaw_smooth_min_confidence << "\n";
+    std::cout << "runtime_controller_imu_yaw_smooth_max_jump_deg: " << runtime_controller_imu_yaw_smooth_max_jump_deg << "\n";
+    std::cout << "runtime_controller_imu_yaw_smooth_jump_hold_ms: " << runtime_controller_imu_yaw_smooth_jump_hold_ms << "\n";
     std::cout << "runtime_controller_imu_yaw_correction_continuous: "
               << (runtime_controller_imu_yaw_correction_continuous ? "true" : "false") << "\n";
     std::cout << "runtime_controller_imu_yaw_correction_on_reacquire: "
@@ -4964,6 +5008,13 @@ int main(int argc, char** argv) {
       dst.publish_predicted_velocity = runtime_hand_gate_publish_predicted_velocity;
       dst.reacquire_blend_ms = static_cast<float>(
           std::max(0.0, runtime_hand_gate_reacquire_blend_ms_imu));
+      dst.yaw_correction_smooth = runtime_controller_imu_yaw_correction_smooth;
+      dst.yaw_smooth_time_constant_ms = static_cast<float>(runtime_controller_imu_yaw_smooth_time_constant_ms);
+      dst.yaw_smooth_max_speed_deg_s = static_cast<float>(runtime_controller_imu_yaw_smooth_max_speed_deg_s);
+      dst.yaw_smooth_deadband_deg = static_cast<float>(runtime_controller_imu_yaw_smooth_deadband_deg);
+      dst.yaw_smooth_min_confidence = static_cast<float>(runtime_controller_imu_yaw_smooth_min_confidence);
+      dst.yaw_smooth_max_jump_deg = static_cast<float>(runtime_controller_imu_yaw_smooth_max_jump_deg);
+      dst.yaw_smooth_jump_hold_ms = static_cast<float>(runtime_controller_imu_yaw_smooth_jump_hold_ms);
       dst.yaw_correction_continuous =
           runtime_controller_imu_yaw_correction_continuous;
       dst.yaw_correction_on_reacquire =
@@ -6397,6 +6448,8 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.left.last_acceleration_sample_timestamp_ns
                     << " controller_left_yaw_update_ns="
                     << runtime_controller_synthesis_state.left.last_yaw_correction_update_ns
+                    << " controller_left_yaw_reference_ns="
+                    << runtime_controller_synthesis_state.left.yaw_matched_source_timestamp_ns
                     << " controller_left_yaw_correction_deg="
                     << (runtime_controller_synthesis_state.left.yaw_correction_rad * 180.0 / 3.14159265358979323846)
                     << " controller_left_yaw_requested="
@@ -6469,6 +6522,8 @@ int main(int argc, char** argv) {
                     << runtime_controller_synthesis_state.right.last_acceleration_sample_timestamp_ns
                     << " controller_right_yaw_update_ns="
                     << runtime_controller_synthesis_state.right.last_yaw_correction_update_ns
+                    << " controller_right_yaw_reference_ns="
+                    << runtime_controller_synthesis_state.right.yaw_matched_source_timestamp_ns
                     << " controller_right_yaw_correction_deg="
                     << (runtime_controller_synthesis_state.right.yaw_correction_rad * 180.0 / 3.14159265358979323846)
                     << " controller_right_yaw_requested="

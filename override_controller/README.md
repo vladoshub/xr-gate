@@ -221,9 +221,10 @@ Each `devices[]` entry may apply a fixed presentation offset after its
 }
 ```
 
-`post` is intended for the fixed IMU-to-controller/grip orientation. It changes
-only `orientation_xyzw`; IMU vectors remain in the axes established by
-`orientation_transform`. Calibrate each side with
+`post` is intended for the fixed IMU-to-controller/grip orientation. With the
+native optical-grip vector fix, gyro, force and magnetic vectors are rotated
+by the inverse local offset so they remain consistent with the new orientation.
+Calibrate a neutral pose on each side with
 `debug/calibrate_controller_orientation_offset.py` while the existing offset is
 disabled, or pass the matching config with `--replace-existing-offset` so the
 tool can remove the currently configured offset from the observed stream.
@@ -250,6 +251,13 @@ python3 debug/calibrate_controller_orientation_offset.py \
 ```
 
 Restart `override_controller` after writing the config.
+
+For guided calibration against Mercury optical wrist orientation, use
+`debug/calibrate_grip.sh`. It records both sides independently, compares repeated
+multi-axis movement rounds and removes any active provider offset before fitting
+an absolute replacement. See [Optical grip calibration](docs/imu_optical_grip_calibration.md)
+for dependencies, runtime prerequisites, capture, validation and application.
+The tools are also installed in `bin/override_controller/tools`.
 
 ## Samsung Gear VR Controller BLE provider
 
