@@ -239,6 +239,17 @@ xr_runtime::ControllerImuStateV1 apply_orientation_offset(
     output = multiply_quaternion(offset, orientation);
   } else {
     output = multiply_quaternion(orientation, offset);
+    // A post/local offset changes sensor-body coordinates to grip coordinates.
+    // Rotate every body vector inversely so world force and gyro are preserved.
+    const Quaternion inverse{-offset.x, -offset.y, -offset.z, offset.w};
+    const Mat3 body_basis = quaternion_to_matrix(inverse.x, inverse.y, inverse.z, inverse.w);
+    const size_t sample_count = std::min<size_t>(state.sample_count,
+        sizeof(state.samples) / sizeof(state.samples[0]));
+    for (size_t i = 0; i < sample_count; ++i) {
+      transform_vector(body_basis, state.samples[i].angular_velocity_rad_s);
+      transform_vector(body_basis, state.samples[i].specific_force_m_s2);
+    }
+    transform_vector(body_basis, state.magnetic_field_uT);
   }
   state.orientation_xyzw[0] = static_cast<float>(output.x);
   state.orientation_xyzw[1] = static_cast<float>(output.y);

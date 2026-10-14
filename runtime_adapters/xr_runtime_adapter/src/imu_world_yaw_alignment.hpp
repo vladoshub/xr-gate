@@ -53,6 +53,11 @@ class WorldYawAlignment {
       --pending_count_;
     }
     pending_[pending_count_++] = {timestamp_ns, optical};
+    return match_pending_optical() && estimate(yaw_rad);
+  }
+
+  // Drain delayed IMU delivery between optical frames as well.
+  bool match_pending_optical() {
     bool added = false;
     std::size_t consumed = 0;
     while (consumed < pending_count_ && imu_count_ != 0 &&
@@ -67,7 +72,7 @@ class WorldYawAlignment {
       std::move(pending_.begin() + consumed, pending_.begin() + pending_count_, pending_.begin());
       pending_count_ -= consumed;
     }
-    return added && estimate(yaw_rad);
+    return added;
   }
 
   std::size_t observation_count() const { return observation_count_; }
