@@ -6,6 +6,33 @@ invalidates the pose or uses the configured HMD-relative fallback. The launch
 script defaults remain 30 ms hold, 600 ms prediction and 180 ms reacquire blend.
 Existing speed, path and HMD distance limits still apply.
 
+## Optical-to-inertial handoff
+
+Loss prediction retains the confirmed launch velocity and integrates only
+previously unconsumed acceleration after its optical measurement boundary:
+`v = v_launch + integral(a dt)`. Acceleration is a signed vector; real braking
+reduces velocity. Existing time decay remains optional; set
+`RUNTIME_CONTROLLER_IMU_TIME_DECAY=0` to keep full response until timeout.
+
+A packet arriving after loss is not necessarily measured after loss. The
+integrator now excludes force intervals ending at or before the last accepted
+optical source timestamp and clips straddling intervals at that boundary.
+Otherwise delayed pre-anchor force changes a launch velocity already inferred
+from the visible trajectory. If launch alignment has advanced velocity to a
+newer IMU sample, that integration cursor remains the lower bound as well.
+
+The optical measurement timestamp is independent of the runtime loss/hold
+clock. Valid acceleration during an intentional hold still changes momentum,
+while the displayed position remains held. Optical acceptance/reacquisition
+clears the previous loss deltas; duplicate sensor timestamps cannot apply them
+twice. A prediction reset clears the measurement boundary with the anchor.
+
+This corrects delayed force crossing the handoff boundary. It does not certify
+accelerometer bias/gravity compensation or guarantee accurate long optical
+losses. Force-heading calibration and IMU aiming are unchanged. The existing
+per-side `RUNTIME_CONTROLLER_*_IMU_ACCELERATION_INTEGRATION=0` switches still
+select optical-velocity prediction without force integration.
+
 ## Frames and sample time
 
 Optical positions and velocities are transformed into runtime space together.
@@ -14,7 +41,7 @@ HMD linear/angular velocity: `v_world = R * v_camera + v_hmd + omega_hmd x r`.
 
 The provider's AHRS reference need not share XR world yaw. Physical acceleration
 therefore has a separate provider-to-XR yaw alignment, learned from confirmed,
-clean optical orientations. It stays fixed while optical tracking is absent;
+clean optical/IMU motion. It stays fixed while optical tracking is absent;
 presentation yaw blends cannot rotate an active position trajectory. Packet
 loss preserves the reference, while an AHRS epoch/device change resets it.
 Until alignment is available, optical velocity can predict position but force
@@ -28,8 +55,118 @@ credible stationary gravity observation after startup or reset. Providers keep
 `CONTROLLER_IMU_ORIENTATION_VALID` clear until then, rather than advertising an
 arbitrary identity orientation as a usable gravity reference. Quiet means gyro
 below 0.20 rad/s and force magnitude within 1 m/s2 of configured gravity.
-Yaw is still identified independently from optical/IMU rotations. An explicit
+Yaw is still identified independently from optical/IMU motion. An explicit
 `madgwick_beta=0` retains the existing gyro-only reference and startup behavior.
+
+## Translation heading calibration
+
+The CLI and launch script enable
+`RUNTIME_CONTROLLER_IMU_TRANSLATION_YAW_REFINEMENT=1`. It also requires
+`RUNTIME_CONTROLLER_IMU_TRANSLATION_YAW_CHECK=1` and acceleration integration
+on the selected side. Each hand learns its own physical force heading in the
+current AHRS/XR reference; no measured session angle is written to a device
+`orientation_offset` or accelerometer bias/scale calibration.
+
+The existing rotation/grip startup confirmation remains available with the
+configured stability wait (four seconds by default), even if the optional
+translation estimator has no usable motion. Rotation and translation have
+independent confirmation clocks; rejected translation windows cannot block a
+stable rotation-derived frame. A coherent translation heading can establish
+the initial force frame independently when optical grip rotation is noisy.
+
+Translation confirmation uses the timestamps of accepted optical positions,
+independently of the rotation estimator's matched palm/IMU quaternion queue.
+Delayed orientation matching or a missing palm rotation fit cannot consume a
+position-derived heading against an older rotation timestamp. Only fresh fitted
+headings enter its circular mean; cached poses do not advance the startup clock.
+The configured stability interval still applies. A held fit can finish while
+new accepted optical positions and current IMU force continue to arrive. A
+force-history gap over 80 ms still invalidates the motion-fit window. A previously
+supported heading can survive an 80--150 ms packet interruption without restarting
+the entire startup wait: such a delivery gap does not change the AHRS reference.
+An IMU outage over the existing 150 ms startup continuity limit restarts the
+unconfirmed startup clock. A confirmed physical frame is retained across packet
+gaps; epoch/device resets still invalidate both estimators.
+
+`[imu-alignment] controller_*_acceleration_yaw_valid=yes` means either startup
+estimator confirmed the force frame. The additional
+`controller_*_acceleration_translation_yaw_calibrated=yes` field reports accepted
+translation-heading calibration/refinement; it may stay `no` after successful
+rotation-only startup. Both kinds of transition are forwarded to the client
+console, independently of verbose frame logging. No forward/back translation
+ritual is required before the existing alignment can finish.
+
+`yaw_valid=yes` on both sides does not stop translation learning. Each side
+continues independently until a translation fit is accepted, and may refine
+again while real optical tracking is available.
+
+While a connected IMU side is still calibrating, the main console also shows a
+`[imu-calibration]` line for that side every three seconds, without diagnostics
+environment variables. It stops once that side is ready. The line includes
+separate rotation/translation stability times, accepted fit support, coherence,
+residual motion in mm, scale ratio and an accumulated `imu_gaps` counter.
+The residual is after position/velocity/bias removal, not the total distance the
+hand travelled. These fields describe the latest fit, not a calibrated accuracy
+percentage. Existing four-field `[imu-alignment]` transitions remain unchanged.
+
+Common `translation` reasons:
+
+| Value | Meaning / useful action |
+| --- | --- |
+| `waiting_optics` | Show this hand to the cameras; held/predicted poses cannot calibrate. |
+| `waiting_imu`, `imu_gap` | Waiting for source-time force coverage; check packet delivery if repeated. |
+| `collecting`, `confirming` | Accumulating a covered window / agreeing heading fits. |
+| `need_motion` | Move forward/back or side to side with acceleration and stops. |
+| `rotate_slower` | Keep wrist rotation slow during the translation test. |
+| `inconsistent_motion`, `scale_mismatch` | IMU and optical motion do not agree enough; the fit is rejected. |
+| `ready` | The current fit passed its checks; startup stability may still be pending. |
+
+For a translation check, keep the hand visible and make several gentle
+10--20 cm forward/back or lateral motions with starts and stops, avoiding rapid
+wrist rotations. The hands can be checked separately. Hold the head fairly still
+to reduce optical noise. Follow the final `translation_yaw_calibrated=yes` flag;
+`translation=ready` alone is not the final startup result.
+
+Visible forward/back movements with acceleration and stops provide useful
+independent heading evidence. Avoid rapid wrist rotations. A stationary hand,
+uniform translation or constant acceleration alone cannot establish a translation
+heading. IMU aiming/orientation remains available while initial force alignment
+is pending; only force integration waits. The existing bounded optical-velocity
+predictor can still bridge a loss before either calibration finishes.
+
+The heading estimator matches optical XZ positions to double-integrated force
+using source timestamps and covered delayed delivery. A 1.25-second fit removes
+unknown initial position/velocity and a quadratic constant-acceleration nuisance
+from both tracks. This nuisance removal is local to the estimator; measured
+acceleration and actual braking remain in the position integrator. A heading
+needs observable residual motion, compatible amplitude, coherence >= 0.97,
+and at least five distinct agreeing endpoints over 150 ms within an eight-degree
+range. Rapid rotation, unobserved force gaps and unsupported/low-quality fits
+cannot establish a new heading. The 350-ms hemisphere check remains for legacy
+rotation-only operation.
+
+After startup, only new accepted heading evidence no older than 150 ms can
+refine the force frame. A confirmed translation heading is applied completely
+while the corresponding optical pose is accepted. A two-degree step per rare
+accepted fit can leave a large residual frame error despite calibrated=yes;
+the confirmed translation fit already passed the independent coherence,
+observability and distinct-endpoint checks. Applying this force frame does not
+change the presentation/aiming quaternion or rotate an active loss trajectory.
+Retained launch-force history is re-expressed in the newly confirmed frame.
+Rotation-based fits may
+make small updates within the confirmed heading range, but cannot restore a
+different intermediate force yaw or override it with a stale half-turn hint.
+Optical loss retains the last confirmed frame; ordinary delivery/prediction
+resets retain it and its consumed-evidence guard. A provider epoch/device or
+backend reference reset clears it and requires calibration again.
+
+Frame diagnostics include `controller_*_acceleration_translation_heading_deg`,
+`*_heading_ns`, `*_heading_coherence` and `*_yaw_refinements` for this estimator,
+separately from the older hemisphere-check fields. `orientation_offset`, rendered
+controller yaw correction, jitter filtering and prediction timeout/limits are
+independent of this calibration. Setting
+`RUNTIME_CONTROLLER_IMU_TRANSLATION_YAW_REFINEMENT=0` disables full-heading
+refinement, retaining rotation-based startup with the legacy hemisphere check.
 
 V3 still carries one AHRS quaternion per batch. Older sample orientations are
 approximately reconstructed backward with the corrected gyroscope and sample

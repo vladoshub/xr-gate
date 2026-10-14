@@ -13,17 +13,57 @@ from xr_client.config_reader import ServiceSpec
 from xr_client.xr_backend_client import Launcher
 
 
-def status(left, right):
-    return (
+def status(left, right, translation=None):
+    text = (
         "[xr_runtime_adapter][imu-alignment] "
         f"controller_left_acceleration_yaw_valid={left} "
-        f"controller_right_acceleration_yaw_valid={right}\n"
-    ).encode("ascii")
+        f"controller_right_acceleration_yaw_valid={right}"
+    )
+    if translation is not None:
+        text += (
+            f" controller_left_acceleration_translation_yaw_calibrated={translation[0]}"
+            f" controller_right_acceleration_translation_yaw_calibrated={translation[1]}"
+        )
+    return (text + "\n").encode("ascii")
 
 
 class ControllerImuConsoleTest(unittest.TestCase):
     def launcher(self, folder):
         return Launcher(SimpleNamespace(log_dir=folder, root_project=folder, log_max_bytes=0))
+
+    def test_progress_is_forwarded_even_after_both_yaw_flags_are_ready(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            ready = status("yes", "yes", ("no", "no"))
+            progress = (b"[xr_runtime_adapter][imu-calibration] side=left yaw=ready "
+                        b"translation=need_motion rotation_stable_ms=0 translation_stable_ms=0 "
+                        b"required_stable_ms=4000 support=0 coherence=0 motion_mm=1.2 scale=0\r\n")
+            complete = status("yes", "yes", ("yes", "yes"))
+            path.write_bytes(ready + progress + ready + progress +
+                             b"[xr_runtime_adapter] verbose frame\n" + complete)
+            item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
+                                   process=SimpleNamespace(poll=lambda: 0))
+            messages = []
+            with patch("xr_client.xr_backend_client.log", messages.append):
+                self.launcher(folder).forward_controller_imu_status(item)
+            self.assertEqual(messages, [line.decode().strip()
+                                       for line in (ready, progress, progress, complete)])
+
+    def test_extended_status_reports_translation_changes_without_repeating_ticks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            expected = [status("no", "no", ("no", "no")),
+                        status("yes", "yes", ("no", "no")),
+                        status("yes", "yes", ("yes", "no")),
+                        status("yes", "yes", ("yes", "yes"))]
+            noise = b"[xr_runtime_adapter] frame=1 controller_left_acceleration_yaw_valid=yes\n"
+            path.write_bytes(b"".join(line * 3 + noise for line in expected))
+            item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
+                                   process=SimpleNamespace(poll=lambda: 0))
+            messages = []
+            with patch("xr_client.xr_backend_client.log", messages.append):
+                self.launcher(folder).forward_controller_imu_status(item)
+            self.assertEqual(messages, [line.decode().strip() for line in expected])
 
     def test_exited_service_drains_log_without_forwarding_verbose_frames(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -74,8 +114,8 @@ class ControllerImuConsoleTest(unittest.TestCase):
 
     def test_start_service_forwards_to_console_and_preserves_service_log(self):
         with tempfile.TemporaryDirectory() as folder:
-            initial = status("no", "no")
-            ready = status("yes", "yes")
+            initial = status("no", "no", ("no", "no"))
+            ready = status("yes", "yes", ("yes", "yes"))
             script = (
                 "import sys,time; "
                 f"sys.stdout.buffer.write({initial!r}+{ready!r}); sys.stdout.flush(); "

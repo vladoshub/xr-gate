@@ -82,6 +82,9 @@ struct RuntimeControllerImuMotionConfig {
   bool position_prediction_enabled = false;
   bool yaw_correction_enabled = false;
   bool translation_yaw_check_enabled = true;
+  // Optionally refine the physical force heading with source-time motion.
+  // It does not block the independent rotation-based startup confirmation.
+  bool translation_yaw_refinement_enabled = false;
   // Confirm the first physical yaw with continuously matched poses. Zero
   // preserves immediate initialization; confirmed frames survive optical loss.
   float acceleration_yaw_stable_ms = 4000.0f;
@@ -220,7 +223,11 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   imu_alignment::WorldYawAlignment acceleration_world_alignment{};
   imu_alignment::TranslationYawCheck acceleration_translation_yaw_check{};
   imu_alignment::YawStabilityConfirmation acceleration_yaw_confirmation{};
+  imu_alignment::YawStabilityConfirmation acceleration_translation_yaw_confirmation{};
   uint32_t acceleration_yaw_half_turn_corrections = 0;
+  bool acceleration_translation_yaw_calibrated = false;
+  uint64_t acceleration_translation_heading_consumed_ns = 0;
+  uint32_t acceleration_translation_yaw_refinements = 0;
   bool has_position_anchor = false;
   bool prediction_active = false;
   bool prediction_started = false;
@@ -238,6 +245,9 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   // prevents repeated runtime ticks from integrating the same SHM frame twice.
   uint64_t last_acceleration_sample_timestamp_ns = 0;
   uint64_t last_optical_pose_ns = 0;
+  // Source time of the last accepted optical measurement, separate from the
+  // runtime loss/hold clock. Late pre-anchor force is not new unseen motion.
+  uint64_t last_optical_measurement_ns = 0;
   uint64_t reacquire_blend_start_ns = 0;
   uint64_t hmd_relative_blend_start_ns = 0;
   float anchor_position_m[3] = {};
