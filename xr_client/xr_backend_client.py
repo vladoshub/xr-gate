@@ -69,6 +69,10 @@ CONTROLLER_IMU_ALIGNMENT_STATUS = re.compile(
     rb"(?: controller_left_acceleration_translation_yaw_calibrated=(yes|no) "
     rb"controller_right_acceleration_translation_yaw_calibrated=(yes|no))?$"
 )
+CONTROLLER_IMU_CALIBRATION_PROGRESS = re.compile(
+    rb"^\[xr_runtime_adapter\]\[imu-calibration\] side=(?:left|right) "
+    rb"yaw=[a-z_]+ translation=[a-z_]+(?: [a-z_]+=[a-z0-9.+/-]+)*$"
+)
 
 
 def normalize_basalt_mode(value: str) -> str:
@@ -344,7 +348,7 @@ class Launcher:
         return {}
 
     def forward_controller_imu_status(self, item: RunningProcess) -> None:
-        """Follow only alignment transitions; keep service stdout in its log."""
+        """Follow alignment transitions and throttled calibration progress."""
         pending = b""
         last_status = None
         try:
@@ -362,10 +366,16 @@ class Launcher:
                         if len(pending) > 16 * 1024:
                             pending = pending[-16 * 1024:]
                         for line in lines:
-                            match = CONTROLLER_IMU_ALIGNMENT_STATUS.fullmatch(line.rstrip(b"\r"))
+                            line = line.rstrip(b"\r")
+                            match = CONTROLLER_IMU_ALIGNMENT_STATUS.fullmatch(line)
                             if match is not None and match.groups() != last_status:
                                 last_status = match.groups()
                                 log(line.decode("ascii").rstrip())
+                            elif CONTROLLER_IMU_CALIBRATION_PROGRESS.fullmatch(line) is not None:
+                                # Runtime already limits this to one line per
+                                # pending side every three seconds. A repeated
+                                # reason is useful when the user must act.
+                                log(line.decode("ascii"))
                         continue
                     if item.limiter_stop.is_set() or item.process.poll() is not None:
                         return

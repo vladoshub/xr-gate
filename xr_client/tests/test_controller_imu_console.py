@@ -31,6 +31,24 @@ class ControllerImuConsoleTest(unittest.TestCase):
     def launcher(self, folder):
         return Launcher(SimpleNamespace(log_dir=folder, root_project=folder, log_max_bytes=0))
 
+    def test_progress_is_forwarded_even_after_both_yaw_flags_are_ready(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            ready = status("yes", "yes", ("no", "no"))
+            progress = (b"[xr_runtime_adapter][imu-calibration] side=left yaw=ready "
+                        b"translation=need_motion rotation_stable_ms=0 translation_stable_ms=0 "
+                        b"required_stable_ms=4000 support=0 coherence=0 motion_mm=1.2 scale=0\r\n")
+            complete = status("yes", "yes", ("yes", "yes"))
+            path.write_bytes(ready + progress + ready + progress +
+                             b"[xr_runtime_adapter] verbose frame\n" + complete)
+            item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
+                                   process=SimpleNamespace(poll=lambda: 0))
+            messages = []
+            with patch("xr_client.xr_backend_client.log", messages.append):
+                self.launcher(folder).forward_controller_imu_status(item)
+            self.assertEqual(messages, [line.decode().strip()
+                                       for line in (ready, progress, progress, complete)])
+
     def test_extended_status_reports_translation_changes_without_repeating_ticks(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "xr_runtime_adapter.log"

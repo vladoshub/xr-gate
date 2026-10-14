@@ -16,10 +16,18 @@ namespace xr_runtime_adapter::imu_alignment {
 // translation or constant acceleration cannot establish the refined heading.
 class TranslationYawCheck {
  public:
+  enum class FitStatus {
+    WaitingForOptical, WaitingForImu, Collecting, ImuGap, Rotating,
+    NeedMotion, ScaleMismatch, InconsistentMotion, Confirming, Ready
+  };
+
   void clear_optical_motion() {
+    ++motion_epoch_;
     pose_count_ = 0;
     hemisphere_.support_count = heading_.support_count = 0;
     hemisphere_.coherence = heading_.coherence = 0;
+    heading_.status = FitStatus::WaitingForOptical;
+    heading_.motion_m = heading_.scale_ratio = 0;
     // Keep confirmed hints and their source times. Consumers must check
     // freshness before learning from them; optical loss cannot revoke a
     // physical frame already confirmed for position prediction.
@@ -28,15 +36,22 @@ class TranslationYawCheck {
     clear_optical_motion();
     force_count_ = 0;
     force_cursor_ns_ = 0;
+    last_force_sample_valid_ = false;
   }
 
   void observe_force(uint64_t timestamp_ns, const float acceleration[3], float gyro_speed) {
     if (timestamp_ns == 0 || timestamp_ns <= force_cursor_ns_) return;
     const uint64_t previous = force_cursor_ns_;
     force_cursor_ns_ = timestamp_ns;
+    last_force_sample_valid_ = std::isfinite(acceleration[0]) &&
+        std::isfinite(acceleration[2]) && std::isfinite(gyro_speed);
     if (previous == 0 || timestamp_ns - previous > 80'000'000ULL ||
-        !std::isfinite(acceleration[0]) || !std::isfinite(acceleration[2]) ||
-        !std::isfinite(gyro_speed)) {
+        !last_force_sample_valid_) {
+      if (previous != 0) {
+        ++force_gap_count_;
+        last_force_gap_ns_ = timestamp_ns;
+        last_force_gap_duration_ns_ = timestamp_ns - previous;
+      }
       force_count_ = 0;
       clear_optical_motion();
       return;
@@ -95,6 +110,31 @@ class TranslationYawCheck {
   float heading_coherence() const { return heading_.hint_coherence; }
   float heading_fit_coherence() const { return heading_.coherence; }
   std::size_t heading_support_count() const { return heading_.support_count; }
+  FitStatus heading_fit_status() const { return heading_.status; }
+  float heading_fit_motion_m() const { return heading_.motion_m; }
+  float heading_fit_scale_ratio() const { return heading_.scale_ratio; }
+  uint64_t motion_epoch() const { return motion_epoch_; }
+  uint32_t force_gap_count() const { return force_gap_count_; }
+  uint64_t last_force_gap_duration_ns() const { return last_force_gap_duration_ns_; }
+  bool has_recent_force(uint64_t optical_ns) const {
+    return last_force_sample_valid_ && force_cursor_ns_ != 0 && (force_cursor_ns_ >= optical_ns ||
+        optical_ns - force_cursor_ns_ <= 150'000'000ULL);
+  }
+  const char* heading_fit_status_name() const {
+    switch (heading_.status) {
+      case FitStatus::WaitingForOptical: return "waiting_optics";
+      case FitStatus::WaitingForImu: return "waiting_imu";
+      case FitStatus::Collecting: return "collecting";
+      case FitStatus::ImuGap: return "imu_gap";
+      case FitStatus::Rotating: return "rotate_slower";
+      case FitStatus::NeedMotion: return "need_motion";
+      case FitStatus::ScaleMismatch: return "scale_mismatch";
+      case FitStatus::InconsistentMotion: return "inconsistent_motion";
+      case FitStatus::Confirming: return "confirming";
+      case FitStatus::Ready: return "ready";
+    }
+    return "collecting";
+  }
   bool fresh_heading(uint64_t optical_ns, uint64_t consumed_ns) const {
     return heading_.valid && heading_.hint_ns > consumed_ns &&
         optical_ns >= heading_.hint_ns && optical_ns - heading_.hint_ns <= 150'000'000ULL;
@@ -110,26 +150,41 @@ class TranslationYawCheck {
     float min_delta = 0, max_delta = 0, min_coherence = 1;
     double sine = 0, cosine = 0;
     bool valid = false;
+    FitStatus status = FitStatus::WaitingForOptical;
+    float motion_m = 0, scale_ratio = 0;
   };
 
   void update_fit(Evidence& evidence, bool refine_heading) {
     std::size_t count = pose_count_;
     while (count && poses_[count - 1].timestamp_ns > force_cursor_ns_) --count;
     const std::size_t minimum_count = refine_heading ? 16 : 7;
-    if (count < minimum_count || force_count_ == 0) return;
+    if (count < minimum_count || force_count_ == 0) {
+      evidence.status = pose_count_ == 0 ? FitStatus::WaitingForOptical
+          : (count < pose_count_ || force_count_ == 0) ? FitStatus::WaitingForImu
+          : last_force_gap_ns_ != 0 && (last_optical_ns_ <= last_force_gap_ns_ ||
+              last_optical_ns_ - last_force_gap_ns_ < 1'250'000'000ULL)
+              ? FitStatus::ImuGap : FitStatus::Collecting;
+      return;
+    }
     const uint64_t last = poses_[count - 1].timestamp_ns;
     const uint64_t window_ns = refine_heading ? 1'250'000'000ULL : 350'000'000ULL;
     const uint64_t cutoff = last > window_ns ? last - window_ns : 0;
     std::size_t first_index = 0;
     while (first_index < count && poses_[first_index].timestamp_ns < cutoff) ++first_index;
     count -= first_index;
-    if (count < minimum_count) return;
+    if (count < minimum_count) { evidence.status = FitStatus::Collecting; return; }
     const uint64_t first = poses_[first_index].timestamp_ns;
     const uint64_t minimum_span = refine_heading ? 700'000'000ULL : 200'000'000ULL;
-    if (last <= evidence.last_fit_ns || last - first < minimum_span || forces_[0].start_ns > first) return;
+    if (last - first < minimum_span) { evidence.status = FitStatus::Collecting; return; }
+    if (forces_[0].start_ns > first) { evidence.status = FitStatus::ImuGap; return; }
+    if (last <= evidence.last_fit_ns) return;
     evidence.last_fit_ns = last;
+    evidence.coherence = evidence.motion_m = evidence.scale_ratio = 0;
     for (std::size_t i = 0; i < force_count_; ++i) {
-      if (forces_[i].end_ns > first && forces_[i].start_ns < last && forces_[i].gyro_speed > 1.0f) return;
+      if (forces_[i].end_ns > first && forces_[i].start_ns < last && forces_[i].gyro_speed > 1.0f) {
+        evidence.status = FitStatus::Rotating;
+        return;
+      }
     }
 
     std::array<double, kPoseCapacity> time{};
@@ -151,7 +206,10 @@ class TranslationYawCheck {
       }
     }
     if (!remove_nuisance_motion(time, optical, count, refine_heading) ||
-        !remove_nuisance_motion(time, provider, count, refine_heading)) return;
+        !remove_nuisance_motion(time, provider, count, refine_heading)) {
+      evidence.status = FitStatus::NeedMotion;
+      return;
+    }
     double eo = 0, ep = 0, cosine = 0, sine = 0;
     for (std::size_t i = 0; i < count; ++i) {
       eo += optical[i][0]*optical[i][0] + optical[i][1]*optical[i][1];
@@ -160,10 +218,19 @@ class TranslationYawCheck {
       sine += provider[i][1]*optical[i][0] - provider[i][0]*optical[i][1];
     }
     const double minimum_motion = refine_heading ? 0.003 : 0.004;
-    if (std::min(eo, ep) < count * minimum_motion * minimum_motion) return;
+    evidence.motion_m = static_cast<float>(std::sqrt(std::min(eo, ep) / count));
+    if (std::min(eo, ep) < count * minimum_motion * minimum_motion) {
+      evidence.status = FitStatus::NeedMotion;
+      return;
+    }
     const double ratio = std::sqrt(eo / ep);
+    evidence.scale_ratio = static_cast<float>(ratio);
     evidence.coherence = static_cast<float>(std::clamp(std::hypot(cosine, sine) / std::sqrt(eo * ep), 0.0, 1.0));
-    if (evidence.coherence < (refine_heading ? 0.97f : 0.95f) || ratio < 0.5 || ratio > 2.0) return;
+    if (ratio < 0.5 || ratio > 2.0) { evidence.status = FitStatus::ScaleMismatch; return; }
+    if (evidence.coherence < (refine_heading ? 0.97f : 0.95f)) {
+      evidence.status = FitStatus::InconsistentMotion;
+      return;
+    }
     const float candidate = static_cast<float>(std::atan2(sine, cosine));
     const float delta = std::atan2(std::sin(candidate - evidence.reference_rad),
                                    std::cos(candidate - evidence.reference_rad));
@@ -189,11 +256,13 @@ class TranslationYawCheck {
     evidence.min_coherence = std::min(evidence.min_coherence, evidence.coherence);
     const std::size_t minimum_support = refine_heading ? 5 : 3;
     const uint64_t support_span = refine_heading ? 150'000'000ULL : 60'000'000ULL;
+    evidence.status = FitStatus::Confirming;
     if (evidence.support_count >= minimum_support && last - evidence.support_start_ns >= support_span) {
       evidence.hint_rad = static_cast<float>(std::atan2(evidence.sine, evidence.cosine));
       evidence.hint_ns = last;
       evidence.hint_coherence = evidence.min_coherence;
       evidence.valid = true;
+      evidence.status = FitStatus::Ready;
     }
   }
 
@@ -240,6 +309,11 @@ class TranslationYawCheck {
   std::array<Pose, kPoseCapacity> poses_{};
   std::size_t force_count_ = 0, pose_count_ = 0;
   uint64_t force_cursor_ns_ = 0, last_optical_ns_ = 0;
+  uint64_t motion_epoch_ = 0;
+  uint64_t last_force_gap_ns_ = 0;
+  uint64_t last_force_gap_duration_ns_ = 0;
+  uint32_t force_gap_count_ = 0;
+  bool last_force_sample_valid_ = false;
   Evidence hemisphere_{}, heading_{};
 };
 

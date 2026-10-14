@@ -496,10 +496,46 @@ void translation_heading_uses_changing_acceleration_without_fitting_bias() {
       check.update(true);
     }
     require(!check.heading_valid(), "unobservable or inconsistent motion established a refined heading");
+    using Status = TranslationYawCheck::FitStatus;
+    if (mode == 0 || mode == 4) {
+      require(check.heading_fit_status() == Status::NeedMotion,
+              "unobservable translation did not explain the missing motion evidence");
+    } else if (mode == 1) {
+      require(check.heading_fit_status() == Status::Rotating,
+              "rapid rotation did not explain why translation calibration is waiting");
+    }
   }
 }
 
-void refined_force_heading_calibrates_both_sides_without_changing_aim(bool rotation_first = false) {
+void translation_startup_averages_only_fresh_heading_evidence() {
+  using xr_runtime_adapter::imu_alignment::YawStabilityConfirmation;
+  YawStabilityConfirmation confirmation;
+  for (int ms = 0; ms <= 3950; ms += 50) {
+    const auto estimate = ms <= 1000 && ms % 200 == 0
+        ? std::optional(0.5f) : std::nullopt;
+    require(!confirmation.observe_heading(kStart + uint64_t(ms)*1'000'000, estimate, 4000, 8),
+            "translation startup finished before the source-time stability interval");
+  }
+  require(confirmation.estimate_count() == 6,
+          "cached translation headings were counted as independent measurements");
+  require(!confirmation.observe_heading(kStart + 3'950'000'000, 0.6f, 4000, 8) &&
+          confirmation.estimate_count() == 6,
+          "duplicate source time changed the confirmed heading evidence");
+  require(confirmation.observe_heading(kStart + 4'000'000'000, 0.52f, 4000, 8),
+          "fresh consistent translation could not finish its own startup clock");
+  near(confirmation.candidate_rad(), std::atan2(6*std::sin(0.5f) + std::sin(0.52f),
+       6*std::cos(0.5f) + std::cos(0.52f)), "startup used the last noisy fit instead of its circular mean");
+  YawStabilityConfirmation wrapped;
+  for (int ms = 0; ms <= 4000; ms += 50) {
+    const float yaw = ms % 100 ? -kPi + 0.01f : kPi - 0.01f;
+    require(wrapped.observe_heading(kStart + uint64_t(ms)*1'000'000, yaw, 4000, 8) == (ms == 4000),
+            "circular translation confirmation broke at the yaw wraparound");
+  }
+  require(std::cos(wrapped.candidate_rad()) < -0.9999f, "opposite headings averaged through zero");
+}
+
+void refined_force_heading_calibrates_both_sides_without_changing_aim(
+    bool rotation_first = false, bool invalid_optical_rotation = false) {
   for (bool right : {false, true}) {
     Scenario s;
     s.state.left.acceleration_world_yaw_valid = false;
@@ -555,6 +591,12 @@ void refined_force_heading_calibrates_both_sides_without_changing_aim(bool rotat
           cu::q_from_axis_angle(0, 0, 1, rotation_first || ms > 3000 ? 0.3 : ms > 2000 ? 0.3*std::sin(3*t) : 0));
       hand.left.controller_qx = noisy_grip.x; hand.left.controller_qy = noisy_grip.y;
       hand.left.controller_qz = noisy_grip.z; hand.left.controller_qw = noisy_grip.w;
+      if (invalid_optical_rotation) {
+        // Accepted optical positions and IMU force can remain useful when a
+        // palm quaternion has no usable rotation correspondence.
+        hand.left.controller_qx = hand.left.controller_qy =
+            hand.left.controller_qz = hand.left.controller_qw = 0;
+      }
       if (right) {
         input.right = input.left; input.left = {};
         hand.right = hand.left; hand.left = {};
@@ -621,6 +663,68 @@ void refined_force_heading_calibrates_both_sides_without_changing_aim(bool rotat
             !state.acceleration_translation_yaw_check.heading_valid(),
             "a different physical device inherited the full-heading calibration");
   }
+}
+
+void translation_keeps_learning_after_both_rotation_frames_are_valid() {
+  Scenario s;
+  s.cfg.left_imu_motion.translation_yaw_refinement_enabled = true;
+  s.cfg.right_imu_motion = s.cfg.left_imu_motion;
+  s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+  s.state.right.acceleration_world_yaw_valid = true;
+  s.hand.flags |= HAND_FLAG_RIGHT_VALID;
+  s.hand.hand_count = 2;
+  for (int ms = 0; ms <= 3500; ms += 10) {
+    const auto ns = s.prepare(ms, -7.2f*std::sin(6*ms/1000.0));
+    s.input.left.imu.samples[0].flags |= CONTROLLER_IMU_GYROSCOPE_VALID;
+    s.input.right = s.input.left;
+    s.input.right.physical_device_hash = 456;
+    s.hand.right = s.hand.left;
+    s.hand.right.handedness = 2;
+    for (bool right : {false, true}) {
+      auto& hand = right ? s.hand.right : s.hand.left;
+      const float yaw = right ? 0.7f : -1.3f;
+      const auto p = cu::q_rotate(cu::q_from_axis_angle(0, 1, 0, yaw),
+          cu::V3d{0.2*std::sin(6*ms/1000.0), 0, 0});
+      hand.controller_px = p.x;
+      hand.controller_pz = p.z;
+    }
+    const auto out = compose_runtime_controller_state(s.sequence, ns, s.cfg, s.hand, s.hand,
+        s.input, std::nullopt, 9.81f, &s.state);
+    near(out.left.orientation_xyzw[3], 1, "left heading learning changed IMU aiming");
+    near(out.right.orientation_xyzw[3], 1, "right heading learning changed IMU aiming");
+  }
+  for (bool right : {false, true}) {
+    const auto& state = right ? s.state.right : s.state.left;
+    require(state.acceleration_world_yaw_valid && state.acceleration_translation_yaw_calibrated &&
+            state.acceleration_translation_yaw_refinements > 0,
+            "both yaw_valid flags stopped independent translation refinement");
+    near(state.acceleration_world_yaw_rad, right ? 0.7f : -1.3f,
+         "translation calibration mixed the left and right sensor frames", 0.015f);
+  }
+}
+
+void translation_startup_handles_brief_and_long_force_source_gaps(int gap_ms) {
+  Scenario s;
+  s.state.left.acceleration_world_yaw_valid = false;
+  s.cfg.left_imu_motion.translation_yaw_refinement_enabled = true;
+  s.hand.left.controller_qw = 0;  // Translation must not depend on a palm rotation fit.
+  int ready_ms = -1;
+  for (int ms = 0; ms <= 10000; ms += 10) {
+    const auto ns = s.prepare(ms, -7.2f*std::sin(6*ms/1000.0));
+    s.hand.left.controller_px = 0.2f*std::sin(6*ms/1000.0);
+    s.input.left.imu.sample_count = ms >= 3800 && ms < 3800 + gap_ms ? 0 : 1;
+    s.input.left.imu.samples[0].flags |= CONTROLLER_IMU_GYROSCOPE_VALID;
+    compose_runtime_controller_state(s.sequence, ns, s.cfg, s.hand, s.hand,
+        s.input, std::nullopt, 9.81f, &s.state);
+    if (s.state.left.acceleration_world_yaw_valid && ready_ms < 0) ready_ms = ms;
+    if (gap_ms > 150 && ms <= 7000) require(!s.state.left.acceleration_world_yaw_valid,
+        "missing force observations retained the pre-gap translation startup clock");
+  }
+  require((gap_ms > 150 ? ready_ms > 7000 : ready_ms > 4000 && ready_ms < 7000) &&
+          s.state.left.acceleration_translation_yaw_calibrated,
+          "translation startup could not recover after a force source gap");
+  require(s.state.left.acceleration_translation_yaw_check.force_gap_count() == 1,
+          "force source gaps were not exposed to calibration diagnostics");
 }
 
 void irregular_optical_window_retains_acceleration_time() {
@@ -2034,8 +2138,13 @@ int main() {
   translation_rejects_unobservable_or_incomplete_motion();
   checked_force_frame_survives_rotation_refits_and_resets();
   translation_heading_uses_changing_acceleration_without_fitting_bias();
+  translation_startup_averages_only_fresh_heading_evidence();
   refined_force_heading_calibrates_both_sides_without_changing_aim();
   refined_force_heading_calibrates_both_sides_without_changing_aim(true);
+  refined_force_heading_calibrates_both_sides_without_changing_aim(false, true);
+  translation_keeps_learning_after_both_rotation_frames_are_valid();
+  translation_startup_handles_brief_and_long_force_source_gaps(100);
+  translation_startup_handles_brief_and_long_force_source_gaps(200);
   irregular_optical_window_retains_acceleration_time();
   window_launch_and_braking_share_the_same_imu_cursor();
   distance_freeze_keeps_physical_velocity_through_braking();

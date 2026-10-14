@@ -74,6 +74,20 @@ independent confirmation clocks; rejected translation windows cannot block a
 stable rotation-derived frame. A coherent translation heading can establish
 the initial force frame independently when optical grip rotation is noisy.
 
+Translation confirmation uses the timestamps of accepted optical positions,
+independently of the rotation estimator's matched palm/IMU quaternion queue.
+Delayed orientation matching or a missing palm rotation fit cannot consume a
+position-derived heading against an older rotation timestamp. Only fresh fitted
+headings enter its circular mean; cached poses do not advance the startup clock.
+The configured stability interval still applies. A held fit can finish while
+new accepted optical positions and current IMU force continue to arrive. A
+force-history gap over 80 ms still invalidates the motion-fit window. A previously
+supported heading can survive an 80--150 ms packet interruption without restarting
+the entire startup wait: such a delivery gap does not change the AHRS reference.
+An IMU outage over the existing 150 ms startup continuity limit restarts the
+unconfirmed startup clock. A confirmed physical frame is retained across packet
+gaps; epoch/device resets still invalidate both estimators.
+
 `[imu-alignment] controller_*_acceleration_yaw_valid=yes` means either startup
 estimator confirmed the force frame. The additional
 `controller_*_acceleration_translation_yaw_calibrated=yes` field reports accepted
@@ -81,6 +95,37 @@ translation-heading calibration/refinement; it may stay `no` after successful
 rotation-only startup. Both kinds of transition are forwarded to the client
 console, independently of verbose frame logging. No forward/back translation
 ritual is required before the existing alignment can finish.
+
+`yaw_valid=yes` on both sides does not stop translation learning. Each side
+continues independently until a translation fit is accepted, and may refine
+again while real optical tracking is available.
+
+While a connected IMU side is still calibrating, the main console also shows a
+`[imu-calibration]` line for that side every three seconds, without diagnostics
+environment variables. It stops once that side is ready. The line includes
+separate rotation/translation stability times, accepted fit support, coherence,
+residual motion in mm, scale ratio and an accumulated `imu_gaps` counter.
+The residual is after position/velocity/bias removal, not the total distance the
+hand travelled. These fields describe the latest fit, not a calibrated accuracy
+percentage. Existing four-field `[imu-alignment]` transitions remain unchanged.
+
+Common `translation` reasons:
+
+| Value | Meaning / useful action |
+| --- | --- |
+| `waiting_optics` | Show this hand to the cameras; held/predicted poses cannot calibrate. |
+| `waiting_imu`, `imu_gap` | Waiting for source-time force coverage; check packet delivery if repeated. |
+| `collecting`, `confirming` | Accumulating a covered window / agreeing heading fits. |
+| `need_motion` | Move forward/back or side to side with acceleration and stops. |
+| `rotate_slower` | Keep wrist rotation slow during the translation test. |
+| `inconsistent_motion`, `scale_mismatch` | IMU and optical motion do not agree enough; the fit is rejected. |
+| `ready` | The current fit passed its checks; startup stability may still be pending. |
+
+For a translation check, keep the hand visible and make several gentle
+10--20 cm forward/back or lateral motions with starts and stops, avoiding rapid
+wrist rotations. The hands can be checked separately. Hold the head fairly still
+to reduce optical noise. Follow the final `translation_yaw_calibrated=yes` flag;
+`translation=ready` alone is not the final startup result.
 
 Visible forward/back movements with acceleration and stops provide useful
 independent heading evidence. Avoid rapid wrist rotations. A stationary hand,

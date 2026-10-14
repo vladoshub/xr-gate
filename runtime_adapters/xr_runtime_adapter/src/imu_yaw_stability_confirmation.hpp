@@ -17,6 +17,20 @@ class YawStabilityConfirmation {
     active_ = false;
     start_ns_ = 0;
     min_delta_ = max_delta_ = 0;
+    estimate_count_ = 0;
+    estimate_sine_ = estimate_cosine_ = 0;
+  }
+
+  // A position-derived heading has its own source-time clock. It must not
+  // depend on a usable optical palm quaternion or on the rotation estimator
+  // catching up with delayed IMU delivery. Only fresh fitted headings enter
+  // the circular mean. Fresh optical source frames may confirm a held fit,
+  // provided the caller still has continuous, current force observations.
+  bool observe_heading(uint64_t timestamp_ns, std::optional<float> estimate_rad,
+                       float stable_ms, float max_range_deg) {
+    const float identity[] = {0, 0, 0, 1};
+    return observe(timestamp_ns, identity, identity, estimate_rad,
+                   stable_ms, max_range_deg, false);
   }
 
   bool observe(uint64_t timestamp_ns, const float provider_xyzw[4],
@@ -51,11 +65,19 @@ class YawStabilityConfirmation {
       reference_rad_ = yaw;
       reference_grip_ = grip;
       min_delta_ = max_delta_ = 0;
+      estimate_count_ = 0;
+      estimate_sine_ = estimate_cosine_ = 0;
     } else {
       min_delta_ = min_delta;
       max_delta_ = max_delta;
     }
-    candidate_rad_ = yaw;
+    if (estimate_rad) {
+      ++estimate_count_;
+      estimate_sine_ += std::sin(yaw);
+      estimate_cosine_ += std::cos(yaw);
+    }
+    candidate_rad_ = !verify_rigid_grip && estimate_count_ != 0
+        ? static_cast<float>(std::atan2(estimate_sine_, estimate_cosine_)) : yaw;
     return static_cast<double>(last_pose_ns_ - start_ns_) / 1.0e6 >= std::max(0.0f, stable_ms);
   }
 
@@ -67,6 +89,7 @@ class YawStabilityConfirmation {
   float range_deg() const {
     return active_ ? (max_delta_ - min_delta_) * 180 / 3.14159265358979323846f : 0;
   }
+  uint32_t estimate_count() const { return estimate_count_; }
 
  private:
   struct Rotation { float w = 1, x = 0, y = 0, z = 0; };
@@ -88,6 +111,8 @@ class YawStabilityConfirmation {
   uint64_t start_ns_ = 0, last_pose_ns_ = 0;
   float reference_rad_ = 0, candidate_rad_ = 0, min_delta_ = 0, max_delta_ = 0;
   Rotation reference_grip_{};
+  uint32_t estimate_count_ = 0;
+  double estimate_sine_ = 0, estimate_cosine_ = 0;
 };
 
 }  // namespace xr_runtime_adapter::imu_alignment

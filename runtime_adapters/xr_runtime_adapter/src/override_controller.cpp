@@ -535,6 +535,7 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
     return;
   }
   auto& translation = state->acceleration_translation_yaw_check;
+  const uint64_t translation_motion_epoch = translation.motion_epoch();
   const bool refine_translation = cfg.translation_yaw_refinement_enabled &&
       cfg.translation_yaw_check_enabled && cfg.acceleration_integration_enabled;
   const bool matching_real_optical = matching_optical_measurement &&
@@ -557,6 +558,21 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
     }
   } else {
     translation.clear_motion();
+  }
+  if (translation.motion_epoch() != translation_motion_epoch) {
+    state->acceleration_translation_heading_consumed_ns = std::max(
+        state->acceleration_translation_heading_consumed_ns, translation.heading_timestamp_ns());
+    // An 80--150 ms packet gap invalidates the motion-fit window, but it
+    // does not change the AHRS reference or revoke an already supported yaw.
+    // Use the same 150 ms continuity limit as startup pose confirmation.
+    if (translation.last_force_gap_duration_ns() > 150'000'000ULL) {
+      state->acceleration_translation_yaw_confirmation.reset();
+    }
+  }
+  if (!translation.has_recent_force(optical_timestamp_ns)) {
+    // A stale provider must not finish confirmation just because new camera
+    // frames are arriving. Long outages restart the source-time clock.
+    state->acceleration_translation_yaw_confirmation.reset();
   }
   if (!real_optical_hand_pose(confirmed_hand) || !real_optical_hand_pose(clean_optical_hand)) {
     state->acceleration_world_alignment.clear_optical_motion();
@@ -622,24 +638,27 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
       }
       uint64_t pose_ns = 0;
       float provider_xyzw[4] = {}, optical_xyzw[4] = {};
+      auto& translation_confirmation = state->acceleration_translation_yaw_confirmation;
+      // Position and rotation observations can become available on different
+      // runtime ticks. Do not consume a fresh translation fit against an old
+      // matched rotation timestamp: that loses evidence on delayed links.
+      const bool translation_ready = refine_translation && translation_confirmation.observe_heading(
+          optical_timestamp_ns, translation_estimate,
+          cfg.acceleration_yaw_stable_ms, cfg.acceleration_yaw_stable_max_range_deg);
+      bool rotation_ready = false;
       if (state->acceleration_world_alignment.latest_matched_pose(pose_ns, provider_xyzw, optical_xyzw)) {
-        auto& translation_confirmation = state->acceleration_translation_yaw_confirmation;
-        // The two estimators have independent startup clocks. A rejected or
-        // unobservable translation fit must not suppress a stable rigid grip.
-        // Prefer the position-derived heading if both finish on this frame.
-        const bool translation_ready = refine_translation && translation_confirmation.observe(
-            pose_ns, provider_xyzw, optical_xyzw, translation_estimate,
-            cfg.acceleration_yaw_stable_ms, cfg.acceleration_yaw_stable_max_range_deg, false);
-        const bool rotation_ready = confirmation.observe(pose_ns, provider_xyzw, optical_xyzw,
+        rotation_ready = confirmation.observe(pose_ns, provider_xyzw, optical_xyzw,
             initial_estimate, cfg.acceleration_yaw_stable_ms, cfg.acceleration_yaw_stable_max_range_deg);
-        if (translation_ready || rotation_ready) {
-          state->acceleration_world_yaw_rad = wrap_pi(translation_ready
-              ? translation_confirmation.candidate_rad() : confirmation.candidate_rad());
-          state->acceleration_world_yaw_valid = true;
-          state->acceleration_translation_yaw_calibrated = translation_ready;
-          confirmation.reset();
-          translation_confirmation.reset();
-        }
+      }
+      // Both startup clocks run independently. Prefer the position-derived
+      // heading if both estimators finish on the same accepted optical frame.
+      if (translation_ready || rotation_ready) {
+        state->acceleration_world_yaw_rad = wrap_pi(translation_ready
+            ? translation_confirmation.candidate_rad() : confirmation.candidate_rad());
+        state->acceleration_world_yaw_valid = true;
+        state->acceleration_translation_yaw_calibrated = translation_ready;
+        confirmation.reset();
+        translation_confirmation.reset();
       }
     }
     state->acceleration_world_yaw_frame_sequence = optical_sequence;
