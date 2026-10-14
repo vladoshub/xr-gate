@@ -76,8 +76,8 @@
         "enabled": true,
         "offset_m": {
           "x": -0.09,
-          "y": -0.1,
-          "z": -0.15
+          "y": -0.0,
+          "z": -0.0
         },
         "rotate_with_hmd_orientation": true
       },
