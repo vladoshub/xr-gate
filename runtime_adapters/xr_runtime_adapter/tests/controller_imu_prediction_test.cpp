@@ -168,13 +168,14 @@ void startup_yaw_restarts_for_jumps_gaps_and_cached_frames() {
           "zero duration did not preserve immediate initialization");
 }
 
-void first_yaw_confirmation_controls_force_integration_on_both_sides() {
+void first_yaw_confirmation_controls_force_integration_on_both_sides(bool refine_translation = false) {
   for (bool right : {false, true}) {
     for (bool interrupted : {false, true}) {
       Scenario s;
       s.state.left.acceleration_world_yaw_valid = false;
       auto& m = s.cfg.left_imu_motion;
-      m.translation_yaw_check_enabled = false;
+      m.translation_yaw_check_enabled = refine_translation;
+      m.translation_yaw_refinement_enabled = refine_translation;
       m.predict_lost_ms = 1200;
       s.cfg.right_orientation_source = s.cfg.left_orientation_source;
       s.cfg.right_imu_motion = m;
@@ -230,6 +231,9 @@ void first_yaw_confirmation_controls_force_integration_on_both_sides() {
         break;
       }
       require(ready_ms > 0, "held grip never completed native startup confirmation");
+      require(!state.acceleration_translation_yaw_check.heading_valid() &&
+              !state.acceleration_translation_yaw_calibrated,
+              "rotation-only startup falsely claimed an independent translation calibration");
       near(state.acceleration_world_yaw_rad, yaw, "stable startup selected an incorrect frame", 1e-4f);
       require(s.cfg.left_imu_motion.acceleration_integration_enabled &&
               s.cfg.right_imu_motion.acceleration_integration_enabled, "confirmation disabled an integration setting");
@@ -431,6 +435,194 @@ void checked_force_frame_survives_rotation_refits_and_resets() {
   }
 }
 
+void translation_heading_uses_changing_acceleration_without_fitting_bias() {
+  using xr_runtime_adapter::imu_alignment::TranslationYawCheck;
+  for (float yaw : {-2.45f, 0.6f, kPi - 0.03f}) {
+    for (int delay : {0, 80}) {
+      TranslationYawCheck check;
+      int force_ms = 0;
+      const auto world = cu::q_from_axis_angle(0, 1, 0, yaw);
+      constexpr double omega = 6.0;
+      for (int ms = 0; ms <= 3000; ms += 30) {
+        for (; force_ms <= ms - delay; force_ms += 5) {
+          const float a[] = {float(-0.20*omega*omega*std::sin(omega*force_ms/1000.0) + 0.4),
+                             0, float(-0.10*omega*omega*std::sin(omega*force_ms/1000.0) - 0.3)};
+          check.observe_force(kStart + uint64_t(force_ms)*1'000'000, a, 0.1f);
+        }
+        const double t = ms/1000.0;
+        const auto p = cu::q_rotate(world, cu::V3d{0.20*std::sin(omega*t), 0, 0.10*std::sin(omega*t)});
+        const float position[] = {float(2 + 0.3*t + p.x), 0, float(-3 - 0.2*t + p.z)};
+        const auto ns = kStart + uint64_t(ms)*1'000'000;
+        check.observe_optical(ns, position);
+        check.observe_optical(ns, position);
+        check.update(true);
+      }
+      require(check.heading_valid(), "changing translation did not identify the complete force yaw");
+      require(std::cos(check.heading_rad() - yaw) > 0.9998f,
+              "constant acceleration bias or delayed delivery rotated the force heading");
+      require(check.heading_coherence() >= 0.97f, "heading was confirmed without coherent support");
+      // Drain any covered delayed poses before testing cached evidence.
+      const float zero[] = {0, 0, 0};
+      for (; force_ms <= 3300; force_ms += 5) {
+        check.observe_force(kStart + uint64_t(force_ms)*1'000'000, zero, 0);
+        check.update(true);
+      }
+      const auto consumed = check.heading_timestamp_ns();
+      const auto support = check.heading_support_count();
+      for (int i = 0; i < 30; ++i) check.update(true);
+      require(check.heading_timestamp_ns() == consumed && check.heading_support_count() == support,
+              "cached optical poses repeatedly refreshed full-heading calibration");
+      require(!check.fresh_heading(consumed, consumed), "already consumed heading was treated as fresh");
+      require(!check.fresh_heading(consumed + 151'000'000, 0), "expired heading was treated as fresh");
+      require(!check.fresh_heading(consumed - 1, 0), "future heading was treated as source-time evidence");
+      check.clear_optical_motion();
+      require(check.heading_valid() && check.heading_timestamp_ns() == consumed,
+              "optical loss revoked a confirmed physical heading");
+    }
+  }
+  // Removing the quadratic nuisance must not invent observability from
+  // constant acceleration, or fit noisy/rapidly rotating/uncovered motion.
+  for (int mode = 0; mode < 5; ++mode) {
+    TranslationYawCheck check;
+    for (int ms = 0; ms <= 2500; ms += 10) {
+      const double t = ms/1000.0;
+      const float a[] = {mode == 0 ? 2.0f : float(-7.2*std::sin(6*t)), 0, 0};
+      if (mode != 2 || ms % 200 < 20) {
+        check.observe_force(kStart + uint64_t(ms)*1'000'000, a, mode == 1 ? 2.0f : 0.1f);
+      }
+      const float position[] = {mode == 0 ? float(t*t) : mode == 3 ? float(0.2*std::sin(13*t))
+          : mode == 4 ? float(0.002*std::sin(6*t)) : float(0.2*std::sin(6*t)), 0, 0};
+      if (ms % 30 == 0) check.observe_optical(kStart + uint64_t(ms)*1'000'000, position);
+      check.update(true);
+    }
+    require(!check.heading_valid(), "unobservable or inconsistent motion established a refined heading");
+  }
+}
+
+void refined_force_heading_calibrates_both_sides_without_changing_aim(bool rotation_first = false) {
+  for (bool right : {false, true}) {
+    Scenario s;
+    s.state.left.acceleration_world_yaw_valid = false;
+    auto& m = s.cfg.left_imu_motion;
+    m.translation_yaw_refinement_enabled = true;
+    m.acceleration_yaw_stable_ms = 4000;
+    m.prediction_window_mode = true;
+    m.prediction_window_ms = 120;
+    m.predict_lost_ms = 1200;
+    s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+    s.cfg.right_imu_motion = m;
+    const float yaw = right ? 0.6f : -2.4f;
+    const auto world = cu::q_from_axis_angle(0, 1, 0, yaw);
+    // Optics offers a different constant local grip. Position calibration
+    // must work without adopting that rendered orientation or its yaw error.
+    const auto optical_q = cu::q_from_axis_angle(0, 1, 0, yaw + 1.1f);
+    auto& state = right ? s.state.right : s.state.left;
+    const int visible_ms = rotation_first ? 10000 : 6000;
+    const auto position = [&](int ms) {
+      const double t = std::max(0, ms - 5000)/1000.0;
+      return rotation_first ? 0.2*(1 - std::cos(6*t)) : 0.2*std::sin(6*ms/1000.0);
+    };
+    int ready_ms = -1;
+    uint32_t checked_refinements = 0;
+    auto tick = [&](int ms, bool optical, uint32_t epoch = 1, uint64_t device = 123) {
+      const auto ns = s.prepare(ms);
+      auto input = s.input;
+      input.left.physical_device_hash = device;
+      auto hand = s.hand;
+      const double t = ms/1000.0;
+      const auto p = cu::q_rotate(world, cu::V3d{position(ms), 0, 0});
+      auto& imu = input.left.imu;
+      const double provider_angle = rotation_first ? 0.25*std::sin(3*t)
+          : ms > 3000 ? 0.15*std::sin(3*t) : 0;
+      const auto provider = cu::q_from_axis_angle(1, 0, 0, provider_angle);
+      imu.orientation_xyzw[0] = provider.x; imu.orientation_xyzw[3] = provider.w;
+      imu.reserved[CONTROLLER_IMU_DIAG_EPOCH] = epoch;
+      imu.samples[0].flags |= CONTROLLER_IMU_GYROSCOPE_VALID;
+      // Provider-world force is along provider X; the independently recorded
+      // optical path is along XR world_yaw * X.
+      const double acceleration = rotation_first
+          ? ms >= 5000 ? 7.2*std::cos(6*(t - 5)) : 0
+          : -7.2*std::sin(6*t);
+      const auto body_force = cu::q_rotate(cu::q_conj(provider),
+          cu::V3d{acceleration, 9.81, 0});
+      imu.samples[0].specific_force_m_s2[0] = body_force.x;
+      imu.samples[0].specific_force_m_s2[1] = body_force.y;
+      imu.samples[0].specific_force_m_s2[2] = body_force.z;
+      imu.samples[0].angular_velocity_rad_s[0] = rotation_first ? 0.75*std::cos(3*t)
+          : ms > 3000 ? 0.45*std::cos(3*t) : 0;
+      hand.left.controller_px = p.x; hand.left.controller_pz = p.z;
+      const auto noisy_grip = cu::q_mul(cu::q_mul(optical_q, provider),
+          cu::q_from_axis_angle(0, 0, 1, rotation_first || ms > 3000 ? 0.3 : ms > 2000 ? 0.3*std::sin(3*t) : 0));
+      hand.left.controller_qx = noisy_grip.x; hand.left.controller_qy = noisy_grip.y;
+      hand.left.controller_qz = noisy_grip.z; hand.left.controller_qw = noisy_grip.w;
+      if (right) {
+        input.right = input.left; input.left = {};
+        hand.right = hand.left; hand.left = {};
+        hand.flags = HAND_FLAG_RIGHT_VALID; hand.right.handedness = 2;
+      }
+      const auto h = optical ? std::optional(hand) : std::nullopt;
+      return compose_runtime_controller_state(s.sequence, ns, s.cfg, h, h,
+          input, std::nullopt, 9.81f, &s.state);
+    };
+    for (int ms = 0; ms <= visible_ms; ms += 10) {
+      const auto out = tick(ms, true);
+      const auto& pose = right ? out.right : out.left;
+      const double angle = rotation_first ? 0.25*std::sin(3*ms/1000.0)
+          : ms > 3000 ? 0.15*std::sin(3*ms/1000.0) : 0;
+      near(pose.orientation_xyzw[3], std::cos(angle/2),
+           "physical heading calibration changed IMU aiming orientation");
+      near(pose.orientation_xyzw[0], std::sin(angle/2),
+           "physical heading calibration attenuated the gyro response");
+      if (state.acceleration_world_yaw_valid && ready_ms < 0) ready_ms = ms;
+      if (state.acceleration_translation_yaw_refinements != checked_refinements) {
+        const float error = std::atan2(std::sin(state.acceleration_world_yaw_rad -
+            state.acceleration_translation_yaw_check.heading_rad()),
+            std::cos(state.acceleration_world_yaw_rad - state.acceleration_translation_yaw_check.heading_rad()));
+        near(error, 0, "calibrated=yes left the confirmed force heading partly unapplied", 1e-5f);
+        checked_refinements = state.acceleration_translation_yaw_refinements;
+      }
+      if (ms < 4000) require(!state.acceleration_world_yaw_valid, "full heading skipped startup stability");
+      if (rotation_first && ms == 5000) {
+        require(state.acceleration_world_yaw_valid && !state.acceleration_translation_yaw_calibrated &&
+                !state.acceleration_translation_yaw_check.heading_valid(),
+                "optional refinement blocked or mislabeled the existing rotation-based startup");
+        near(state.acceleration_world_yaw_rad, yaw + 1.1f,
+             "rotation-only phase failed to exercise the different force heading", 1e-4f);
+      }
+    }
+    require(ready_ms >= 4000 && state.acceleration_translation_yaw_calibrated,
+            "full physical yaw did not calibrate at startup for both hands");
+    require(std::cos(state.acceleration_world_yaw_rad - yaw) > 0.9999f,
+            "startup force yaw inherited the optical grip orientation");
+    if (rotation_first) require(state.acceleration_translation_yaw_refinements > 0,
+                               "accepted translation never refined the prior rotation-derived frame");
+    const float retained = state.acceleration_world_yaw_rad;
+    const auto hint_ns = state.acceleration_translation_heading_consumed_ns;
+    for (int ms = visible_ms + 10; ms <= visible_ms + 200; ms += 10) {
+      const auto out = tick(ms, false);
+      near(state.acceleration_world_yaw_rad, retained, "optical loss changed the calibrated force frame");
+      const auto& pose = right ? out.right : out.left;
+      const auto p = cu::q_rotate(world, cu::V3d{position(ms), 0, 0});
+      near(pose.position[0], p.x, "calibrated loss prediction moved in the wrong X direction", 0.008f);
+      near(pose.position[2], p.z, "calibrated loss prediction moved in the wrong depth direction", 0.008f);
+    }
+    reset_runtime_controller_imu_prediction(state);
+    require(state.acceleration_translation_yaw_calibrated &&
+            state.acceleration_translation_heading_consumed_ns == hint_ns,
+            "ordinary prediction reset discarded or refreshed confirmed translation evidence");
+    tick(visible_ms + 210, true, 2);
+    require(!state.acceleration_world_yaw_valid && !state.acceleration_translation_yaw_calibrated &&
+            !state.acceleration_translation_yaw_check.heading_valid(),
+            "new AHRS epoch inherited the full-heading calibration");
+    state.acceleration_world_yaw_valid = true;
+    state.acceleration_translation_yaw_calibrated = true;
+    tick(visible_ms + 220, true, 2, 456);
+    require(!state.acceleration_world_yaw_valid && !state.acceleration_translation_yaw_calibrated &&
+            !state.acceleration_translation_yaw_check.heading_valid(),
+            "a different physical device inherited the full-heading calibration");
+  }
+}
+
 void irregular_optical_window_retains_acceleration_time() {
   xr_runtime_adapter::prediction_window::PositionWindowEstimator<> window;
   const uint64_t start = 40'000'000'000'000ULL;
@@ -534,6 +726,52 @@ void window_launch_and_braking_share_the_same_imu_cursor() {
         reset_runtime_controller_imu_prediction(state);
         require(state.acceleration_history_count == 0 && state.anchor_velocity_alignment_samples == 0,
                 "prediction reset retained the old launch history");
+      }
+    }
+  }
+}
+
+void late_pre_optical_force_is_not_reintegrated_after_loss() {
+  for (bool right : {false, true}) {
+    for (int hold : {0, 60}) {
+      Scenario s;
+      auto& m = s.cfg.left_imu_motion;
+      m.prediction_window_mode = true; m.prediction_window_ms = 120;
+      m.hold_lost_ms = hold; m.predict_lost_ms = 1200;
+      s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+      s.cfg.right_imu_motion = m; s.state.right.acceleration_world_yaw_valid = true;
+      auto tick = [&](int ms, bool optical) {
+        const auto ns = s.prepare(ms);
+        auto input = s.input; auto hand = s.hand;
+        auto& imu = input.left.imu;
+        // Delivery lags the optical observation by 80ms. A packet received
+        // during loss may still describe the already observed optical path.
+        imu.latest_sample_timestamp_ns = imu.orientation_timestamp_ns = ns-80'000'000;
+        imu.samples[0].timestamp_ns = ns-80'000'000;
+        imu.samples[0].specific_force_m_s2[0] = 2;
+        hand.left.controller_px = 0.35f*ms/1000;
+        if (right) {
+          input.right = input.left; input.left = {};
+          hand.right = hand.left; hand.left = {}; hand.flags = HAND_FLAG_RIGHT_VALID;
+          hand.right.handedness = 2;
+        }
+        const auto h = optical ? std::optional(hand) : std::nullopt;
+        return compose_runtime_controller_state(s.sequence, ns, s.cfg, h, h,
+            input, std::nullopt, 9.81f, &s.state);
+      };
+      for (int ms = 0; ms <= 120; ms += 15) tick(ms, true);
+      auto& state = right ? s.state.right : s.state.left;
+      near(state.anchor_velocity_mps[0], 0.35f, "delayed input changed optical launch velocity");
+      for (int ms = 135; ms <= 390; ms += 15) {
+        const auto out = tick(ms, false);
+        // The 195->210ms delivery interval straddles measurement time 120ms:
+        // only its final 10ms belong to unseen motion. Later intervals count
+        // normally, including acceleration during an intentional hold.
+        const float expected_dv = 2*std::max(0, ms-80-120)/1000.0f;
+        near(state.acceleration_velocity_delta_mps[0], expected_dv,
+             "late pre-anchor force was counted as new post-loss acceleration", 1e-5f);
+        if (ms > 120+hold) near((right ? out.right : out.left).linear_velocity[0], 0.35f+expected_dv,
+            "source-time clipping removed real post-anchor force", 1e-5f);
       }
     }
   }
@@ -1558,18 +1796,252 @@ void distance_recovery_does_not_spend_frozen_time_as_speed_budget() {
   require(recovered,"outside optical anchor never made a bounded inward recovery");
 }
 
+void presentation_yaw_matches_camera_time_with_delayed_delivery() {
+  for (bool right : {false, true}) {
+    for (bool smooth : {false, true}) {
+    for (const auto delays : {std::pair<int,int>{0,40}, {35,0}, {70,20}}) {
+      Scenario s;
+      auto& motion = s.cfg.left_imu_motion;
+      motion.yaw_correction_enabled = true;
+      motion.yaw_correction_smooth = smooth;
+      motion.yaw_correction_continuous = true;
+      motion.yaw_correction_trigger_filter = false;
+      motion.yaw_correction_interval_ms = 0;
+      // Interpolation across an abrupt stop may differ by under one degree;
+      // delivery-time comparisons would invent errors of 14-24 degrees here.
+      motion.yaw_correction_deadband_deg = 2.0f;
+      motion.yaw_correction_blend_ms = 0;
+      if (right) {
+        s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+        s.cfg.right_imu_motion = motion;
+      }
+      const auto angle_at = [](int ms) { return std::min(ms, 400) * 0.006f; };
+      constexpr float anchor = 0.35f;
+      for (int ms = 0; ms <= 600; ms += 10) {
+        const auto tick_ns = s.prepare(ms);
+        const int imu_ms = ms - delays.first, camera_ms = ms - delays.second;
+        auto& imu = s.input.left.imu;
+        imu.orientation_timestamp_ns = imu.latest_sample_timestamp_ns =
+            kStart + static_cast<int64_t>(imu_ms) * 1'000'000;
+        imu.orientation_xyzw[1] = std::sin(angle_at(imu_ms) * 0.5f);
+        imu.orientation_xyzw[3] = std::cos(angle_at(imu_ms) * 0.5f);
+        s.hand.source_timestamp_ns = kStart + static_cast<int64_t>(camera_ms) * 1'000'000;
+        s.hand.left.controller_qy = std::sin((anchor + angle_at(camera_ms)) * 0.5f);
+        s.hand.left.controller_qw = std::cos((anchor + angle_at(camera_ms)) * 0.5f);
+        if (right) {
+          s.input.right = s.input.left;
+          s.hand.right = s.hand.left;
+          s.hand.right.handedness = 2;
+          s.hand.flags |= HAND_FLAG_RIGHT_VALID;
+        }
+        compose_runtime_controller_state(s.sequence, tick_ns, s.cfg, s.hand, s.hand,
+                                         s.input, std::nullopt, 9.81f, &s.state);
+        const auto& state = right ? s.state.right : s.state.left;
+        if (ms >= 100) {
+          require(state.yaw_correction_valid, "delayed delivery never produced a matched yaw pair");
+          near(state.yaw_correction_rad, anchor, "camera latency became false yaw drift", 0.001f);
+          require(state.yaw_apply_count == 1, "a rigid turn or stop triggered another yaw correction");
+        }
+      }
+    }
+    }
+  }
+}
+
+struct SmoothYawScenario {
+  Scenario s;
+  bool right;
+  explicit SmoothYawScenario(bool right_side = false) : right(right_side) {
+    auto& m = s.cfg.left_imu_motion;
+    m.position_prediction_enabled = m.acceleration_integration_enabled = false;
+    m.yaw_correction_enabled = m.yaw_correction_smooth = true;
+    if (right) {
+      s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+      s.cfg.right_imu_motion = m;
+    }
+  }
+  RuntimeControllerImuSideRuntimeState& state() { return right ? s.state.right : s.state.left; }
+  RuntimeControllerImuMotionConfig& config() { return right ? s.cfg.right_imu_motion : s.cfg.left_imu_motion; }
+  RuntimeControllerSideStateV1 tick(int ms, float imu_deg, float error_deg,
+                                   bool optical = true, float confidence = 1,
+                                   bool accepted = true, bool cached = false) {
+    const auto previous = s.hand;
+    const auto now = s.prepare(ms);
+    const float a = imu_deg * kPi / 180;
+    s.input.left.imu.orientation_xyzw[1] = std::sin(a / 2);
+    s.input.left.imu.orientation_xyzw[3] = std::cos(a / 2);
+    const float b = (imu_deg + error_deg) * kPi / 180;
+    s.hand.left.controller_qy = std::sin(b / 2);
+    s.hand.left.controller_qw = std::cos(b / 2);
+    s.hand.left.confidence = confidence;
+    if (cached) s.hand = previous;
+    if (right) {
+      s.input.right = s.input.left;
+      s.hand.right = s.hand.left;
+      s.hand.right.handedness = 2;
+      s.hand.flags |= HAND_FLAG_RIGHT_VALID;
+    }
+    auto filtered = s.hand;
+    if (!accepted) {
+      filtered.left.status = filtered.right.status = 2;
+    }
+    const auto frame = compose_runtime_controller_state(s.sequence, now, s.cfg,
+        optical ? std::optional(filtered) : std::nullopt,
+        optical ? std::optional(s.hand) : std::nullopt,
+        s.input, std::nullopt, 9.81f, &s.state);
+    return right ? frame.right : frame.left;
+  }
+};
+
+float angle_delta(float a, float b) { return std::remainder(a - b, 2 * kPi); }
+
+void smooth_yaw_preserves_aiming_and_bounds_drift_correction() {
+  for (bool right : {false, true}) {
+    SmoothYawScenario aim(right);
+    for (int ms = 0; ms <= 2000; ms += 10) {
+      // Include micro-aiming, a large turn and wrapping through +/-180 degrees.
+      const float degrees = ms < 1000 ? 0.2f * std::sin(ms / 50.f) : (ms - 1000) * 0.4f;
+      const auto out = aim.tick(ms, degrees, 20);
+      const auto expected = cu::q_from_axis_angle(0, 1, 0, (degrees + 20) * kPi / 180);
+      const float dot = out.orientation_xyzw[3] * expected.w + out.orientation_xyzw[1] * expected.y;
+      near(std::abs(dot), 1, "smooth yaw attenuated useful gyro movement", 1e-5f);
+      near(aim.state().yaw_correction_rad, 20 * kPi / 180,
+           "rigid optical/IMU motion invented drift", 1e-5f);
+    }
+    SmoothYawScenario drift(right);
+    drift.tick(0, 0, 0);
+    float last = 0;
+    unsigned changes_between_camera_frames = 0;
+    for (int ms = 10; ms <= 5000; ms += 10) {
+      // Optical at ~33Hz, rendering at 100Hz. Cached frames are not new evidence,
+      // but the accepted fresh target advances smoothly between camera updates.
+      drift.tick(ms, 0, 10, true, 1, true, ms % 30 != 0 && ms != 10);
+      const float correction = drift.state().yaw_correction_rad;
+      const float delta = angle_delta(correction, last);
+      require(delta >= -1e-6f && delta <= 2 * kPi / 180 * 0.01f + 1e-6f,
+              "smooth drift correction exceeded degrees-per-second limit");
+      if (ms % 30 != 0 && delta > 1e-6f) ++changes_between_camera_frames;
+      last = correction;
+    }
+    require(last > 7 * kPi / 180 && last < 10 * kPi / 180,
+            "continuous correction did not reduce persistent drift");
+    require(changes_between_camera_frames > 20,
+            "correction was stepped only on optical frames");
+    SmoothYawScenario noise(right);
+    noise.tick(0, 0, 0);
+    for (int ms = 10; ms <= 2000; ms += 10) noise.tick(ms, 0, ms % 20 ? 0.4f : -0.4f);
+    near(noise.state().yaw_correction_rad, 0, "sub-deadband optical noise moved aim");
+  }
+}
+
+void smooth_yaw_rejects_bad_optics_and_recovers_without_a_snap() {
+  SmoothYawScenario x;
+  x.tick(0, 0, 0);
+  x.tick(10, 0, 10);
+  const float before_loss = x.state().yaw_correction_rad;
+  x.tick(20, 0, 90, false);
+  x.tick(10000, 30, 90, false);
+  near(x.state().yaw_correction_rad, before_loss, "yaw moved during optical loss");
+  x.tick(10010, 30, 40);
+  require(std::abs(angle_delta(x.state().yaw_correction_rad, before_loss)) <=
+              2 * kPi / 180 * 0.01f + 1e-6f,
+          "reacquire spent time lost as an instantaneous correction budget");
+  const auto good = x.state().yaw_correction_rad;
+  x.tick(10020, 30, 80, true, 0.1f);
+  x.tick(10030, 30, 80, true, 1, false);
+  near(x.state().yaw_correction_rad, good, "low-confidence or rejected optics changed yaw");
+  x.tick(10040, 30, 10);
+  const auto last = x.state().yaw_correction_rad;
+  x.tick(10200, 30, 10, true, 1, true, true);
+  near(x.state().yaw_correction_rad, last, "stale cached optical pose changed yaw");
+  require(x.state().yaw_last_action == "smooth_stale", "stale target was not diagnosed");
+
+  SmoothYawScenario jump;
+  jump.tick(0, 0, 0);
+  jump.tick(10, 0, 60);
+  jump.tick(20, 0, 0);
+  near(jump.state().yaw_correction_rad, 0, "single optical yaw outlier moved aim");
+  for (int ms = 30; ms < 230; ms += 10) {
+    jump.tick(ms, 0, 60);
+    near(jump.state().yaw_correction_rad, 0, "unconfirmed jump spent correction time");
+  }
+  jump.tick(230, 0, 60);
+  require(jump.state().yaw_correction_rad > 0 && jump.state().yaw_correction_rad < 0.001f,
+          "persistent changed reference was rejected forever or applied with a snap");
+
+  SmoothYawScenario wrapped;
+  wrapped.config().yaw_smooth_deadband_deg = 0;
+  wrapped.tick(0, 0, 179);
+  for (int ms = 10; ms <= 3000; ms += 10) wrapped.tick(ms, 0, -179);
+  const auto turn = angle_delta(wrapped.state().yaw_correction_rad, 179 * kPi / 180);
+  require(turn > 1 * kPi / 180 && turn < 2 * kPi / 180,
+          "yaw wrap selected a long turn or froze correction");
+
+  SmoothYawScenario disabled;
+  disabled.config().yaw_correction_continuous = false;
+  disabled.tick(0, 0, 0);
+  for (int ms = 10; ms <= 200; ms += 10) disabled.tick(ms, 0, 10);
+  near(disabled.state().yaw_correction_rad, 0, "CONTINUOUS=0 did not disable smooth updates");
+  disabled.state().yaw_correction_requested = true;
+  disabled.tick(210, 0, 10);
+  require(disabled.state().yaw_correction_rad > 0,
+          "explicit reacquire request did not start a bounded smooth correction");
+}
+
+void smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses() {
+  for (int tick_ms : {5, 10, 25}) {
+    SmoothYawScenario x;
+    x.config().yaw_smooth_deadband_deg = 0;
+    x.config().yaw_smooth_max_speed_deg_s = 360;
+    x.tick(0, 0, 0);
+    for (int ms = tick_ms; ms <= 2000; ms += tick_ms) x.tick(ms, 0, 10);
+    near(x.state().yaw_correction_rad, 10 * kPi / 180 * (1 - std::exp(-1.f)),
+         "complementary gain depends on runtime tick frequency", 1e-5f);
+  }
+  for (bool future : {false, true}) {
+    SmoothYawScenario x;
+    const auto now = x.s.prepare(0);
+    x.s.hand.source_timestamp_ns = future ? now + 100'000'000 : 0;
+    compose_runtime_controller_state(x.s.sequence, now, x.s.cfg, x.s.hand, x.s.hand,
+        x.s.input, std::nullopt, 9.81f, &x.s.state);
+    require(!x.state().yaw_correction_valid,
+            "missing/future source time established a smooth yaw reference");
+  }
+  SmoothYawScenario vertical;
+  vertical.tick(0, 0, 0);
+  const auto now = vertical.s.prepare(10);
+  vertical.s.input.left.imu.orientation_xyzw[0] = std::sin(kPi / 4);
+  vertical.s.input.left.imu.orientation_xyzw[3] = std::cos(kPi / 4);
+  vertical.s.hand.left.controller_qx = std::sin(kPi / 4);
+  vertical.s.hand.left.controller_qw = std::cos(kPi / 4);
+  compose_runtime_controller_state(vertical.s.sequence, now, vertical.s.cfg,
+      vertical.s.hand, vertical.s.hand, vertical.s.input, std::nullopt, 9.81f, &vertical.s.state);
+  near(vertical.state().yaw_correction_rad, 0, "vertical pose invented a yaw correction");
+  require(vertical.state().yaw_last_action == "smooth_unobservable",
+          "vertical heading was not diagnosed as unobservable");
+}
+
 int main() {
+  smooth_yaw_preserves_aiming_and_bounds_drift_correction();
+  smooth_yaw_rejects_bad_optics_and_recovers_without_a_snap();
+  smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses();
+  presentation_yaw_matches_camera_time_with_delayed_delivery();
   startup_yaw_waits_for_stability_without_freezing_real_motion();
   startup_yaw_restarts_for_jumps_gaps_and_cached_frames();
   first_yaw_confirmation_controls_force_integration_on_both_sides();
+  first_yaw_confirmation_controls_force_integration_on_both_sides(true);
   translation_checks_direction_with_source_time_and_unknown_velocity();
   translation_rejects_unobservable_or_incomplete_motion();
   checked_force_frame_survives_rotation_refits_and_resets();
+  translation_heading_uses_changing_acceleration_without_fitting_bias();
+  refined_force_heading_calibrates_both_sides_without_changing_aim();
+  refined_force_heading_calibrates_both_sides_without_changing_aim(true);
   irregular_optical_window_retains_acceleration_time();
   window_launch_and_braking_share_the_same_imu_cursor();
   distance_freeze_keeps_physical_velocity_through_braking();
   distance_recovery_does_not_spend_frozen_time_as_speed_budget();
   static_assert(sizeof(ControllerInputV3) == 1432, "controller V3 ABI changed");
+  late_pre_optical_force_is_not_reintegrated_after_loss();
   initialized_gravity_preserves_optical_motion();
   rigid_grip_does_not_change_world_alignment();
   motion_alignment_uses_source_time_and_observable_rotations();

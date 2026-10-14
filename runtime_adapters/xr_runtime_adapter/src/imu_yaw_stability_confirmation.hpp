@@ -21,7 +21,7 @@ class YawStabilityConfirmation {
 
   bool observe(uint64_t timestamp_ns, const float provider_xyzw[4],
                const float optical_xyzw[4], std::optional<float> estimate_rad,
-               float stable_ms, float max_range_deg) {
+               float stable_ms, float max_range_deg, bool verify_rigid_grip = true) {
     if (timestamp_ns == 0 || timestamp_ns <= last_pose_ns_) return false;
     const uint64_t previous = last_pose_ns_;
     last_pose_ns_ = timestamp_ns;
@@ -44,7 +44,8 @@ class YawStabilityConfirmation {
     const float min_delta = std::min(min_delta_, delta), max_delta = std::max(max_delta_, delta);
     const float dot = std::clamp(std::abs(grip.w*reference_grip_.w + grip.x*reference_grip_.x +
         grip.y*reference_grip_.y + grip.z*reference_grip_.z), 0.0f, 1.0f);
-    if (!active_ || max_delta - min_delta > limit || dot < std::cos(limit/2)) {
+    if (!active_ || max_delta - min_delta > limit ||
+        (verify_rigid_grip && dot < std::cos(limit/2))) {
       active_ = true;
       start_ns_ = timestamp_ns;
       reference_rad_ = yaw;

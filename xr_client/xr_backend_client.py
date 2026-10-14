@@ -65,7 +65,9 @@ BASALT_LEGACY_MODE_FLAGS = ("--no-imu", "--vo", "--vio")
 CONTROLLER_IMU_ALIGNMENT_STATUS = re.compile(
     rb"^\[xr_runtime_adapter\]\[imu-alignment\] "
     rb"controller_left_acceleration_yaw_valid=(yes|no) "
-    rb"controller_right_acceleration_yaw_valid=(yes|no)$"
+    rb"controller_right_acceleration_yaw_valid=(yes|no)"
+    rb"(?: controller_left_acceleration_translation_yaw_calibrated=(yes|no) "
+    rb"controller_right_acceleration_translation_yaw_calibrated=(yes|no))?$"
 )
 
 
