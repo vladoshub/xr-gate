@@ -796,10 +796,8 @@ void update_yaw_correction(
     begin_yaw_check(state);
   }
 
-  // Evaluate only when Mercury/backend publishes a new hand pose. The IMU
-  // orientation passed to this call is the latest available orientation at
-  // that moment, so every hold-window update compares the newest pair rather
-  // than poses captured when the window started.
+  // Evaluate each matched camera-time pair once. The caller interpolates
+  // IMU history, including delayed Bluetooth delivery, at optical source time.
   const bool new_backend_frame =
       optical_frame_sequence != 0 &&
       optical_frame_sequence != state.yaw_check_last_frame_sequence;
@@ -921,21 +919,199 @@ void update_yaw_correction(
   apply_latest_yaw_correction(state, cfg, desired, timestamp_ns);
 }
 
+void suspend_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
+                        const char* action) {
+  state.yaw_smooth_target_valid = false;
+  state.yaw_smooth_reference_valid = false;
+  state.yaw_smooth_jump_pending = false;
+  state.yaw_last_step_rad = 0;
+  state.yaw_last_action = action;
+}
+
+void observe_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
+                        const RuntimeControllerImuMotionConfig& cfg,
+                        Qf provider, const xr_runtime::HandSideF32V2& optical,
+                        uint64_t source_ns, uint64_t now_ns) {
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+  // Cached, reordered and future camera observations cannot spend filter time.
+  if (source_ns == 0 || source_ns <= state.yaw_smooth_last_source_ns ||
+      source_ns > now_ns || now_ns - source_ns > 150'000'000ULL) return;
+  const uint64_t previous_source_ns = state.yaw_smooth_last_source_ns;
+  state.yaw_smooth_last_source_ns = source_ns;
+  if (previous_source_ns && source_ns - previous_source_ns > 150'000'000ULL) {
+    state.yaw_smooth_reference_valid = false;
+    state.yaw_smooth_jump_pending = false;
+  }
+  const Qf camera = normalize_q({optical.controller_qw, optical.controller_qx,
+                                optical.controller_qy, optical.controller_qz});
+  // A nearly vertical palm has an ill-conditioned horizontal heading. Keep
+  // gyro motion intact and wait for an observable yaw rather than chasing it.
+  const float local_forward[] = {0, 0, -1};
+  float pf[3]{}, of[3]{};
+  q_rotate(provider, local_forward, pf);
+  q_rotate(camera, local_forward, of);
+  float py = 0, oy = 0;
+  if (std::hypot(pf[0], pf[2]) < 0.25f ||
+      std::hypot(of[0], of[2]) < 0.25f ||
+      !yaw_rad_from_q(provider, py) || !yaw_rad_from_q(camera, oy)) {
+    suspend_smooth_yaw(state, "smooth_unobservable");
+    return;
+  }
+  const float desired = wrap_pi(oy - py);
+  state.yaw_last_desired_rad = desired;
+  state.yaw_last_error_rad = wrap_pi(desired - state.yaw_correction_rad);
+  if (!state.yaw_correction_valid) {
+    apply_latest_yaw_correction(state, cfg, desired, now_ns);
+  }
+  if (!cfg.yaw_correction_continuous && !state.yaw_correction_requested &&
+      !state.yaw_smooth_reacquire_active) {
+    state.yaw_smooth_target_valid = false;
+    return;
+  }
+
+  // Test innovation between source-time pairs, not the remaining output
+  // error: normal slow drift may be arbitrarily large and still be accepted.
+  const float jump_limit = cfg.yaw_smooth_max_jump_deg * kDegToRad;
+  if (state.yaw_smooth_reference_valid &&
+      std::abs(wrap_pi(desired - state.yaw_smooth_reference_rad)) > jump_limit) {
+    state.yaw_smooth_target_valid = false;
+    if (!state.yaw_smooth_jump_pending ||
+        std::abs(wrap_pi(desired - state.yaw_smooth_jump_candidate_rad)) > 3 * kDegToRad) {
+      state.yaw_smooth_jump_pending = true;
+      state.yaw_smooth_jump_candidate_rad = desired;
+      state.yaw_smooth_jump_start_ns = source_ns;
+    }
+    state.yaw_last_action = "smooth_jump_pending";
+    if (source_ns - state.yaw_smooth_jump_start_ns <
+        nonnegative_ms_to_ns(cfg.yaw_smooth_jump_hold_ms)) return;
+  }
+  state.yaw_smooth_jump_pending = false;
+  state.yaw_smooth_reference_valid = true;
+  state.yaw_smooth_reference_rad = desired;
+  state.yaw_smooth_target_valid = true;
+  state.yaw_smooth_target_rad = desired;
+  state.yaw_smooth_target_source_ns = source_ns;
+  state.yaw_smooth_confidence = clamp01(optical.confidence);
+  if (state.yaw_correction_requested && !state.yaw_smooth_reacquire_active) {
+    state.yaw_smooth_reacquire_active = true;
+    ++state.yaw_reacquire_apply_count;
+  }
+}
+
+void advance_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
+                        const RuntimeControllerImuMotionConfig& cfg,
+                        uint64_t now_ns) {
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+  const uint64_t previous_tick_ns = state.yaw_smooth_last_tick_ns;
+  state.yaw_smooth_last_tick_ns = now_ns;
+  state.yaw_last_step_rad = 0;
+  state.yaw_blend_active = false;
+  if (!state.yaw_smooth_target_valid || !state.yaw_correction_valid) return;
+  if (now_ns < state.yaw_smooth_target_source_ns ||
+      now_ns - state.yaw_smooth_target_source_ns > 150'000'000ULL) {
+    suspend_smooth_yaw(state, "smooth_stale");
+    return;
+  }
+  if (!cfg.yaw_correction_continuous && !state.yaw_smooth_reacquire_active) return;
+  if (!previous_tick_ns || now_ns <= previous_tick_ns) return;
+  // No catch-up after a runtime stall or reconnect. Only the current tick
+  // contributes a bounded amount of correction; the IMU quaternion is untouched.
+  const float dt = std::min(0.05f, float(now_ns - previous_tick_ns) * 1e-9f);
+  const float error = wrap_pi(state.yaw_smooth_target_rad - state.yaw_correction_rad);
+  state.yaw_last_error_rad = error;
+  const float deadband = cfg.yaw_smooth_deadband_deg * kDegToRad;
+  const float outside_deadband = std::max(0.0f, std::abs(error) - deadband);
+  if (outside_deadband <= 1e-5f) {
+    state.yaw_last_action = "smooth_deadband";
+    state.yaw_correction_requested = false;
+    state.yaw_smooth_reacquire_active = false;
+    return;
+  }
+  const float tau = std::max(0.001f, cfg.yaw_smooth_time_constant_ms * 0.001f);
+  const float gain = -std::expm1(-dt / tau) * state.yaw_smooth_confidence;
+  const float limit = cfg.yaw_smooth_max_speed_deg_s * kDegToRad * dt;
+  const float step = std::copysign(std::min(outside_deadband * gain, limit), error);
+  state.yaw_correction_rad = wrap_pi(state.yaw_correction_rad + step);
+  state.yaw_last_step_rad = step;
+  state.last_yaw_correction_update_ns = now_ns;
+  state.yaw_last_action = "smooth_apply";
+  ++state.yaw_apply_count;
+  if (cfg.yaw_correction_continuous) {
+    state.yaw_correction_requested = false;
+    state.yaw_smooth_reacquire_active = false;
+  }
+}
+
 void apply_runtime_yaw_correction(
     RuntimeImuSample& imu,
     const RuntimeControllerImuMotionConfig& motion_cfg,
     RuntimeControllerImuSideRuntimeState* runtime_state,
     const xr_runtime::HandSideF32V2* optical_hand_side,
     uint64_t optical_frame_sequence,
+    uint64_t optical_source_timestamp_ns,
+    bool optical_measurement_accepted,
     uint64_t timestamp_ns) {
   if (!imu.orientation_valid || runtime_state == nullptr ||
       !motion_cfg.yaw_correction_enabled) {
     return;
   }
-  advance_yaw_blend(*runtime_state, timestamp_ns);
-  update_yaw_correction(*runtime_state, motion_cfg,
-                        imu.yaw_reference_orientation,
-                        optical_hand_side, optical_frame_sequence, timestamp_ns);
+  if (!motion_cfg.yaw_correction_smooth) advance_yaw_blend(*runtime_state, timestamp_ns);
+  const float optical_xyzw[] = {
+      optical_hand_side ? optical_hand_side->controller_qx : 0,
+      optical_hand_side ? optical_hand_side->controller_qy : 0,
+      optical_hand_side ? optical_hand_side->controller_qz : 0,
+      optical_hand_side ? optical_hand_side->controller_qw : 0};
+  const bool smooth_quality_valid = !motion_cfg.yaw_correction_smooth ||
+      (optical_measurement_accepted && optical_hand_side &&
+       std::isfinite(optical_hand_side->confidence) &&
+       optical_hand_side->confidence >= motion_cfg.yaw_smooth_min_confidence);
+  if (!real_optical_hand_pose(optical_hand_side) || !smooth_quality_valid ||
+      !finite_q_xyzw(optical_xyzw) || !nonzero_q_xyzw(optical_xyzw)) {
+    runtime_state->yaw_pose_alignment.clear_optical_motion();
+    runtime_state->yaw_matched_source_timestamp_ns = 0;
+    runtime_state->yaw_pose_submitted_sequence = optical_frame_sequence;
+    if (motion_cfg.yaw_correction_smooth) {
+      suspend_smooth_yaw(*runtime_state, "smooth_invalid_optics");
+    } else update_yaw_correction(*runtime_state, motion_cfg,
+                          imu.yaw_reference_orientation,
+                          optical_hand_side, optical_frame_sequence, timestamp_ns);
+  } else if (optical_source_timestamp_ns == 0) {
+    // Compatibility for legacy producers without camera source timestamps.
+    if (motion_cfg.yaw_correction_smooth) {
+      suspend_smooth_yaw(*runtime_state, "smooth_missing_source_time");
+    } else update_yaw_correction(*runtime_state, motion_cfg,
+                          imu.yaw_reference_orientation,
+                          optical_hand_side, optical_frame_sequence, timestamp_ns);
+  } else {
+    auto& alignment = runtime_state->yaw_pose_alignment;
+    if (optical_frame_sequence != 0 &&
+        optical_frame_sequence != runtime_state->yaw_pose_submitted_sequence) {
+      float unused_yaw = 0;
+      alignment.observe_optical(optical_source_timestamp_ns, optical_xyzw, unused_yaw);
+      runtime_state->yaw_pose_submitted_sequence = optical_frame_sequence;
+    }
+    alignment.match_pending_optical();
+    uint64_t matched_ns = 0;
+    float provider[4] = {}, optical[4] = {};
+    if (alignment.latest_matched_pose(matched_ns, provider, optical) &&
+        matched_ns <= timestamp_ns && timestamp_ns - matched_ns <= 150'000'000ULL) {
+      runtime_state->yaw_matched_source_timestamp_ns = matched_ns;
+      auto matched_hand = *optical_hand_side;
+      matched_hand.controller_qx = optical[0];
+      matched_hand.controller_qy = optical[1];
+      matched_hand.controller_qz = optical[2];
+      matched_hand.controller_qw = optical[3];
+      const auto provider_q = normalize_q({provider[3], provider[0], provider[1], provider[2]});
+      if (motion_cfg.yaw_correction_smooth) {
+        observe_smooth_yaw(*runtime_state, motion_cfg, provider_q,
+                           matched_hand, matched_ns, timestamp_ns);
+      } else update_yaw_correction(*runtime_state, motion_cfg, provider_q,
+          &matched_hand, matched_ns, timestamp_ns);
+    }
+  }
+  if (motion_cfg.yaw_correction_smooth) {
+    advance_smooth_yaw(*runtime_state, motion_cfg, timestamp_ns);
+  }
   if (runtime_state->yaw_correction_valid) {
     imu.orientation = q_mul(yaw_q(runtime_state->yaw_correction_rad), imu.orientation);
   }
@@ -2357,6 +2533,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
         const auto q = sample.yaw_reference_orientation;
         const float xyzw[] = {q.x, q.y, q.z, q.w};
         runtime_state->acceleration_world_alignment.observe_imu(sample.yaw_reference_timestamp_ns, xyzw);
+        runtime_state->yaw_pose_alignment.observe_imu(sample.yaw_reference_timestamp_ns, xyzw);
       };
       if (imu_history != nullptr) {
         for (const auto& input : *imu_history) {
@@ -2384,6 +2561,9 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       }
       remember_imu_orientation(physical_imu);
       RuntimeImuSample presentation_imu = physical_imu;
+      const bool matching_optical_measurement = hand != nullptr && optical_yaw_hand != nullptr &&
+          hand->sequence == optical_yaw_hand->sequence &&
+          hand->source_timestamp_ns == optical_yaw_hand->source_timestamp_ns;
 
       // Yaw correction is a presentation-only wrist-orientation adjustment.
       // It samples the raw backend hand frame so predicted or held runtime
@@ -2391,11 +2571,10 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       // the physical IMU frame used by spatial position prediction.
       apply_runtime_yaw_correction(
           presentation_imu, imu_motion_cfg, runtime_state,
-          optical_yaw_hand_side, optical_yaw_frame_sequence, timestamp_ns);
-
-      const bool matching_optical_measurement = hand != nullptr && optical_yaw_hand != nullptr &&
-          hand->sequence == optical_yaw_hand->sequence &&
-          hand->source_timestamp_ns == optical_yaw_hand->source_timestamp_ns;
+          optical_yaw_hand_side, optical_yaw_frame_sequence,
+          optical_yaw_hand != nullptr ? optical_yaw_hand->source_timestamp_ns : 0,
+          matching_optical_measurement && real_optical_hand_pose(hand_side),
+          timestamp_ns);
       // Physical acceleration needs its own provider->XR frame alignment.
       // It remains fixed during loss, independent of presentation yaw blends.
       align_acceleration_world_frame(physical_imu, runtime_state, hand_side,

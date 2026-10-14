@@ -118,6 +118,9 @@ set(OVERRIDE_CONTROLLER_TOOL_FILES
   "${CMAKE_CURRENT_LIST_DIR}/debug/record_controller_imu.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_imu_axes.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_controller_orientation_offset.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_optical_grip.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/apply_optical_grip_calibration.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_grip.sh"
   "${CMAKE_CURRENT_LIST_DIR}/debug/watch_controller_input_stream.py"
 )
 add_custom_command(TARGET override_controller POST_BUILD
@@ -128,6 +131,17 @@ add_custom_command(TARGET override_controller POST_BUILD
   COMMENT "Copy override_controller Python tools next to binary"
 )
 install(PROGRAMS ${OVERRIDE_CONTROLLER_TOOL_FILES}
+  DESTINATION bin/override_controller/tools
+)
+add_custom_command(TARGET override_controller POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+    "${CMAKE_CURRENT_LIST_DIR}/debug/calibration_requirements.txt"
+    "${CMAKE_CURRENT_LIST_DIR}/docs/imu_optical_grip_calibration.md"
+    "$<TARGET_FILE_DIR:override_controller>/tools"
+)
+install(FILES
+  "${CMAKE_CURRENT_LIST_DIR}/debug/calibration_requirements.txt"
+  "${CMAKE_CURRENT_LIST_DIR}/docs/imu_optical_grip_calibration.md"
   DESTINATION bin/override_controller/tools
 )
 
@@ -165,6 +179,17 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   if(Python3_Interpreter_FOUND)
     add_test(NAME calibrate_controller_accelerometer_test
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/calibrate_controller_accelerometer_test.py")
+    if(UNIX AND NOT APPLE)
+      execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import numpy; import scipy"
+        RESULT_VARIABLE _OPTICAL_CALIBRATION_DEPS_AVAILABLE
+        OUTPUT_QUIET ERROR_QUIET)
+      if(_OPTICAL_CALIBRATION_DEPS_AVAILABLE EQUAL 0)
+        add_test(NAME calibrate_optical_grip_test
+          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/calibrate_optical_grip_test.py")
+      else()
+        message(STATUS "Optical grip calibration tests skipped: install NumPy/SciPy in the configured Python")
+      endif()
+    endif()
   endif()
   add_executable(gearvr_imu_stream_test
     tests/gearvr_imu_stream_test.cpp

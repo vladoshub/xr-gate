@@ -422,7 +422,7 @@ GearVrInputProvider::GearVrInputProvider(ProviderOptionValues options)
     : impl_(std::make_unique<Impl>(std::move(options))) {
   std::cerr << "[override_controller][gearvr_ble] madgwick_beta=" << impl_->options.madgwick_beta
             << " gravity_initialization=" << (impl_->options.madgwick_beta > 0 ? "stationary_force" : "gyro_only")
-            << " imu_continuity_revision=2\n";
+            << " imu_continuity_revision=2 optical_grip_vectors_revision=1\n";
 }
 
 GearVrInputProvider::~GearVrInputProvider() = default;
