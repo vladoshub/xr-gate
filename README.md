@@ -100,10 +100,10 @@ Do not use this project in unsafe environments. Make sure you have enough free s
 XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
 
 
-## Quick start
+# Quick start
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
-### 1. Install (once)
+## 1. Install (once)
 
 
 Download these artifacts:
@@ -145,7 +145,7 @@ cd ~/xr-gate-release/xr-gate
 ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
 ```
 
-### 2. Optional: train override controller input (once)
+## 2. Optional: train override controller input (once)
 
 
 Without this, input will be limited to gestures (pinch, grab).
@@ -165,7 +165,7 @@ The config will be saved in ~/.config/xr_tracking/override_controller/default.js
 
 
 
-**Or if you have VR-PARK controllers you can use this config:**
+## VR-PARK controllers:
 
 **Perhaps this setting will work with other similar joysticks (4 unique action buttons + a simple stick for mouse movement)**
 
@@ -211,7 +211,7 @@ CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.j
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
-**Or if you have Samsung Gear VR controllers you can use this config:**
+## Samsung Gear VR controllers:
 
 1. Copy config:
 
@@ -323,7 +323,7 @@ When using external input, hands position and rotation from cameras, input from 
 
 
 
-### 3. Run xr_client
+## 3. Run xr_client
 
 **You must launch the client every time before launching SteamVR.**
 
@@ -390,9 +390,90 @@ If you have completed the train override controller from the previous point, you
 ---
 
 
-## SteamVR with XREAL Ultra
+# SteamVR with XREAL Ultra
 
 Steam and SteamVR must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
+
+
+## Workaround for systems without built-in x11 (Ubuntu 26.04)
+
+### 1. Install LightDM + Xfce
+
+
+```bash
+sudo apt update
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y universe
+sudo apt update
+
+sudo apt install -y \
+  lightdm lightdm-gtk-greeter \
+  xfce4 xfce4-terminal dbus-x11 \
+  xserver-xorg xserver-xorg-input-libinput \
+  xserver-xorg-video-amdgpu
+```
+
+### 1a. Additional for NVIDIA GPU
+```bash
+bash <<'BASH'
+set -e
+
+LIGHTDM_NATIVE_ARCH="$(dpkg --print-architecture)"
+
+read -r LIGHTDM_NV_GL LIGHTDM_NV_VERSION < <(
+  dpkg-query -W \
+    -f='${Package} ${Architecture} ${Version} ${db:Status-Status}\n' \
+    'libnvidia-gl*' 2>/dev/null |
+  awk -v arch="$LIGHTDM_NATIVE_ARCH" \
+    '$2 == arch && $4 == "installed" {print $1, $3; exit}'
+)
+
+LIGHTDM_NV_XORG="xserver-xorg-video-nvidia${LIGHTDM_NV_GL#libnvidia-gl}"
+
+sudo apt install -y "${LIGHTDM_NV_XORG}=${LIGHTDM_NV_VERSION}"
+
+test -f /usr/lib/xorg/modules/drivers/nvidia_drv.so
+BASH
+```
+
+### 2. Enable lightdm
+
+```bash
+sudo mkdir -p /etc/lightdm/lightdm.conf.d
+
+sudo tee /etc/lightdm/lightdm.conf.d/90-xfce.conf >/dev/null <<'EOF'
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=xfce
+EOF
+
+sudo dpkg-reconfigure lightdm
+```
+
+Choose lightdm and:
+
+
+```bash
+sudo systemctl enable lightdm.service --force
+sudo systemctl set-default graphical.target
+sudo reboot
+```
+
+
+### 2a. Additional install blueman for convenience and Bluetooth control
+
+
+```bash
+sudo apt update
+sudo apt install -y bluez blueman rfkill
+
+sudo systemctl enable --now bluetooth.service
+sudo rfkill unblock bluetooth
+bluetoothctl power on
+```
+
+
+
 
 Run xr_client
 ```bash
@@ -400,7 +481,9 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-### 1. Register OpenVR driver (once)
+## Use SteamVR
+
+###  Register OpenVR driver (once)
 
 For direct USB4/iGPU path, tested with HX370 iGPU:
 
@@ -499,7 +582,7 @@ XR_STEAMVR_RESTORE_LAYOUT=right-of \
 ./run_openvr_restore_desktop.sh
 ```
 
-## Some demo
+### Some demo
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -519,9 +602,8 @@ Stereo overlay (need running xr_video backend)
 ---
 
 
-## Monado/OpenXR with XREAL Ultra
+# Monado/OpenXR with XREAL Ultra
 
-Use an X11/Xorg session.
 
 Run xr_client
 ```bash
@@ -531,7 +613,7 @@ cd ~/xr-gate-release/xr-gate
 
 ## Choose monitor mode
 
-## A. Monado with main monitor — Auto disable main monitor
+### A. Monado with main monitor — Auto disable main monitor
 
 Example for 90 Hz XREAL Ultra:
 
@@ -549,7 +631,7 @@ XR_TRACKING_MONADO_XCB_RATE_HZ=90 \
 
 After stopping Monado driver with `Ctrl+C`, the main display should be restored.
 
-## B. Monado with main monitor — Manually disable main monitor
+### B. Monado with main monitor — Manually disable main monitor
 
 Check displays:
 
@@ -604,7 +686,7 @@ devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
 ```
 
 
-## C. Monado with main monitor in system — XCB windowed mode (work with main monitor)
+### C. Monado with main monitor in system — XCB windowed mode (work with main monitor)
 
 ```bash
 sudo apt install xdotool wmctrl
@@ -619,7 +701,7 @@ XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
-## D. Monado without main monitor in system
+### D. Monado without main monitor in system
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -631,7 +713,7 @@ XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
 devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
-## Start OpenXR demo
+### Start OpenXR demo
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -647,7 +729,7 @@ Check /readme/xrizer.md
 ---
 
 
-## Build:
+# Build:
 
 Clone:
 ```bash
