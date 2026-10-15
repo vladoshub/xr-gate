@@ -9,9 +9,9 @@
 namespace xr_runtime_adapter::imu_alignment {
 
 // Compare optical XZ motion with double-integrated provider-world force.
-// The short fit retains the legacy 180-degree check. The longer heading fit
-// also removes a constant acceleration nuisance term, so attitude/gravity
-// error during a movement cannot masquerade as a different physical yaw.
+// Both the hemisphere and full-heading fits remove a constant acceleration
+// nuisance term, so attitude/gravity error during a movement cannot masquerade
+// as a different physical yaw, including a false 180-degree correction.
 // It requires observable changing acceleration; a static pose, uniform
 // translation or constant acceleration cannot establish the refined heading.
 class TranslationYawCheck {
@@ -94,8 +94,12 @@ class TranslationYawCheck {
     if (refine_heading) update_fit(heading_, true);
   }
 
-  float select_hemisphere(float rotation_yaw_rad) const {
-    if (!hemisphere_.valid || std::cos(rotation_yaw_rad - hemisphere_.hint_rad) >= 0) return rotation_yaw_rad;
+  float select_hemisphere(float rotation_yaw_rad, uint64_t optical_timestamp_ns) const {
+    // Retaining a checked frame across loss is different from applying an
+    // old motion hint to a new rotation fit. Only current evidence may flip it.
+    if (!hemisphere_.valid || optical_timestamp_ns < hemisphere_.hint_ns ||
+        optical_timestamp_ns - hemisphere_.hint_ns > 150'000'000ULL ||
+        std::cos(rotation_yaw_rad - hemisphere_.hint_rad) >= 0) return rotation_yaw_rad;
     constexpr float pi = 3.14159265358979323846f;
     return std::atan2(std::sin(rotation_yaw_rad + pi), std::cos(rotation_yaw_rad + pi));
   }
@@ -135,9 +139,12 @@ class TranslationYawCheck {
     }
     return "collecting";
   }
-  bool fresh_heading(uint64_t optical_ns, uint64_t consumed_ns) const {
-    return heading_.valid && heading_.hint_ns > consumed_ns &&
+  bool recent_heading(uint64_t optical_ns) const {
+    return heading_.valid &&
         optical_ns >= heading_.hint_ns && optical_ns - heading_.hint_ns <= 150'000'000ULL;
+  }
+  bool fresh_heading(uint64_t optical_ns, uint64_t consumed_ns) const {
+    return recent_heading(optical_ns) && heading_.hint_ns > consumed_ns;
   }
 
  private:
@@ -157,7 +164,7 @@ class TranslationYawCheck {
   void update_fit(Evidence& evidence, bool refine_heading) {
     std::size_t count = pose_count_;
     while (count && poses_[count - 1].timestamp_ns > force_cursor_ns_) --count;
-    const std::size_t minimum_count = refine_heading ? 16 : 7;
+    const std::size_t minimum_count = refine_heading ? 16 : 12;
     if (count < minimum_count || force_count_ == 0) {
       evidence.status = pose_count_ == 0 ? FitStatus::WaitingForOptical
           : (count < pose_count_ || force_count_ == 0) ? FitStatus::WaitingForImu
@@ -167,14 +174,14 @@ class TranslationYawCheck {
       return;
     }
     const uint64_t last = poses_[count - 1].timestamp_ns;
-    const uint64_t window_ns = refine_heading ? 1'250'000'000ULL : 350'000'000ULL;
+    const uint64_t window_ns = refine_heading ? 1'250'000'000ULL : 750'000'000ULL;
     const uint64_t cutoff = last > window_ns ? last - window_ns : 0;
     std::size_t first_index = 0;
     while (first_index < count && poses_[first_index].timestamp_ns < cutoff) ++first_index;
     count -= first_index;
     if (count < minimum_count) { evidence.status = FitStatus::Collecting; return; }
     const uint64_t first = poses_[first_index].timestamp_ns;
-    const uint64_t minimum_span = refine_heading ? 700'000'000ULL : 200'000'000ULL;
+    const uint64_t minimum_span = refine_heading ? 700'000'000ULL : 350'000'000ULL;
     if (last - first < minimum_span) { evidence.status = FitStatus::Collecting; return; }
     if (forces_[0].start_ns > first) { evidence.status = FitStatus::ImuGap; return; }
     if (last <= evidence.last_fit_ns) return;
@@ -205,8 +212,8 @@ class TranslationYawCheck {
         provider[i][1] += force.z * weight;
       }
     }
-    if (!remove_nuisance_motion(time, optical, count, refine_heading) ||
-        !remove_nuisance_motion(time, provider, count, refine_heading)) {
+    if (!remove_nuisance_motion(time, optical, count) ||
+        !remove_nuisance_motion(time, provider, count)) {
       evidence.status = FitStatus::NeedMotion;
       return;
     }
@@ -268,7 +275,7 @@ class TranslationYawCheck {
 
   static bool remove_nuisance_motion(const std::array<double, kPoseCapacity>& time,
                                     std::array<std::array<double, 2>, kPoseCapacity>& value,
-                                    std::size_t count, bool remove_acceleration_bias) {
+                                    std::size_t count) {
     double mean_t = 0, mean[2] = {}, denominator = 0, numerator[2] = {};
     for (std::size_t i = 0; i < count; ++i) {
       mean_t += time[i]; mean[0] += value[i][0]; mean[1] += value[i][1];
@@ -285,7 +292,6 @@ class TranslationYawCheck {
     for (std::size_t i = 0; i < count; ++i) {
       for (int axis = 0; axis < 2; ++axis) value[i][axis] -= mean[axis] + numerator[axis] / denominator * (time[i] - mean_t);
     }
-    if (!remove_acceleration_bias) return true;
     // Remove this nuisance term only from the heading fit, never from the
     // acceleration samples used for physical position prediction.
     std::array<double, kPoseCapacity> quadratic{};

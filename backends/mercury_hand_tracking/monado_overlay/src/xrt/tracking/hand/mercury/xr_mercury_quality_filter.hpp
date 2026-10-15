@@ -11,7 +11,7 @@
 namespace xr_mercury_quality {
 
 struct Config {
-    bool enabled = true;
+    bool enabled = false;
     double min_mean_xy = 0.25;
     double weak_mean_xy = 0.35;
     double max_weak_reprojection_error = 0.5;

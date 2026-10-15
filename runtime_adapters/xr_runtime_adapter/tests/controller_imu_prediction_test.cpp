@@ -8,6 +8,7 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace xr_runtime;
@@ -20,7 +21,10 @@ void require(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
 void near(float actual, float expected, const char* message, float tolerance = 1e-5f) {
-  require(std::isfinite(actual) && std::abs(actual - expected) <= tolerance, message);
+  if (!std::isfinite(actual) || std::abs(actual - expected) > tolerance) {
+    throw std::runtime_error(std::string(message) + ": actual=" + std::to_string(actual) +
+                             " expected=" + std::to_string(expected));
+  }
 }
 
 struct Scenario {
@@ -259,20 +263,20 @@ void translation_checks_direction_with_source_time_and_unknown_velocity() {
     for (int imu_delay_ms : {0, 80}) {
       TranslationYawCheck check;
       const auto frame = cu::q_from_axis_angle(0, 1, 0, expected_yaw);
-      const auto acceleration = cu::q_rotate(frame, cu::V3d{2, 0, 1});
-      const float force[] = {2, 0, 1};
       int imu_ms = 0;
       for (int ms = 0; ms <= 900; ms += 33) {
         for (; imu_ms <= ms - imu_delay_ms; imu_ms += 5) {
+          const float a = -3.6f*std::sin(6*(imu_ms - 2.5)/1000.0);
+          const float force[] = {a + 0.6f, 0, 0.5f*a - 0.4f};
           check.observe_force(kStart + uint64_t(imu_ms)*1'000'000, force, 0.2f);
         }
         // Irregular exposures, a large position offset and arbitrary initial
         // velocity must not change the inferred force-frame direction.
         if (ms > 0 && ms % 99 == 0) continue;
         const double t = ms / 1000.0;
+        const auto p = cu::q_rotate(frame, cu::V3d{0.1*std::sin(6*t), 0, 0.05*std::sin(6*t)});
         const float position[] = {
-            float(3.2 + 0.4*t + 0.5*acceleration.x*t*t), 0,
-            float(-1.3 - 0.6*t + 0.5*acceleration.z*t*t)};
+            float(3.2 + 0.4*t + p.x), 0, float(-1.3 - 0.6*t + p.z)};
         const auto ns = kStart + uint64_t(ms)*1'000'000;
         check.observe_optical(ns, position);
         check.observe_optical(ns, position);
@@ -281,16 +285,94 @@ void translation_checks_direction_with_source_time_and_unknown_velocity() {
       require(check.valid(), "translation could not check delayed/irregular source-time motion");
       near(std::cos(check.yaw_hint_rad() - expected_yaw), 1,
            "translation confused position/velocity with yaw", 1e-5f);
-      near(check.select_hemisphere(expected_yaw), expected_yaw,
+      near(check.select_hemisphere(expected_yaw, kStart + 900'000'000), expected_yaw,
            "translation flipped a correct physical frame");
-      near(std::cos(check.select_hemisphere(expected_yaw + kPi) - expected_yaw), 1,
+      near(std::cos(check.select_hemisphere(expected_yaw + kPi, kStart + 900'000'000) - expected_yaw), 1,
            "translation retained the opposite force-frame hemisphere", 1e-6f);
+      near(check.select_hemisphere(expected_yaw + kPi, kStart + 2'000'000'000),
+           expected_yaw + kPi, "expired motion hint flipped a new rotation estimate");
+      near(check.select_hemisphere(expected_yaw + kPi, kStart),
+           expected_yaw + kPi, "future motion hint flipped an older rotation estimate");
       const float hint = check.yaw_hint_rad();
       check.clear_motion();
       check.update();
       require(check.valid() && check.support_count() == 0,
               "ordinary delivery reset discarded the checked physical frame");
       near(check.yaw_hint_rad(), hint, "delivery reset changed the retained direction");
+    }
+  }
+}
+
+void constant_force_bias_cannot_reverse_a_correct_frame() {
+  using xr_runtime_adapter::imu_alignment::TranslationYawCheck;
+  TranslationYawCheck check;
+  const float force[] = {-1, 0, 0};
+  for (int ms = 0; ms <= 1200; ms += 10) {
+    const auto ns = kStart + uint64_t(ms)*1'000'000;
+    check.observe_force(ns, force, 0.1f);
+    if (ms % 30 == 0) {
+      const float t = ms/1000.f;
+      const float position[] = {0.5f*t*t, 0, -0.3f};
+      check.observe_optical(ns, position);
+    }
+    check.update(true);
+  }
+  // Yaw is zero: a -2 m/s^2 gravity/attitude residual has reversed the
+  // measured +1 m/s^2 acceleration. Pure quadratic motion cannot separate
+  // this bias from a physical half-turn, even with perfect correlation.
+  require(!check.valid(), "constant force bias established a false 180-degree hint");
+  near(check.select_hemisphere(0, kStart + 1'200'000'000), 0,
+       "constant bias reversed an already correct frame");
+  require(!check.heading_valid(), "constant acceleration established a refined heading");
+}
+
+void opposite_heading_requires_sustained_new_evidence(bool persistent = false) {
+  for (bool right : {false, true}) {
+    Scenario s;
+    auto& m = s.cfg.left_imu_motion;
+    m.translation_yaw_refinement_enabled = true;
+    m.acceleration_yaw_stable_ms = 4000;
+    s.cfg.right_orientation_source = s.cfg.left_orientation_source;
+    s.cfg.right_imu_motion = m;
+    auto& state = right ? s.state.right : s.state.left;
+    state.acceleration_world_yaw_valid = true;
+    state.acceleration_translation_yaw_calibrated = true;
+    constexpr double omega = 2*3.14159265358979323846;
+    int changed_ms = -1;
+    for (int ms = 0; ms <= (persistent ? 13000 : 11000); ms += 10) {
+      const auto ns = s.prepare(ms, -0.2*omega*omega*std::sin(omega*ms/1000.0));
+      auto input = s.input;
+      input.left.imu.samples[0].flags |= CONTROLLER_IMU_GYROSCOPE_VALID;
+      auto hand = s.hand;
+      // A two-second, coherent optical inversion is continuous in position
+      // at both boundaries and stays below the runtime continuity speed cap.
+      // A persistent candidate must still be able to earn a new calibration.
+      const bool opposite_optics = ms >= 6000 && (persistent || ms < 8000);
+      hand.left.controller_px = (opposite_optics ? -1 : 1)*0.2*std::sin(omega*ms/1000.0);
+      hand.left.controller_pz = -0.3f;
+      if (right) {
+        input.right = input.left; input.left = {};
+        hand.right = hand.left; hand.left = {};
+        hand.flags = HAND_FLAG_RIGHT_VALID;
+        hand.right.handedness = 2;
+      }
+      compose_runtime_controller_state(s.sequence, ns, s.cfg, hand, hand,
+          input, std::nullopt, 9.81f, &s.state);
+      if (!persistent) {
+        require(std::cos(state.acceleration_world_yaw_rad) > 0.99f,
+                "brief coherent wrong optics reversed an already calibrated force frame");
+      } else if (std::cos(state.acceleration_world_yaw_rad) < 0) {
+        if (changed_ms < 0) changed_ms = ms;
+        require(ms >= 10000, "a large heading change bypassed the stability interval");
+      }
+      require(state.acceleration_world_yaw_valid && state.acceleration_translation_yaw_calibrated,
+              "rejected candidate invalidated the retained physical frame");
+    }
+    require(state.acceleration_translation_yaw_refinements > 0,
+            "wrong-heading test did not exercise translation refinement");
+    if (persistent) {
+      require(changed_ms >= 10000 && std::cos(state.acceleration_world_yaw_rad) < -0.99f,
+              "sustained observable evidence could not replace a prior heading");
     }
   }
 }
@@ -314,23 +396,24 @@ void translation_rejects_unobservable_or_incomplete_motion() {
       check.update();
     }
     require(!check.valid(), "unobservable/uncovered motion established a force-frame hint");
-    near(check.select_hemisphere(-kPi), -kPi,
+    near(check.select_hemisphere(-kPi, kStart + 900'000'000), -kPi,
          "unconfirmed translation altered the rotation calibration");
   }
   TranslationYawCheck repeated;
-  const float acceleration[] = {3, 0, 0};
-  for (int ms = 0; ms <= 360; ms += 10) {
+  for (int ms = 0; ms <= 900; ms += 10) {
     const auto ns = kStart + uint64_t(ms)*1'000'000;
+    const float acceleration[] = {float(-3.6*std::sin(6*ms/1000.0)), 0, 0};
     repeated.observe_force(ns, acceleration, 0);
     if (ms % 30 == 0) {
       const double t = ms / 1000.0;
-      const float position[] = {float(1.5*t*t), 0, 0};
+      const float position[] = {float(0.1*std::sin(6*t)), 0, 0};
       repeated.observe_optical(ns, position);
     }
   }
   repeated.update();
   require(repeated.support_count() == 1, "single exposure window did not qualify");
-  for (int ms = 370; ms <= 700; ms += 10) {
+  for (int ms = 910; ms <= 1400; ms += 10) {
+    const float acceleration[] = {float(-3.6*std::sin(6*ms/1000.0)), 0, 0};
     repeated.observe_force(kStart + uint64_t(ms)*1'000'000, acceleration, 0);
     repeated.update();
   }
@@ -370,7 +453,9 @@ void checked_force_frame_survives_rotation_refits_and_resets() {
           // prevent it from restoring that frame on either controller side.
           const double angle = std::max(0, ms - 350) * 0.0009;
           const auto provider = cu::q_from_axis_angle(1, 0, 0, angle);
-          const auto force = cu::q_rotate(cu::q_conj(provider), cu::V3d{2, 9.81, 1});
+          const double force_scale = 1 + 1.5*(ms - 5)/1000.0;
+          const auto force = cu::q_rotate(cu::q_conj(provider),
+              cu::V3d{2*force_scale, 9.81, force_scale});
           imu.orientation_xyzw[0] = provider.x; imu.orientation_xyzw[1] = provider.y;
           imu.orientation_xyzw[2] = provider.z; imu.orientation_xyzw[3] = provider.w;
           imu.samples[0].flags |= CONTROLLER_IMU_GYROSCOPE_VALID;
@@ -382,8 +467,9 @@ void checked_force_frame_survives_rotation_refits_and_resets() {
           hand.left.controller_qx = optical_q.x; hand.left.controller_qy = optical_q.y;
           hand.left.controller_qz = optical_q.z; hand.left.controller_qw = optical_q.w;
           const double t = ms / 1000.0;
-          hand.left.controller_px = 0.5*acceleration.x*t*t;
-          hand.left.controller_pz = 0.5*acceleration.z*t*t;
+          const double p = 0.5*t*t + 0.25*t*t*t;
+          hand.left.controller_px = acceleration.x*p;
+          hand.left.controller_pz = acceleration.z*p;
           if (right) {
             input.right = input.left; input.left = {};
             hand.right = hand.left; hand.left = {};
@@ -395,7 +481,8 @@ void checked_force_frame_survives_rotation_refits_and_resets() {
               input, std::nullopt, 9.81f, &s.state);
         };
         RuntimeControllerStateFrameV1 out;
-        for (int ms = 0; ms <= 900; ms += 10) out = tick(ms, true, 1, 0, 123);
+        constexpr int visible_ms = 1300;
+        for (int ms = 0; ms <= visible_ms; ms += 10) out = tick(ms, true, 1, 0, 123);
         require(state.acceleration_world_alignment.pair_count() >= 5,
                 "test did not exercise later rotation-based calibration");
         require(state.acceleration_translation_yaw_check.valid() == enabled,
@@ -404,30 +491,32 @@ void checked_force_frame_survives_rotation_refits_and_resets() {
                 "force-frame correction repeated or did not run");
         near(std::cos(state.acceleration_world_yaw_rad - expected_yaw), enabled ? 1 : -1,
              "later rotation fits selected the wrong force-frame branch", 1e-5f);
-        for (int ms = 910; ms <= 1100; ms += 10) out = tick(ms, false, 1, 0, 123);
+        for (int ms = visible_ms + 10; ms <= visible_ms + 200; ms += 10)
+          out = tick(ms, false, 1, 0, 123);
         const auto& pose = right ? out.right : out.left;
         if (enabled) {
-          near(pose.position[0], 0.5f*acceleration.x*1.1f*1.1f,
-               "checked frame did not preserve physical position after camera loss", 2e-5f);
-          near(pose.position[2], 0.5f*acceleration.z*1.1f*1.1f,
-               "checked frame predicted the opposite depth direction", 2e-5f);
-          near(pose.linear_velocity[0], acceleration.x*1.1f,
-               "checked frame left an incorrect launch/braking velocity", 2e-5f);
+          constexpr double t = (visible_ms + 200)/1000.0;
+          near(pose.position[0], acceleration.x*(0.5*t*t + 0.25*t*t*t),
+               "checked frame did not preserve physical position after camera loss", 5e-4f);
+          near(pose.position[2], acceleration.z*(0.5*t*t + 0.25*t*t*t),
+               "checked frame predicted the opposite depth direction", 5e-4f);
+          near(pose.linear_velocity[0], acceleration.x*(t + 0.75*t*t),
+               "checked frame left an incorrect launch/braking velocity", 5e-4f);
         }
-        tick(1110, false, 1, 1, 123);
+        tick(visible_ms + 210, false, 1, 1, 123);
         require(state.acceleration_translation_yaw_check.valid() == enabled &&
                 state.acceleration_yaw_half_turn_corrections == (enabled ? 1u : 0u),
                 "packet drop discarded the confirmed direction");
         reset_runtime_controller_imu_prediction(state);
         require(state.acceleration_translation_yaw_check.valid() == enabled,
                 "prediction reset discarded the physical hemisphere");
-        tick(1120, true, 2, 1, 123);
+        tick(visible_ms + 220, true, 2, 1, 123);
         require(!state.acceleration_translation_yaw_check.valid() &&
                 !state.acceleration_world_yaw_valid && state.acceleration_yaw_half_turn_corrections == 0,
                 "new AHRS epoch retained the old force-frame evidence");
         // A different physical controller likewise cannot inherit a hint.
         state.acceleration_world_yaw_valid = true;
-        tick(1130, true, 2, 1, 456);
+        tick(visible_ms + 230, true, 2, 1, 456);
         require(!state.acceleration_world_yaw_valid && !state.acceleration_translation_yaw_check.valid(),
                 "physical device change retained a prior controller's yaw");
       }
@@ -553,7 +642,7 @@ void refined_force_heading_calibrates_both_sides_without_changing_aim(
     // must work without adopting that rendered orientation or its yaw error.
     const auto optical_q = cu::q_from_axis_angle(0, 1, 0, yaw + 1.1f);
     auto& state = right ? s.state.right : s.state.left;
-    const int visible_ms = rotation_first ? 10000 : 6000;
+    const int visible_ms = rotation_first ? 12000 : 6000;
     const auto position = [&](int ms) {
       const double t = std::max(0, ms - 5000)/1000.0;
       return rotation_first ? 0.2*(1 - std::cos(6*t)) : 0.2*std::sin(6*ms/1000.0);
@@ -673,7 +762,7 @@ void translation_keeps_learning_after_both_rotation_frames_are_valid() {
   s.state.right.acceleration_world_yaw_valid = true;
   s.hand.flags |= HAND_FLAG_RIGHT_VALID;
   s.hand.hand_count = 2;
-  for (int ms = 0; ms <= 3500; ms += 10) {
+  for (int ms = 0; ms <= 6000; ms += 10) {
     const auto ns = s.prepare(ms, -7.2f*std::sin(6*ms/1000.0));
     s.input.left.imu.samples[0].flags |= CONTROLLER_IMU_GYROSCOPE_VALID;
     s.input.right = s.input.left;
@@ -2126,6 +2215,9 @@ void smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses() {
 }
 
 int main() {
+  constant_force_bias_cannot_reverse_a_correct_frame();
+  opposite_heading_requires_sustained_new_evidence();
+  opposite_heading_requires_sustained_new_evidence(true);
   smooth_yaw_preserves_aiming_and_bounds_drift_correction();
   smooth_yaw_rejects_bad_optics_and_recovers_without_a_snap();
   smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses();

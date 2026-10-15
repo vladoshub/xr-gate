@@ -142,17 +142,30 @@ acceleration and actual braking remain in the position integrator. A heading
 needs observable residual motion, compatible amplitude, coherence >= 0.97,
 and at least five distinct agreeing endpoints over 150 ms within an eight-degree
 range. Rapid rotation, unobserved force gaps and unsupported/low-quality fits
-cannot establish a new heading. The 350-ms hemisphere check remains for legacy
-rotation-only operation.
+cannot establish a new heading. The shorter hemisphere check uses a 750-ms
+window and also removes constant acceleration. Constant force and optical
+curvature alone cannot distinguish a physical half-turn from gravity/attitude
+bias, even when their correlation is exactly one.
 
-After startup, only new accepted heading evidence no older than 150 ms can
-refine the force frame. A confirmed translation heading is applied completely
-while the corresponding optical pose is accepted. A two-degree step per rare
-accepted fit can leave a large residual frame error despite calibrated=yes;
-the confirmed translation fit already passed the independent coherence,
-observability and distinct-endpoint checks. Applying this force frame does not
-change the presentation/aiming quaternion or rotate an active loss trajectory.
-Retained launch-force history is re-expressed in the newly confirmed frame.
+After rotation startup, initial translation calibration and a heading change
+larger than `RUNTIME_CONTROLLER_IMU_ACCELERATION_YAW_STABLE_MAX_RANGE_DEG`
+must additionally pass `RUNTIME_CONTROLLER_IMU_ACCELERATION_YAW_STABLE_MS`
+(4000 ms by default). Only fresh source-time fits supply angle evidence and
+can commit a correction. New accepted positions may bridge a held fit while
+its source age stays within 150 ms; an older hint restarts the pending
+correction. Five heavily overlapping fit windows are not a substitute for
+this stability interval. The last
+confirmed physical frame remains active while a different candidate is pending.
+Once translation is calibrated, new small refinements within the configured
+range can be accepted directly. Confirmed changes are applied completely while
+the corresponding optical pose is accepted; a partly applied target must not be
+reported as calibrated. Applying this force frame does not change the
+presentation/aiming quaternion or rotate an active loss trajectory. Retained
+launch-force history is re-expressed in the newly confirmed frame.
+
+Hemisphere hints also expire after 150 ms of source time. Their retained value
+is diagnostic history, not permission to flip a later rotation estimate after
+tracking loss or a delivery gap.
 Rotation-based fits may
 make small updates within the confirmed heading range, but cannot restore a
 different intermediate force yaw or override it with a stale half-turn hint.
@@ -166,7 +179,12 @@ separately from the older hemisphere-check fields. `orientation_offset`, rendere
 controller yaw correction, jitter filtering and prediction timeout/limits are
 independent of this calibration. Setting
 `RUNTIME_CONTROLLER_IMU_TRANSLATION_YAW_REFINEMENT=0` disables full-heading
-refinement, retaining rotation-based startup with the legacy hemisphere check.
+refinement, retaining rotation-based startup with the bias-resistant hemisphere
+check. For reliability comparisons, retain the default four-second stability
+interval and use movements with starts and stops. The `yes` flags report passed
+consistency tests, not measured physical accuracy. Persistent correlated optical
+errors and acceleration/attitude bias during loss still require hardware logs;
+these checks do not calibrate the acceleration samples themselves.
 
 V3 still carries one AHRS quaternion per batch. Older sample orientations are
 approximately reconstructed backward with the corrected gyroscope and sample

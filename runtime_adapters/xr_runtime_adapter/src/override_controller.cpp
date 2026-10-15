@@ -595,26 +595,49 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
     const bool fresh_heading = refine_translation && matching_real_optical &&
         translation.fresh_heading(optical_timestamp_ns,
             state->acceleration_translation_heading_consumed_ns);
+    if (state->acceleration_world_yaw_valid && !fresh_heading &&
+        state->acceleration_translation_yaw_confirmation.pending()) {
+      auto& confirmation = state->acceleration_translation_yaw_confirmation;
+      if (refine_translation && matching_real_optical &&
+          translation.recent_heading(optical_timestamp_ns)) {
+        // Covered camera frames may bridge the fitter's short support-window
+        // renewal. Reusing the fit must not add another heading measurement or
+        // allow a hint older than the source-time continuity limit to confirm.
+        confirmation.observe_heading(optical_timestamp_ns, std::nullopt,
+            cfg.acceleration_yaw_stable_ms, cfg.acceleration_yaw_stable_max_range_deg);
+      } else {
+        confirmation.reset();
+      }
+    }
     if (fresh_heading) {
       state->acceleration_translation_heading_consumed_ns = translation.heading_timestamp_ns();
       if (state->acceleration_world_yaw_valid) {
-        // Position is still optical here. Refine only the physical force
-        // frame; presentation yaw and the gyro aiming response are separate.
-        // This is already a separately confirmed, observable translation
-        // heading, not an individual optical rotation. Commit the identified
-        // force frame while position is optical; a tiny step per rare fit can
-        // leave tens of degrees unapplied even after reporting calibrated=yes.
-        // No presentation/aiming orientation or active lost-hand trajectory is
-        // rotated here. Retained force history is re-expressed at launch.
-        state->acceleration_world_yaw_rad = wrap_pi(translation.heading_rad());
-        state->acceleration_translation_yaw_calibrated = true;
-        ++state->acceleration_translation_yaw_refinements;
+        const float limit = std::max(0.0f, cfg.acceleration_yaw_stable_max_range_deg) *
+            3.14159265358979323846f / 180.0f;
+        const float target = translation.heading_rad();
+        const bool needs_confirmation = !state->acceleration_translation_yaw_calibrated ||
+            std::abs(wrap_pi(target - state->acceleration_world_yaw_rad)) > limit;
+        auto& confirmation = state->acceleration_translation_yaw_confirmation;
+        // Five overlapping fit windows over 150 ms are not an independent
+        // four-second confirmation. Initial translation calibration and large
+        // changes must earn the same source-time stability interval as startup.
+        // Only fresh fits supply angle evidence and can commit a correction.
+        if (!needs_confirmation || confirmation.observe_heading(
+                optical_timestamp_ns, target,
+                cfg.acceleration_yaw_stable_ms, cfg.acceleration_yaw_stable_max_range_deg)) {
+          state->acceleration_world_yaw_rad = wrap_pi(needs_confirmation
+              ? confirmation.candidate_rad() : target);
+          state->acceleration_translation_yaw_calibrated = true;
+          ++state->acceleration_translation_yaw_refinements;
+          confirmation.reset();
+        }
       } else {
         translation_estimate = translation.heading_rad();
       }
     }
     if (rotation_estimate && (!fresh_heading || !state->acceleration_world_yaw_valid)) {
-      if (cfg.translation_yaw_check_enabled) world_yaw = translation.select_hemisphere(world_yaw);
+      if (cfg.translation_yaw_check_enabled)
+        world_yaw = translation.select_hemisphere(world_yaw, optical_timestamp_ns);
       if (state->acceleration_world_yaw_valid) {
         // A palm fit must not undo a translation-calibrated force heading.
         // Allow small coherent rotation updates only within its confirmed
@@ -634,7 +657,7 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
     if (!state->acceleration_world_yaw_valid) {
       auto& confirmation = state->acceleration_yaw_confirmation;
       if (!initial_estimate && confirmation.pending() && cfg.translation_yaw_check_enabled) {
-        initial_estimate = translation.select_hemisphere(confirmation.candidate_rad());
+        initial_estimate = translation.select_hemisphere(confirmation.candidate_rad(), optical_timestamp_ns);
       }
       uint64_t pose_ns = 0;
       float provider_xyzw[4] = {}, optical_xyzw[4] = {};
@@ -665,7 +688,7 @@ void align_acceleration_world_frame(RuntimeImuSample& imu,
   }
   if (cfg.translation_yaw_check_enabled && state->acceleration_world_yaw_valid &&
       !state->acceleration_translation_yaw_calibrated && matching_real_optical) {
-    const float checked = translation.select_hemisphere(state->acceleration_world_yaw_rad);
+    const float checked = translation.select_hemisphere(state->acceleration_world_yaw_rad, optical_timestamp_ns);
     if (std::abs(wrap_pi(checked - state->acceleration_world_yaw_rad)) > 1.0f) {
       state->acceleration_world_yaw_rad = checked;
       ++state->acceleration_yaw_half_turn_corrections;
