@@ -736,6 +736,9 @@ jobs:
     runs-on: ubuntu-24.04
     container: ubuntu:26.04
     needs: merge-package
+    # The optional xrizer job may be skipped upstream of a successful merge.
+    # Use a status function to override the implicit success() dependency gate.
+    if: ${{ !cancelled() && needs.merge-package.result == 'success' }}
     timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
@@ -893,9 +896,9 @@ jobs:
             args+=(--prerelease)
           fi
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release exists: $TAG"
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" "${ASSETS[@]}" \
               --repo "$GITHUB_REPOSITORY" \

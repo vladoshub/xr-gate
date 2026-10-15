@@ -122,19 +122,20 @@ class Client {
   ~Client();
   void start();
   void stop();
-  void enqueue(TcpMessage msg);
+  void enqueue(const TcpMessage& msg);
   bool alive() const { return alive_.load(); }
+  bool wants(const std::string& stream_id) const;
 
  private:
   void run();
   void send_hello();
   bool read_subscribe();
-  bool wants(const std::string& stream_id) const;
 
   TcpFanoutPublisher::Impl* server_ = nullptr;
   socket_t sock_ = kInvalidSocket;
   int id_ = 0;
   std::atomic<bool> alive_{true};
+  std::atomic<bool> subscription_ready_{false};
   std::thread thread_;
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -222,23 +223,21 @@ void Client::stop() {
   if (thread_.joinable()) thread_.join();
 }
 
-void Client::enqueue(TcpMessage msg) {
+bool Client::wants(const std::string& stream_id) const {
+  // The subscription set is immutable after this release/acquire handoff.
+  // Before it completes, do not copy frames or race read_subscribe().
+  return alive_.load() && subscription_ready_.load(std::memory_order_acquire) &&
+         (subscribe_all_ || subscriptions_.count(stream_id) != 0);
+}
+
+void Client::enqueue(const TcpMessage& msg) {
   if (!alive_.load()) return;
-  // Stream id is visible in header JSON; cheap enough for this experimental path.
-  if (!subscribe_all_) {
-    bool ok = false;
-    for (const auto& sid : subscriptions_) {
-      const std::string needle = "\"stream_id\":\"" + sid + "\"";
-      if (msg.header_json.find(needle) != std::string::npos) { ok = true; break; }
-    }
-    if (!ok) return;
-  }
   std::lock_guard<std::mutex> lock(mutex_);
   if (queue_.size() >= static_cast<size_t>(server_->client_queue_size)) {
     queue_.pop_front();
     ++dropped_;
   }
-  queue_.push_back(std::move(msg));
+  queue_.push_back(msg);
   cv_.notify_one();
 }
 
@@ -305,6 +304,7 @@ void Client::run() {
       alive_.store(false);
       return;
     }
+    subscription_ready_.store(true, std::memory_order_release);
     std::cerr << "[capture_service_cpp][tcp] client " << id_ << " subscribed=" << (subscribe_all_ ? "*" : "filtered") << std::endl;
     while (alive_.load()) {
       TcpMessage msg;
@@ -395,6 +395,16 @@ void TcpFanoutPublisher::publish(const std::string& stream_id,
                                  const std::string& frame_id) {
   auto it = impl_->specs.find(stream_id);
   if (it == impl_->specs.end()) return;
+  std::vector<std::shared_ptr<Client>> clients;
+  {
+    std::lock_guard<std::mutex> lock(impl_->clients_mutex);
+    for (const auto& client : impl_->clients) {
+      if (client->wants(stream_id)) clients.push_back(client);
+    }
+  }
+  // Listening alone (or an IMU-only subscriber) must not serialize headers
+  // and copy full camera images that nobody requested.
+  if (clients.empty()) return;
   const auto& spec = it->second;
   std::ostringstream header;
   header << "{"
@@ -414,11 +424,6 @@ void TcpFanoutPublisher::publish(const std::string& stream_id,
   TcpMessage msg;
   msg.header_json = header.str();
   msg.payload.assign(payload, payload + payload_len);
-  std::vector<std::shared_ptr<Client>> clients;
-  {
-    std::lock_guard<std::mutex> lock(impl_->clients_mutex);
-    clients = impl_->clients;
-  }
   for (auto& client : clients) if (client->alive()) client->enqueue(msg);
 }
 

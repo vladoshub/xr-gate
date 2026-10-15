@@ -51,6 +51,25 @@ cv::Mat to_gray8(const cv::Mat& input) {
 }
 
 cv::Mat transform_gray_image(const cv::Mat& input, const std::string& rotate_mode, const std::string& flip_mode) {
+  const std::string rotation = normalize(rotate_mode);
+  const std::string flip = normalize(flip_mode);
+  // Each returned image must own its pixels: XREAL reuses the decoded eye
+  // buffer before the other eye arrives. Skip identity passes, not that copy.
+  if (flip == "none" || flip.empty()) return rotate_image(input, rotation);
+  if (rotation == "none" || rotation == "0" || rotation.empty()) {
+    return flip_image(input, flip);
+  }
+  // Flipping both axes is another half-turn. In the XREAL right-eye profile,
+  // ccw90 + xy is exactly cw90, so one rotation replaces two image passes.
+  if (flip == "xy" || flip == "yx" || flip == "both") {
+    if (rotation == "ccw90" || rotation == "270" || rotation == "counterclockwise") {
+      return rotate_image(input, "cw90");
+    }
+    if (rotation == "cw90" || rotation == "90" || rotation == "clockwise") {
+      return rotate_image(input, "ccw90");
+    }
+    if (rotation == "rotate180" || rotation == "180") return input.clone();
+  }
   return flip_image(rotate_image(input, rotate_mode), flip_mode);
 }
 

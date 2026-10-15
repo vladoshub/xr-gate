@@ -46,14 +46,13 @@ class XrealCameraSource final : public ICameraSource {
 
   SourceReadStatus read(StereoFrame& output) override {
     output = {};
-    cv::Mat frame;
-    if (!capture_.read(frame) || frame.empty()) return SourceReadStatus::Timeout;
+    if (!capture_.read(capture_frame_) || capture_frame_.empty()) return SourceReadStatus::Timeout;
     const uint64_t receive_ns = steady_ns();
 
     bool is_right = false;
     const bool device_time = cfg_.camera.timestamp_mode == "device";
     XrealCameraMetadata metadata;
-    if (!decode_xreal_eye(frame, raw_eye_, is_right, device_time ? &metadata : nullptr)) {
+    if (!decode_xreal_eye(capture_frame_, raw_eye_, is_right, device_time ? &metadata : nullptr)) {
       ++decode_fail_;
       return SourceReadStatus::TransportActivity;
     }
@@ -123,6 +122,7 @@ class XrealCameraSource final : public ICameraSource {
   std::shared_ptr<XrealDeviceClock> clock_;
   XrealStereoTimestampPairer pairer_;
   CameraCapture capture_;
+  cv::Mat capture_frame_;
   cv::Mat raw_eye_;
   cv::Mat latest_left_;
   cv::Mat latest_right_;

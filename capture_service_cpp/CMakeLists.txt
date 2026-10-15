@@ -92,6 +92,14 @@ install(PROGRAMS tools/list_xr_controller_devices.py DESTINATION tools)
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(image_transform_smoke
+    tests/image_transform_smoke.cpp
+    src/image_transform.cpp
+  )
+  target_include_directories(image_transform_smoke PRIVATE include ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(image_transform_smoke PRIVATE ${OpenCV_LIBS})
+  add_test(NAME image_transform_smoke COMMAND image_transform_smoke)
+
   if(WIN32)
     set(CAPTURE_CONFIG_TEST_PLATFORM_SOURCE src/platform/windows/runtime_defaults_windows.cpp)
   else()
@@ -224,6 +232,18 @@ if(BUILD_TESTING)
   add_test(NAME imu_transform_smoke COMMAND imu_transform_smoke)
 
   if(NOT WIN32)
+    add_executable(tcp_fanout_demand_linux
+      tests/tcp_fanout_demand_linux.cpp
+      src/tcp_fanout.cpp
+      src/common.cpp
+      src/config/capture_config.cpp
+      src/platform/linux/runtime_defaults_linux.cpp
+    )
+    target_include_directories(tcp_fanout_demand_linux PRIVATE include)
+    target_link_libraries(tcp_fanout_demand_linux PRIVATE Threads::Threads)
+    add_test(NAME tcp_fanout_demand_linux COMMAND tcp_fanout_demand_linux)
+    set_tests_properties(tcp_fanout_demand_linux PROPERTIES TIMEOUT 10)
+
     add_executable(serial_imu_transport_activity_linux
       tests/serial_imu_transport_activity_linux.cpp
       src/sources/serial_imu_source.cpp
