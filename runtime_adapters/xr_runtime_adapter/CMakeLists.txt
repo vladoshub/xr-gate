@@ -16,6 +16,7 @@ find_package(nlohmann_json CONFIG QUIET)
 
 add_executable(xr_runtime_adapter
   src/xr_runtime_adapter.cpp
+  src/app_tcp_server.cpp
   src/coordinate_util.cpp
   src/gestures.cpp
   src/hmd_pose_stability_filter.cpp
@@ -30,6 +31,9 @@ target_include_directories(xr_runtime_adapter PRIVATE
   "${XR_SHARED_INCLUDE_DIR}"
 )
 target_link_libraries(xr_runtime_adapter PRIVATE Threads::Threads)
+if(WIN32)
+  target_link_libraries(xr_runtime_adapter PRIVATE ws2_32)
+endif()
 
 if(TARGET CLI11::CLI11)
   target_link_libraries(xr_runtime_adapter PRIVATE CLI11::CLI11)
@@ -59,6 +63,13 @@ install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_r
 option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build runtime tracking regression tests" OFF)
 if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   enable_testing()
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME app_tcp_server_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_tcp_server_test.py"
+        --adapter $<TARGET_FILE:xr_runtime_adapter>)
+    set_tests_properties(app_tcp_server_test PROPERTIES TIMEOUT 30)
+  endif()
   add_executable(controller_imu_angular_velocity_test
     tests/controller_imu_angular_velocity_test.cpp
     src/override_controller.cpp

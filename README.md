@@ -827,6 +827,10 @@ Tracking and perception backends, including hand tracking, video, spatial mappin
 
 Runtime normalization layer. It consumes backend streams, applies transforms/prediction/stale checks, and republishes runtime-ready HMD, controller, hand, video, and spatial data.
 
+Applications can opt into a read-only TCP JSON stream for HMD/hand/controller
+state with `RUNTIME_APP_TCP=1` (off by default). See
+[Application TCP/UDP and video access](runtime_adapters/xr_runtime_adapter/docs/application_network_api.md).
+
 ### `xr_client`
 
 Process orchestrator for starting, stopping, and supervising the runtime stack.

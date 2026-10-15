@@ -602,6 +602,8 @@ copy_capture_client_runtime() {
 }
 
 copy_tools_runtime() {
+  copy_runtime_file "$XR_ROOT_PROJECT/tools/xr_app_client.py" "$XR_OUT_BIN_ROOT/python/tools/xr_app_client.py"
+  copy_runtime_file "$XR_ROOT_PROJECT/tools/xr_video_tcp_client.py" "$XR_OUT_BIN_ROOT/python/tools/xr_video_tcp_client.py"
   copy_file "$XR_ROOT_PROJECT/tools/xr_startup_gate.py" "$XR_OUT_BIN_ROOT/python/tools/xr_startup_gate.py"
   copy_file \
     "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py" \
@@ -625,6 +627,8 @@ EOF_LAUNCHER
 }
 
 write_app_launchers() {
+  write_root_launcher "run_app_client.sh" "bin/python/tools/xr_app_client.py"
+  write_root_launcher "run_video_tcp_client.sh" "bin/python/tools/xr_video_tcp_client.py"
   write_root_launcher "calibrate_hmd_orientation_offset.sh" "bin/python/tools/calibrate_hmd_orientation_offset.py"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"

@@ -26,6 +26,8 @@ BUILD_DIR="$(expand_tilde "$BUILD_DIR")"
 
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/runtime_adapters/xr_runtime_adapter}"
 INSTALL_BIN_DIR="$(expand_tilde "$INSTALL_BIN_DIR")"
+INSTALL_SCRIPT_DIR="${INSTALL_SCRIPT_DIR:-$ROOT_PROJECT/bin/scripts/runtime_adapters/xr_runtime_adapter}"
+INSTALL_SCRIPT_DIR="$(expand_tilde "$INSTALL_SCRIPT_DIR")"
 
 CLEAN_BUILD="${CLEAN_BUILD:-0}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc 2>/dev/null || echo 2)}"
@@ -85,6 +87,11 @@ cmake --build "$BUILD_DIR" --target xr_runtime_adapter -j"$BUILD_JOBS"
 
 cp "$BUILD_DIR/xr_runtime_adapter" "$INSTALL_BIN_DIR/xr_runtime_adapter"
 chmod +x "$INSTALL_BIN_DIR/xr_runtime_adapter"
+# Device wrappers prefer this installed copy over the source launcher. Keep it
+# in step with the binary so new opt-in environment options take effect.
+mkdir -p "$INSTALL_SCRIPT_DIR"
+cp "$ADAPTER_DIR/scripts/linux/start_xr_runtime_adapter_shm.sh" "$INSTALL_SCRIPT_DIR/start_xr_runtime_adapter_shm.sh"
+chmod +x "$INSTALL_SCRIPT_DIR/start_xr_runtime_adapter_shm.sh"
 
 cat <<EOF2
 
