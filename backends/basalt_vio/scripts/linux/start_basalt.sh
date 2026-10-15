@@ -66,6 +66,7 @@ if [[ -d "$BASALT_LIB_DIR" ]]; then
   export LD_LIBRARY_PATH="$BASALT_LIB_DIR:${LD_LIBRARY_PATH:-}"
 fi
 
+BASALT_NUM_THREADS="${BASALT_NUM_THREADS:-2}"
 TRANSPORT="${BASALT_TRANSPORT:-${TRANSPORT:-shm}}"
 CAPTURE_REGISTRY="${CAPTURE_REGISTRY:-/tmp/capture_service_streams.json}"
 CAPTURE_TCP_HOST="${CAPTURE_TCP_HOST:-127.0.0.1}"
@@ -295,6 +296,7 @@ if [[ "$STARTUP_GATE" == "1" ]]; then
 fi
 
 backend_args=(
+  --num-threads "$BASALT_NUM_THREADS"
   --transport "$TRANSPORT"
   --registry "$CAPTURE_REGISTRY"
   --tcp-host "$CAPTURE_TCP_HOST"
