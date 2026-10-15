@@ -1,4 +1,4 @@
-"""Console forwarding must retain file logging and emit only IMU transitions."""
+"""Console forwarding must retain file logging and filter verbose frames."""
 import subprocess
 import sys
 import tempfile
@@ -27,6 +27,14 @@ def status(left, right, translation=None):
     return (text + "\n").encode("ascii")
 
 
+def raw_status_logger(messages):
+    """Capture backend lines independently of colored user guidance."""
+    def collect(message, *, color=None):
+        if color is None:
+            messages.append(message)
+    return collect
+
+
 class ControllerImuConsoleTest(unittest.TestCase):
     def launcher(self, folder):
         return Launcher(SimpleNamespace(log_dir=folder, root_project=folder, log_max_bytes=0))
@@ -44,7 +52,7 @@ class ControllerImuConsoleTest(unittest.TestCase):
             item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
                                    process=SimpleNamespace(poll=lambda: 0))
             messages = []
-            with patch("xr_client.xr_backend_client.log", messages.append):
+            with patch("xr_client.xr_backend_client.log", raw_status_logger(messages)):
                 self.launcher(folder).forward_controller_imu_status(item)
             self.assertEqual(messages, [line.decode().strip()
                                        for line in (ready, progress, progress, complete)])
@@ -61,7 +69,7 @@ class ControllerImuConsoleTest(unittest.TestCase):
             item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
                                    process=SimpleNamespace(poll=lambda: 0))
             messages = []
-            with patch("xr_client.xr_backend_client.log", messages.append):
+            with patch("xr_client.xr_backend_client.log", raw_status_logger(messages)):
                 self.launcher(folder).forward_controller_imu_status(item)
             self.assertEqual(messages, [line.decode().strip() for line in expected])
 
@@ -75,7 +83,7 @@ class ControllerImuConsoleTest(unittest.TestCase):
             item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
                                    process=SimpleNamespace(poll=lambda: 0))
             messages = []
-            with patch("xr_client.xr_backend_client.log", messages.append):
+            with patch("xr_client.xr_backend_client.log", raw_status_logger(messages)):
                 self.launcher(folder).forward_controller_imu_status(item)
             self.assertEqual(messages, [status(a, b).decode().strip()
                                         for a, b in (("no", "no"), ("yes", "no"), ("yes", "yes"))])
@@ -87,7 +95,9 @@ class ControllerImuConsoleTest(unittest.TestCase):
             received = threading.Event()
             messages = []
 
-            def collect(message):
+            def collect(message, *, color=None):
+                if color is not None:
+                    return
                 messages.append(message)
                 received.set()
 
@@ -127,7 +137,9 @@ class ControllerImuConsoleTest(unittest.TestCase):
             ready_seen = threading.Event()
             messages = []
 
-            def collect(message):
+            def collect(message, *, color=None):
+                if color is not None:
+                    return
                 messages.append(message)
                 if message == ready.decode().strip():
                     ready_seen.set()

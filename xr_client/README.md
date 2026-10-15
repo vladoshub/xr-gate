@@ -64,6 +64,22 @@ that will be used the next time key `9` starts Basalt.
 Detailed Linux config documentation is maintained in
 `configs/xr_client_default_shm_config_readme.md`.
 
+## Controller IMU calibration messages
+
+Each forwarded `[imu-calibration]` progress line is followed by a yellow hint:
+keep the hand and controller visible, hold your head steady, and make gentle
+10-20 cm forward/back or side-to-side movements with clear starts and stops.
+Avoid fast wrist rotations and continue until calibration is confirmed.
+
+A green `Left controller calibrated. IMU prediction is active.` (or right/both)
+message appears when the runtime confirms yaw and translation calibration.
+Legacy runtimes without translation flags use their yaw-ready flags; disabled
+translation calibration does not block readiness once reported as disabled.
+Readiness is announced again after a calibration reset and recovery. The manual
+controls menu is reprinted after each batch of forwarded calibration messages
+when interactive controls are enabled. These messages use the existing
+`XR_CLIENT_COLOR` setting and respect `NO_COLOR`.
+
 ## Windows native profile
 
 Native Windows support uses the separate TCP/UDP profile:

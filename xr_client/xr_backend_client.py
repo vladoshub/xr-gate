@@ -70,8 +70,8 @@ CONTROLLER_IMU_ALIGNMENT_STATUS = re.compile(
     rb"controller_right_acceleration_translation_yaw_calibrated=(yes|no))?$"
 )
 CONTROLLER_IMU_CALIBRATION_PROGRESS = re.compile(
-    rb"^\[xr_runtime_adapter\]\[imu-calibration\] side=(?:left|right) "
-    rb"yaw=[a-z_]+ translation=[a-z_]+(?: [a-z_]+=[a-z0-9.+/-]+)*$"
+    rb"^\[xr_runtime_adapter\]\[imu-calibration\] side=(?P<side>left|right) "
+    rb"yaw=[a-z_]+ translation=(?P<translation>[a-z_]+)(?: [a-z_]+=[a-z0-9.+/-]+)*$"
 )
 
 
@@ -351,6 +351,8 @@ class Launcher:
         """Follow alignment transitions and throttled calibration progress."""
         pending = b""
         last_status = None
+        last_ready = (False, False)
+        translation_disabled = set()
         try:
             with item.log_path.open("rb") as source:
                 while not item.limiter_stop.is_set():
@@ -365,17 +367,50 @@ class Launcher:
                         # A partial verbose frame never grows without bound.
                         if len(pending) > 16 * 1024:
                             pending = pending[-16 * 1024:]
+                        console_updated = False
                         for line in lines:
                             line = line.rstrip(b"\r")
                             match = CONTROLLER_IMU_ALIGNMENT_STATUS.fullmatch(line)
                             if match is not None and match.groups() != last_status:
                                 last_status = match.groups()
                                 log(line.decode("ascii").rstrip())
-                            elif CONTROLLER_IMU_CALIBRATION_PROGRESS.fullmatch(line) is not None:
+                                # A ready fit is not yet a confirmed calibration.
+                                # Older runtimes report only the two yaw flags.
+                                ready = tuple(
+                                    last_status[index] == b"yes" and (
+                                        last_status[index + 2] in (None, b"yes") or
+                                        side in translation_disabled
+                                    )
+                                    for index, side in enumerate((b"left", b"right"))
+                                )
+                                if any(current and not previous
+                                       for current, previous in zip(ready, last_ready)):
+                                    label = ("Both controllers" if all(ready) else
+                                             "Left controller" if ready[0] else "Right controller")
+                                    log(f"{label} calibrated. IMU prediction is active.", color="green")
+                                last_ready = ready
+                                console_updated = True
+                            else:
+                                progress = CONTROLLER_IMU_CALIBRATION_PROGRESS.fullmatch(line)
+                                if progress is None:
+                                    continue
                                 # Runtime already limits this to one line per
                                 # pending side every three seconds. A repeated
                                 # reason is useful when the user must act.
                                 log(line.decode("ascii"))
+                                side = progress.group("side")
+                                if progress.group("translation") == b"disabled":
+                                    translation_disabled.add(side)
+                                log(
+                                    f"Calibrating {side.decode('ascii')} controller: keep the hand and controller "
+                                    "visible to the cameras and keep your head steady. Gently move the controller "
+                                    "10-20 cm forward/back or side to side, with clear starts and stops. "
+                                    "Avoid fast wrist rotations. Continue until calibration is confirmed.",
+                                    color="yellow",
+                                )
+                                console_updated = True
+                        if console_updated and self.manual_controls is not None and not self.manual_controls.stop_requested:
+                            self.manual_controls.print_menu()
                         continue
                     if item.limiter_stop.is_set() or item.process.poll() is not None:
                         return
