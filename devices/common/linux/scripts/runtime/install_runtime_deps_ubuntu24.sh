@@ -77,7 +77,15 @@ XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
 if [[ -f "$XR_PACKAGE_ROOT/BUILD_UBUNTU_VERSION" ]]; then
   package_ubuntu="$(cat "$XR_PACKAGE_ROOT/BUILD_UBUNTU_VERSION")"
   if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != "$package_ubuntu" ]]; then
-    fatal "package requires Ubuntu $package_ubuntu; detected ${ID:-unknown} ${VERSION_ID:-unknown}. Download the matching runtime archive."
+    # The 24.04 static-OpenCV package is also checked on 26.04 in CI.
+    # Legacy builds and other distro/version combinations keep the strict guard.
+    if [[ "$package_ubuntu" == 24.04 && "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 26.04 &&
+          -f "$XR_PACKAGE_ROOT/BUILD_OPENCV_LINKAGE" &&
+          "$(cat "$XR_PACKAGE_ROOT/BUILD_OPENCV_LINKAGE")" == static-4.10.0 ]]; then
+      log "using Ubuntu 24.04 static-OpenCV runtime on Ubuntu 26.04"
+    else
+      fatal "package requires Ubuntu $package_ubuntu; detected ${ID:-unknown} ${VERSION_ID:-unknown}. Download the matching runtime archive."
+    fi
   fi
 fi
 
@@ -132,6 +140,10 @@ if [[ "$INSTALL_APT" == "1" ]]; then
     bluez
   )
   apt_install_required "${runtime_packages[@]}"
+fi
+
+if [[ -f "$XR_PACKAGE_ROOT/BUILD_CPU_TARGET" ]]; then
+  python3 "$SCRIPT_DIR/cpu_target.py" check "$XR_PACKAGE_ROOT"
 fi
 
 if [[ "$INSTALL_DEVICE_ACCESS" == "1" && -n "${XR_RUNTIME_DEVICE_ACCESS_SCRIPT:-}" ]]; then

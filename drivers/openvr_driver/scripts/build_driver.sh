@@ -219,7 +219,8 @@ printf '[build_driver] DEVICE_SETTINGS=%s\n' "${XR_OPENVR_DEVICE_SETTINGS:-<none
 printf '[build_driver] DISPLAY_CONFIG=%s\n' "$XR_OPENVR_DISPLAY_CONFIG"
 printf '[build_driver] PACKAGE_TAG=%s\n' "${XR_OPENVR_PACKAGE_TAG:-<none>}"
 
-cmake -S "$DRIVER_ROOT" -B "$BUILD_DIR" -DXR_OPENVR_SDK_ROOT="$SDK_ROOT"
+cmake -S "$DRIVER_ROOT" -B "$BUILD_DIR" -DXR_OPENVR_SDK_ROOT="$SDK_ROOT" \
+  -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 cmake --build "$BUILD_DIR" -j"$BUILD_JOBS"
 
 PACKAGE_SETTINGS="$BUILD_DIR/xr_tracking/resources/settings/default.vrsettings"

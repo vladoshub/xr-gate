@@ -11,6 +11,23 @@ checkouts used for the build into `LICENSES/components/`.
 
 ## Components included in the normal runtime build
 
+### OpenCV
+
+- Upstream: https://github.com/opencv/opencv
+- Pinned version: 4.10.0, commit `71d3237a093b60a27601c20e9ee6c3e52154e8b1`.
+- License: Apache-2.0. The static SDK includes bundled zlib, libpng and
+  libjpeg-turbo code under their respective upstream licenses.
+- The normal Linux build links this SDK statically, with PIC and the selected
+  CPU profile (AVX2 by default), into
+  native components instead of depending on the distro's OpenCV SONAME.
+- The package includes the exact OpenCV LICENSE, COPYRIGHT, installed upstream
+  third-party notices, source commit and build configuration under
+  `bin/opencv/licenses/` and `LICENSES/components/opencv/`.
+- Nonfree algorithms, IPP, CUDA, OpenCL, FFmpeg, GStreamer and GUI toolkits are
+  disabled in this SDK. UVC/V4L2 camera input and JPEG/PNG image codecs remain.
+- Apache-2.0 permits redistribution in the main runtime with these notices;
+  no separate restricted download is required for this configuration.
+
 ### Basalt
 
 - Upstream: https://github.com/VladyslavUsenko/basalt

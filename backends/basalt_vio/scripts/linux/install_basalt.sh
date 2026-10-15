@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_SUPPORT_DIR="$(cd "$SCRIPT_DIR/../../../../devices/common/linux/scripts/build" && pwd)"
+if [[ -z "${XR_BUILD_SESSION_DIR:-}" || ! -d "$XR_BUILD_SESSION_DIR" ]] || [[ -z "${XR_BUILD_SESSION_OWNER:-}" ]] || ! kill -0 "${XR_BUILD_SESSION_OWNER:-0}" 2>/dev/null; then
+  exec bash "$BUILD_SUPPORT_DIR/with_build_session.sh" bash "$0" "$@"
+fi
+if [[ "${XR_USE_BUNDLED_OPENCV:-1}" == "1" ]]; then
+  source "$BUILD_SUPPORT_DIR/opencv_env.sh"
+fi
+
 expand_tilde() {
   local value="$1"
   case "$value" in
@@ -52,7 +61,7 @@ CMAKE_PRESET="${CMAKE_PRESET:-relwithdebinfo}"
 XR_CMAKE_PRESET="${XR_CMAKE_PRESET:-xr_${CMAKE_PRESET}}"
 
 # Build output is project-owned and intentionally outside third_party/basalt.
-BASALT_BUILD_ROOT="${BASALT_BUILD_ROOT:-$ROOT_PROJECT/build/backends/basalt_vio}"
+BASALT_BUILD_ROOT="${BASALT_BUILD_ROOT:-$XR_BUILD_ROOT/backends/basalt_vio}"
 BASALT_BUILD_ROOT="$(expand_tilde "$BASALT_BUILD_ROOT")"
 BASALT_BUILD_DIR="${BASALT_BUILD_DIR:-$BASALT_BUILD_ROOT/$CMAKE_PRESET}"
 BASALT_BUILD_DIR="$(expand_tilde "$BASALT_BUILD_DIR")"
@@ -331,6 +340,9 @@ else
   ensure_basalt_external_backend_integration
 fi
 
+# Drop unused GUI/test dependency builds and the second OpenCV build in vcpkg.
+python3 "$BACKEND_DIR/scripts/prepare_runtime_build.py" "$BASALT_DIR" "${XR_USE_BUNDLED_OPENCV:-1}"
+
 echo
 echo "[git status]"
 git status --short
@@ -348,8 +360,9 @@ fi
 
 # Generate a CMakeUserPresets.json inside the Basalt checkout that inherits the
 # upstream preset but redirects binaryDir to xr_tracking/build/...
-python3 - "$BASALT_DIR/CMakeUserPresets.json" "$XR_CMAKE_PRESET" "$CMAKE_PRESET" "$BASALT_BUILD_DIR" "$ROOT_PROJECT" <<'PY'
+python3 - "$BASALT_DIR/CMakeUserPresets.json" "$XR_CMAKE_PRESET" "$CMAKE_PRESET" "$BASALT_BUILD_DIR" "$ROOT_PROJECT" "${XR_OPENCV_PREFIX:-}" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -358,6 +371,7 @@ name = sys.argv[2]
 inherits = sys.argv[3]
 binary_dir = sys.argv[4]
 root = sys.argv[5]
+opencv_prefix = sys.argv[6]
 
 payload = {
     "version": 3,
@@ -368,10 +382,16 @@ payload = {
             "binaryDir": binary_dir,
             "cacheVariables": {
                 "XR_TRACKING_ROOT": root,
+                "CXX_MARCH": os.environ["XR_CPU_TARGET"],
+                "VCPKG_TARGET_TRIPLET": os.environ["VCPKG_TRIPLET"],
+                "VCPKG_HOST_TRIPLET": os.environ["VCPKG_TRIPLET"],
+                "VCPKG_OVERLAY_TRIPLETS": str(Path(root) / "backends/basalt_vio/cmake/triplets"),
             },
         }
     ],
 }
+if opencv_prefix:
+    payload["configurePresets"][0]["cacheVariables"]["OpenCV_DIR"] = str(Path(opencv_prefix) / "lib/cmake/opencv4")
 
 path.write_text(json.dumps(payload, indent=2) + "\n")
 print("[OK] wrote", path)
@@ -388,10 +408,9 @@ cd "$BASALT_DIR"
 
 echo
 echo "[build targets]"
-for target in $BUILD_TARGETS; do
-  "$CMAKE_BIN" --build "$BASALT_BUILD_DIR" --target "$target" \
-    -j"${BASALT_BUILD_JOBS:-$(nproc)}"
-done
+read -r -a basalt_targets <<< "$BUILD_TARGETS"
+"$CMAKE_BIN" --build "$BASALT_BUILD_DIR" --target "${basalt_targets[@]}" \
+  -j"${BASALT_BUILD_JOBS:-$(nproc)}"
 
 echo
 echo "[copy runtime libraries]"
@@ -440,6 +459,9 @@ rm -rf "$BASALT_LICENSE_DIR"
 mkdir -p "$BASALT_LICENSE_DIR/vcpkg"
 [[ -f "$BASALT_DIR/LICENSE" ]] || { echo "[ERROR] Basalt LICENSE not found: $BASALT_DIR/LICENSE" >&2; exit 1; }
 cp "$BASALT_DIR/LICENSE" "$BASALT_LICENSE_DIR/Basalt-LICENSE.txt"
+if [[ -n "${XR_OPENCV_PREFIX:-}" ]]; then
+  cp -a "$XR_OPENCV_PREFIX/licenses" "$BASALT_LICENSE_DIR/opencv"
+fi
 BASALT_RESOLVED_COMMIT="$(git -C "$BASALT_DIR" rev-parse HEAD)"
 cat > "$BASALT_LICENSE_DIR/SOURCE_INFO.txt" <<EOF_BASALT_SOURCE
 Component: Basalt

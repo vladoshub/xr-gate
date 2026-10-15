@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Build XR Mercury hand-tracking backend from project-owned files in xr_tracking.
 # Third-party source trees are expected under $ROOT_PROJECT/third_party.
-# Build outputs go under $ROOT_PROJECT/build/backends/mercury_hand_tracking.
+# Build outputs go under ${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/mercury_hand_tracking.
 # User-facing binaries/libs are copied to $ROOT_PROJECT/bin/backends/mercury_hand_tracking.
 
 expand_tilde() {
@@ -80,7 +80,7 @@ INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
 INSTALL_LFS_DEPS="${INSTALL_LFS_DEPS:-1}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}"
 
-BUILD_ROOT="${BUILD_ROOT:-$ROOT_PROJECT/build/backends/mercury_hand_tracking}"
+BUILD_ROOT="${BUILD_ROOT:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/mercury_hand_tracking}"
 MONADO_BUILD_DIR="${MONADO_BUILD_DIR:-$BUILD_ROOT/monado_xr_mercury}"
 BACKEND_BUILD_DIR="${BACKEND_BUILD_DIR:-$BUILD_ROOT/backend}"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/backends/mercury_hand_tracking}"
@@ -273,6 +273,7 @@ export LD_LIBRARY_PATH="$ORT_ROOT/lib:${LD_LIBRARY_PATH:-}"
 
 cmake -S "$MONADO_DIR" -B "$MONADO_BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
+  ${XR_OPENCV_PREFIX:+"-DOpenCV_DIR=$XR_OPENCV_PREFIX/lib/cmake/opencv4"} \
   -DONNXRuntime_INCLUDE_DIR="$ORT_ROOT/include" \
   -DONNXRuntime_LIBRARY="$ORT_ROOT/lib/libonnxruntime.so" \
   -DMODULE_MERCURY_HANDTRACKING=ON
@@ -309,6 +310,7 @@ log "Building XR Mercury hand-tracking backend"
 rm -rf "$BACKEND_BUILD_DIR"
 cmake -S "$BACKEND_DIR" -B "$BACKEND_BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
+  ${XR_OPENCV_PREFIX:+"-DOpenCV_DIR=$XR_OPENCV_PREFIX/lib/cmake/opencv4"} \
   -DXR_ROOT="$ROOT_PROJECT"
 
 cmake --build "$BACKEND_BUILD_DIR" \

@@ -22,7 +22,7 @@ BRIDGES_DIR="$(expand_tilde "$BRIDGES_DIR")"
 
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}"
 CMAKE_BUILD_DIR_NAME="${CMAKE_BUILD_DIR_NAME:-relwithdebinfo}"
-BUILD_DIR="${BUILD_DIR:-$ROOT_PROJECT/build/bridges/$CMAKE_BUILD_DIR_NAME}"
+BUILD_DIR="${BUILD_DIR:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/bridges/$CMAKE_BUILD_DIR_NAME}"
 BUILD_DIR="$(expand_tilde "$BUILD_DIR")"
 
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/bridges}"
@@ -41,14 +41,18 @@ find_optional_vcpkg_installed() {
   fi
 
   candidates+=(
-    "$ROOT_PROJECT/build/backends/basalt_vio/relwithdebinfo/vcpkg_installed/$VCPKG_TRIPLET"
-    "$ROOT_PROJECT/build/backends/basalt_vio/debug/vcpkg_installed/$VCPKG_TRIPLET"
+    "${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/basalt_vio/relwithdebinfo/vcpkg_installed/$VCPKG_TRIPLET"
+    "${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/basalt_vio/debug/vcpkg_installed/$VCPKG_TRIPLET"
     "$ROOT_PROJECT/third_party/basalt/build/relwithdebinfo/vcpkg_installed/$VCPKG_TRIPLET"
     "$ROOT_PROJECT/third_party/basalt/build/debug/vcpkg_installed/$VCPKG_TRIPLET"
   )
 
   local c
   for c in "${candidates[@]}"; do
+    # A clean session may only consume dependencies compiled in this invocation.
+    if [[ -n "${XR_BUILD_SESSION_DIR:-}" && "$c" != "$XR_BUILD_ROOT/"* ]]; then
+      continue
+    fi
     if [[ -d "$c" ]] && { [[ -f "$c/share/cli11/CLI11Config.cmake" ]] || [[ -f "$c/share/cli11/cli11-config.cmake" ]] || [[ -f "$c/include/CLI/CLI.hpp" ]]; }; then
       printf '%s\n' "$c"
       return 0

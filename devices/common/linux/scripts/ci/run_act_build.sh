@@ -221,11 +221,16 @@ if [[ "$CLEAN_ARTIFACTS" == "1" ]]; then
   rm -rf "$ACT_ARTIFACT_DIR"
 fi
 mkdir -p "$ACT_ARTIFACT_DIR"
+# act may reuse its synthetic GitHub run ID. Isolate dependency artifacts and
+# give all jobs in this invocation a fresh identity as well.
+ACT_ARTIFACT_DIR="$(mktemp -d "$ACT_ARTIFACT_DIR/run.XXXXXXXX")"
+XR_LOCAL_BUILD_ID="${ACT_ARTIFACT_DIR##*/}"
 
 ACT_ARGS=(
   -W "$WORKFLOW"
   --container-architecture linux/amd64
   --artifact-server-path "$ACT_ARTIFACT_DIR"
+  --env "XR_LOCAL_BUILD_ID=$XR_LOCAL_BUILD_ID"
   -P "ubuntu-24.04=$ACT_RUNNER_IMAGE"
   -P "ubuntu-latest=$ACT_UBUNTU_LATEST_IMAGE"
 )
