@@ -454,11 +454,15 @@ std::optional<InputEvent> GearVrInputProvider::wait_event(std::vector<DeviceInfo
       : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (true) {
     int remaining = timeout_ms;
-    if (timeout_ms >= 0) {
+    if (timeout_ms > 0) {
       const auto now = std::chrono::steady_clock::now();
       if (now >= deadline) return std::nullopt;
+      // A fractional millisecond must still block. Rounding it down to zero
+      // spins the native transport until the deadline (especially in 2 ms
+      // composite-provider slices). An explicit zero timeout instead pumps
+      // once below so ready BLE input is visible to non-blocking callers.
       remaining = static_cast<int>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+          std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count());
     }
     bool stdin_ready = false;
     impl_->pump(remaining, include_stdin, &stdin_ready);

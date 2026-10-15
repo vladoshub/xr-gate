@@ -642,11 +642,18 @@ class LinuxGearVrBleTransport final : public BleTransport {
   }
 
   bool refresh_managed_objects() {
+    auto schedule_next_refresh = [&]() {
+      next_refresh_ns_ = static_cast<uint64_t>(monotonic_now_ns()) + kManagedObjectsRefreshNs;
+      refresh_requested_ = false;
+    };
     MessageGuard reply{api_.get(), nullptr};
     ErrorGuard error{api_.get()};
     const int rc = api_->call_method(bus_, kBluezService, "/", kObjectManagerInterface,
                                      "GetManagedObjects", &error.value, &reply.value, nullptr);
     if (rc < 0 || !reply.value) {
+      // A missing/restarting BlueZ service must not trigger another synchronous
+      // GetManagedObjects call on every pump, or leave an expired poll timer.
+      schedule_next_refresh();
       std::cerr << "[override_controller][gearvr_ble][WARN] BlueZ GetManagedObjects failed: "
                 << (error.value.message ? error.value.message : std::to_string(rc)) << "\n";
       return false;
@@ -656,7 +663,10 @@ class LinuxGearVrBleTransport final : public BleTransport {
     std::map<std::string, ManagedService> services;
     std::map<std::string, ManagedCharacteristic> characteristics;
 
-    if (api_->message_enter_container(reply.value, 'a', "{oa{sa{sv}}}") <= 0) return false;
+    if (api_->message_enter_container(reply.value, 'a', "{oa{sa{sv}}}") <= 0) {
+      schedule_next_refresh();
+      return false;
+    }
     while (api_->message_enter_container(reply.value, 'e', "oa{sa{sv}}") > 0) {
       const char* object_path_c = nullptr;
       if (api_->message_read(reply.value, "o", &object_path_c) <= 0 || !object_path_c) {
@@ -787,8 +797,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
       if (!session->seen_in_refresh && session->connected) update_connected(*session, false);
     }
 
-    next_refresh_ns_ = static_cast<uint64_t>(monotonic_now_ns()) + kManagedObjectsRefreshNs;
-    refresh_requested_ = false;
+    schedule_next_refresh();
     return true;
   }
 
@@ -1026,6 +1035,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
         // send one early VR-mode command so controllers that gate CCCD traffic
         // until the sensor is running start producing packets reliably.
         if (!session.pre_notify_mode_sent) {
+          if (now_ns < session.next_notify_attempt_ns) continue;
           if (write_command(session, kCommandVrMode)) {
             session.pre_notify_mode_sent = true;
             session.next_notify_attempt_ns = now_ns + kInitCommandGapNs;
@@ -1113,10 +1123,18 @@ class LinuxGearVrBleTransport final : public BleTransport {
     const auto &commands = initialization_commands();
     for (const auto &[id, session]: sessions_) {
       if (!session->connected) {
-        shorten(session->next_connect_ns);
+        // An in-flight Connect completes through D-Bus. Its already-expired
+        // retry deadline cannot make progress and would force poll(0) forever.
+        if (!session->connect_pending && session->paired && !session->device_path.empty()) {
+          shorten(session->next_connect_ns);
+        }
         continue;
       }
-      if (!session->notifications_started) {
+      // Until GATT discovery completes there is no notification setup to run.
+      // Wait for PropertiesChanged rather than polling its old setup deadline.
+      if (!session->services_resolved || session->notify_path.empty() ||
+          session->command_path.empty()) continue;
+      if (!session->pre_notify_mode_sent || !session->notifications_started) {
         shorten(session->next_notify_attempt_ns);
       }
       if (session->notifications_started &&

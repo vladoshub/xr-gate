@@ -251,6 +251,19 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   add_test(NAME controller_imu_transform_test COMMAND controller_imu_transform_test)
 
   if(UNIX AND NOT APPLE)
+    add_executable(gearvr_bluez_retry_test
+      tests/gearvr_bluez_retry_test.cpp
+      src/providers/gearvr/gearvr_protocol.cpp
+      src/core/backend_control.cpp
+    )
+    target_include_directories(gearvr_bluez_retry_test PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/include"
+      "${XR_SHARED_INCLUDE_DIR}"
+    )
+    target_link_libraries(gearvr_bluez_retry_test PRIVATE Threads::Threads dl)
+    target_link_options(gearvr_bluez_retry_test PRIVATE "-Wl,--wrap=dlsym")
+    add_test(NAME gearvr_bluez_retry_test COMMAND gearvr_bluez_retry_test)
+
     add_executable(evdev_rescan_test
       tests/evdev_rescan_test.cpp
       src/platform/linux/linux_evdev_input_provider.cpp

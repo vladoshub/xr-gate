@@ -1,6 +1,7 @@
 #include "linux_evdev_input_provider.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <cstdarg>
 #include <cstdlib>
 #include <filesystem>
@@ -127,6 +128,33 @@ void append_key(const fs::path& node, unsigned code) {
   out.write(reinterpret_cast<const char*>(&event), sizeof(event));
 }
 
+void zero_timeout_reads_ready_fd() {
+  Fixture f;
+  std::ofstream(f.node, std::ios::binary | std::ios::trunc).close();
+  append_key(f.node, KEY_A);
+  LinuxEvdevInputProvider provider(f.directory.string());
+  auto devices = provider.scan_devices(true);
+  const auto event = provider.wait_event(devices, 0, false);
+  require(event && event->code == KEY_A, "zero-timeout poll skipped a ready fd");
+  require(!provider.wait_event(devices, 0, false), "zero-timeout poll did not finish after draining input");
+  provider.close_devices(devices);
+}
+
+void positive_timeout_waits_for_idle_fd() {
+  int fds[2];
+  require(pipe2(fds, O_NONBLOCK | O_CLOEXEC) == 0, "cannot create idle input pipe");
+  LinuxEvdevInputProvider provider;
+  std::vector<DeviceInfo> devices(1);
+  devices[0].fd = fds[0];
+  const auto before = std::chrono::steady_clock::now();
+  const auto event = provider.wait_event(devices, 1, false);
+  const auto elapsed = std::chrono::steady_clock::now() - before;
+  close(fds[0]);
+  close(fds[1]);
+  require(!event && elapsed >= std::chrono::microseconds(500),
+          "positive evdev wait rounded down to an immediate select");
+}
+
 void candidate_cleanup_keeps_pending_input() {
   Fixture f;
   std::ofstream(f.node, std::ios::binary | std::ios::trunc).close();
@@ -178,6 +206,8 @@ void provider_destruction_closes_unreleased_views() {
 }
 
 int main() {
+  positive_timeout_waits_for_idle_fd();
+  zero_timeout_reads_ready_fd();
   stable_scans_share_the_live_client();
   replaced_nodes_get_a_new_client();
   candidate_cleanup_keeps_pending_input();

@@ -2245,7 +2245,7 @@ void run_service(InputProvider& provider, AppConfig cfg, bool verbose,
     const auto before_wait = std::chrono::steady_clock::now();
     int wait_ms = 1;
     if (next_publish > before_wait) {
-      wait_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(next_publish - before_wait).count());
+      wait_ms = static_cast<int>(std::chrono::ceil<std::chrono::milliseconds>(next_publish - before_wait).count());
       wait_ms = std::clamp(wait_ms, 1, event_wait_cap_ms);
     }
 

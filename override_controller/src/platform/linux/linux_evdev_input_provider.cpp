@@ -479,10 +479,14 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
     timeval* tv_ptr = nullptr;
     if (timeout_ms >= 0) {
       const auto now = std::chrono::steady_clock::now();
-      if (now >= deadline) return std::nullopt;
-      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-      tv.tv_sec = static_cast<long>(remaining.count() / 1000);
-      tv.tv_usec = static_cast<long>((remaining.count() % 1000) * 1000);
+      if (timeout_ms > 0 && now >= deadline) return std::nullopt;
+      // select() accepts microseconds. Keep that precision rather than
+      // turning a positive 1 ms wait into an immediate poll. Explicit zero
+      // waits still inspect the fd set once for already-ready events.
+      const auto remaining = timeout_ms == 0 ? std::chrono::microseconds::zero()
+          : std::chrono::ceil<std::chrono::microseconds>(deadline - now);
+      tv.tv_sec = static_cast<long>(remaining.count() / 1000000);
+      tv.tv_usec = static_cast<long>(remaining.count() % 1000000);
       tv_ptr = &tv;
     }
 
@@ -508,12 +512,10 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
     // press/release/axis history that would otherwise appear in SteamVR as a seconds-long queue.
     std::map<std::tuple<size_t, uint16_t, uint16_t>, size_t> compact_index;
     std::vector<InputEvent> compacted;
-    bool saw_ready_device = false;
 
     for (size_t i = 0; i < devices.size(); ++i) {
       auto& d = devices[i];
       if (d.fd < 0 || !FD_ISSET(d.fd, &rfds)) continue;
-      saw_ready_device = true;
 
       input_event ev{};
       ssize_t n = 0;
@@ -574,7 +576,7 @@ std::optional<InputEvent> LinuxEvdevInputProvider::wait_event(std::vector<Device
     // A device can wake select() with only EV_SYN/EV_MSC/noise or with data
     // that was drained by another read. Do not report that as a user-facing
     // timeout; keep waiting until the original deadline expires.
-    if (!saw_ready_device && timeout_ms == 0) return std::nullopt;
+    if (timeout_ms == 0) return std::nullopt;
   }
 }
 

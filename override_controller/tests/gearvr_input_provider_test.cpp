@@ -22,9 +22,15 @@ class FakeTransport : public BleTransport {
  public:
   std::vector<BleDeviceSnapshot> snapshots;
   std::deque<BlePacket> packets;
+  bool blocking_waits = false;
+  std::vector<int> wait_timeouts;
   std::string platform_name() const override { return "test"; }
-  void pump(int, bool, bool* stdin_ready) override {
+  void pump(int timeout_ms, bool, bool* stdin_ready) override {
     if (stdin_ready) *stdin_ready = false;
+    if (blocking_waits) {
+      wait_timeouts.push_back(timeout_ms);
+      if (timeout_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
+    }
   }
   std::vector<BleDeviceSnapshot> devices() const override { return snapshots; }
   bool pop_packet(BlePacket& packet) override {
@@ -72,6 +78,30 @@ std::unique_ptr<BleTransport> make_platform_ble_transport(const GearVrOptions&) 
 uint64_t now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void zero_timeout_reads_ready_transport() {
+  GearVrInputProvider provider({{"initial_scan_ms", "0"}});
+  auto devices = provider.scan_devices(true);
+  provider.flush_events(devices);
+  transport->enqueue("left", 10000, now_ns());
+  provider.wait_event(devices, 0, false);
+  require(provider.imu_state(devices[0]).sequence == 1 &&
+          provider.has_pending_imu(devices[0]),
+          "zero-timeout poll skipped ready transport packets");
+}
+
+void positive_timeout_does_not_spin() {
+  GearVrInputProvider provider({{"initial_scan_ms", "0"}});
+  auto devices = provider.scan_devices(true);
+  provider.flush_events(devices);
+  transport->blocking_waits = true;
+  for (unsigned i = 0; i < 8; ++i) provider.wait_event(devices, 1, false);
+  require(!transport->wait_timeouts.empty() && transport->wait_timeouts.size() <= 16,
+          "positive wait rounded to zero and busy-polled the transport");
+  for (const int timeout : transport->wait_timeouts) {
+    require(timeout > 0, "positive wait used a non-blocking transport poll");
+  }
 }
 
 void firmware_wrap_keeps_provider_epoch_and_raw_history() {
@@ -253,6 +283,8 @@ void config_calibration_discards_old_batches_and_survives_reconnect() {
 }
 
 int main() {
+  positive_timeout_does_not_spin();
+  zero_timeout_reads_ready_transport();
   routing_reconnect_and_flush();
   delayed_delivery_preserves_ahrs();
   stale_output_preserves_filter_and_bias();

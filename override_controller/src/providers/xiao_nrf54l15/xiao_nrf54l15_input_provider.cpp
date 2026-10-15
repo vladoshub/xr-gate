@@ -655,10 +655,12 @@ std::optional<InputEvent> XiaoNrf54l15InputProvider::wait_event(
                                   std::chrono::milliseconds(timeout_ms);
   while (true) {
     int remaining = timeout_ms;
-    if (timeout_ms >= 0) {
+    if (timeout_ms > 0) {
       const auto now = std::chrono::steady_clock::now();
       if (now >= deadline) return std::nullopt;
-      remaining = static_cast<int>(std::chrono::duration_cast<
+      // Preserve positive sub-millisecond waits; timeout zero must still pump
+      // the transport once to collect already-ready serial input.
+      remaining = static_cast<int>(std::chrono::ceil<
           std::chrono::milliseconds>(deadline - now).count());
     }
 

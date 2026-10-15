@@ -327,7 +327,7 @@ class LinuxSerialTransport final : public SerialTransport {
     if (timeout_ms < 0) effective_timeout = 1000;
     const auto now = std::chrono::steady_clock::now();
     if (next_scan_ > now) {
-      const auto until_scan = std::chrono::duration_cast<std::chrono::milliseconds>(
+      const auto until_scan = std::chrono::ceil<std::chrono::milliseconds>(
           next_scan_ - now).count();
       const int scan_timeout = static_cast<int>(std::max<int64_t>(0, until_scan));
       if (effective_timeout < 0 || scan_timeout < effective_timeout) {
