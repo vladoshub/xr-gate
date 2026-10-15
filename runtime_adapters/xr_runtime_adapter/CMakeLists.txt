@@ -59,6 +59,22 @@ install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_r
 option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build runtime tracking regression tests" OFF)
 if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   enable_testing()
+  add_executable(controller_imu_angular_velocity_test
+    tests/controller_imu_angular_velocity_test.cpp
+    src/override_controller.cpp
+  )
+  target_compile_features(controller_imu_angular_velocity_test PRIVATE cxx_std_17)
+  target_include_directories(controller_imu_angular_velocity_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${XR_SHARED_INCLUDE_DIR}"
+  )
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(controller_imu_angular_velocity_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(controller_imu_angular_velocity_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  add_test(NAME controller_imu_angular_velocity_test COMMAND controller_imu_angular_velocity_test)
+
   add_executable(controller_imu_delivery_test
     tests/controller_imu_delivery_test.cpp
     src/override_controller.cpp
@@ -129,7 +145,10 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   add_test(NAME controller_imu_prediction_test COMMAND controller_imu_prediction_test)
 
   add_library(mercury_velocity_mock SHARED tests/mercury_velocity_mock.cpp)
-  add_executable(hand_optical_velocity_test tests/hand_optical_velocity_test.cpp)
+  add_executable(hand_optical_velocity_test
+    tests/hand_optical_velocity_test.cpp
+    src/override_controller.cpp
+  )
   foreach(velocity_target mercury_velocity_mock hand_optical_velocity_test)
     target_compile_features(${velocity_target} PRIVATE cxx_std_17)
     target_include_directories(${velocity_target} PRIVATE

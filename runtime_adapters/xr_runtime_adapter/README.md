@@ -200,6 +200,11 @@ controller_input -> runtime_controller_state
 
 The resulting runtime controller state can be consumed by the OpenVR driver.
 
+Both runtime controller velocities use tracking/world axes. IMU gyro is rotated
+from calibrated controller-body axes with the final presentation orientation
+before publication. See [Alyx controller motion diagnostics](docs/alyx_controller_motion.md)
+for the optical velocity path, long-session tests and failure capture steps.
+
 `hand_orientation_offset` is optical controller-alignment data. Its
 `only_optic` field defaults to `true`, so the offset is applied only while the
 effective orientation source for that side is hand tracking rather than an

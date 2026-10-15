@@ -2700,6 +2700,8 @@ void write_controller_position_diagnostics(
       << prefix << "_pose_sources=" << pose.source_mask
       << prefix << "_position=(" << pose.position[0] << "," << pose.position[1] << "," << pose.position[2] << ")"
       << prefix << "_velocity=(" << pose.linear_velocity[0] << "," << pose.linear_velocity[1] << "," << pose.linear_velocity[2] << ")"
+      << prefix << "_angular_velocity=(" << pose.angular_velocity[0] << ","
+      << pose.angular_velocity[1] << "," << pose.angular_velocity[2] << ")"
       << prefix << "_orientation=(" << pose.orientation_xyzw[0] << "," << pose.orientation_xyzw[1] << ","
       << pose.orientation_xyzw[2] << "," << pose.orientation_xyzw[3] << ")"
       << prefix << "_buttons=" << pose.buttons
@@ -2719,11 +2721,17 @@ void write_controller_position_diagnostics(
         << raw_optical->controller_py << "," << raw_optical->controller_pz << ")"
         << prefix << "_raw_optical_q=(" << raw_optical->controller_qx << ","
         << raw_optical->controller_qy << "," << raw_optical->controller_qz << ","
-        << raw_optical->controller_qw << ")";
+        << raw_optical->controller_qw << ")"
+        << prefix << "_raw_optical_flags=" << raw_optical->flags
+        << prefix << "_raw_optical_v=(" << raw_optical->vx << ","
+        << raw_optical->vy << "," << raw_optical->vz << ")";
   }
   if (accepted_optical) {
     out << prefix << "_accepted_optical_p=(" << accepted_optical->controller_px << ","
-        << accepted_optical->controller_py << "," << accepted_optical->controller_pz << ")";
+        << accepted_optical->controller_py << "," << accepted_optical->controller_pz << ")"
+        << prefix << "_accepted_optical_flags=" << accepted_optical->flags
+        << prefix << "_accepted_optical_v=(" << accepted_optical->vx << ","
+        << accepted_optical->vy << "," << accepted_optical->vz << ")";
   }
   if (controller_input) {
     const auto& imu = controller_input->imu;

@@ -122,6 +122,8 @@ struct RuntimeControllerSideStateV1 {
   float position[3] = {0.0f, 0.0f, 0.0f};
   float orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
+  // Both velocities use the same tracking/world axes as position/orientation,
+  // not controller-local axes. Angular velocity is radians per second.
   float linear_velocity[3] = {0.0f, 0.0f, 0.0f};
   float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
 

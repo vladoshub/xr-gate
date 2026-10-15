@@ -1203,9 +1203,11 @@ void apply_imu_orientation_override(
   out.last_pose_ns = imu.timestamp_ns;
 
   if (imu.angular_velocity_valid) {
-    out.angular_velocity[0] = imu.angular_velocity_rad_s[0];
-    out.angular_velocity[1] = imu.angular_velocity_rad_s[1];
-    out.angular_velocity[2] = imu.angular_velocity_rad_s[2];
+    // IMU gyro is expressed in the calibrated controller body axes. Runtime
+    // pose velocities (and OpenVR DriverPose_t) are in tracking/world axes.
+    // Rotate with the final presentation orientation so basis conversion,
+    // local grip offsets and retained optical yaw all agree with the pose.
+    q_rotate(imu.orientation, imu.angular_velocity_rad_s, out.angular_velocity);
   }
 }
 

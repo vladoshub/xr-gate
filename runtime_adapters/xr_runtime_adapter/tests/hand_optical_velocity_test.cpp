@@ -1,5 +1,6 @@
 #include <mercury_hand_tracking/mercury_runtime_loader.hpp>
 #include "hand_pose_stability_filter.hpp"
+#include "override_controller.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -161,6 +162,70 @@ void reacquire_and_sides(const char* library) {
   near(both.left.vx,1,"left history mixed with right");
   near(both.right.vx,-2,"right history mixed with left");
 }
+
+void long_session_preserves_flick_velocity_through_controller_synthesis(const char* library) {
+  namespace controller = xr_runtime_adapter::override_controller;
+  using namespace xr_runtime;
+  Fixture f(library);
+  hand::HandPoseStabilityFilter gate(config());
+  controller::RuntimeControllerSynthesisConfig cfg;
+  controller::RuntimeControllerSynthesisState state;
+  ControllerInputV3 input;
+  cfg.left_orientation_source=cfg.right_orientation_source=
+      controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
+  cfg.left_imu_motion.position_prediction_enabled=true;
+  cfg.right_imu_motion=cfg.left_imu_motion;
+  for(auto* side : {&input.left,&input.right}) {
+    side->status=CONTROLLER_INPUT_ACTIVE;
+    side->flags=CONTROLLER_DEVICE_IMU_ACTIVE | CONTROLLER_DEVICE_BUTTONS_VALID;
+    side->buttons=CONTROLLER_BUTTON_TRIGGER;
+    side->trigger=1;
+    side->imu.status=CONTROLLER_IMU_ACTIVE;
+    side->imu.data_flags=CONTROLLER_IMU_ORIENTATION_VALID;
+    side->imu.orientation_xyzw[3]=1;
+  }
+  float previous_x=0;
+  double peak_speed=0;
+  for(uint64_t ms=0;ms<=360'000;ms+=33) {
+    // Repeated 0.63 m/s motions stay in the camera field throughout six
+    // minutes. Exercise the real loader derivative, accepted-pose window and
+    // controller synthesis rather than injecting precomputed output velocity.
+    const float x=.1f*std::sin(2*3.14159265358979323846*double(ms%1000)/1000);
+    auto raw=f.tick(1000+ms,x);
+    raw.right=raw.left;
+    raw.right.handedness=2;
+    raw.right.controller_px=-x;
+    raw.right.vx=-raw.left.vx;
+    raw.flags |= HAND_FLAG_RIGHT_VALID;
+    raw.hand_count=2;
+    const auto accepted=gate.filter(raw);
+    input.sequence=raw.sequence;
+    input.timestamp_ns=raw.timestamp_ns;
+    for(auto* side : {&input.left,&input.right}) {
+      side->imu.sequence=raw.sequence;
+      side->imu.orientation_timestamp_ns=side->imu.latest_sample_timestamp_ns=raw.source_timestamp_ns;
+    }
+    // Runtime resets its IMU synthesis state when override_controller restarts.
+    // That must not be necessary to recover an accepted optical derivative.
+    if(ms==180'015) state={};
+    const auto output=controller::compose_runtime_controller_state(raw.sequence,raw.timestamp_ns,
+        cfg,accepted,raw,input,std::nullopt,9.81f,&state);
+    if(ms>0) {
+      near(raw.left.vx,(x-previous_x)/.033f,"long backend session lost camera derivative");
+      require(valid_v(accepted.left) && valid_v(accepted.right),
+              "long session lost accepted optical velocity");
+      near(output.left.linear_velocity[0],accepted.left.vx,
+           "controller synthesis erased measured left flick velocity");
+      near(output.right.linear_velocity[0],accepted.right.vx,
+           "controller synthesis erased measured right flick velocity");
+      near(output.left.trigger,1,"long session changed left trigger");
+      near(output.right.trigger,1,"long session changed right trigger");
+      peak_speed=std::max(peak_speed,std::abs(double(output.left.linear_velocity[0])));
+    }
+    previous_x=x;
+  }
+  require(peak_speed>.5,"optical flick was over-smoothed before controller output");
+}
 int main(int argc,char** argv) {
   try {
     require(argc==2,"mock library path required");
@@ -169,6 +234,7 @@ int main(int argc,char** argv) {
     accepted_pose_velocity(argv[1],true);
     window_noise_and_limits(argv[1]);
     reacquire_and_sides(argv[1]);
+    long_session_preserves_flick_velocity_through_controller_synthesis(argv[1]);
     std::cout<<"Optical velocities: timestamps, accepted poses, noise, limits, reacquire and both sides: OK\n";
     return 0;
   } catch(const std::exception& e) {
