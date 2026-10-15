@@ -21,15 +21,19 @@ export VCPKG_BINARY_SOURCES="clear;files,$VCPKG_DEFAULT_BINARY_CACHE,readwrite"
 export XDG_CACHE_HOME="$session/xdg-cache"
 mkdir -p "$CCACHE_DIR" "$CCACHE_TEMPDIR" "$VCPKG_DEFAULT_BINARY_CACHE" "$VCPKG_DOWNLOADS" "$XDG_CACHE_HOME"
 printf '%s\n' 'max_size = 2G' 'remote_storage =' > "$CCACHE_CONFIGPATH"
-# x86-64-v3 is the AVX2/FMA baseline, without host-specific AVX-512 instructions.
-export XR_CPU_TARGET="x86-64-v3"
-export CFLAGS="${CFLAGS:-} -march=x86-64-v3 -mtune=generic -g0"
-export CXXFLAGS="${CXXFLAGS:-} -march=x86-64-v3 -mtune=generic -g0"
-export CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:-} -march=x86-64-v3 -mtune=generic -g0"
+export XR_CPU_PROFILE_FILE="$session/cpu-profile.json"
+support_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+profile_values="$(python3 "$support_dir/../runtime/cpu_target.py" \
+  describe "${XR_BUILD_CPU:-avx2}" --output "$XR_CPU_PROFILE_FILE")"
+IFS=$'\t' read -r XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG <<< "$profile_values"
+export XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG
+export CFLAGS="${CFLAGS:-} -march=$XR_CPU_TARGET -mtune=$XR_CPU_TUNE -g0"
+export CXXFLAGS="${CXXFLAGS:-} -march=$XR_CPU_TARGET -mtune=$XR_CPU_TUNE -g0"
+export CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:-} -march=$XR_CPU_TARGET -mtune=$XR_CPU_TUNE -g0"
 export CLEAN_BUILD=1
 export CMAKE_BUILD_TYPE=Release BUILD_TYPE=Release
 export VCPKG_MAX_CONCURRENCY="${BUILD_JOBS:-2}"
-export VCPKG_TRIPLET=x64-linux-avx2-release
+export VCPKG_TRIPLET="x64-linux-$XR_BUILD_CPU-release"
 if command -v ccache >/dev/null 2>&1; then
   export CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache
 fi
@@ -42,5 +46,5 @@ elif [[ -n "${GITHUB_RUN_ID:-}" && -n "${GITHUB_RUN_ATTEMPT:-}" ]]; then
 else
   export XR_BUILD_DEPENDENCY_TOKEN="local:${session##*/}"
 fi
-echo "[build-session] fresh session: $session (AVX2; no persistent cache)" >&2
+echo "[build-session] fresh session: $session ($XR_BUILD_CPU / $XR_CPU_TARGET; no persistent cache)" >&2
 "$@"

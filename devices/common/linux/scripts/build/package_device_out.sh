@@ -758,6 +758,8 @@ fi
 python3 "$SCRIPT_DIR/finalize_native_package.py" "${native_finalize_args[@]}"
 if [[ -n "${XR_CPU_TARGET:-}" ]]; then
   printf '%s\n' "$XR_CPU_TARGET" > "$XR_OUT_ROOT/BUILD_CPU_TARGET"
+  [[ -f "${XR_CPU_PROFILE_FILE:-}" ]] || fatal "CPU profile metadata is missing"
+  cp "$XR_CPU_PROFILE_FILE" "$XR_OUT_ROOT/BUILD_CPU_PROFILE.json"
 fi
 if [[ -n "${XR_OPENCV_PREFIX:-}" && -f "$XR_OPENCV_PREFIX/XR_BUILD_ID" ]]; then
   printf '%s\n' 'static-4.10.0' > "$XR_OUT_ROOT/BUILD_OPENCV_LINKAGE"

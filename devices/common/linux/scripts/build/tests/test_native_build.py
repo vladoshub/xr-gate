@@ -19,7 +19,7 @@ class NativeBuildTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.env = dict(os.environ, ROOT_PROJECT=str(self.root))
+        self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU="avx2")
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
                      "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
             self.env.pop(name, None)
@@ -102,11 +102,116 @@ for replacement in ['ci:123:2',expected.replace('x86-64-v3','native'),expected.r
         once = cmake.read_bytes(), manifest.read_bytes(), port.read_bytes()
         module.prepare(upstream, True)
         self.assertEqual(once, (cmake.read_bytes(), manifest.read_bytes(), port.read_bytes()))
-        self.assertIn('"-march=native" "-march=x86-64-v3"', port.read_text())
+        self.assertIn('"-march=native" ""', port.read_text())
         self.assertIn('add_library(basalt SHARED)', cmake.read_text())
         self.assertIn('backends/basalt_vio', cmake.read_text())
         self.assertNotIn('add_executable(basalt_calibrate', cmake.read_text())
         self.assertEqual(json.loads(manifest.read_text())["dependencies"], ["eigen3", "tbb"])
+
+    def test_all_cpu_profiles_control_flags_opencv_triplets_and_metadata(self):
+        code = """
+import json, os
+from pathlib import Path
+names=['XR_BUILD_CPU','XR_CPU_TARGET','XR_CPU_TUNE','XR_OPENCV_CPU_BASELINE','VCPKG_TRIPLET','CFLAGS','CXXFLAGS','XR_CPU_CACHE_TAG']
+print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(Path(os.environ['XR_CPU_PROFILE_FILE']).read_text())}))
+"""
+        for mode, march, tune, opencv in [("AVX2", "x86-64-v3", "generic", "AVX2"),
+                                         ("avx512", "x86-64-v4", "generic", "AVX512_SKX"),
+                                         ("native", "native", "native", "NATIVE")]:
+            with self.subTest(profile=mode):
+                r = self.session(code, dict(self.env, XR_BUILD_CPU=mode))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                data = json.loads(r.stdout)
+                env = data["env"]
+                self.assertEqual(env["XR_CPU_TARGET"], march)
+                self.assertEqual(env["XR_CPU_TUNE"], tune)
+                self.assertEqual(env["XR_OPENCV_CPU_BASELINE"], opencv)
+                self.assertEqual(env["VCPKG_TRIPLET"], f"x64-linux-{mode.lower()}-release")
+                for variable in ("CFLAGS", "CXXFLAGS"):
+                    self.assertIn(f"-march={march} -mtune={tune}", env[variable])
+                self.assertEqual(data["metadata"]["march"], march)
+                self.assertEqual(data["metadata"]["cache_tag"], env["XR_CPU_CACHE_TAG"])
+                triplet = ROOT / "backends/basalt_vio/cmake/triplets" / (env["VCPKG_TRIPLET"] + ".cmake")
+                self.assertIn(f"-march={march} -mtune={tune}", triplet.read_text())
+
+    def test_invalid_profile_stops_before_build_command(self):
+        result = self.session("raise AssertionError('build must not start')", dict(self.env, XR_BUILD_CPU="invalid"))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("XR_BUILD_CPU must be", result.stderr)
+        self.assertEqual(list((self.root / "build/.sessions").iterdir()), [])
+
+    def test_local_output_directories_are_separate(self):
+        for profile, suffix in [("avx2", "out/xr-gate"), ("AvX512", "out/avx512/xr-gate"),
+                                ("native", "out/native/xr-gate")]:
+            env = dict(self.env, XR_ROOT_PROJECT=str(self.root), XR_OUT_PACKAGE_NAME="xr-gate", XR_BUILD_CPU=profile)
+            for variable in ("XR_OUT_ROOT", "XR_OUT_BIN_ROOT"):
+                env.pop(variable, None)
+            r = subprocess.run(["bash", "-c", 'source "$1"; printf "%s" "$XR_OUT_ROOT"',
+                                "test", str(BUILD / "device_out_env.sh")],
+                               env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, str(self.root / suffix))
+
+    def test_output_guard_rejects_mixing_cpu_profiles(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (self.root / "BUILD_CPU_TARGET").write_text("x86-64-v3\n")
+        fresh = self.root / "fresh.json"
+        fresh.write_text(json.dumps(module.describe("avx2")))
+        module.check_output(self.root, fresh)  # Compatible with the previous AVX2 patch.
+        fresh.write_text(json.dumps(module.describe("avx512")))
+        with self.assertRaisesRegex(ValueError, "another CPU profile"):
+            module.check_output(self.root, fresh)
+
+    def test_runtime_rejects_unsupported_avx512_and_native_cpu(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        def cpuinfo(flags, model="test CPU"):
+            return "model name : " + model + "\nflags : " + " ".join(sorted(flags)) + "\n"
+        v3 = cpuinfo(module.V3_FLAGS)
+        v4 = cpuinfo(module.V4_FLAGS)
+        marker = self.root / "BUILD_CPU_TARGET"
+        marker.write_text("x86-64-v3\n")
+        module.check_package(self.root, v3)
+        marker.write_text("x86-64-v4\n")
+        with self.assertRaisesRegex(ValueError, "missing CPU features"):
+            module.check_package(self.root, v3)
+        module.check_package(self.root, v4)
+        native = module.describe("native", v4)
+        self.assertNotEqual(native["cache_tag"], module.describe("native", v3)["cache_tag"])
+        self.assertNotEqual(native["cache_tag"], module.describe("native", cpuinfo(module.V4_FLAGS, "another CPU"))["cache_tag"])
+        marker.write_text("native\n")
+        with self.assertRaisesRegex(ValueError, "missing its build CPU"):
+            module.check_package(self.root, v4)
+        (self.root / "BUILD_CPU_PROFILE.json").write_text(json.dumps(native))
+        module.check_package(self.root, v4)
+        with self.assertRaisesRegex(ValueError, "missing CPU features"):
+            module.check_package(self.root, v3)
+
+    def test_old_opengv_avx2_override_is_upgraded(self):
+        spec = importlib.util.spec_from_file_location("prepare_runtime_build",
+                ROOT / "backends/basalt_vio/scripts/prepare_runtime_build.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        upstream = self.root / "basalt"
+        upstream.mkdir()
+        (upstream / "CMakeLists.txt").write_text('add_library(basalt SHARED)\n# XR_GATE_RUNTIME_ONLY\n'
+            '# ---- XR Tracking external backends ----\n')
+        (upstream / "vcpkg.json").write_text('{"dependencies": ["eigen3"]}')
+        port = upstream / "vcpkg/ports/opengv/portfile.cmake"
+        port.parent.mkdir(parents=True)
+        port.write_text('''# XR_GATE_AVX2_OPENGV
+if(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+    vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt" "-march=native" "-march=x86-64-v3")
+endif()
+
+vcpkg_cmake_configure(SOURCE_PATH "${SOURCE_PATH}")
+''')
+        module.prepare(upstream, True)
+        self.assertNotIn("-march=x86-64-v3", port.read_text())
+        self.assertEqual(port.read_text().count("# XR_GATE_CPU_PROFILE_OPENGV"), 1)
 
     @unittest.skipUnless(shutil.which("readelf") and shutil.which("strip"), "binutils needed")
     def test_package_strip_does_not_follow_external_symlinks(self):

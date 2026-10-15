@@ -119,6 +119,14 @@ export XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
 export XR_DEVICE_TARGET="${XR_DEVICE_TARGET:-$XR_TARGET_DEVICE}"
 mkdir -p "$XR_OUT_BIN_ROOT"
 
+python3 "$SCRIPT_DIR/../runtime/cpu_target.py" check-output "$XR_OUT_ROOT" "$XR_CPU_PROFILE_FILE"
+
+# Even jobs without OpenCV consumers must match the SDK builder in native mode.
+# Otherwise the merged package could contain incompatible native CPU targets.
+if [[ "$XR_BUILD_CPU" == native && -n "${XR_OPENCV_PREFIX:-}" ]]; then
+  bash "$SCRIPT_DIR/build_opencv.sh"
+fi
+
 if [[ "${XR_USE_BUNDLED_OPENCV:-1}" == "1" ]]; then
   for opencv_step in capture_service_cpp basalt_vio mercury_hand_tracking xr_spatial monado_driver; do
     if should_run_step "$opencv_step"; then

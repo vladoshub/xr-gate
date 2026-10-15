@@ -6,6 +6,12 @@ name: XR Gate split build
   pull_request:
   workflow_dispatch:
     inputs:
+      cpu_profile:
+        description: "Native CPU target (native requires consistent builder CPUs)"
+        type: choice
+        options: [avx2, avx512, native]
+        required: false
+        default: avx2
       openvr_frequencies:
         description: "OpenVR driver frequencies to build"
         required: false
@@ -56,6 +62,7 @@ env:
   DEBIAN_FRONTEND: noninteractive
   BUILD_JOBS: "2"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  XR_BUILD_CPU: ${{ github.event_name == 'workflow_dispatch' && inputs.cpu_profile || 'avx2' }}
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
   XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer && '1' || '0' }}
@@ -149,7 +156,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends git ca-certificates build-essential cmake ninja-build python3 ccache nasm
       - uses: actions/checkout@v6
-      - name: Build static AVX2 OpenCV once for this run
+      - name: Build static OpenCV once for this CPU profile and run
         env:
           XR_OPENCV_PREFIX: ${{ github.workspace }}/opencv-sdk
         run: bash devices/common/linux/scripts/build/build_opencv.sh
@@ -157,7 +164,7 @@ jobs:
         run: tar -czf opencv-sdk.tar.gz opencv-sdk
       - uses: actions/upload-artifact@v4
         with:
-          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}-${{ env.XR_BUILD_CPU }}
           path: opencv-sdk.tar.gz
           retention-days: 1
           compression-level: 0
@@ -265,7 +272,7 @@ jobs:
       - name: Download OpenCV SDK from this run and attempt
         uses: actions/download-artifact@v4
         with:
-          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}-${{ env.XR_BUILD_CPU }}
           path: .build-deps
 
       - name: Unpack current-run OpenCV SDK
@@ -296,6 +303,7 @@ jobs:
 
       - name: Build partial package
         env:
+          XR_OUT_ROOT: ${{ github.workspace }}/out/xr-gate
           XR_BUILD_ONLY: ${{ matrix.component.build_only }}
           XR_PACKAGE_ALLOW_PARTIAL: "1"
           CLONE_OPENVR: "1"
@@ -439,6 +447,7 @@ jobs:
     name: build optional xrizer / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
     container: ubuntu:${{ matrix.ubuntu }}
+    needs: build-opencv
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer == true }}
     timeout-minutes: 180
 
@@ -478,8 +487,18 @@ jobs:
             python3 python3-full python3-venv
           git lfs install --local
 
+      - name: Download current CPU-profile OpenCV SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}-${{ env.XR_BUILD_CPU }}
+          path: .build-deps
+
+      - name: Unpack current-run SDK for native CPU validation
+        run: tar -xzf .build-deps/opencv-sdk.tar.gz -C .build-deps
+
       - name: Build xrizer with GPL compliance material
         env:
+          XR_OUT_ROOT: ${{ github.workspace }}/out/xr-gate
           XR_BUILD_ONLY: "xrizer"
           XR_BUILD_XRIZER: "1"
           XR_PACKAGE_ALLOW_PARTIAL: "1"
@@ -487,6 +506,7 @@ jobs:
           XRIZER_VENDOR_CARGO_SOURCES: "1"
           XRIZER_INSTALL_RUSTUP: "1"
           CLONE_XRIZER: "1"
+          XR_OPENCV_PREFIX: ${{ github.workspace }}/.build-deps/opencv-sdk
         run: |
           set -euo pipefail
           ./devices/common/linux/scripts/build/install_xr_gate_out.sh
@@ -555,6 +575,7 @@ jobs:
 
       - name: Download Mercury hand-tracking models
         env:
+          XR_OUT_ROOT: ${{ github.workspace }}/out/xr-gate
           XR_BUILD_ONLY: "hand_tracking_models"
           XR_PACKAGE_ALLOW_PARTIAL: "1"
           XR_DOWNLOAD_HAND_TRACKING_MODELS: "1"
@@ -656,7 +677,14 @@ jobs:
           test -f merged/xr-gate/LICENSE
           test -f merged/xr-gate/LICENSES/MIT.txt
           test -f merged/xr-gate/THIRD_PARTY_NOTICES.md
-          test "$(cat merged/xr-gate/BUILD_CPU_TARGET)" = x86-64-v3
+          case "$XR_BUILD_CPU" in
+            avx2) expected_cpu=x86-64-v3 ;;
+            avx512) expected_cpu=x86-64-v4 ;;
+            native) expected_cpu=native ;;
+            *) echo "Unknown CPU profile: $XR_BUILD_CPU" >&2; exit 2 ;;
+          esac
+          test "$(cat merged/xr-gate/BUILD_CPU_TARGET)" = "$expected_cpu"
+          test -f merged/xr-gate/BUILD_CPU_PROFILE.json
           test "$(cat merged/xr-gate/BUILD_OPENCV_LINKAGE)" = static-4.10.0
           test -f merged/xr-gate/bin/opencv/licenses/OpenCV-LICENSE.txt
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
@@ -873,6 +901,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "XR Gate $TAG" \
-              --notes "XR Gate Linux x64: separate Ubuntu 24.04 and 26.04 packages. Download the archive matching your Ubuntu version; Mercury models are shared." \
+              --notes "XR Gate Linux x64, CPU profile: $XR_BUILD_CPU. Separate Ubuntu 24.04 and 26.04 packages; Mercury models are shared." \
               "${args[@]}"
           fi

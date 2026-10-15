@@ -20,7 +20,14 @@ export XR_COMMON_SOURCE_HOME="${XR_COMMON_SOURCE_HOME:-$XR_ROOT_PROJECT/devices/
 
 # Global output root for deployable artifacts. Override once and all package/build
 # wrappers use the same destination.
-export XR_OUT_ROOT="${XR_OUT_ROOT:-$XR_ROOT_PROJECT/out/$XR_OUT_PACKAGE_NAME}"
+_xr_cpu_output_prefix=""
+_xr_cpu_output_profile="${XR_BUILD_CPU:-avx2}"
+case "${_xr_cpu_output_profile,,}" in
+  avx512) _xr_cpu_output_prefix="avx512/" ;;
+  native) _xr_cpu_output_prefix="native/" ;;
+esac
+export XR_OUT_ROOT="${XR_OUT_ROOT:-$XR_ROOT_PROJECT/out/$_xr_cpu_output_prefix$XR_OUT_PACKAGE_NAME}"
+unset _xr_cpu_output_prefix _xr_cpu_output_profile
 export XR_OUT_BIN_ROOT="${XR_OUT_BIN_ROOT:-$XR_OUT_ROOT/bin}"
 export XR_OUT_DEVICE_HOME="${XR_OUT_DEVICE_HOME:-$XR_OUT_ROOT/devices/$XR_TARGET_DEVICE}"
 export XR_OUT_COMMON_HOME="${XR_OUT_COMMON_HOME:-$XR_OUT_ROOT/devices/common}"

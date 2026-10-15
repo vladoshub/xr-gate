@@ -362,6 +362,7 @@ fi
 # upstream preset but redirects binaryDir to xr_tracking/build/...
 python3 - "$BASALT_DIR/CMakeUserPresets.json" "$XR_CMAKE_PRESET" "$CMAKE_PRESET" "$BASALT_BUILD_DIR" "$ROOT_PROJECT" "${XR_OPENCV_PREFIX:-}" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -381,9 +382,9 @@ payload = {
             "binaryDir": binary_dir,
             "cacheVariables": {
                 "XR_TRACKING_ROOT": root,
-                "CXX_MARCH": "x86-64-v3",
-                "VCPKG_TARGET_TRIPLET": "x64-linux-avx2-release",
-                "VCPKG_HOST_TRIPLET": "x64-linux-avx2-release",
+                "CXX_MARCH": os.environ["XR_CPU_TARGET"],
+                "VCPKG_TARGET_TRIPLET": os.environ["VCPKG_TRIPLET"],
+                "VCPKG_HOST_TRIPLET": os.environ["VCPKG_TRIPLET"],
                 "VCPKG_OVERLAY_TRIPLETS": str(Path(root) / "backends/basalt_vio/cmake/triplets"),
             },
         }

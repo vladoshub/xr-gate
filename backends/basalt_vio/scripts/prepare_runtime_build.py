@@ -50,14 +50,22 @@ endif()
     # Fix that port too; changing only Basalt's CXX_MARCH is insufficient.
     port = root / "vcpkg/ports/opengv/portfile.cmake"
     port_text = port.read_text()
-    port_marker = "# XR_GATE_AVX2_OPENGV"
+    old_fix = '''# XR_GATE_AVX2_OPENGV
+if(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+    vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt" "-march=native" "-march=x86-64-v3")
+endif()
+
+'''
+    port_text = port_text.replace(old_fix, "")
+    port_marker = "# XR_GATE_CPU_PROFILE_OPENGV"
     if port_marker not in port_text:
         anchor = "vcpkg_cmake_configure("
         if anchor not in port_text:
             raise SystemExit("Unrecognized opengv overlay port")
-        fix = '''# XR_GATE_AVX2_OPENGV
+        fix = '''# XR_GATE_CPU_PROFILE_OPENGV
 if(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
-    vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt" "-march=native" "-march=x86-64-v3")
+    # The selected vcpkg triplet owns -march/-mtune for every CPU profile.
+    vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt" "-march=native" "")
 endif()
 
 '''

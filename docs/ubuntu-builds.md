@@ -1,9 +1,45 @@
-# Linux AVX2 runtime builds
+# Linux CPU-profile runtime builds
 
 The split workflow builds in `ubuntu:24.04` and `ubuntu:26.04` containers. The
 container supplies the compiler and libraries; the Ubuntu 24.04 runner label
-is not the runtime ABI target. Native code targets `x86-64-v3` (AVX2/FMA/BMI),
-never the runner's `-march=native` / AVX-512 capabilities.
+is not the runtime ABI target. Select the CPU profile with `XR_BUILD_CPU`:
+
+| Profile | GCC/Clang target | OpenCV baseline | Intended use |
+| --- | --- | --- | --- |
+| `avx2` (default) | `-march=x86-64-v3 -mtune=generic` | AVX2 | Shared AVX2/FMA/BMI runtime |
+| `avx512` | `-march=x86-64-v4 -mtune=generic` | AVX512_SKX | CPUs with AVX-512F/CD/BW/DQ/VL |
+| `native` | `-march=native -mtune=native` | NATIVE | The build machine's CPU |
+
+The same profile configures Basalt, OpenCV and the vcpkg dependencies. `avx512`
+is the x86-64-v4 baseline, not every vendor-specific AVX-512 extension. `native`
+can use additional extensions on the build host and is not a portable release.
+For native SDK reuse, CPU model/features must match across CI jobs. On heterogeneous
+hosted runners the build may reject a native SDK; use a consistent self-hosted
+runner or a local build. Native runtime checks conservatively require the build
+host's CPU flags, and may reject another kernel/VM even with a similar CPU.
+
+Local examples (from the repository root):
+
+```bash
+XR_BUILD_CPU=avx2 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_BUILD_CPU=avx512 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_BUILD_CPU=native ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+For GitHub Actions, select `cpu_profile` in the dispatch inputs. With local act:
+
+```bash
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --full --allow-pull --input cpu_profile=avx512 --input publish_release=false
+```
+
+Build one profile per invocation. Local output roots are separated automatically:
+`out/xr-gate/` for AVX2, `out/avx512/xr-gate/` for AVX512, and
+`out/native/xr-gate/` for native. An explicit `XR_OUT_ROOT` still works; the
+installer rejects reusing it for a different CPU profile/native CPU identity.
+CI explicitly selects its original `out/xr-gate/` layout in each isolated job.
+Artifact filenames are unchanged; `BUILD_CPU_TARGET` and `BUILD_CPU_PROFILE.json`
+inside each package record the actual profile. The installer checks CPU support.
+The builder must also support the chosen instructions for build-time helper tools.
 
 ## Fresh build sessions
 
@@ -19,8 +55,8 @@ edits the Basalt and Monado source trees.
 GitHub Actions builds OpenCV once **per Ubuntu ABI, workflow run and attempt**.
 The SDK is an intermediate artifact, not an `actions/cache` entry. Downstream
 jobs accept it only if its run/attempt, Ubuntu version, source commit and CPU
-baseline match. A new workflow run or attempt cannot restore it. Use **Re-run all
-jobs**, not only failed jobs, when retrying a workflow: the new attempt must
+profile/native CPU fingerprint match. A new workflow run or attempt cannot
+restore it. Use **Re-run all jobs**, not only failed jobs, when retrying a workflow: the new attempt must
 rebuild its SDK too. The `act` wrapper also gives each invocation a fresh artifact
 directory and dependency identity, because act can reuse synthetic GitHub IDs.
 Do not restore `build/`, `vcpkg_installed/` or compiler caches manually.
@@ -29,8 +65,8 @@ Do not restore `build/`, `vcpkg_installed/` or compiler caches manually.
 
 The build pins OpenCV 4.10.0 to commit
 `71d3237a093b60a27601c20e9ee6c3e52154e8b1` and builds a static, position-independent
-AVX2 SDK. Basalt, capture service, spatial processing and Monado/Mercury consume
-that SDK. Basalt's vcpkg manifest no longer builds another OpenCV, Pangolin or
+SDK for the selected CPU profile. Basalt, capture service, spatial processing
+and Monado/Mercury consume that SDK. Basalt's vcpkg manifest no longer builds another OpenCV, Pangolin or
 GTest for the runtime-only targets. vcpkg builds the remaining dependencies in
 Release only. Basalt retains both float and double estimator support and its
 original optimization / Eigen initialization settings, with DWARF disabled.
@@ -105,7 +141,7 @@ After unpacking, run:
 ./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh
 ```
 
-`BUILD_CPU_TARGET` records the AVX2 baseline and the installer checks CPU features
+`BUILD_CPU_TARGET` and `BUILD_CPU_PROFILE.json` record the selected target; the installer checks CPU features
 before loading native code. `BUILD_OPENCV_LINKAGE` records the bundled native
 OpenCV configuration. The historical `install_runtime_deps_ubuntu24.sh` entry
 point remains compatible. Device access uses the device-specific installer/hook.
