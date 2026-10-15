@@ -19,7 +19,7 @@ VCPKG_TRIPLET="${VCPKG_TRIPLET:-x64-linux}"
 
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}"
 BUILD_NAME="${BUILD_NAME:-relwithdebinfo}"
-BUILD_ROOT="${BUILD_ROOT:-$ROOT_PROJECT/build/backends/imu_3dof}"
+BUILD_ROOT="${BUILD_ROOT:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/imu_3dof}"
 BUILD_DIR="${BUILD_DIR:-$BUILD_ROOT/$BUILD_NAME}"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/backends/imu_3dof}"
 
@@ -44,13 +44,17 @@ find_optional_vcpkg_installed() {
     candidates+=("$BASALT_VCPKG_INSTALLED")
   fi
   candidates+=(
-    "$ROOT_PROJECT/build/backends/basalt_vio/relwithdebinfo/vcpkg_installed/$VCPKG_TRIPLET"
-    "$ROOT_PROJECT/build/backends/basalt_vio/debug/vcpkg_installed/$VCPKG_TRIPLET"
+    "${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/basalt_vio/relwithdebinfo/vcpkg_installed/$VCPKG_TRIPLET"
+    "${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/basalt_vio/debug/vcpkg_installed/$VCPKG_TRIPLET"
     "$BASALT_DIR/build/relwithdebinfo/vcpkg_installed/$VCPKG_TRIPLET"
     "$BASALT_DIR/build/debug/vcpkg_installed/$VCPKG_TRIPLET"
   )
   local c
   for c in "${candidates[@]}"; do
+    # A clean session may only consume dependencies compiled in this invocation.
+    if [[ -n "${XR_BUILD_SESSION_DIR:-}" && "$c" != "$XR_BUILD_ROOT/"* ]]; then
+      continue
+    fi
     if [[ -d "$c" ]] && { [[ -f "$c/share/cli11/CLI11Config.cmake" ]] || [[ -f "$c/share/cli11/cli11-config.cmake" ]] || [[ -f "$c/include/CLI/CLI.hpp" ]]; }; then
       printf '%s\n' "$c"
       return 0

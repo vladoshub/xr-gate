@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${XR_BUILD_SESSION_DIR:-}" || ! -d "$XR_BUILD_SESSION_DIR" ]] || [[ -z "${XR_BUILD_SESSION_OWNER:-}" ]] || ! kill -0 "${XR_BUILD_SESSION_OWNER:-0}" 2>/dev/null; then
+  exec bash "$SCRIPT_DIR/with_build_session.sh" bash "$0" "$@"
+fi
 # shellcheck source=/dev/null
 if [[ -n "${XR_DEVICE_OUT_ENV:-}" ]]; then
   # shellcheck source=/dev/null
@@ -116,6 +119,17 @@ export XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
 export XR_DEVICE_TARGET="${XR_DEVICE_TARGET:-$XR_TARGET_DEVICE}"
 mkdir -p "$XR_OUT_BIN_ROOT"
 
+if [[ "${XR_USE_BUNDLED_OPENCV:-1}" == "1" ]]; then
+  for opencv_step in capture_service_cpp basalt_vio mercury_hand_tracking xr_spatial monado_driver; do
+    if should_run_step "$opencv_step"; then
+      source "$SCRIPT_DIR/opencv_env.sh"
+      mkdir -p "$XR_OUT_BIN_ROOT/opencv/licenses"
+      cp -a "$XR_OPENCV_PREFIX/licenses/." "$XR_OUT_BIN_ROOT/opencv/licenses/"
+      break
+    fi
+  done
+fi
+
 # This script centralizes output paths for install/build steps. Individual
 # install scripts remain usable directly, but this is the recommended device
 # package build entrypoint.
@@ -123,7 +137,7 @@ mkdir -p "$XR_OUT_BIN_ROOT"
 run_step capture_service_cpp env \
   XR_CAPTURE_SERVICE_CPP_DEVICE="${XR_CAPTURE_SERVICE_CPP_DEVICE:-$XR_TARGET_DEVICE}" \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/capture_service_cpp" \
-  BUILD_DIR="$XR_ROOT_PROJECT/build/capture_service_cpp" \
+  BUILD_DIR="$XR_BUILD_ROOT/capture_service_cpp" \
   bash "$XR_ROOT_PROJECT/capture_service_cpp/scripts/linux/build_capture_service_cpp.sh"
 
 if [[ "${XR_BUILD_CAPTURE_SERVICE_PYTHON:-0}" == "1" || " ${XR_BUILD_ONLY:-} " == *" capture_service_python "* ]]; then
@@ -273,7 +287,7 @@ PY
       INSTALL_DRIVERS_ROOT="$XR_OUT_BIN_ROOT/drivers" \
       INSTALL_DRIVER_ROOT="$XR_OUT_BIN_ROOT/drivers/$driver_dir" \
       INSTALL_DRIVER_PACKAGE="$XR_OUT_BIN_ROOT/drivers/$driver_dir/xr_tracking" \
-      BUILD_DIR="${OPENVR_BUILD_ROOT:-$XR_ROOT_PROJECT/build/drivers}/$driver_dir" \
+      BUILD_DIR="${OPENVR_BUILD_ROOT:-$XR_BUILD_ROOT/drivers}/$driver_dir" \
       CLONE_OPENVR="${CLONE_OPENVR:-1}" \
         "$XR_ROOT_PROJECT/drivers/openvr_driver/scripts/build_driver.sh"
     done
@@ -294,25 +308,25 @@ run_step monado_driver env \
   XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-$XR_TARGET_DEVICE}" \
   BIN_DIR="$XR_OUT_BIN_ROOT/drivers/monado_driver" \
   XR_BIN_ROOT="$XR_OUT_BIN_ROOT" \
-  BUILD_DIR="${MONADO_BUILD_DIR:-$XR_ROOT_PROJECT/third_party/monado_driver/build/xr_tracking_relwithdebinfo}" \
+  BUILD_DIR="${MONADO_BUILD_DIR:-$XR_BUILD_ROOT/monado_driver}" \
   CLONE_MONADO="${CLONE_MONADO:-1}" \
   bash "$XR_ROOT_PROJECT/drivers/monado_driver/scripts/linux/install.sh"
 
 run_step steamvr_video_overlay env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/apps/steamvr/video_overlay" \
-  BUILD_DIR="${STEAMVR_VIDEO_OVERLAY_BUILD_DIR:-$XR_ROOT_PROJECT/build/apps/steamvr/video_overlay/relwithdebinfo}" \
+  BUILD_DIR="${STEAMVR_VIDEO_OVERLAY_BUILD_DIR:-$XR_BUILD_ROOT/apps/steamvr/video_overlay}" \
   XR_OPENVR_SDK_ROOT="${XR_OPENVR_SDK_ROOT:-${XR_OPENVR_SDK_DIR:-$XR_ROOT_PROJECT/third_party/openvr}}" \
   bash "$XR_ROOT_PROJECT/apps/steamvr/video_overlay/scripts/linux/install_steamvr_video_overlay.sh"
 
 run_step steamvr_spatial_overlay env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/apps/steamvr/spatial_overlay" \
-  BUILD_DIR="${STEAMVR_SPATIAL_OVERLAY_BUILD_DIR:-$XR_ROOT_PROJECT/build/apps/steamvr/spatial_overlay/relwithdebinfo}" \
+  BUILD_DIR="${STEAMVR_SPATIAL_OVERLAY_BUILD_DIR:-$XR_BUILD_ROOT/apps/steamvr/spatial_overlay}" \
   XR_OPENVR_SDK_DIR="${XR_OPENVR_SDK_DIR:-${XR_OPENVR_SDK_ROOT:-$XR_ROOT_PROJECT/third_party/openvr}}" \
   bash "$XR_ROOT_PROJECT/apps/steamvr/spatial_overlay/scripts/linux/install_xr_steamvr_spatial_overlay.sh"
 
 run_step steamvr_spatial_scene env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/apps/steamvr/spatial_scene" \
-  BUILD_DIR="${STEAMVR_SPATIAL_SCENE_BUILD_DIR:-$XR_ROOT_PROJECT/build/apps/steamvr/spatial_scene/relwithdebinfo}" \
+  BUILD_DIR="${STEAMVR_SPATIAL_SCENE_BUILD_DIR:-$XR_BUILD_ROOT/apps/steamvr/spatial_scene}" \
   XR_OPENVR_SDK_DIR="${XR_OPENVR_SDK_DIR:-${XR_OPENVR_SDK_ROOT:-$XR_ROOT_PROJECT/third_party/openvr}}" \
   bash "$XR_ROOT_PROJECT/apps/steamvr/spatial_scene/scripts/linux/install_xr_steamvr_spatial_scene.sh"
 

@@ -549,6 +549,9 @@ configure_and_build_monado() {
   fi
 
   local cmake_args=(-S "$MONADO_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DXR_TRACKING_ROOT="$ROOT_PROJECT")
+  if [[ -n "${XR_OPENCV_PREFIX:-}" ]]; then
+    cmake_args+=("-DOpenCV_DIR=$XR_OPENCV_PREFIX/lib/cmake/opencv4")
+  fi
 
   if is_truthy "$XR_MONADO_ENABLE_X11"; then
     log "requesting Monado X11/XCB compositor target"

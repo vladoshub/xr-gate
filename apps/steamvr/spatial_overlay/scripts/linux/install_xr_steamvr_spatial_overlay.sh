@@ -24,7 +24,7 @@ echo "[install_xr_steamvr_spatial_overlay] INSTALL_BIN_DIR=$INSTALL_BIN_DIR"
 echo "[install_xr_steamvr_spatial_overlay] XR_OPENVR_SDK_DIR=$XR_OPENVR_SDK_DIR"
 
 cmake -S "$APP_DIR" -B "$BUILD_DIR" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}" \
   -DXR_OPENVR_SDK_DIR="$XR_OPENVR_SDK_DIR" \
   -DXR_SHARED_INCLUDE_DIR="$ROOT_PROJECT/shared/include"
 

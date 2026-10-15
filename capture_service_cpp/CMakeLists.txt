@@ -74,7 +74,7 @@ else()
 endif()
 
 add_executable(capture_service_cpp ${CAPTURE_SERVICE_CPP_SOURCES})
-target_include_directories(capture_service_cpp PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include" ${HIDAPI_INCLUDE_DIR})
+target_include_directories(capture_service_cpp PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include" ${HIDAPI_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(capture_service_cpp PRIVATE ${OpenCV_LIBS} ${HIDAPI_LIBRARY} Threads::Threads)
 
 # Small metadata-only client used by backend launchers before the main capture

@@ -16,7 +16,7 @@ ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 BACKEND_DIR="${BACKEND_DIR:-$ROOT_PROJECT/backends/xr_spatial}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}"
 BUILD_NAME="${BUILD_NAME:-relwithdebinfo}"
-BUILD_ROOT="${BUILD_ROOT:-$ROOT_PROJECT/build/backends/xr_spatial}"
+BUILD_ROOT="${BUILD_ROOT:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/xr_spatial}"
 BUILD_DIR="${BUILD_DIR:-$BUILD_ROOT/$BUILD_NAME}"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/backends/xr_spatial}"
 
@@ -155,6 +155,9 @@ CMAKE_ARGS=(
   -DXR_SHARED_INCLUDE_DIR="$ROOT_PROJECT/shared/include"
 )
 
+if [[ -n "${XR_OPENCV_PREFIX:-}" ]]; then
+  CMAKE_ARGS+=("-DOpenCV_DIR=$XR_OPENCV_PREFIX/lib/cmake/opencv4")
+fi
 cmake "${CMAKE_ARGS[@]}"
 cmake --build "$BUILD_DIR" -j"$BUILD_JOBS" --target xr_spatial_backend
 

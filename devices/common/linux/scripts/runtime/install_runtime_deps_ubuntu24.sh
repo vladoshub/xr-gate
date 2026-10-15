@@ -77,7 +77,15 @@ XR_TARGET_DEVICE="${XR_TARGET_DEVICE:-generic}"
 if [[ -f "$XR_PACKAGE_ROOT/BUILD_UBUNTU_VERSION" ]]; then
   package_ubuntu="$(cat "$XR_PACKAGE_ROOT/BUILD_UBUNTU_VERSION")"
   if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != "$package_ubuntu" ]]; then
-    fatal "package requires Ubuntu $package_ubuntu; detected ${ID:-unknown} ${VERSION_ID:-unknown}. Download the matching runtime archive."
+    # The 24.04 AVX2/static-OpenCV package is also checked on 26.04 in CI.
+    # Legacy builds and other distro/version combinations keep the strict guard.
+    if [[ "$package_ubuntu" == 24.04 && "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 26.04 &&
+          -f "$XR_PACKAGE_ROOT/BUILD_OPENCV_LINKAGE" &&
+          "$(cat "$XR_PACKAGE_ROOT/BUILD_OPENCV_LINKAGE")" == static-4.10.0 ]]; then
+      log "using Ubuntu 24.04 static-OpenCV runtime on Ubuntu 26.04"
+    else
+      fatal "package requires Ubuntu $package_ubuntu; detected ${ID:-unknown} ${VERSION_ID:-unknown}. Download the matching runtime archive."
+    fi
   fi
 fi
 
@@ -132,6 +140,25 @@ if [[ "$INSTALL_APT" == "1" ]]; then
     bluez
   )
   apt_install_required "${runtime_packages[@]}"
+fi
+
+if [[ -f "$XR_PACKAGE_ROOT/BUILD_CPU_TARGET" && "$(cat "$XR_PACKAGE_ROOT/BUILD_CPU_TARGET")" == x86-64-v3 ]]; then
+  python3 - <<'PY'
+import re
+from pathlib import Path
+required = {"avx", "avx2", "fma", "f16c", "bmi1", "bmi2", "lzcnt", "movbe", "xsave",
+            "cx16", "lahf_lm", "popcnt", "sse3", "ssse3", "sse4_1", "sse4_2"}
+cpus = re.findall(r"^flags\s*:\s*(.*)$", Path("/proc/cpuinfo").read_text(), re.M)
+if not cpus:
+    raise SystemExit("Cannot verify AVX2/x86-64-v3 CPU support")
+for flags_text in cpus:
+    flags = set(flags_text.split())
+    if "abm" in flags: flags.add("lzcnt")
+    if "pni" in flags: flags.add("sse3")
+    missing = required - flags
+    if missing:
+        raise SystemExit("This runtime requires AVX2/x86-64-v3; missing CPU features: " + ", ".join(sorted(missing)))
+PY
 fi
 
 if [[ "$INSTALL_DEVICE_ACCESS" == "1" && -n "${XR_RUNTIME_DEVICE_ACCESS_SCRIPT:-}" ]]; then

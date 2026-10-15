@@ -134,10 +134,39 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-opencv:
+    name: OpenCV SDK / Ubuntu ${{ matrix.ubuntu }}
+    runs-on: ubuntu-24.04
+    container: ubuntu:${{ matrix.ubuntu }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["24.04", "26.04"]
+    steps:
+      - name: Bootstrap OpenCV build container
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates build-essential cmake ninja-build python3 ccache nasm
+      - uses: actions/checkout@v6
+      - name: Build static AVX2 OpenCV once for this run
+        env:
+          XR_OPENCV_PREFIX: ${{ github.workspace }}/opencv-sdk
+        run: bash devices/common/linux/scripts/build/build_opencv.sh
+      - name: Archive current-run SDK
+        run: tar -czf opencv-sdk.tar.gz opencv-sdk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}
+          path: opencv-sdk.tar.gz
+          retention-days: 1
+          compression-level: 0
+
   build-part:
     name: build ${{ matrix.component.name }} / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
     container: ubuntu:${{ matrix.ubuntu }}
+    needs: build-opencv
     timeout-minutes: 180
 
     strategy:
@@ -189,6 +218,9 @@ jobs:
             devices/common/linux/scripts/build/device_out_env.sh
             devices/common/linux/scripts/build/xr_gate_out_env.sh
             devices/common/linux/scripts/build/install_device_out.sh
+            devices/common/linux/scripts/build/with_build_session.sh
+            devices/common/linux/scripts/build/build_opencv.sh
+            devices/common/linux/scripts/build/opencv_env.sh
             devices/common/linux/scripts/build/install_xr_gate_out.sh
             devices/common/linux/scripts/build/package_device_out.sh
             devices/common/linux/scripts/build/package_xr_gate_out.sh
@@ -219,12 +251,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git git-lfs ca-certificates curl wget tar unzip rsync jq file \
-            build-essential cmake ninja-build pkg-config \
+            build-essential cmake ninja-build pkg-config binutils ccache nasm \
             python3 python3-full python3-venv python3-pip \
             libopencv-dev libhidapi-dev libcli11-dev nlohmann-json3-dev \
             libeigen3-dev libboost-all-dev libceres-dev libtbb-dev \
             libfmt-dev libspdlog-dev
           git lfs install --local
+
+      - name: Check native build orchestration
+        if: ${{ matrix.component.name == 'basalt' }}
+        run: python3 devices/common/linux/scripts/build/tests/test_native_build.py -v
+
+      - name: Download OpenCV SDK from this run and attempt
+        uses: actions/download-artifact@v4
+        with:
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.ubuntu }}
+          path: .build-deps
+
+      - name: Unpack current-run OpenCV SDK
+        run: tar -xzf .build-deps/opencv-sdk.tar.gz -C .build-deps
 
       - name: Install SteamVR/OpenGL build packages
         if: ${{ matrix.component.name == 'steamvr' }}
@@ -256,6 +301,7 @@ jobs:
           CLONE_OPENVR: "1"
           CLONE_MONADO: "1"
           BASALT_BUILD_JOBS: "2"
+          XR_OPENCV_PREFIX: ${{ github.workspace }}/.build-deps/opencv-sdk
         run: |
           df -h
           ./devices/common/linux/scripts/build/install_xr_gate_out.sh
@@ -610,6 +656,9 @@ jobs:
           test -f merged/xr-gate/LICENSE
           test -f merged/xr-gate/LICENSES/MIT.txt
           test -f merged/xr-gate/THIRD_PARTY_NOTICES.md
+          test "$(cat merged/xr-gate/BUILD_CPU_TARGET)" = x86-64-v3
+          test "$(cat merged/xr-gate/BUILD_OPENCV_LINKAGE)" = static-4.10.0
+          test -f merged/xr-gate/bin/opencv/licenses/OpenCV-LICENSE.txt
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             test -d merged/xr-gate/bin/drivers/xrizer/runtime
             test -f merged/xr-gate/LICENSES/GPL-3.0-or-later.txt
@@ -654,6 +703,24 @@ jobs:
           retention-days: 7
 
 
+  check-24-on-26:
+    name: Ubuntu 24.04 runtime on Ubuntu 26.04
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    needs: merge-package
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: xr-gate-ubuntu-24.04-linux-x64
+      - name: Check cross-version runtime dependencies
+        run: |
+          set -euo pipefail
+          tar -xzf xr-gate-ubuntu-24.04-linux-x64.tar.gz
+          bash xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh --no-device-access
+          xr-gate/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+          xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
+
   publish-release:
     name: publish GitHub release
     runs-on: ubuntu-24.04
@@ -661,6 +728,7 @@ jobs:
       - release-unpack-helper
       - hand-tracking-models-mercury
       - merge-package
+      - check-24-on-26
     if: >-
       ${{
         always() &&
@@ -672,6 +740,7 @@ jobs:
         needs.release-unpack-helper.result == 'success' &&
         needs.hand-tracking-models-mercury.result == 'success' &&
         needs.merge-package.result == 'success'
+        && needs.check-24-on-26.result == 'success'
       }}
     timeout-minutes: 20
     permissions:

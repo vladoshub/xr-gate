@@ -14,7 +14,7 @@ ROOT_PROJECT="${ROOT_PROJECT:-$HOME/src/xr_tracking}"
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/xreal_display_helper}"
 INSTALL_BIN_DIR="$(expand_tilde "$INSTALL_BIN_DIR")"
-BUILD_DIR="${BUILD_DIR:-$ROOT_PROJECT/build/tools/xreal_ultra/xreal_display_helper}"
+BUILD_DIR="${BUILD_DIR:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/tools/xreal_ultra/xreal_display_helper}"
 BUILD_DIR="$(expand_tilde "$BUILD_DIR")"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
@@ -25,7 +25,7 @@ sudo apt install -y cmake build-essential pkg-config libhidapi-dev
 
 cmake -S tools/xreal_ultra/xreal_display_helper \
   -B "$BUILD_DIR" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 
 cmake --build "$BUILD_DIR" -j"$BUILD_JOBS"
 

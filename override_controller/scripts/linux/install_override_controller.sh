@@ -23,7 +23,7 @@ BACKEND_DIR="$(expand_tilde "$BACKEND_DIR")"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 BUILD_NAME="${BUILD_NAME:-relwithdebinfo}"
-BUILD_DIR="${BUILD_DIR:-$ROOT_PROJECT/build/override_controller/$BUILD_NAME}"
+BUILD_DIR="${BUILD_DIR:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/override_controller/$BUILD_NAME}"
 BUILD_DIR="$(expand_tilde "$BUILD_DIR")"
 
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/override_controller}"
@@ -98,8 +98,11 @@ fi
 
 CMAKE_PREFIX_PATH_EXTRA="${CMAKE_PREFIX_PATH:-}"
 for prefix in \
-  "$ROOT_PROJECT/build/backends/basalt_vio/relwithdebinfo/vcpkg_installed/x64-linux" \
+  "${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/basalt_vio/relwithdebinfo/vcpkg_installed/${VCPKG_TRIPLET:-x64-linux}" \
   "$ROOT_PROJECT/third_party/basalt/build/relwithdebinfo/vcpkg_installed/x64-linux"; do
+  if [[ -n "${XR_BUILD_SESSION_DIR:-}" && "$prefix" != "$XR_BUILD_ROOT/"* ]]; then
+    continue
+  fi
   if [[ -d "$prefix" ]]; then
     if [[ -n "$CMAKE_PREFIX_PATH_EXTRA" ]]; then
       CMAKE_PREFIX_PATH_EXTRA="$prefix;$CMAKE_PREFIX_PATH_EXTRA"
