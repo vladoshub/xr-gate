@@ -42,6 +42,7 @@
 #include <chrono>
 
 #include "gestures.hpp"
+#include "app_tcp_server.hpp"
 #include "override_controller.hpp"
 #include "hand_tracking_freshness.hpp"
 #include "coordinate_util.hpp"
@@ -2819,6 +2820,9 @@ int main(int argc, char** argv) {
 
   xr_runtime::ControllerInputRuntimeConfig controller_input_config;
 
+  bool app_tcp_enabled = false;
+  xr_runtime_adapter::AppTcpServerConfig app_tcp_config;
+
   bool publish_runtime_pose_shm = false;
   bool publish_runtime_pose_udp = false;
   std::string runtime_pose_udp_host = "127.0.0.1";
@@ -3078,6 +3082,12 @@ int main(int argc, char** argv) {
   app.add_option("--adapter", adapter_type, "adapter: logging, monado, steamvr");
   app.add_option("--mode", mode, "consume mode: event or tick");
   app.add_option("--input", input, "tracking input: shm or udp");
+  app.add_flag("--app-tcp", app_tcp_enabled,
+               "Enable read-only JSON Lines TCP server for applications (off by default)");
+  app.add_option("--app-tcp-host", app_tcp_config.host, "Application TCP bind host (default 127.0.0.1)");
+  app.add_option("--app-tcp-port", app_tcp_config.port, "Application TCP port (default 45810)");
+  app.add_option("--app-tcp-rate", app_tcp_config.rate_hz, "Maximum application frame rate, 1..240 Hz (default 60)");
+  app.add_option("--app-tcp-max-clients", app_tcp_config.max_clients, "Maximum application clients, 1..32 (default 8)");
   app.add_option("--udp-bind-host", udp_bind_host, "UDP input bind host");
   app.add_option("--udp-bind-port", udp_bind_port, "UDP input bind port");
   app.add_option("--udp-frame-id", udp_frame_id, "frame id assigned to UDP tracking packets");
@@ -4884,6 +4894,15 @@ int main(int argc, char** argv) {
                 << controller_input_config.transport << "\n";
     }
 
+    std::unique_ptr<xr_runtime_adapter::AppTcpServer> app_tcp_server;
+    if (app_tcp_enabled) {
+      app_tcp_config.runtime_frame = runtime_frame;
+      app_tcp_server = std::make_unique<xr_runtime_adapter::AppTcpServer>(app_tcp_config);
+      std::cout << "[xr_runtime_adapter] application TCP listening on "
+                << app_tcp_config.host << ":" << app_tcp_config.port
+                << " rate=" << app_tcp_config.rate_hz << " Hz\n";
+    }
+
     std::unique_ptr<xr_runtime::RuntimePoseShmPublisher> runtime_pose_publisher;
     std::unique_ptr<xr_runtime::net::runtime_output_udp::RuntimeOutputUdpSender> runtime_pose_udp_publisher;
     if (publish_runtime_pose_udp) {
@@ -5074,7 +5093,7 @@ int main(int argc, char** argv) {
     bool last_left_translation_yaw_calibrated = false;
     bool last_right_translation_yaw_calibrated = false;
     const auto report_controller_imu_alignment_status = [&]() {
-      if (!publish_runtime_controller_state_shm && !publish_runtime_controller_state_udp) return;
+      if (!publish_runtime_controller_state_shm && !publish_runtime_controller_state_udp && !app_tcp_enabled) return;
       const bool left = runtime_controller_synthesis_state.left.acceleration_world_yaw_valid;
       const bool right = runtime_controller_synthesis_state.right.acceleration_world_yaw_valid;
       const bool left_translation = runtime_controller_synthesis_state.left.acceleration_translation_yaw_calibrated;
@@ -5719,7 +5738,7 @@ int main(int argc, char** argv) {
 
       std::optional<xr_runtime::ControllerInputV3> controller_input_for_tracking_profiles;
       if (controller_input_thread &&
-          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp)) {
+          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp || app_tcp_enabled)) {
         const auto profile_snapshot = controller_input_thread->snapshot();
         if (profile_snapshot.latest) {
           const bool receive_stale = is_age_stale(
@@ -5863,7 +5882,7 @@ int main(int argc, char** argv) {
         controller_input_discontinuities = controller_snapshot_for_frame->discontinuities;
       }
       if (controller_input_thread &&
-          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp)) {
+          (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp || app_tcp_enabled)) {
         const auto& controller_snapshot = *controller_snapshot_for_frame;
         if (controller_snapshot.latest) {
           const bool controller_receive_stale = is_age_stale(
@@ -6244,7 +6263,12 @@ int main(int argc, char** argv) {
         adapter->consume(frame);
         ++consumed;
 
-        if ((runtime_pose_publisher || runtime_pose_udp_publisher) && frame.hmd.sequence != 0) {
+        std::optional<xr_runtime_adapter::AppTcpFrame> app_tcp_frame;
+        if (app_tcp_server && app_tcp_server->has_clients()) {
+          app_tcp_frame.emplace();
+          app_tcp_frame->read_timestamp_ns = frame.read_timestamp_ns;
+        }
+        if ((runtime_pose_publisher || runtime_pose_udp_publisher || app_tcp_frame) && frame.hmd.sequence != 0) {
           const uint64_t runtime_pose_seq = runtime_pose_publisher ? runtime_pose_publisher->next_sequence()
                                                                   : (runtime_pose_published + 1);
           auto runtime_pose = xr_runtime::runtime_hmd_pose_from_hmd_pose(
@@ -6258,12 +6282,13 @@ int main(int argc, char** argv) {
               frame_hmd_stale_lost);
           if (runtime_pose_publisher) runtime_pose_publisher->publish(runtime_pose);
           if (runtime_pose_udp_publisher) runtime_pose_udp_publisher->send_pose(runtime_pose);
+          if (app_tcp_frame) app_tcp_frame->hmd = runtime_pose;
           ++runtime_pose_published;
         }
         xr_runtime::RuntimeControllerStateFrameV1 controller_state_for_log{};
         bool controller_state_for_log_available = false;
         std::optional<xr_runtime::HandTrackingFrameF32V2> controller_hand_for_log;
-        if (runtime_controller_state_publisher || runtime_controller_state_udp_publisher) {
+        if (runtime_controller_state_publisher || runtime_controller_state_udp_publisher || app_tcp_frame) {
           poll_runtime_controller_imu_control(std::chrono::steady_clock::now());
 
           std::optional<xr_runtime::HandTrackingFrameF32V2> runtime_controller_hand;
@@ -6321,9 +6346,10 @@ int main(int argc, char** argv) {
           controller_hand_for_log = runtime_controller_hand;
           if (runtime_controller_state_publisher) runtime_controller_state_publisher->publish(runtime_controller_state);
           if (runtime_controller_state_udp_publisher) runtime_controller_state_udp_publisher->send_controller_state(runtime_controller_state);
+          if (app_tcp_frame) app_tcp_frame->controllers = runtime_controller_state;
           ++runtime_controller_state_published;
         }
-        if (runtime_hand_publisher || runtime_hand_udp_publisher) {
+        if (runtime_hand_publisher || runtime_hand_udp_publisher || app_tcp_frame) {
           xr_tracking::HandTrackingFrameF32V2 runtime_hand{};
           if (frame.hand_v2_valid) {
             runtime_hand = runtime_hand_frame_v2_from_runtime(frame.hand_v2, frame.read_timestamp_ns);
@@ -6351,8 +6377,10 @@ int main(int argc, char** argv) {
           trace_pose("runtime_output", runtime_hand);
           if (runtime_hand_publisher) runtime_hand_publisher->publish(runtime_hand);
           if (runtime_hand_udp_publisher) runtime_hand_udp_publisher->send_hand(runtime_hand);
+          if (app_tcp_frame) app_tcp_frame->hands = runtime_hand;
           ++runtime_hand_published;
         }
+        if (app_tcp_frame) app_tcp_server->publish(*app_tcp_frame);
         if (mode == "event") {
           ++event_consumed;
         } else {

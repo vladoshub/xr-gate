@@ -64,6 +64,18 @@ runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.s
 
 The script is controlled mostly through environment variables, so individual runtime features can be enabled without changing code.
 
+## Application TCP / UDP access
+
+Export `RUNTIME_APP_TCP=1` before launching to enable the read-only application
+TCP server on `127.0.0.1:45810`. It streams JSON Lines containing runtime HMD,
+21-joint hands, and controller poses/buttons to multiple applications. It is
+**disabled by default**, uses a separate network worker, and also works without
+SHM outputs. Test it with `python3 tools/xr_app_client.py` from the repository root.
+
+See [Application network access](docs/application_network_api.md) for configuration,
+the JSON protocol, existing runtime UDP outputs, binary stereo-video TCP, client
+examples, and video bandwidth calculations.
+
 ## HMD mounting orientation calibration
 
 `orientation_transform` converts the source quaternion into the runtime

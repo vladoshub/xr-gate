@@ -28,6 +28,11 @@ TICK_RATE="${TICK_RATE:-90}" # runtime publish/tick rate in Hz
 PREDICTION_MS="${PREDICTION_MS:-15}" # pose prediction horizon in milliseconds
 PRINT_EVERY="${PRINT_EVERY:-90}" # log every N runtime ticks
 DURATION="${DURATION:-0}" # run duration in seconds; 0 means unlimited
+RUNTIME_APP_TCP="${RUNTIME_APP_TCP:-0}" # opt-in read-only application JSON Lines server
+RUNTIME_APP_TCP_HOST="${RUNTIME_APP_TCP_HOST:-127.0.0.1}"
+RUNTIME_APP_TCP_PORT="${RUNTIME_APP_TCP_PORT:-45810}"
+RUNTIME_APP_TCP_RATE="${RUNTIME_APP_TCP_RATE:-60}"
+RUNTIME_APP_TCP_MAX_CLIENTS="${RUNTIME_APP_TCP_MAX_CLIENTS:-8}"
 #ORIGIN_MODE="${ORIGIN_MODE:-start_pose}"
 ORIGIN_MODE="${ORIGIN_MODE:-none}" # runtime origin policy; none keeps upstream origin
 
@@ -515,6 +520,13 @@ args=(
 
 if [[ "$HMD_3DOF_PRIORITY" == "1" ]]; then
   args+=(--hmd-3dof-priority)
+fi
+if [[ "$RUNTIME_APP_TCP" == "1" ]]; then
+  args+=(--app-tcp
+    --app-tcp-host "$RUNTIME_APP_TCP_HOST"
+    --app-tcp-port "$RUNTIME_APP_TCP_PORT"
+    --app-tcp-rate "$RUNTIME_APP_TCP_RATE"
+    --app-tcp-max-clients "$RUNTIME_APP_TCP_MAX_CLIENTS")
 fi
 if [[ "$RUNTIME_HMD_POSE_STABILITY_FILTER" == "1" ]]; then
   args+=(--runtime-hmd-pose-stability-filter)
