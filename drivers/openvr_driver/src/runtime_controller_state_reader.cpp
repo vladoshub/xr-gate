@@ -6,6 +6,9 @@
 #include <string>
 
 #include "runtime_pose_reader.hpp"
+#ifdef _WIN32
+#include "runtime_tcp_client.hpp"
+#endif
 
 namespace xr::openvr_driver {
 
@@ -53,7 +56,10 @@ std::unique_ptr<IRuntimeControllerStateReader> create_runtime_controller_state_r
     const RuntimeControllerStateReaderConfig& cfg) {
   const std::string transport = lower_ascii(cfg.transport.empty() ? "auto" : cfg.transport);
 #if defined(_WIN32)
-  if (transport == "auto" || transport == "udp" || transport == "windows_udp") {
+  if (transport == "auto" || transport == "tcp" || transport == "app_tcp") {
+    return create_tcp_runtime_controller_state_reader(cfg);
+  }
+  if (transport == "udp" || transport == "windows_udp") {
     return create_windows_runtime_controller_state_reader(cfg);
   }
 #else

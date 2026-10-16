@@ -1,0 +1,52 @@
+name: xr-gate
+services:
+  runtime:
+    image: xr-gate-runtime:v2.3.0
+    build:
+      context: .
+    platform: linux/amd64
+    container_name: xr-gate
+    init: true
+    stdin_open: true
+    tty: true
+    restart: "no"
+    stop_grace_period: 20s
+    shm_size: ${XR_SHM_SIZE:-512m}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      XR_PROFILE: ${XR_PROFILE:-xreal_ultra}
+      XR_VIDEO_TCP: ${XR_VIDEO_TCP:-0}
+      RUNTIME_APP_TCP_RATE: ${XR_TCP_RATE:-60}
+      RUNTIME_APP_TCP_MAX_CLIENTS: ${XR_TCP_MAX_CLIENTS:-8}
+    ports:
+      - target: 45810
+        published: "${XR_TCP_PORT:-45810}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${XR_CONFIG_DIR:-./config}
+        target: /config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${XR_LOG_DIR:-./logs}
+        target: /tmp/xr_backend_client_logs
+        bind:
+          create_host_path: false
+      - controller-state:/root/.config/xr_tracking/override_controller
+    networks: [runtime]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  controller-state:
+networks:
+  runtime:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: 127.0.0.1

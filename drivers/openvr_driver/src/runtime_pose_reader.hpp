@@ -6,13 +6,12 @@
 #include <string>
 
 #include <xr_runtime/contracts/runtime_pose_stream.hpp>
+#include "runtime_tcp_config.hpp"
 
 namespace xr::openvr_driver {
 
 struct RuntimePoseReaderConfig {
-  // Transport selector is intentionally platform-neutral. Current Stage 8B
-  // implements Linux/POSIX SHM. Windows can later add named shared memory,
-  // UDP, or named-pipe readers without changing the OpenVR driver core.
+  // auto: Linux/POSIX SHM, Windows application TCP. Explicit Windows UDP remains supported.
   std::string transport = "auto";
   std::string registry_path;
   std::string stream_id = "runtime_hmd_pose";
@@ -20,6 +19,7 @@ struct RuntimePoseReaderConfig {
   uint32_t max_age_ms = 250;
   std::string udp_bind_host = "127.0.0.1";
   uint16_t udp_port = 45800;
+  RuntimeTcpConfig tcp;
 };
 
 struct RuntimePoseSample {

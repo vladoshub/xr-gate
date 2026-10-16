@@ -4,6 +4,26 @@ SteamVR/OpenVR driver for the XR runtime streams produced by `xr_runtime_adapter
 
 The driver is intentionally thin. It does not read cameras, IMU, Basalt, Mercury, or raw device data. It only consumes runtime-normalized HMD/controller streams.
 
+## Windows TCP driver
+
+Windows builds default to one shared application TCP connection at
+`127.0.0.1:45810` (`xr_gate_app_v1`). Linux `auto` retains its existing POSIX SHM
+readers, settings and dependency requirements. Windows explicit `udp` remains
+available. See the Windows setup, CI, BAT installer, and Direct Mode instructions:
+[English](docs/WINDOWS.en.md) / [Русский](docs/WINDOWS.ru.md).
+
+TCP settings in the `xr_tracking` section are `runtimeTcpHost`, `runtimeTcpPort`,
+`runtimeTcpReconnectMs`, and `runtimeTcpTimeoutMs`. Only IPv4 literals and
+`localhost` are accepted. All head/hand/controller readers share the connection.
+Frames are decoded on a background thread, cached without a queue, and aged
+using local receive time plus age calculated entirely in the server clock
+domain. Disconnect clears the cache immediately; reconnect requires a fresh
+compatible hello and resets the sequence baseline. Missing streams remain
+missing and the TCP path bypasses the local controller-input hold policy.
+
+Build C++/Python network tests with `-DXR_OPENVR_BUILD_TESTS=ON`. Linux driver
+builds with this option disabled do not compile or link the TCP client/parser.
+
 ## Expected runtime streams
 
 ```text

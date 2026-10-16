@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate · Windows SteamVR</title><style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style></head><body><main class="document"><nav aria-label="Language"><button type="button" data-language-switch="ru" aria-pressed="true">Русский</button><button type="button" data-language-switch="en" aria-pressed="false">English</button><a href="WINDOWS.ru.md">RU · Markdown</a><a href="WINDOWS.en.md">EN · Markdown</a><span class="meta">XR Gate · Windows SteamVR · 16.10.2026</span></nav><section data-language="ru" lang="ru"><details><summary>Оглавление</summary><ol><li><a href="#ru-section-0">1. Скачать Windows-пакет</a></li><li><a href="#ru-section-1">2. Установить SteamVR-драйвер</a></li><li><a href="#ru-section-2">3. Подготовить SBS и видеоподключение XREAL</a></li><li><a href="#ru-section-3">4. Включить Direct Mode в SteamVR</a></li><li><a href="#ru-section-4">TCP-настройки и ежедневный запуск</a></li><li><a href="#ru-section-5">Сборка из исходников и CI</a></li></ol></details><h1>SteamVR-драйвер XR Gate в Windows</h1>
+<p>Русский · <a href="WINDOWS.en.md">English</a></p>
+<p>Это SteamVR-драйвер для Windows x64. Capture и трекинг XR Gate работают в Linux,
+WSL или Docker, SteamVR и игра — в Windows. Драйвер подключается к серверу
+<code>xr_gate_app_v1</code> по TCP <strong>127.0.0.1:45810</strong>. Изображение поступает в XREAL через
+видеоподключение к GPU Windows. Передача USB камер/HID через USB/IP не передаёт
+DisplayPort-видео.</p>
+<h2 id="ru-section-0">1. Скачать Windows-пакет</h2>
+<p>После применения сопровождающего патча и успешного запуска GitHub Actions:</p>
+<ol>
+<li>Откройте <strong>Actions → XR Gate split build</strong> и успешную сборку изменённого commit.</li>
+<li>Скачайте artifact <strong>xr-gate-steamvr-windows-x64</strong>. В Linux-релизе v2.3.0 этого
+нового Windows-драйвера нет.</li>
+<li>Распакуйте artifact, затем <strong>xr-gate-steamvr-windows-x64-60Hz-direct.zip</strong>
+в постоянную папку, например <code>C:\XR-Gate-SteamVR\60Hz-direct</code>.</li>
+<li>Внутри <strong>xr_tracking</strong> должны находиться <code>driver.vrdrivermanifest</code>,
+<code>bin\win64\driver_xr_tracking.dll</code>, <code>resources</code> и BAT-файлы.</li>
+</ol>
+<p>CI также собирает варианты 90 Hz и <code>extended_sbs</code>. Начните с 60 Hz. Одновременно
+регистрируйте только один пакет XR Gate. При публикации релиза этим workflow
+четыре Windows ZIP и файлы SHA-256 также появляются в Release.</p>
+<h2 id="ru-section-1">2. Установить SteamVR-драйвер</h2>
+<p>Установите Steam и SteamVR через Steam. Один раз запустите SteamVR, затем
+закройте его. В распакованной папке <strong>xr_tracking</strong> дважды щёлкните
+<strong>Install-Driver.bat</strong>. Права администратора обычно не требуются. Скрипт ищет
+SteamVR по зарегистрированному runtime и установке Steam, а если не находит —
+просит путь к папке SteamVR, например <code>D:\SteamLibrary\steamapps\common\SteamVR</code>.</p>
+<p>Скрипт вызывает <code>vrpathreg.exe adddriver</code> и показывает список путей. После
+регистрации оставьте папку драйвера на месте. Если SteamVR заблокировал add-on,
+откройте <strong>Settings → Startup/Shutdown → Manage Add-ons</strong> и включите XR Gate.</p>
+<p>Для явного пути в PowerShell:</p>
+<pre><code class="language-powershell">.\Manage-Driver.ps1 -Action Install -SteamVR &#39;D:\SteamLibrary\steamapps\common\SteamVR&#39;
+</code></pre>
+<p>Для удаления или смены варианта закройте SteamVR, запустите
+<strong>Uninstall-Driver.bat</strong> в старом пакете, затем установите новый. Удаляется только
+этот зарегистрированный путь драйвера; SteamVR и другие драйверы сохраняются.</p>
+<h2 id="ru-section-2">3. Подготовить SBS и видеоподключение XREAL</h2>
+<p>Это разные операции: <strong>SBS/3D</strong> задаёт стереорежим дисплея очков, а
+<strong>Direct Mode SteamVR</strong> передаёт поддерживаемый дисплей под управление композитора.</p>
+<ol>
+<li>Подключите очки к USB-C с поддержкой видео либо к подходящему адаптеру
+DisplayPort/HDMI → USB-C с питанием, подключённому к нужному GPU.</li>
+<li>До передачи USB XREAL в WSL включите полный SBS/3D. У XREAL Air 2 Ultra
+удерживайте <strong>Brightness Up (+) примерно 3 секунды</strong> до сигнала, как указано
+в корневом README XR Gate.</li>
+<li>В настройках дисплея Windows проверьте стереоразрешение очков, обычно
+<strong>3840×1080</strong>, и выберите <strong>60 Hz</strong> для пакета 60 Hz. Эта временная проверка
+обычного монитора выполняется до захвата дисплея Direct Mode.</li>
+<li>Передайте камеры/HID и при необходимости Bluetooth-донгл в WSL, затем
+запустите XR Gate. Оставьте консоль <code>xr_client</code> открытой. Если WSL предлагает
+выбор режима, используйте текущий режим дисплея, когда Windows/кнопка очков
+уже переключили SBS.</li>
+</ol>
+<p>После передачи USB в WSL Windows-утилита HID не может управлять тем же
+устройством. Используйте кнопку очков или Linux-helper; перед Windows-helper
+остановите XR Gate и верните USB Windows. Переключение режима с переподключением
+USB может потребовать повторить attach и перезапустить контейнер/runtime.</p>
+<h2 id="ru-section-3">4. Включить Direct Mode в SteamVR</h2>
+<ol>
+<li>При работающем XR Gate запустите <strong>Test-TCP.bat</strong>. Должен появиться
+<code>xr_gate_app_v1</code>. Успешный TCP ещё не подтверждает качество трекинга:
+проверьте startup gate и <code>pose_valid</code>.</li>
+<li>Запустите SteamVR. Откройте <strong>Settings → Developer → Enable Direct Mode</strong>,
+как описано у Valve. В зависимости от версии включите Advanced Settings
+либо откройте Developer Settings из меню SteamVR, чтобы найти этот пункт.</li>
+<li>Если требуется, перезапустите SteamVR. Проверьте изображение VR в очках и
+реакцию головы/контроллеров, затем запускайте игру.</li>
+</ol>
+<p><strong>Direct-Mode-Guide.bat</strong> открывает эту инструкцию и запускает SteamVR.
+Переключатель Direct Mode остаётся ручным шагом: комплект не использует
+недокументированную GPU-команду и не обещает, что <code>directMode: true</code> принудительно
+переведёт любой монитор в Direct Mode.</p>
+<p>Совместимость конкретного EDID XREAL, GPU и адаптера с Direct Mode нужно
+проверять на реальном компьютере. Текущий драйвер предоставляет
+<code>IVRDisplayComponent</code>, но не добавляет новый Windows-драйвер GPU/дисплея.
+Успешная сборка DLL или TCP-тест не подтверждают возможность захвата этого
+дисплея Windows в Direct Mode.</p>
+<p>Если экран чёрный или Direct Mode недоступен, проверьте видеоподключение к GPU,
+SBS-разрешение/частоту и логи SteamVR. <strong>Экспериментальный</strong> запасной вариант:
+удалить регистрацию direct-пакета и установить соответствующий
+<code>60Hz-extended_sbs</code>. Он использует обычный дисплей Windows; координаты его окна
+может понадобиться изменить в <code>resources/settings/default.vrsettings</code>.
+Этот путь также требует проверки с оборудованием. Для обычного использования
+очков остановите SteamVR, используйте Disable Direct Mode, если пункт доступен,
+верните USB из WSL и переключите очки в 2D аппаратной кнопкой.</p>
+<h2 id="ru-section-4">TCP-настройки и ежедневный запуск</h2>
+<p>Windows-пакет задаёт <code>tcp</code> для <code>runtimePoseTransport</code>, <code>runtimeHandTransport</code> и
+<code>runtimeControllerStateTransport</code>. Настройки в секции <code>xr_tracking</code> файла
+<code>resources/settings/default.vrsettings</code> меняйте при остановленном SteamVR:</p>
+<pre><code class="language-json">&quot;runtimeTcpHost&quot;: &quot;127.0.0.1&quot;,
+&quot;runtimeTcpPort&quot;: 45810,
+&quot;runtimeTcpReconnectMs&quot;: 500,
+&quot;runtimeTcpTimeoutMs&quot;: 1000
+</code></pre>
+<p>Host — IPv4-адрес или <code>localhost</code>. Проверки max-age головы/рук/контроллеров
+сохраняются, обычно 250 мс. Одно фоновое TCP-соединение обслуживает голову и
+обе руки. При разрыве кеш очищается; переставшие обновляться или повторяемые
+кадры устаревают. TCP не продлевает ввод старым механизмом controller input hold.
+В Linux <code>auto</code> остаётся POSIX SHM; в Windows <code>auto</code> выбирает TCP. Явный Windows
+UDP остаётся доступен, но этот сценарий и WSL-комплект используют TCP.</p>
+<p>Ежедневный порядок: <strong>SBS/видео → USB в WSL → XR Gate → TCP-тест → SteamVR → игра</strong>.
+Docker публикует <code>127.0.0.1:45810</code> Linux-хоста; WSL передаёт localhost в Windows.
+Не запускайте одновременно прямой WSL-runtime и Docker-runtime на одном порту.
+Для 90 Hz используйте соответствующий пакет; частоту TCP при необходимости
+можно повысить до 90 отдельно от физической частоты дисплея очков.</p>
+<h2 id="ru-section-5">Сборка из исходников и CI</h2>
+<p>Нужны MSVC x64, CMake/Ninja, Python 3.10+, OpenVR SDK commit
+<code>0924064316de3effbcd1acf1e309182a2deb1c05</code> и nlohmann/json 3.11+ (в CI — 3.11.3).
+В x64 Developer PowerShell из корня репозитория:</p>
+<pre><code class="language-powershell">.\drivers\openvr_driver\scripts\windows\build_driver.ps1 `
+  -OpenVrSdkRoot C:\src\openvr -NlohmannJsonInclude C:\src\json\single_include `
+  -Device xreal_ultra -BuildType Release -DisplayFrequency 60 -DisplayMode direct -BuildTests
+ctest --test-dir build\drivers\openvr_driver\windows_Release -C Release --output-on-failure
+</code></pre>
+<p>Результат — <code>build\drivers\openvr_driver\windows_Release\xr_tracking</code>. Отдельный
+Windows-job выполняет эти тесты и упаковывает варианты 60/90 Hz direct/extended.
+В hosted CI нет оборудования: загрузку SteamVR, GPU Direct Mode, USB XREAL и
+Bluetooth необходимо проверять на устройстве.</p>
+<p>Источники: <a href="https://help.steampowered.com/en/wizard/HelpWithGameIssue/?appid=250820&issueid=370&nodeid=52">Valve: Direct Mode</a>,
+<a href="https://github.com/vladoshub/xr-gate#quick-start">корневой README XR Gate</a>,
+<a href="https://learn.microsoft.com/en-us/windows/wsl/networking">Microsoft: сеть WSL</a>.</p>
+</section>
+<section data-language="en" lang="en" hidden><details><summary>Contents</summary><ol><li><a href="#en-section-0">1. Download the Windows package</a></li><li><a href="#en-section-1">2. Install the SteamVR driver</a></li><li><a href="#en-section-2">3. Prepare XREAL SBS and the video connection</a></li><li><a href="#en-section-3">4. Enable Direct Mode in SteamVR</a></li><li><a href="#en-section-4">TCP settings and daily startup</a></li><li><a href="#en-section-5">Build from source / CI</a></li></ol></details><h1>XR Gate SteamVR driver on Windows</h1>
+<p><a href="WINDOWS.ru.md">Русская инструкция</a> · English</p>
+<p>This package is a Windows x64 SteamVR driver. XR Gate capture/tracking runs in
+Linux, WSL or a Docker container; SteamVR and the game run in Windows. The driver
+connects to the runtime&#39;s <code>xr_gate_app_v1</code> TCP server at <strong>127.0.0.1:45810</strong>.
+Display output reaches XREAL through the Windows GPU/video connection. USB/IP
+for the cameras/HID does not carry DisplayPort video.</p>
+<h2 id="en-section-0">1. Download the Windows package</h2>
+<p>After the accompanying patch has been applied and GitHub Actions has completed:</p>
+<ol>
+<li>Open the repository&#39;s <strong>Actions → XR Gate split build</strong> and the successful run
+for the patched commit.</li>
+<li>Download artifact <strong>xr-gate-steamvr-windows-x64</strong>. The Linux v2.3.0 runtime ZIP
+does not contain this new Windows driver.</li>
+<li>Extract the artifact, then extract <strong>xr-gate-steamvr-windows-x64-60Hz-direct.zip</strong>
+into a permanent folder, for example <code>C:\XR-Gate-SteamVR\60Hz-direct</code>.</li>
+<li>The inner <strong>xr_tracking</strong> folder must contain <code>driver.vrdrivermanifest</code>,
+<code>bin\win64\driver_xr_tracking.dll</code>, <code>resources</code>, and the BAT files.</li>
+</ol>
+<p>The job also builds 90 Hz and <code>extended_sbs</code> variants. Start with 60 Hz. Register
+only one XR Gate package at a time. A published release from this workflow also
+contains the four Windows ZIPs and SHA-256 files.</p>
+<h2 id="en-section-1">2. Install the SteamVR driver</h2>
+<p>Install Steam and SteamVR through Steam. Start SteamVR once, then close it.
+Inside the extracted <strong>xr_tracking</strong> folder, double-click <strong>Install-Driver.bat</strong>.
+Administrator rights are normally unnecessary. The script locates SteamVR from
+its registered runtime path or Steam installation; otherwise it asks for the
+SteamVR folder, for example <code>D:\SteamLibrary\steamapps\common\SteamVR</code>.</p>
+<p>It runs <code>vrpathreg.exe adddriver</code> and shows registered paths. Keep the driver
+folder in place after registration. If SteamVR blocks the add-on, open
+<strong>Settings → Startup/Shutdown → Manage Add-ons</strong> and enable XR Gate.</p>
+<p>For an explicit path in PowerShell:</p>
+<pre><code class="language-powershell">.\Manage-Driver.ps1 -Action Install -SteamVR &#39;D:\SteamLibrary\steamapps\common\SteamVR&#39;
+</code></pre>
+<p>To remove or switch packages: close SteamVR, run <strong>Uninstall-Driver.bat</strong> in the
+old package, then install the new package. This removes only that registered
+driver path, not your SteamVR installation or other drivers.</p>
+<h2 id="en-section-2">3. Prepare XREAL SBS and the video connection</h2>
+<p>These are separate operations: <strong>SBS/3D mode</strong> changes the glasses&#39; display
+layout; <strong>SteamVR Direct Mode</strong> lets the compositor own a supported display.</p>
+<ol>
+<li>Connect the glasses to a video-capable USB-C output, or an appropriate
+powered DisplayPort/HDMI-to-USB-C adapter connected to the intended GPU.</li>
+<li>Before forwarding XREAL USB to WSL, enable full SBS/3D. On XREAL Air 2 Ultra,
+hold <strong>Brightness Up (+) for about 3 seconds</strong> until the beep, as described
+in the root XR Gate README.</li>
+<li>In Windows Display settings, verify the glasses show the expected stereo
+resolution, normally <strong>3840×1080</strong>, and select <strong>60 Hz</strong> for the 60 Hz package.
+This temporary desktop check happens before Direct Mode takes ownership.</li>
+<li>Forward cameras/HID and the optional Bluetooth dongle to WSL, then run XR Gate.
+Keep its <code>xr_client</code> console open. When offered a display-mode choice in WSL,
+use the current display mode if Windows/the hardware button already set it.</li>
+</ol>
+<p>Once USB is attached to WSL, a Windows HID utility cannot control that same USB
+device. Use the glasses&#39; hardware button or the Linux-side helper; stop XR Gate
+and detach USB before using a Windows HID helper. A USB mode switch/reconnect
+may require attaching USB again and restarting the container/runtime.</p>
+<h2 id="en-section-3">4. Enable Direct Mode in SteamVR</h2>
+<ol>
+<li>With XR Gate running, run <strong>Test-TCP.bat</strong>. It must report <code>xr_gate_app_v1</code>.
+Transport success alone does not establish valid tracking: check the startup
+gate and <code>pose_valid</code> as well.</li>
+<li>Start SteamVR. Open <strong>Settings → Developer → Enable Direct Mode</strong>, following
+Valve&#39;s instructions. Depending on SteamVR version, enable Advanced Settings
+or open Developer Settings from the SteamVR menu to find this control.</li>
+<li>Restart SteamVR if requested. Verify VR content is shown in the glasses and
+head/controller tracking responds. Start the game only after this check.</li>
+</ol>
+<p><strong>Direct-Mode-Guide.bat</strong> opens this guide and starts SteamVR. The Direct Mode
+toggle remains a manual step: this package does not use an undocumented GPU
+command or claim that changing <code>directMode: true</code> can force any monitor into
+Direct Mode.</p>
+<p>Direct Mode support for the particular XREAL EDID, GPU and adapter must be
+tested on the real machine. The current driver provides <code>IVRDisplayComponent</code>;
+it does not add a new Windows GPU/display driver. A successful DLL build or TCP
+test is not proof that Windows can acquire this display in Direct Mode.</p>
+<p>If the display stays black or Direct Mode is unavailable: check the GPU video
+path, SBS resolution/frequency and SteamVR logs. As an <strong>experimental</strong> alternative,
+unregister the direct package and install the matching <code>60Hz-extended_sbs</code>
+package. It uses an ordinary desktop display; its window coordinates may need
+adjustment in <code>resources/settings/default.vrsettings</code>. This fallback also needs
+hardware testing. To return the display to normal use, stop SteamVR, use its
+Disable Direct Mode control if available, detach USB from WSL, and switch the
+glasses back to 2D with their hardware control.</p>
+<h2 id="en-section-4">TCP settings and daily startup</h2>
+<p>The Windows package sets <code>runtimePoseTransport</code>, <code>runtimeHandTransport</code>, and
+<code>runtimeControllerStateTransport</code> to <code>tcp</code>. Edit the <code>xr_tracking</code> section of
+<code>resources/settings/default.vrsettings</code> while SteamVR is stopped:</p>
+<pre><code class="language-json">&quot;runtimeTcpHost&quot;: &quot;127.0.0.1&quot;,
+&quot;runtimeTcpPort&quot;: 45810,
+&quot;runtimeTcpReconnectMs&quot;: 500,
+&quot;runtimeTcpTimeoutMs&quot;: 1000
+</code></pre>
+<p>Host accepts an IPv4 literal or <code>localhost</code>. Pose/hand/controller max-age settings
+remain available (normally 250 ms). One background TCP connection serves the
+head and both hands. On disconnect the cached streams are cleared; quiet or
+replayed frames expire. TCP does not use the historical controller input hold.
+Linux <code>auto</code> remains POSIX SHM; Windows <code>auto</code> selects TCP. Explicit Windows UDP
+is still selectable, but this guide and the WSL bundle use TCP.</p>
+<p>Daily order: <strong>SBS/video → USB into WSL → XR Gate → TCP test → SteamVR → game</strong>.
+Docker publishes <code>127.0.0.1:45810</code> on its Linux host; WSL&#39;s localhost forwarding
+then exposes it to Windows. Do not start the direct WSL runtime and Docker
+runtime on the same port simultaneously. For a 90 Hz setup, choose the matching
+package and optionally set the runtime TCP output rate to 90; this is separate
+from the glasses&#39; display refresh rate.</p>
+<h2 id="en-section-5">Build from source / CI</h2>
+<p>Use MSVC x64, CMake/Ninja, Python 3.10+, OpenVR SDK commit
+<code>0924064316de3effbcd1acf1e309182a2deb1c05</code>, and nlohmann/json 3.11+ (CI pins 3.11.3).
+From an x64 Developer PowerShell in the repository root:</p>
+<pre><code class="language-powershell">.\drivers\openvr_driver\scripts\windows\build_driver.ps1 `
+  -OpenVrSdkRoot C:\src\openvr -NlohmannJsonInclude C:\src\json\single_include `
+  -Device xreal_ultra -BuildType Release -DisplayFrequency 60 -DisplayMode direct -BuildTests
+ctest --test-dir build\drivers\openvr_driver\windows_Release -C Release --output-on-failure
+</code></pre>
+<p>Output: <code>build\drivers\openvr_driver\windows_Release\xr_tracking</code>. The separate
+Windows CI job runs the same tests and packages 60/90 Hz direct/extended variants.
+No hardware is available on hosted CI: actual SteamVR loading, GPU Direct Mode,
+XREAL USB and Bluetooth need on-device validation.</p>
+<p>Sources: <a href="https://help.steampowered.com/en/wizard/HelpWithGameIssue/?appid=250820&issueid=370&nodeid=52">Valve Direct Mode help</a>,
+<a href="https://github.com/vladoshub/xr-gate#quick-start">XR Gate root README</a>,
+<a href="https://learn.microsoft.com/en-us/windows/wsl/networking">Microsoft WSL networking</a>.</p>
+</section></main><script>function selectLanguage(lang){if(lang!=='ru'&&lang!=='en')lang='en';document.documentElement.lang=lang;for(const block of document.querySelectorAll('[data-language]'))block.hidden=block.dataset.language!==lang;for(const b of document.querySelectorAll('[data-language-switch]'))b.setAttribute('aria-pressed',String(b.dataset.languageSwitch===lang));try{localStorage.setItem('xr-guide-language',lang)}catch{}}
+for(const b of document.querySelectorAll('[data-language-switch]'))b.addEventListener('click',()=>selectLanguage(b.dataset.languageSwitch));
+let preferred=new URLSearchParams(location.search).get('lang');try{preferred=preferred||localStorage.getItem('xr-guide-language')}catch{}selectLanguage(preferred||(navigator.language.toLowerCase().startsWith('ru')?'ru':'en'));
+for(const pre of document.querySelectorAll('pre')){const lang=pre.closest('[data-language]').dataset.language;const label=lang==='ru'?'Копировать':'Copy';const wrapper=document.createElement('div');wrapper.className='codeblock';pre.before(wrapper);wrapper.append(pre);const b=document.createElement('button');b.className='copy';b.type='button';b.textContent=label;wrapper.prepend(b);b.addEventListener('click',async()=>{try{if(navigator.clipboard&&isSecureContext){await navigator.clipboard.writeText(pre.textContent)}else{const area=document.createElement('textarea');area.value=pre.textContent;document.body.append(area);try{area.select();if(!document.execCommand('copy'))throw Error('copy')}finally{area.remove()}}b.textContent=lang==='ru'?'Скопировано':'Copied';setTimeout(()=>b.textContent=label,1600)}catch{const range=document.createRange();range.selectNodeContents(pre);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);b.textContent=lang==='ru'?'Нажмите Ctrl+C':'Press Ctrl+C'}})}
+</script></body></html>

@@ -14,4 +14,10 @@ The driver is built against Valve's OpenVR SDK:
 The OpenVR SDK source and headers are not embedded in this source archive. The
 build script downloads or uses a separate SDK checkout, and the installed
 binary driver package copies the exact license file from that checkout into its
-own `licenses/` directory.
+own license directory. Windows packages include the selected SDK's license in
+`LICENSES/OpenVR-SDK.txt`.
+## Windows application TCP JSON parser
+
+Windows TCP builds use nlohmann/json (MIT), pinned to v3.11.3 in CI.
+Copyright and permission notice: `LICENSES/Nlohmann-JSON-MIT.txt`.
+Linux SHM driver builds do not link this parser unless TCP tests are requested.

@@ -6,6 +6,9 @@
 #include <string>
 
 #include "runtime_pose_reader.hpp"
+#ifdef _WIN32
+#include "runtime_tcp_client.hpp"
+#endif
 
 namespace xr::openvr_driver {
 
@@ -60,7 +63,10 @@ bool runtime_hand_side_is_valid(const xr_tracking::HandTrackingFrameF32V2& frame
 std::unique_ptr<IRuntimeHandReader> create_runtime_hand_reader(const RuntimeHandReaderConfig& cfg) {
   const std::string transport = lower_ascii(cfg.transport.empty() ? "auto" : cfg.transport);
 #if defined(_WIN32)
-  if (transport == "auto" || transport == "udp" || transport == "windows_udp") {
+  if (transport == "auto" || transport == "tcp" || transport == "app_tcp") {
+    return create_tcp_runtime_hand_reader(cfg);
+  }
+  if (transport == "udp" || transport == "windows_udp") {
     return create_windows_runtime_hand_reader(cfg);
   }
 #else

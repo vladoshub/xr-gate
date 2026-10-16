@@ -1,0 +1,8 @@
+# Included only by `./xr-gate ...` when XR_VIDEO_TCP=1.
+services:
+  runtime:
+    ports:
+      - target: 45700
+        published: "${XR_VIDEO_PORT:-45700}"
+        host_ip: 127.0.0.1
+        protocol: tcp

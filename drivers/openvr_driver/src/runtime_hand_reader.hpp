@@ -5,13 +5,12 @@
 #include <string>
 
 #include "runtime_hand_contract.hpp"
+#include "runtime_tcp_config.hpp"
 
 namespace xr::openvr_driver {
 
 struct RuntimeHandReaderConfig {
-  // Transport selector is platform-neutral. Current implementation supports
-  // Linux/POSIX SHM. Windows is intentionally a stub until the runtime adapter
-  // publishes HAND_TRACKING_21_JOINT_F32_V2 through a Windows-friendly transport.
+  // auto: Linux/POSIX SHM, Windows application TCP.
   std::string transport = "auto";
   std::string registry_path;
   std::string stream_id = "hand_tracking";
@@ -19,6 +18,7 @@ struct RuntimeHandReaderConfig {
   uint32_t max_age_ms = 250;
   std::string udp_bind_host = "127.0.0.1";
   uint16_t udp_port = 45801;
+  RuntimeTcpConfig tcp;
 };
 
 struct RuntimeHandSample {

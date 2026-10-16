@@ -5,6 +5,9 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#ifdef _WIN32
+#include "runtime_tcp_client.hpp"
+#endif
 
 namespace xr::openvr_driver {
 
@@ -43,7 +46,10 @@ bool runtime_pose_is_fresh(const RuntimePoseSample& sample, uint32_t max_age_ms)
 std::unique_ptr<IRuntimePoseReader> create_runtime_pose_reader(const RuntimePoseReaderConfig& cfg) {
   const std::string transport = lower_ascii(cfg.transport.empty() ? "auto" : cfg.transport);
 #if defined(_WIN32)
-  if (transport == "auto" || transport == "udp" || transport == "windows_udp") {
+  if (transport == "auto" || transport == "tcp" || transport == "app_tcp") {
+    return create_tcp_runtime_pose_reader(cfg);
+  }
+  if (transport == "udp" || transport == "windows_udp") {
     return create_windows_runtime_pose_reader(cfg);
   }
 #else

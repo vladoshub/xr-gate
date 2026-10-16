@@ -329,6 +329,17 @@ const std::string& driver_provided_chaperone_json() {
   return kJson;
 }
 
+RuntimeTcpConfig load_tcp_settings() {
+  RuntimeTcpConfig config;
+#ifdef _WIN32
+  config.host = get_string_setting("runtimeTcpHost", "127.0.0.1");
+  config.port = static_cast<uint16_t>(std::clamp(get_int_setting("runtimeTcpPort", 45810), 1, 65535));
+  config.reconnect_ms = static_cast<uint32_t>(std::clamp(get_int_setting("runtimeTcpReconnectMs", 500), 10, 60000));
+  config.timeout_ms = static_cast<uint32_t>(std::clamp(get_int_setting("runtimeTcpTimeoutMs", 1000), 100, 60000));
+#endif
+  return config;
+}
+
 class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
                                      public vr::IVRDisplayComponent {
  public:
@@ -577,6 +588,7 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
     model_number_ = get_string_setting(kModelNumberKey, "XR Tracking Runtime HMD");
 
     reader_config_.transport = get_string_setting(kRuntimePoseTransportKey, "auto");
+    reader_config_.tcp = load_tcp_settings();
     reader_config_.registry_path = get_string_setting(kRuntimePoseRegistryPathKey, "");
     reader_config_.stream_id = get_string_setting(kRuntimePoseStreamKey, "runtime_hmd_pose");
     reader_config_.shm_name = get_string_setting(kRuntimePoseShmNameKey, "runtime_hmd_pose");
@@ -892,7 +904,11 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
       maybe_log_controller_state_error(controller_error);
     }
 
-    if (hold_cached_runtime_controller_input_if_fresh()) {
+    // TCP owns a complete latest-state snapshot and explicit disconnects.
+    // Never extend a lost TCP input with the historical local-SHM hold policy.
+    const bool tcp = controller_reader_ && std::strcmp(controller_reader_->transport_name(), "app_tcp") == 0;
+    if (tcp) has_cached_runtime_controller_side_ = false;
+    if (!tcp && hold_cached_runtime_controller_input_if_fresh()) {
       return;
     }
 
@@ -1476,6 +1492,9 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
   void load_hand_settings() {
     hand_cfg_.mode = get_string_setting(kHandControllerModeKey, "none");
     hand_cfg_.reader.transport = get_string_setting(kRuntimeHandTransportKey, "auto");
+    hand_cfg_.reader.tcp = load_tcp_settings();
+    hand_cfg_.controller_reader.tcp = hand_cfg_.reader.tcp;
+    hand_cfg_.hmd_reader.tcp = hand_cfg_.reader.tcp;
     hand_cfg_.reader.registry_path = get_string_setting(kRuntimeHandRegistryPathKey, "");
     hand_cfg_.reader.stream_id = get_string_setting(kRuntimeHandStreamKey, "runtime_hand_tracking");
     hand_cfg_.reader.shm_name = get_string_setting(kRuntimeHandShmNameKey, "runtime_hand_tracking");

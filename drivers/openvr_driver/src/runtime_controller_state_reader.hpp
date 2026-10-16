@@ -5,6 +5,7 @@
 #include <string>
 
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
+#include "runtime_tcp_config.hpp"
 
 namespace xr::openvr_driver {
 
@@ -16,6 +17,7 @@ struct RuntimeControllerStateReaderConfig {
   uint32_t max_age_ms = 250;
   std::string udp_bind_host = "127.0.0.1";
   uint16_t udp_port = 45802;
+  RuntimeTcpConfig tcp;
 };
 
 struct RuntimeControllerStateSample {

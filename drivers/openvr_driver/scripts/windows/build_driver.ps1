@@ -8,7 +8,12 @@ param(
   [string]$DisplayConfig = $(if ($env:XR_OPENVR_DISPLAY_CONFIG) { $env:XR_OPENVR_DISPLAY_CONFIG } elseif ($env:XR_DISPLAY_CONFIG) { $env:XR_DISPLAY_CONFIG } else { "" }),
   [Nullable[double]]$DisplayFrequency = $(if ($env:XR_OPENVR_DISPLAY_FREQUENCY_HZ) { [double]$env:XR_OPENVR_DISPLAY_FREQUENCY_HZ } elseif ($env:XR_DISPLAY_FREQUENCY_HZ) { [double]$env:XR_DISPLAY_FREQUENCY_HZ } else { $null }),
   [ValidateSet("direct", "extended_sbs")]
-  [string]$DisplayMode = $(if ($env:XR_OPENVR_DISPLAY_MODE) { $env:XR_OPENVR_DISPLAY_MODE } else { "direct" })
+  [string]$DisplayMode = $(if ($env:XR_OPENVR_DISPLAY_MODE) { $env:XR_OPENVR_DISPLAY_MODE } else { "direct" }),
+  [ValidateSet("tcp", "udp")][string]$RuntimeTransport = "tcp",
+  [string]$RuntimeTcpHost = "127.0.0.1",
+  [ValidateRange(1, 65535)][int]$RuntimeTcpPort = 45810,
+  [string]$NlohmannJsonInclude = $env:NLOHMANN_JSON_INCLUDE_DIR,
+  [switch]$BuildTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,8 +58,15 @@ if (![string]::IsNullOrWhiteSpace($DeviceSettings)) {
 
 $BuildSuffix = if ($Device -eq "generic" -or $Device -eq "xreal_ultra") { "windows_$BuildType" } else { "windows_${Device}_$BuildType" }
 $BuildDir = Join-Path $Root "build\drivers\openvr_driver\$BuildSuffix"
-cmake -S $DriverDir -B $BuildDir -G $Generator -DCMAKE_BUILD_TYPE=$BuildType -DXR_OPENVR_SDK_ROOT=$OpenVrSdkRoot
+$CmakeArgs = @('-S', $DriverDir, '-B', $BuildDir, '-G', $Generator,
+  "-DCMAKE_BUILD_TYPE=$BuildType", "-DXR_OPENVR_SDK_ROOT=$OpenVrSdkRoot",
+  "-DXR_OPENVR_BUILD_TESTS=$(if ($BuildTests) { 'ON' } else { 'OFF' })")
+if ($NlohmannJsonInclude) { $CmakeArgs += "-DNLOHMANN_JSON_INCLUDE_DIR=$NlohmannJsonInclude" }
+if ($Generator -match '^Visual Studio') { $CmakeArgs += @('-A', 'x64') }
+cmake @CmakeArgs
+if ($LASTEXITCODE -ne 0) { throw "CMake configure failed: $LASTEXITCODE" }
 cmake --build $BuildDir --config $BuildType
+if ($LASTEXITCODE -ne 0) { throw "CMake build failed: $LASTEXITCODE" }
 
 $SettingsPath = Join-Path $BuildDir "xr_tracking\resources\settings\default.vrsettings"
 if (!(Test-Path $SettingsPath)) { throw "Built package settings not found: $SettingsPath" }
@@ -73,6 +85,23 @@ if (![string]::IsNullOrWhiteSpace($DeviceSettings)) {
 python @RenderArgs
 if ($LASTEXITCODE -ne 0) { throw "render_display_settings.py failed with exit code $LASTEXITCODE" }
 Copy-Item -Force $DisplayConfig (Join-Path (Split-Path -Parent $SettingsPath) "display_config.yaml")
+
+# PowerShell JSON objects merge case-insensitive keys such as debugMode/DebugMode.
+# Reuse Python to preserve the release settings exactly outside these fields.
+python (Join-Path $DriverDir 'scripts\configure_windows_transport.py') `
+  --settings $SettingsPath --transport $RuntimeTransport --host $RuntimeTcpHost --port $RuntimeTcpPort
+if ($LASTEXITCODE -ne 0) { throw "Windows transport configuration failed: $LASTEXITCODE" }
+$Package = Join-Path $BuildDir 'xr_tracking'
+if (!(Test-Path (Join-Path $Package 'bin\win64\driver_xr_tracking.dll'))) { throw 'Expected win64 driver DLL is missing.' }
+Copy-Item -Force (Join-Path $DriverDir 'LICENSE') $Package
+Copy-Item -Force (Join-Path $DriverDir 'THIRD_PARTY_NOTICES.md') $Package
+Copy-Item -Recurse -Force (Join-Path $DriverDir 'LICENSES') $Package
+if (Test-Path (Join-Path $OpenVrSdkRoot 'LICENSE')) {
+  Copy-Item -Force (Join-Path $OpenVrSdkRoot 'LICENSE') (Join-Path $Package 'LICENSES\OpenVR-SDK.txt')
+}
+Copy-Item -Recurse -Force (Join-Path $DriverDir 'scripts\windows\package\*') $Package
+Copy-Item -Force (Join-Path $DriverDir 'docs\WINDOWS.ru.md') (Join-Path $Package 'WINDOWS.ru.md')
+Copy-Item -Force (Join-Path $DriverDir 'docs\WINDOWS.en.md') (Join-Path $Package 'WINDOWS.en.md')
 
 Write-Host "[build_openvr_driver] device: $Device"
 Write-Host "[build_openvr_driver] display config: $DisplayConfig"

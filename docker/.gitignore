@@ -1,0 +1,8 @@
+.env
+.state/
+logs/
+exported-configs/
+config/*.json
+config/*.env
+__pycache__/
+*.pyc

@@ -103,6 +103,11 @@ XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, Steam
 # Quick start
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
+Windows SteamVR over TCP: [English](drivers/openvr_driver/docs/WINDOWS.en.md) /
+[Русский](drivers/openvr_driver/docs/WINDOWS.ru.md).
+Docker runtime, prebuilt GitHub assets: [English](docker/README.en.md) /
+[Русский](docker/README.ru.md).
+
 ## 1. Install (once)
 
 
