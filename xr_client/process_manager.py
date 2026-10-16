@@ -11,13 +11,14 @@ The shutdown path is deliberately cross-platform:
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 try:
     from .config_reader import ServiceSpec
@@ -26,6 +27,7 @@ except ImportError:
 
 IS_POSIX = os.name == "posix"
 IS_WINDOWS = os.name == "nt"
+BLUEZ_DEVICE_PATH = re.compile(r"/org/bluez/hci[0-9]+/dev_(?:[0-9A-Fa-f]{2}_){5}[0-9A-Fa-f]{2}")
 
 
 @dataclass
@@ -35,6 +37,53 @@ class RunningProcess:
     log_path: Path
     log_file: Any
     limiter_stop: threading.Event = field(default_factory=threading.Event)
+    ble_cleanup_file: Optional[Path] = None
+
+
+def cleanup_ble_connections(item: RunningProcess, *, log_fn: Callable[[str], None]) -> None:
+    """Recover links left behind by a crashed/killed Linux Gear VR provider."""
+    path = item.ble_cleanup_file
+    if path is None or item.process.poll() is None:
+        return  # Never disconnect a live provider that could reconnect immediately.
+    try:
+        pending = set()
+        for record in path.read_text().splitlines():
+            if len(record) < 2 or BLUEZ_DEVICE_PATH.fullmatch(record[1:]) is None:
+                continue
+            if record[0] == "+":
+                pending.add(record[1:])
+            elif record[0] == "-":
+                pending.discard(record[1:])
+        deadline = time.monotonic() + 3.0
+        for device_path in sorted(pending):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log_fn("[WARN] Gear VR exit cleanup timed out")
+                break
+            try:
+                result = subprocess.run(
+                    ["busctl", "--system", "--timeout=1s", "call", "org.bluez",
+                     device_path, "org.bluez.Device1", "Disconnect"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE, text=True, timeout=min(1.5, remaining),
+                    check=False,
+                )
+                if result.returncode == 0 or "Not connected" in result.stderr or "NotConnected" in result.stderr:
+                    log_fn(f"Gear VR disconnected after override_controller exit: {device_path}")
+                else:
+                    log_fn(f"[WARN] Gear VR exit cleanup failed for {device_path}: {result.stderr.strip()}")
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log_fn(f"[WARN] Cannot disconnect Gear VR after override_controller exit: {exc}")
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeError) as exc:
+        log_fn(f"[WARN] Cannot read Gear VR exit cleanup file: {exc}")
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            log_fn(f"[WARN] Cannot remove Gear VR exit cleanup file: {exc}")
+        item.ble_cleanup_file = None
 
 
 def _set_limiter_stop(item: RunningProcess) -> None:
@@ -202,6 +251,7 @@ def terminate_running_processes(
             item.process.wait(timeout=0.05)
         except Exception:
             pass
+        cleanup_ble_connections(item, log_fn=log_fn)
         try:
             item.log_file.close()
         except Exception:

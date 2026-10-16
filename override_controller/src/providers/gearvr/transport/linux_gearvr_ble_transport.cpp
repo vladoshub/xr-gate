@@ -8,10 +8,12 @@
 #include <chrono>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -180,6 +182,7 @@ constexpr uint64_t kManagedObjectsRefreshNs = 2'000'000'000ull;
 constexpr uint64_t kKeepAliveNs = 10'000'000'000ull;
 constexpr uint64_t kInitCommandGapNs = 20'000'000ull;
 constexpr uint64_t kDbusCallTimeoutUsec = 5'000'000ull;
+constexpr uint64_t kShutdownCallTimeoutUsec = 150'000ull;
 
 int64_t monotonic_now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -226,6 +229,9 @@ class LinuxGearVrBleTransport final : public BleTransport {
  public:
   explicit LinuxGearVrBleTransport(GearVrOptions options)
       : options_(std::move(options)), api_(std::make_unique<SdBusApi>()) {
+    if (const char* path = std::getenv("OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE")) {
+      cleanup_file_ = path;
+    }
     const int rc = api_->open_system(&bus_);
     if (rc < 0 || !bus_) {
       throw std::runtime_error("cannot open system D-Bus for BlueZ: " + std::to_string(rc));
@@ -236,21 +242,45 @@ class LinuxGearVrBleTransport final : public BleTransport {
   }
 
   ~LinuxGearVrBleTransport() override {
+    stopping_ = true;
+    // Fit normal teardown into the launcher's stop timeout. A stalled BlueZ
+    // operation must not prevent Disconnect on the remaining controllers.
+    (void)api_->set_method_timeout(bus_, kShutdownCallTimeoutUsec);
     for (auto& [id, session_ptr] : sessions_) {
       Session& session = *session_ptr;
+      if (session.connect_slot) {
+        api_->slot_unref(session.connect_slot);
+        session.connect_slot = nullptr;
+      }
       const bool stop_dbus_notifications =
           session.notifications_started && !session.notify_uses_fd;
       close_notify_channel(session);
+      if (!session.managed) continue;
+      if (session.connected && !session.command_path.empty()) {
+        (void)write_command(session, kCommandOff, false, kShutdownCallTimeoutUsec);
+      }
       if (stop_dbus_notifications && !session.notify_path.empty()) {
         MessageGuard reply{api_.get(), nullptr};
         (void)api_->call_method(bus_, kBluezService, session.notify_path.c_str(),
                                 kGattCharacteristicInterface, "StopNotify", nullptr,
                                 &reply.value, nullptr);
       }
-      if (!session.command_path.empty()) (void)write_command(session, kCommandOff, false);
-      if (session.connect_slot) {
-        api_->slot_unref(session.connect_slot);
-        session.connect_slot = nullptr;
+      // StopNotify/closing AcquireNotify stops packets, not the BLE link.
+      // Disconnect also cancels a Connect still pending inside BlueZ.
+      MessageGuard reply{api_.get(), nullptr};
+      ErrorGuard error{api_.get()};
+      const int rc = api_->call_method(bus_, kBluezService, session.device_path.c_str(),
+                                      kDeviceInterface, "Disconnect", &error.value,
+                                      &reply.value, nullptr);
+      if (rc >= 0 || (error.value.name &&
+                      std::strcmp(error.value.name, "org.bluez.Error.NotConnected") == 0)) {
+        (void)record_cleanup('-', session.device_path);
+        std::cerr << "[override_controller][gearvr_ble] disconnected on exit "
+                  << session.address << "\n";
+      } else {
+        std::cerr << "[override_controller][gearvr_ble][WARN] Disconnect on exit failed "
+                  << session.address << ": "
+                  << (error.value.message ? error.value.message : std::to_string(rc)) << "\n";
       }
     }
     if (properties_slot_) api_->slot_unref(properties_slot_);
@@ -392,6 +422,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     uint64_t notification_watchdog_ns = 0;
     bool full_sensor_frame_logged = false;
     bool connect_pending = false;
+    bool managed = false;
     bool seen_in_refresh = false;
     std::string error;
     uint64_t next_connect_ns = 0;
@@ -556,10 +587,30 @@ class LinuxGearVrBleTransport final : public BleTransport {
     return nullptr;
   }
 
+  bool record_cleanup(char operation, const std::string& device_path) {
+    if (cleanup_file_.empty()) return true;  // Standalone: destructor cleanup only.
+    std::ofstream output(cleanup_file_, std::ios::app);
+    output << operation << device_path << '\n';
+    output.flush();
+    return output.good();
+  }
+
+  void manage_connection(Session& session) {
+    if (cleanup_paths_.count(session.device_path) == 0) {
+      // Register before Connect so SIGKILL cannot strand an unrecorded link.
+      if (!record_cleanup('+', session.device_path)) {
+        throw std::runtime_error("cannot register Gear VR exit cleanup in " + cleanup_file_);
+      }
+      cleanup_paths_.insert(session.device_path);
+    }
+    session.managed = true;
+  }
+
   void update_connected(Session& session, bool connected) {
     if (session.connected == connected) return;
     session.connected = connected;
     if (connected) {
+      if (!stopping_) manage_connection(session);
       session.error.clear();
       session.next_connect_ns = 0;
       session.next_keepalive_ns = static_cast<uint64_t>(monotonic_now_ns()) + kKeepAliveNs;
@@ -591,7 +642,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
       session.next_connect_ns = static_cast<uint64_t>(monotonic_now_ns()) +
                                 static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
       std::cerr << "[override_controller][gearvr_ble] disconnected " << session.address
-                << "; reconnect scheduled\n";
+                << (stopping_ ? "\n" : "; reconnect scheduled\n");
     }
   }
 
@@ -806,6 +857,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
         session.device_path.empty() || now_ns < session.next_connect_ns) {
       return;
     }
+    manage_connection(session);
     session.connect_pending = true;
     const int rc = api_->call_method_async(bus_, &session.connect_slot, kBluezService,
                                            session.device_path.c_str(), kDeviceInterface,
@@ -975,7 +1027,8 @@ class LinuxGearVrBleTransport final : public BleTransport {
     return false;
   }
 
-  bool write_command(Session& session, const Command& command, bool log_error = true) {
+  bool write_command(Session& session, const Command& command, bool log_error = true,
+                     uint64_t timeout_usec = kDbusCallTimeoutUsec) {
     if (session.command_path.empty()) return false;
     MessageGuard call{api_.get(), nullptr};
     MessageGuard reply{api_.get(), nullptr};
@@ -1004,7 +1057,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     }
     if (rc >= 0) rc = api_->message_close_container(call.value);
     if (rc >= 0) {
-      rc = api_->bus_call(bus_, call.value, kDbusCallTimeoutUsec, &error.value, &reply.value);
+      rc = api_->bus_call(bus_, call.value, timeout_usec, &error.value, &reply.value);
     }
     if (rc >= 0 && !session.write_mode_logged) {
       session.write_mode_logged = true;
@@ -1021,6 +1074,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
   }
 
   void advance_sessions(uint64_t now_ns) {
+    if (stopping_) return;
     if (refresh_requested_ || now_ns >= next_refresh_ns_) (void)refresh_managed_objects();
     for (auto& [id, session_ptr] : sessions_) {
       Session& session = *session_ptr;
@@ -1176,6 +1230,9 @@ class LinuxGearVrBleTransport final : public BleTransport {
   sd_bus_slot* interfaces_removed_slot_ = nullptr;
   std::map<std::string, std::unique_ptr<Session>> sessions_;
   std::deque<BlePacket> pending_packets_;
+  std::string cleanup_file_;
+  std::set<std::string> cleanup_paths_;
+  bool stopping_ = false;
   bool refresh_requested_ = false;
   uint64_t next_refresh_ns_ = 0;
 };

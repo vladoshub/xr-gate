@@ -19,6 +19,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -38,7 +39,7 @@ try:
         resolve_config_argument,
     )
     from .manual_controls import ManualControlPoller
-    from .process_manager import RunningProcess, terminate_one_process_tree, terminate_running_processes
+    from .process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
     from .tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent
 except ImportError:
     from common import env_truthy, expand_path, log, registry_has_stream
@@ -54,7 +55,7 @@ except ImportError:
         resolve_config_argument,
     )
     from manual_controls import ManualControlPoller
-    from process_manager import RunningProcess, terminate_one_process_tree, terminate_running_processes
+    from process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
     from tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent
 
 IS_POSIX = os.name == "posix"
@@ -447,7 +448,13 @@ class Launcher:
         # of creating a sparse NUL-filled gap at the old file offset.
         log_file = log_path.open("ab", buffering=0)
         log_file.truncate(0)
+        ble_cleanup_file = None
         try:
+            if sys.platform.startswith("linux") and spec.name == "override_controller":
+                fd, name = tempfile.mkstemp(prefix="xr-gate-gearvr-", suffix=".cleanup")
+                os.close(fd)
+                ble_cleanup_file = Path(name)
+                env["OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE"] = name
             proc = subprocess.Popen(
                 spec.command,
                 cwd=spec.cwd or self.cfg.root_project,
@@ -458,9 +465,12 @@ class Launcher:
             )
         except Exception:
             log_file.close()
+            if ble_cleanup_file is not None:
+                ble_cleanup_file.unlink(missing_ok=True)
             raise
 
-        item = RunningProcess(spec=spec, process=proc, log_path=log_path, log_file=log_file)
+        item = RunningProcess(spec=spec, process=proc, log_path=log_path, log_file=log_file,
+                              ble_cleanup_file=ble_cleanup_file)
         self.running.append(item)
         if spec.name == "xr_runtime_adapter":
             threading.Thread(
@@ -695,43 +705,8 @@ class Launcher:
             log(f"No running services to stop for: {', '.join(names)}")
             return
         log(f"Stopping services: {', '.join(item.spec.name for item in items)}")
-        for item in reversed(items):
-            item.limiter_stop.set()
-            proc = item.process
-            if proc.poll() is not None:
-                continue
-            try:
-                if IS_POSIX:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                elif IS_WINDOWS:
-                    proc.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
-                else:
-                    proc.terminate()
-            except Exception:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-        deadline = time.monotonic() + max((x.spec.stop_timeout_s for x in items), default=1.0)
-        while time.monotonic() < deadline:
-            if all(item.process.poll() is not None for item in items):
-                break
-            time.sleep(0.1)
-        for item in reversed(items):
-            proc = item.process
-            if proc.poll() is None:
-                try:
-                    if IS_POSIX:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    else:
-                        proc.kill()
-                except Exception:
-                    pass
-            try:
-                item.log_file.close()
-            except Exception:
-                pass
-        self.running = [item for item in self.running if item not in items]
+        terminate_running_processes(items, log_fn=log)
+        self.running = [item for item in self.running if item.spec.name not in wanted]
 
     def clean_registry_paths(self, paths: Sequence[str]) -> None:
         if not paths:
@@ -1630,6 +1605,7 @@ class Launcher:
 
     def unregister_running_item(self, item: RunningProcess) -> None:
         item.limiter_stop.set()
+        cleanup_ble_connections(item, log_fn=log)
         try:
             item.log_file.close()
         except Exception:
@@ -1885,6 +1861,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     launcher: Optional[Launcher] = None
+    previous_stop_handlers: Dict[int, Any] = {}
+
+    def stop_on_signal(signum: int, _frame: Any) -> None:
+        # Exit through finally so the children and Gear VR links are cleaned
+        # up even when the terminal closes or a supervisor sends SIGTERM.
+        for stop_signal in previous_stop_handlers:
+            signal.signal(stop_signal, signal.SIG_IGN)
+        raise SystemExit(128 + signum)
+
     try:
         selected_config = resolve_config_argument(args)
         cfg = load_config(selected_config)
@@ -1933,6 +1918,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 cfg.imu_tap_controls.enabled = True
                 cfg.imu_tap_controls.debug = True
         launcher = Launcher(cfg, dry_run=args.dry_run)
+        if IS_POSIX:
+            stop_signals = [signal.SIGTERM]
+            if hasattr(signal, "SIGHUP"):
+                stop_signals.append(signal.SIGHUP)
+            for stop_signal in stop_signals:
+                previous_stop_handlers[stop_signal] = signal.signal(stop_signal, stop_on_signal)
         launcher.run(once=bool(args.once))
         return 0
     except KeyboardInterrupt:
@@ -1942,8 +1933,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[xr_backend_client][ERROR] {exc}", file=sys.stderr, flush=True)
         return 1
     finally:
-        if launcher is not None and not args.once:
-            launcher.stop_all()
+        try:
+            if launcher is not None and not args.once:
+                launcher.stop_all()
+        finally:
+            for stop_signal, previous_handler in previous_stop_handlers.items():
+                signal.signal(stop_signal, previous_handler)
 
 
 if __name__ == "__main__":

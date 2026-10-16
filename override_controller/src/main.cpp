@@ -2548,6 +2548,9 @@ int main(int argc, char** argv) {
   try {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+#ifdef SIGHUP
+    signal(SIGHUP, on_signal);
+#endif
 
     Args args = parse_args(argc, argv);
     try {

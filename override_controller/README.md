@@ -261,6 +261,26 @@ The tools are also installed in `bin/override_controller/tools`.
 
 ## Samsung Gear VR Controller BLE provider
 
+On Linux, stopping the provider sends the controller's OFF command, stops
+notifications and calls BlueZ `Device1.Disconnect` for each Gear VR connection
+it adopted or attempted. Ctrl+C, SIGTERM, SIGHUP and normal exception unwinding use this
+cleanup. Pending BlueZ Connect requests are canceled too. Shutdown D-Bus calls
+use short timeouts so an unresponsive controller cannot block the other side.
+
+When launched by xr-client, each process receives its own temporary cleanup
+file. The transport records the exact BlueZ device paths before connecting and
+acknowledges successful disconnects. After process exit, xr-client disconnects
+any remaining paths using `busctl`, including after a crash, SIGKILL or a forced
+manual stop. This happens before an automatic restart; the fallback has a
+three-second overall budget. No Bluetooth device enumeration is used during
+cleanup. The installed binary and xr-client Python files must both be updated.
+
+Crash recovery requires xr-client to remain alive and `busctl` to be available
+with permission to call BlueZ. xr-client also cleans up on SIGTERM and SIGHUP
+(terminal close). A standalone provider killed without unwinding, or SIGKILL
+of xr-client along with the provider, cannot run this fallback. Pairing
+and trust settings are retained. The next provider start connects normally.
+
 `override_controller` can aggregate the normal platform input provider and the
 Gear VR BLE provider in the same process. Gear VR support is opt-in. The provider
 is fully native C++; Python and Bleak are not used. Common packet decoding,
