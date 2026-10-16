@@ -230,57 +230,58 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.j
 
 2. Connect controllers to PC
 
-Enable only first controller.
+   
+## If you have built-in Bluetooth, I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500.
+
+Without external USB
 
 ```bash
-sudo systemctl enable --now bluetooth
+bluetoothctl list
+```
+
+Remember the MAC address of the built-in adapter. Then connect the USB and repeat the command—the MAC address that appears is its own.
+
+```bash
 bluetoothctl
 ```
 
-Next (separate commands):
+Inside, execute the following, substituting the actual MAC addresses:
 
 ```bash
+select AA:AA:AA:AA:AA:AA
+power off
+
+select BB:BB:BB:BB:BB:BB
 power on
+show
+quit
 ```
 
-```bash
-agent NoInputNoOutput
-```
+Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output for USB should show "Powered: yes." The select and power commands select the adapter and 
+
+
+## Pair controllers
+
+Enable controllers and pair:
+(separate commands):
 
 ```bash
+bluetoothctl
+power on
+
+agent on
 default-agent
-```
+scan on
 
-```bash
-scan le
-```
+pair CONTROLLER_1
+trust CONTROLLER_1
+connect CONTROLLER_1
 
-Wait controllers:
-
-```bash
-Device AA:BB:CC:DD:EE:FF Gear VR Controller(first)
-Device AB:BB:CC:DD:EE:FF Gear VR Controller(second)
-```
-
-Next:
-
-
-```bash
-pair AA:BB:CC:DD:EE:FF
-```
-
-```bash
-trust AA:BB:CC:DD:EE:FF
-```
-
-```bash
-info AA:BB:CC:DD:EE:FF
-```
-
-Repeat for second controller from pair command
-
-```bash
-exit
+pair CONTROLLER_12
+trust CONTROLLER_2
+connect CONTROLLER_2
+scan off
+quit
 ```
 
 3. Register your controllers:
