@@ -262,8 +262,7 @@ Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output
 
 ## Pair controllers
 
-Enable controllers and pair:
-(separate commands):
+Enable controllers and pair (separate commands):
 
 ```bash
 bluetoothctl
@@ -277,7 +276,7 @@ pair CONTROLLER_1
 trust CONTROLLER_1
 connect CONTROLLER_1
 
-pair CONTROLLER_12
+pair CONTROLLER_2
 trust CONTROLLER_2
 connect CONTROLLER_2
 scan off
