@@ -64,6 +64,29 @@ that will be used the next time key `9` starts Basalt.
 Detailed Linux config documentation is maintained in
 `configs/xr_client_default_shm_config_readme.md`.
 
+## Camera recovery during startup
+
+Switching the glasses to SBS may disconnect and re-enumerate their USB devices.
+The capture registry is written before camera/IMU devices are opened, so the
+client also waits for advancing sequences on each required SHM stream. The
+`capture_service` config defaults to `stream_activity_timeout_s: 5.0`; other
+services keep registration-only readiness unless this option is enabled.
+VO and `no_imu` services do not wait for IMU data.
+
+Services listed in `gate.restart_services_on_failure` use `gate.max_attempts`
+for startup recovery, including device-open failures and registered streams
+that never produce data. They are stopped and the configured capture registry
+is cleaned before retrying. `gate.restart_backoff_s` defaults to `2.0`, allowing
+USB devices to reappear before capture is reopened. Failed quality checks use
+the same recovery path; only capture is reopened, without switching SBS again.
+
+During the check, a capture process exit triggers recovery immediately. The
+quality gate fails after two seconds without stereo data. It still uses the
+full five-second window and existing thresholds to assess image quality.
+Use `--quality-no-frame-timeout-s` in the gate command to adjust
+the stall timeout (`0` disables it). Existing JSON profiles pick up these
+defaults without edits.
+
 ## Controller IMU calibration messages
 
 Each forwarded `[imu-calibration]` progress line is followed by a yellow hint:

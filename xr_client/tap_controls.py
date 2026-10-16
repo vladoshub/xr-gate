@@ -184,7 +184,7 @@ def _load_capture_client(root_project: str):
         from capture_client import CaptureClient  # type: ignore
     except Exception as exc:
         raise RuntimeError(
-            "failed to import capture_client for IMU tap controls; run from xr_tracking root, "
+            "failed to import capture_client; run from xr_tracking root, "
             "set ROOT_PROJECT, or add bin/python / project root to PYTHONPATH"
         ) from exc
     return CaptureClient

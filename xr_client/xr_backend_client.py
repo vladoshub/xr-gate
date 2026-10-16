@@ -40,7 +40,7 @@ try:
     )
     from .manual_controls import ManualControlPoller
     from .process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
-    from .tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent
+    from .tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent, _load_capture_client
 except ImportError:
     from common import env_truthy, expand_path, log, registry_has_stream
     from config_reader import (
@@ -56,7 +56,7 @@ except ImportError:
     )
     from manual_controls import ManualControlPoller
     from process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
-    from tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent
+    from tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent, _load_capture_client
 
 IS_POSIX = os.name == "posix"
 IS_WINDOWS = os.name == "nt"
@@ -523,20 +523,52 @@ class Launcher:
         log(f"Waiting for stream '{wait.stream}' in {wait.registry}")
         start = time.monotonic()
         while True:
-            if registry_has_stream(wait.registry, wait.stream):
-                log(f"OK: stream '{wait.stream}' is registered")
-                return
             if not self.is_running(producer_name):
                 for item in self.running:
                     if item.spec.name == producer_name:
                         self.print_log_tail(item.log_path)
                 self.fail(f"{producer_name} stopped before stream '{wait.stream}' appeared")
+            if registry_has_stream(wait.registry, wait.stream):
+                log(f"OK: stream '{wait.stream}' is registered")
+                return
             if time.monotonic() - start >= wait.timeout_s:
                 for item in self.running:
                     if item.spec.name == producer_name:
                         self.print_log_tail(item.log_path)
                 self.fail(f"Timeout waiting for stream '{wait.stream}' in {wait.registry}")
             time.sleep(0.25)
+
+    def wait_for_stream_activity(self, spec: ServiceSpec, waits: Sequence[WaitStream]) -> None:
+        """Registration precedes device open; require new samples from this producer."""
+        if spec.stream_activity_timeout_s <= 0.0 or not waits:
+            return
+        CaptureClient = _load_capture_client(self.cfg.root_project)
+        clients: Dict[str, Any] = {}
+        pending: Dict[Tuple[str, str], int] = {}
+        try:
+            for wait in waits:
+                if wait.registry not in clients:
+                    streams = [item.stream for item in waits if item.registry == wait.registry]
+                    clients[wait.registry] = CaptureClient.from_shm_registry(wait.registry, required_streams=streams)
+                pending[(wait.registry, wait.stream)] = clients[wait.registry].latest_sequence(wait.stream)
+            log(f"Waiting for fresh data from {spec.name}: {', '.join(wait.stream for wait in waits)}")
+            deadline = time.monotonic() + spec.stream_activity_timeout_s
+            while pending:
+                if not self.is_running(spec.name):
+                    self.fail(f"{spec.name} stopped before fresh stream data arrived")
+                for key, sequence in list(pending.items()):
+                    registry, stream = key
+                    if clients[registry].latest_sequence(stream) > sequence:
+                        pending.pop(key)
+                if not pending:
+                    log(f"OK: {spec.name} streams are producing fresh data")
+                    return
+                if time.monotonic() >= deadline:
+                    self.fail(f"{spec.name} has no fresh data on streams: {', '.join(stream for _, stream in pending)}")
+                time.sleep(0.05)
+        finally:
+            for client in clients.values():
+                client.close()
 
     def wait_for_service_streams(self, spec: ServiceSpec) -> None:
         imu_stream_names = {"imu0"}
@@ -570,6 +602,7 @@ class Launcher:
                 log(spec.ready_message)
             return
 
+        active_waits = []
         for wait in spec.wait_streams:
             reason = skip_reason(wait)
             if reason:
@@ -579,8 +612,37 @@ class Launcher:
                 )
                 continue
             self.wait_stream(spec.name, wait)
+            active_waits.append(wait)
+        self.wait_for_stream_activity(spec, active_waits)
         if spec.ready_message:
             log(spec.ready_message)
+
+    def start_service_with_gate_recovery(self, spec: ServiceSpec) -> bool:
+        """Retry device startup failures as well as failures of the quality check."""
+        gate = self.cfg.gate
+        recover = bool(gate and gate.enabled and spec.name in gate.restart_services_on_failure)
+        max_attempts = max(1, gate.max_attempts) if recover else 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                started = self.start_service(spec)
+                if started:
+                    self.wait_for_service_streams(spec)
+                return started
+            except (RuntimeError, OSError) as exc:
+                if not recover:
+                    raise
+                self.print_log_tail(self.log_dir / f"{spec.name}.log", lines=40)
+                self.stop_service_names([spec.name])
+                self.clean_registry_paths(gate.restart_clean_registries)
+                if attempt >= max_attempts:
+                    raise
+                log(
+                    f"Startup recovery: {spec.name} is not ready ({exc}); "
+                    f"waiting for device reconnect before retry ({attempt}/{max_attempts})",
+                    color="yellow",
+                )
+                time.sleep(max(0.0, gate.restart_backoff_s))
+        return False
 
 
     def _describe_control_action(self, event_name: str, action: Dict[str, Any]) -> str:
@@ -1407,13 +1469,13 @@ class Launcher:
         log(f"Startup gate recovery: restarting services: {', '.join(names)}", color="yellow")
         self.stop_service_names(names)
         self.clean_registry_paths(getattr(gate, "restart_clean_registries", []) or [])
+        if not self.dry_run:
+            time.sleep(max(0.0, gate.restart_backoff_s))
         for name in names:
             spec = self.service_spec_by_name(name)
             if spec is None:
                 self.fail(f"Startup gate recovery service not found: {name}")
-            started = self.start_service(spec)
-            if started:
-                self.wait_for_service_streams(spec)
+            self.start_service_with_gate_recovery(spec)
 
     def _prompt_after_gate_failure(self, gate: GateSpec, reason: str, max_attempts: int) -> str:
         log(
@@ -1457,6 +1519,8 @@ class Launcher:
         except Exception as exc:
             out_queue.put(f"[xr_backend_client][gate-reader-error] {exc}\n")
         finally:
+            if process.stdout is not None:
+                process.stdout.close()
             out_queue.put(None)
 
     def run_gate(self, gate: Optional[GateSpec]) -> None:
@@ -1496,6 +1560,7 @@ class Launcher:
             gate_ready_from_output = False
             gate_pass_line_seen = False
             gate_timed_out = False
+            producer_failure = ""
             code: Optional[int] = None
             process: Optional[subprocess.Popen] = None
             line_queue: "queue.Queue[Optional[str]]" = queue.Queue()
@@ -1522,6 +1587,18 @@ class Launcher:
                 self._emit_gate_timeout_countdown(gate, deadline_s, force=True)
 
                 while True:
+                    failed_producers = [
+                        item for item in self.running_items_by_name(gate.restart_services_on_failure)
+                        if item.process.poll() is not None
+                    ]
+                    if failed_producers:
+                        producer_failure = ", ".join(
+                            f"{item.spec.name} exited with code {item.process.returncode}"
+                            for item in failed_producers
+                        )
+                        self._release_startup_gate_process(process)
+                        code = 1
+                        break
                     now = time.monotonic()
                     if deadline_s is not None and now >= deadline_s:
                         gate_timed_out = True
@@ -1566,11 +1643,13 @@ class Launcher:
                         self._release_startup_gate_process(process)
                         code = 1
 
-            if gate_ready_from_output:
+            if gate_ready_from_output or code == 0:
                 log("Startup gate passed")
                 return
 
-            if gate_timed_out:
+            if producer_failure:
+                reason = producer_failure
+            elif gate_timed_out:
                 reason = f"timeout after {timeout_s:.0f}s"
             else:
                 if code is None:
@@ -1685,9 +1764,7 @@ class Launcher:
             if not spec.start_on_launch:
                 log(f"Skipping {spec.name}: start_on_launch=false")
                 continue
-            started = self.start_service(spec)
-            if started:
-                self.wait_for_service_streams(spec)
+            self.start_service_with_gate_recovery(spec)
 
         self.run_gate(self.cfg.gate)
 

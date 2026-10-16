@@ -123,6 +123,7 @@ class VisualGateConfig:
 class StreamQualityGateConfig:
     enabled: bool = False
     window_s: float = 5.0
+    no_frame_timeout_s: float = 2.0
     max_defective_frames: int = 5
     min_frames: int = 20
     min_mean: float = 12.0
@@ -433,46 +434,59 @@ def run_stream_quality_gate(source: SyncedPacketSource, cfg: StartupGateConfig) 
         raise ValueError("quality window_s must be positive")
     if quality.max_defective_frames < 0:
         raise ValueError("quality max_defective_frames must be non-negative")
+    if not math.isfinite(quality.no_frame_timeout_s) or quality.no_frame_timeout_s < 0.0:
+        raise ValueError("quality no_frame_timeout_s must be finite and non-negative")
 
     wall_start = time.monotonic()
+    last_frame_s = wall_start
     last_print_seen = -1
     frames_seen = 0
     defective = 0
 
-    while True:
+    def finish(reason: str) -> StartupGateResult:
         elapsed_s = time.monotonic() - wall_start
-        if elapsed_s >= quality.window_s:
-            passed = frames_seen >= quality.min_frames and defective <= quality.max_defective_frames
-            reason = "passed" if passed else (
-                "not-enough-frames" if frames_seen < quality.min_frames else "too-many-defective-frames"
-            )
-            print(
-                "[xr_startup_gate] stream quality gate result: "
-                f"elapsed={elapsed_s:.2f}s seen={frames_seen} "
-                f"defective={defective}/{quality.max_defective_frames} "
-                f"min_frames={quality.min_frames} passed={str(passed).lower()} reason={reason}",
-                flush=True,
-            )
-            return StartupGateResult(
-                passed=passed,
-                visual_ready=passed,
-                imu_ready=True,
-                frames_seen=frames_seen,
-                visual_seen=frames_seen,
-                visual_good=max(0, frames_seen - defective),
-                imu_seen=0,
-                imu_good=0,
-                quality_seen=frames_seen,
-                quality_defective=defective,
-                quality_window_s=elapsed_s,
-                reason=reason,
-            )
+        passed = reason == "passed"
+        print(
+            "[xr_startup_gate] stream quality gate result: "
+            f"elapsed={elapsed_s:.2f}s seen={frames_seen} "
+            f"defective={defective}/{quality.max_defective_frames} "
+            f"min_frames={quality.min_frames} passed={str(passed).lower()} reason={reason}",
+            flush=True,
+        )
+        return StartupGateResult(
+            passed=passed,
+            visual_ready=passed,
+            imu_ready=True,
+            frames_seen=frames_seen,
+            visual_seen=frames_seen,
+            visual_good=max(0, frames_seen - defective),
+            imu_seen=0,
+            imu_good=0,
+            quality_seen=frames_seen,
+            quality_defective=defective,
+            quality_window_s=elapsed_s,
+            reason=reason,
+        )
 
-        packet = source.read_next(timeout_s=min(cfg.read_timeout_s, max(0.05, quality.window_s - elapsed_s)))
+    while True:
+        now = time.monotonic()
+        elapsed_s = now - wall_start
+        if quality.no_frame_timeout_s > 0.0 and now - last_frame_s >= quality.no_frame_timeout_s:
+            return finish("no-frames" if frames_seen == 0 else "stream-stalled")
+        if elapsed_s >= quality.window_s:
+            if frames_seen < quality.min_frames:
+                return finish("not-enough-frames")
+            return finish("passed" if defective <= quality.max_defective_frames else "too-many-defective-frames")
+
+        read_timeout_s = min(cfg.read_timeout_s, quality.window_s - elapsed_s)
+        if quality.no_frame_timeout_s > 0.0:
+            read_timeout_s = min(read_timeout_s, quality.no_frame_timeout_s - (now - last_frame_s))
+        packet = source.read_next(timeout_s=read_timeout_s)
         if packet is None:
             print("[xr_startup_gate] WARN: stream quality sync timeout", flush=True)
             continue
 
+        last_frame_s = time.monotonic()
         pair = getattr(packet, "pair", packet)
         frames_seen += 1
         h0 = compute_image_health(pair.cam0)
@@ -664,6 +678,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     _add_bool_gate_flags(ap)
     ap.add_argument("--stream-quality-gate", action="store_true", help="Run a fixed-window camera quality preflight gate")
     ap.add_argument("--quality-window-s", type=float, default=5.0)
+    ap.add_argument("--quality-no-frame-timeout-s", type=float, default=2.0,
+                    help="Fail early when stereo data stops; 0 disables the stall timeout")
     ap.add_argument("--quality-max-defective-frames", type=int, default=5)
     ap.add_argument("--quality-min-frames", type=int, default=20)
     ap.add_argument("--quality-min-mean", type=float, default=12.0)
@@ -707,6 +723,7 @@ def config_from_args(args: argparse.Namespace) -> StartupGateConfig:
         quality=StreamQualityGateConfig(
             enabled=bool(args.stream_quality_gate),
             window_s=args.quality_window_s,
+            no_frame_timeout_s=args.quality_no_frame_timeout_s,
             max_defective_frames=args.quality_max_defective_frames,
             min_frames=args.quality_min_frames,
             min_mean=args.quality_min_mean,
@@ -764,6 +781,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "[xr_startup_gate] stream_quality_gate: enabled "
             f"window_s={cfg.quality.window_s} max_defective_frames={cfg.quality.max_defective_frames} "
+            f"no_frame_timeout_s={cfg.quality.no_frame_timeout_s} "
             f"min_frames={cfg.quality.min_frames} min_mean={cfg.quality.min_mean} "
             f"min_stddev={cfg.quality.min_stddev} max_black_fraction={cfg.quality.max_black_fraction} "
             f"min_corners={cfg.quality.min_corners} min_laplacian_stddev={cfg.quality.min_laplacian_stddev}",

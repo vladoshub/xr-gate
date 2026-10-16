@@ -65,6 +65,7 @@ class ServiceSpec:
     cwd: Optional[str] = None
     env: Dict[str, str] = field(default_factory=dict)
     wait_streams: List[WaitStream] = field(default_factory=list)
+    stream_activity_timeout_s: float = 0.0
     foreground: bool = False
     ready_message: str = ""
     start_delay_s: float = 0.3
@@ -94,6 +95,7 @@ class GateSpec:
     timeout_status_interval_s: float = 1.0
     timeout_prompt: bool = True
     max_attempts: int = 1
+    restart_backoff_s: float = 2.0
     restart_services_on_failure: List[str] = field(default_factory=list)
     restart_clean_registries: List[str] = field(default_factory=list)
     visual_progress_template: str = (
@@ -190,6 +192,7 @@ def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: fl
         cwd=cwd,
         env=env,
         wait_streams=parse_wait_streams(item.get("wait_streams", []), default_timeout_s, root_project),
+        stream_activity_timeout_s=float(item.get("stream_activity_timeout_s", 5.0 if name == "capture_service" else 0.0)),
         foreground=bool(item.get("foreground", False)),
         ready_message=str(item.get("ready_message", "")),
         start_delay_s=float(item.get("start_delay_s", 0.3)),
@@ -229,6 +232,7 @@ def parse_gate(item: Optional[Dict[str, Any]], root_project: str) -> Optional[Ga
         timeout_status_interval_s=float(item.get("timeout_status_interval_s", 1.0)),
         timeout_prompt=bool(item.get("timeout_prompt", True)),
         max_attempts=max(1, int(item.get("max_attempts", 1))),
+        restart_backoff_s=float(item.get("restart_backoff_s", 2.0)),
         restart_services_on_failure=[str(x) for x in item.get("restart_services_on_failure", [])],
         restart_clean_registries=[str(x) for x in item.get("restart_clean_registries", [])],
         visual_progress_template=str(item.get(

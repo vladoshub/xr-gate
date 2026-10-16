@@ -56,5 +56,5 @@ python3 "$XR_ROOT_PROJECT/devices/common/linux/scripts/runtime/cpu_target.py" ch
 if [[ ! -t 0 ]]; then
   echo '[xr-gate] stdin is not a terminal. Use ./xr-gate run or ./xr-gate console for prompts and keys.' >&2
 fi
-echo "[xr-gate] release v2.3.0; xr_client config: $config; application TCP: 45810" >&2
+echo "[xr-gate] release v2.5.0; xr_client config: $config; application TCP: 45810" >&2
 exec "$XR_ROOT_PROJECT/run_xr_client.sh" --config "$config" "$@"
