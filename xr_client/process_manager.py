@@ -39,6 +39,8 @@ class RunningProcess:
     log_file: Any
     limiter_stop: threading.Event = field(default_factory=threading.Event)
     ble_cleanup_file: Optional[Path] = None
+    log_lock: Any = field(default_factory=threading.Lock, repr=False)
+    log_trimmed_bytes: int = 0
 
 
 def cleanup_ble_connections(item: RunningProcess, *, log_fn: Callable[[str], None]) -> None:

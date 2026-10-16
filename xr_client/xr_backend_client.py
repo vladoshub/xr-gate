@@ -11,6 +11,7 @@ New services/backends should be added in JSON config, not hard-coded here.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, nullcontext
 import json
 import math
 import os
@@ -75,6 +76,12 @@ CONTROLLER_IMU_CALIBRATION_PROGRESS = re.compile(
     rb"^\[xr_runtime_adapter\]\[imu-calibration\] side=(?P<side>left|right) "
     rb"yaw=[a-z_]+ translation=(?P<translation>[a-z_]+)(?: [a-z_]+=[a-z0-9.+/-]+)*$"
 )
+
+
+class StartupGateFailure(RuntimeError):
+    def __init__(self, message: str, *, producer_failed: bool = False) -> None:
+        super().__init__(message)
+        self.producer_failed = producer_failed
 
 
 def normalize_basalt_mode(value: str) -> str:
@@ -149,6 +156,7 @@ class Launcher:
         self.tap_detector: Optional[ImuTapDetector] = None
         self.manual_controls: Optional[ManualControlPoller] = None
         self._prestart_message_printed = False
+        self._selected_prestart_option: Optional[PrestartOptionSpec] = None
         self._last_gate_visual_hint: Optional[Tuple[int, int]] = None
         self._last_gate_imu_hint: Optional[Tuple[int, int]] = None
         self._last_gate_hint_time_s = 0.0
@@ -290,9 +298,10 @@ class Launcher:
         if spec is None or not spec.enabled:
             return
         self.print_prestart_message(spec)
-        option = self.select_prestart_option(spec)
+        option = self._selected_prestart_option or self.select_prestart_option(spec)
         if option is None:
             return
+        self._selected_prestart_option = option
         log(f"Selected prestart option: {option.id} ({option.label})")
         if option.command:
             service_name = option.service_name or option.id
@@ -349,6 +358,18 @@ class Launcher:
                 except FileNotFoundError:
                     pass
 
+    def _trim_service_log(self, item: RunningProcess) -> None:
+        with item.log_lock:
+            if (item.limiter_stop.is_set() or not item.log_path.exists()
+                    or item.log_path.stat().st_size <= self.cfg.log_max_bytes):
+                return
+            data = item.log_path.read_bytes()
+            tail = data[-self.cfg.log_max_bytes:]
+            item.log_path.write_bytes(tail)
+            # Readers must shift their physical cursor past the removed prefix,
+            # rather than interpreting retained history as fresh backend output.
+            item.log_trimmed_bytes += len(data) - len(tail)
+
     def start_log_limiter(self, item: RunningProcess) -> None:
         if self.cfg.log_max_bytes <= 0:
             return
@@ -356,9 +377,7 @@ class Launcher:
         def worker() -> None:
             while not item.limiter_stop.is_set() and item.process.poll() is None:
                 try:
-                    if item.log_path.exists() and item.log_path.stat().st_size > self.cfg.log_max_bytes:
-                        data = item.log_path.read_bytes()[-self.cfg.log_max_bytes:]
-                        item.log_path.write_bytes(data)
+                    self._trim_service_log(item)
                 except Exception:
                     pass
                 item.limiter_stop.wait(max(0.1, self.cfg.log_trim_interval_s))
@@ -379,14 +398,27 @@ class Launcher:
         last_status = None
         last_ready = (False, False)
         translation_disabled = set()
+        trimmed_bytes_seen = 0
         try:
             with item.log_path.open("rb") as source:
                 while not item.limiter_stop.is_set():
-                    if os.fstat(source.fileno()).st_size < source.tell():
-                        # The existing log limiter truncates this same inode.
-                        source.seek(0)
-                        pending = b""
-                    chunk = source.read(64 * 1024)
+                    with getattr(item, "log_lock", nullcontext()):
+                        trimmed_bytes = getattr(item, "log_trimmed_bytes", 0)
+                        if trimmed_bytes != trimmed_bytes_seen:
+                            offset = source.tell() - (trimmed_bytes - trimmed_bytes_seen)
+                            source.seek(max(0, offset))
+                            if offset < 0:
+                                # The reader fell behind the retained tail.
+                                pending = b""
+                                last_status = None
+                                last_ready = (False, False)
+                                translation_disabled.clear()
+                            trimmed_bytes_seen = trimmed_bytes
+                        if os.fstat(source.fileno()).st_size < source.tell():
+                            # Also tolerate external truncation without limiter metadata.
+                            source.seek(0)
+                            pending = b""
+                        chunk = source.read(64 * 1024)
                     if chunk:
                         lines = (pending + chunk).split(b"\n")
                         pending = lines.pop()
@@ -425,11 +457,15 @@ class Launcher:
                                 progress = CONTROLLER_IMU_CALIBRATION_PROGRESS.fullmatch(line)
                                 if progress is None:
                                     continue
+                                side = progress.group("side")
+                                if last_ready[0 if side == b"left" else 1]:
+                                    # Completion owns the side until a fresh
+                                    # alignment status actually resets it.
+                                    continue
                                 # Runtime already limits this to one line per
                                 # pending side every three seconds. A repeated
                                 # reason is useful when the user must act.
                                 log(line.decode("ascii"))
-                                side = progress.group("side")
                                 if progress.group("translation") == b"disabled":
                                     translation_disabled.add(side)
                                 log(
@@ -1564,7 +1600,7 @@ class Launcher:
     def _prompt_after_gate_failure(self, gate: GateSpec, reason: str, max_attempts: int) -> str:
         log(
             f"Startup gate failed after {max_attempts} attempt(s): {reason}. "
-            "Press R then Enter to restart capture/check again, or Enter to start without gate.",
+            "Press R then Enter to restart startup/check again, or Enter to start without gate.",
             color="yellow",
         )
         if not gate.timeout_prompt or not sys.stdin.isatty():
@@ -1609,7 +1645,7 @@ class Launcher:
                 process.stdout.close()
             out_queue.put(None)
 
-    def run_gate(self, gate: Optional[GateSpec]) -> None:
+    def run_gate(self, gate: Optional[GateSpec], *, single_attempt: bool = False) -> None:
         if gate is None or not gate.enabled:
             log("Startup gate disabled")
             return
@@ -1651,7 +1687,7 @@ class Launcher:
             process: Optional[subprocess.Popen] = None
             line_queue: "queue.Queue[Optional[str]]" = queue.Queue()
 
-            with log_path.open("wb" if attempt == 1 else "ab") as log_file:
+            with log_path.open("wb" if attempt == 1 else "ab") as log_file, ExitStack() as cleanup:
                 if attempt > 1:
                     log_file.write(f"\n[xr_backend_client] --- startup gate retry {attempt} ---\n".encode("utf-8"))
                 process = subprocess.Popen(
@@ -1664,6 +1700,10 @@ class Launcher:
                     bufsize=1,
                     **self.popen_kwargs(),
                 )
+                if single_attempt:
+                    # A full retry must close the old gate's SHM readers and
+                    # process tree before reopening the display/capture stack.
+                    cleanup.callback(terminate_one_process_tree, process)
                 threading.Thread(
                     target=self._read_gate_stdout,
                     args=(process, line_queue),
@@ -1682,7 +1722,8 @@ class Launcher:
                             f"{item.spec.name} exited with code {item.process.returncode}"
                             for item in failed_producers
                         )
-                        self._release_startup_gate_process(process)
+                        if not single_attempt:
+                            self._release_startup_gate_process(process)
                         code = 1
                         break
                     now = time.monotonic()
@@ -1713,20 +1754,23 @@ class Launcher:
 
                     if gate_pass_line_seen or (self._gate_visual_ready and self._gate_imu_ready):
                         gate_ready_from_output = True
-                        self._release_startup_gate_process(process)
+                        if not single_attempt:
+                            self._release_startup_gate_process(process)
                         code = 0
                         break
 
                     self._emit_gate_timeout_countdown(gate, deadline_s)
 
                 if gate_timed_out:
-                    self._release_startup_gate_process(process)
+                    if not single_attempt:
+                        self._release_startup_gate_process(process)
                     code = None
                 elif code is None:
                     try:
                         code = process.wait(timeout=0.5)
                     except subprocess.TimeoutExpired:
-                        self._release_startup_gate_process(process)
+                        if not single_attempt:
+                            self._release_startup_gate_process(process)
                         code = 1
 
             if gate_ready_from_output or code == 0:
@@ -1741,6 +1785,10 @@ class Launcher:
                 if code is None:
                     code = 1
                 reason = f"exit code {code}"
+
+            if single_attempt:
+                self.print_log_tail(log_path, lines=40)
+                raise StartupGateFailure(reason, producer_failed=bool(producer_failure))
 
             if attempt < max_attempts:
                 self.print_log_tail(log_path, lines=40)
@@ -1836,6 +1884,98 @@ class Launcher:
         if code != 0:
             self.fail(f"Foreground service {spec.name} exited with code {code}")
 
+    def _start_pre_gate_services(self, *, recover_individually: bool) -> None:
+        for spec in self.cfg.pre_gate_services:
+            if not spec.start_on_launch:
+                log(f"Skipping {spec.name}: start_on_launch=false")
+                continue
+            if recover_individually:
+                self.start_service_with_gate_recovery(spec)
+            elif self.start_service(spec):
+                self.wait_for_service_streams(spec)
+
+    def _save_startup_attempt_logs(self, paths: Sequence[Path], session: str, attempt: int) -> None:
+        destination = self.log_dir / "startup_attempts" / session / f"attempt-{attempt}"
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+            for path in set(paths):
+                if path.is_file():
+                    shutil.copy2(path, destination / path.name)
+            log(f"Failed startup logs: {destination}")
+        except OSError as exc:
+            log(f"[WARN] Cannot preserve failed startup logs: {exc}")
+
+    def run_startup(self) -> None:
+        gate = self.cfg.gate
+        full_retry = bool(gate and gate.enabled and gate.restart_full_startup_on_failure)
+        if not full_retry:
+            self.clean_registries()
+            self.run_prestart_control()
+            self._start_pre_gate_services(recover_individually=True)
+            self.run_gate(gate)
+            return
+
+        max_attempts = max(1, int(gate.max_attempts))
+        attempt = 0
+        total_attempts = 0
+        session = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+        while True:
+            attempt += 1
+            total_attempts += 1
+            gate_started = False
+            log(f"Full startup attempt {attempt}/{max_attempts}")
+            try:
+                self.clean_registries()
+                self.run_prestart_control()
+                self._start_pre_gate_services(recover_individually=False)
+                gate_started = True
+                self.run_gate(gate, single_attempt=True)
+                return
+            except (RuntimeError, OSError) as exc:
+                # Preserve skip/retry for a failed quality check with a live
+                # capture source. Missing/dead capture cannot be skipped.
+                manual_retry = False
+                if (attempt >= max_attempts and isinstance(exc, StartupGateFailure)
+                        and not exc.producer_failed):
+                    choice = self._prompt_after_gate_failure(gate, str(exc), max_attempts)
+                    if choice == "skip":
+                        log("Startup gate skipped by user after failed quality check", color="yellow")
+                        return
+                    manual_retry = True
+
+                failed_items = list(self.running)
+                paths = [item.log_path for item in failed_items]
+                if gate_started:
+                    paths.append(self.log_dir / f"{gate.log_name}.log")
+                else:
+                    for path in paths:
+                        self.print_log_tail(path, lines=40)
+                log(f"Full startup attempt {attempt}/{max_attempts} failed: {exc}", color="yellow")
+                # Do not call stop_all(): that also sets the supervisor's quit
+                # flag. Here every owned child must stop before a fresh attempt.
+                if not terminate_running_processes(self.running, log_fn=log):
+                    self.fail("Cannot retry startup: previous service processes did not stop")
+                for item in failed_items:
+                    # Finish a trim already in progress before reusing its path.
+                    with item.log_lock:
+                        pass
+                self._save_startup_attempt_logs(paths, session, total_attempts)
+                self.clean_registry_paths(gate.restart_clean_registries)
+                self.restart_history.clear()
+                self._controller_imu_console_suppressed = False
+                if attempt >= max_attempts and not manual_retry:
+                    self.clean_registries()
+                    raise RuntimeError(f"Startup failed after {max_attempts} full attempt(s): {exc}") from exc
+                if manual_retry:
+                    attempt = 0
+                log(
+                    f"Retrying full startup in {max(0.0, gate.restart_backoff_s):.1f}s: "
+                    "display helper, capture and startup gate",
+                    color="yellow",
+                )
+                if not self.dry_run:
+                    time.sleep(max(0.0, gate.restart_backoff_s))
+
     def run(self, *, once: bool = False) -> None:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         os.chdir(self.cfg.root_project)
@@ -1843,16 +1983,7 @@ class Launcher:
         log(f"LOG_DIR={self.log_dir}")
         log(f"LOG_MAX_BYTES={self.cfg.log_max_bytes}")
         log(f"LOG_TRIM_INTERVAL_SEC={self.cfg.log_trim_interval_s}")
-        self.clean_registries()
-        self.run_prestart_control()
-
-        for spec in self.cfg.pre_gate_services:
-            if not spec.start_on_launch:
-                log(f"Skipping {spec.name}: start_on_launch=false")
-                continue
-            self.start_service_with_gate_recovery(spec)
-
-        self.run_gate(self.cfg.gate)
+        self.run_startup()
 
         self.start_imu_tap_controls()
 

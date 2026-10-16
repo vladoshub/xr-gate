@@ -97,6 +97,7 @@ class GateSpec:
     timeout_prompt: bool = True
     max_attempts: int = 1
     restart_backoff_s: float = 2.0
+    restart_full_startup_on_failure: bool = True
     restart_services_on_failure: List[str] = field(default_factory=list)
     restart_clean_registries: List[str] = field(default_factory=list)
     visual_progress_template: str = (
@@ -235,6 +236,7 @@ def parse_gate(item: Optional[Dict[str, Any]], root_project: str) -> Optional[Ga
         timeout_prompt=bool(item.get("timeout_prompt", True)),
         max_attempts=max(1, int(item.get("max_attempts", 1))),
         restart_backoff_s=float(item.get("restart_backoff_s", 2.0)),
+        restart_full_startup_on_failure=bool(item.get("restart_full_startup_on_failure", True)),
         restart_services_on_failure=[str(x) for x in item.get("restart_services_on_failure", [])],
         restart_clean_registries=[str(x) for x in item.get("restart_clean_registries", [])],
         visual_progress_template=str(item.get(

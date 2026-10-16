@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from xr_client.config_reader import ServiceSpec
+from xr_client.process_manager import RunningProcess
 from xr_client.xr_backend_client import Launcher
 
 
@@ -38,6 +39,113 @@ def raw_status_logger(messages):
 class ControllerImuConsoleTest(unittest.TestCase):
     def launcher(self, folder):
         return Launcher(SimpleNamespace(log_dir=folder, root_project=folder, log_max_bytes=0))
+
+    def test_log_limiter_does_not_replay_completed_calibration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            progress = (b"[xr_runtime_adapter][imu-calibration] side=left yaw=collecting "
+                        b"translation=need_motion\n")
+            initial = status("no", "no", ("no", "no"))
+            ready = status("yes", "yes", ("yes", "yes"))
+            history = initial + progress + ready
+            path.write_bytes(b"old verbose frames\n" * 400 + history)
+            item = RunningProcess(ServiceSpec(name="xr_runtime_adapter", command=[]),
+                                  SimpleNamespace(poll=lambda: None), path, None)
+            launcher = Launcher(SimpleNamespace(log_dir=folder, root_project=folder,
+                                                log_max_bytes=len(history) + 1024,
+                                                log_trim_interval_s=0.01))
+            launcher.manual_controls = SimpleNamespace(stop_requested=False,
+                                                       redraw_prompt=lambda: None)
+            ready_seen, replayed = threading.Event(), threading.Event()
+            messages = []
+
+            def collect(message, *, color=None):
+                messages.append((message, color))
+                if message == "Both controllers calibrated. IMU prediction is active.":
+                    if ready_seen.is_set():
+                        replayed.set()
+                    ready_seen.set()
+
+            reader = threading.Thread(target=launcher.forward_controller_imu_status,
+                                      args=(item,), daemon=True)
+            with patch("xr_client.xr_backend_client.log", collect):
+                reader.start()
+                try:
+                    self.assertTrue(ready_seen.wait(2), "initial calibration missing")
+                    launcher.start_log_limiter(item)
+                    self.assertFalse(replayed.wait(0.4), "log trimming replayed old calibration")
+                    self.assertLessEqual(path.stat().st_size, launcher.cfg.log_max_bytes)
+                    # A real calibration reset and later confirmation still reach the user.
+                    ready_seen.clear()
+                    with path.open("ab") as output:
+                        output.write(initial + progress + ready)
+                    self.assertTrue(ready_seen.wait(2), "real recalibration was suppressed")
+                    self.assertEqual(sum(message.startswith("Calibrating left")
+                                         for message, _ in messages), 2)
+                finally:
+                    item.limiter_stop.set()
+                    reader.join(2)
+            self.assertFalse(reader.is_alive())
+
+    def test_confirmed_side_ignores_late_progress_until_alignment_resets(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            ready = status("yes", "yes", ("yes", "yes"))
+            progress = (b"[xr_runtime_adapter][imu-calibration] side=left yaw=ready "
+                        b"translation=need_motion\n")
+            reset = status("yes", "yes", ("no", "yes"))
+            path.write_bytes(ready + progress + reset + progress + ready + progress)
+            item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
+                                   process=SimpleNamespace(poll=lambda: 0))
+            messages = []
+            with patch("xr_client.xr_backend_client.log", lambda message, **kw: messages.append(message)):
+                self.launcher(folder).forward_controller_imu_status(item)
+            self.assertEqual(messages.count(progress.decode().strip()), 1)
+            self.assertEqual(sum(message.startswith("Calibrating left") for message in messages), 1)
+            self.assertEqual(messages[-1], "Both controllers calibrated. IMU prediction is active.")
+
+    def test_trim_preserves_partial_line_when_log_regrows_past_reader_offset(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            initial = status("no", "no", ("no", "no"))
+            ready = status("yes", "yes", ("yes", "yes"))
+            path.write_bytes(b"verbose frame\n" * 400 + initial + ready[:-10])
+            old_size = path.stat().st_size
+            item = RunningProcess(ServiceSpec(name="xr_runtime_adapter", command=[]),
+                                  SimpleNamespace(poll=lambda: None), path, None)
+            launcher = Launcher(SimpleNamespace(log_dir=folder, root_project=folder,
+                                                log_max_bytes=len(ready) + 256))
+            initial_seen, resume, ready_seen = threading.Event(), threading.Event(), threading.Event()
+            messages = []
+
+            def collect(message, *, color=None):
+                if color is not None:
+                    return
+                messages.append(message)
+                if message == initial.decode().strip():
+                    initial_seen.set()
+                    resume.wait(2)
+                if message == ready.decode().strip():
+                    ready_seen.set()
+
+            reader = threading.Thread(target=launcher.forward_controller_imu_status,
+                                      args=(item,), daemon=True)
+            with patch("xr_client.xr_backend_client.log", collect):
+                reader.start()
+                try:
+                    self.assertTrue(initial_seen.wait(2))
+                    launcher._trim_service_log(item)
+                    with path.open("ab") as output:
+                        output.write(ready[-10:] + b"new verbose frame\n" * 500)
+                    self.assertGreater(path.stat().st_size, old_size)
+                    resume.set()
+                    self.assertTrue(ready_seen.wait(2), "new status lost across trimming/regrowth")
+                    self.assertEqual(messages, [initial.decode().strip(), ready.decode().strip()])
+                finally:
+                    resume.set()
+                    item.limiter_stop.set()
+                    reader.join(2)
+            self.assertFalse(reader.is_alive())
 
     def test_explicit_stop_suppresses_calibration_until_controller_starts_again(self):
         with tempfile.TemporaryDirectory() as folder:

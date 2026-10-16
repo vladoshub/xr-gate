@@ -90,12 +90,27 @@ burst cannot satisfy this check. Stereo tolerance follows the gate command's
 services keep registration-only readiness unless this option is enabled.
 VO and `no_imu` services do not wait for IMU data.
 
-Services listed in `gate.restart_services_on_failure` use `gate.max_attempts`
-for startup recovery, including device-open failures and registered streams
-that never produce data. They are stopped and the configured capture registry
-is cleaned before retrying. `gate.restart_backoff_s` defaults to `2.0`, allowing
-USB devices to reappear before capture is reopened. Failed quality checks use
-the same recovery path; only capture is reopened, without switching SBS again.
+By default, `gate.restart_full_startup_on_failure` is `true`. Initial startup
+uses one `gate.max_attempts` budget for helper-readiness failures, capture-open
+failures, missing fresh data and failed/timed-out quality checks. Each failed
+attempt stops every owned startup service, waits for the old gate process to
+close, clears the configured registries, then repeats prestart, all enabled
+pre-gate services and the quality check. The selected display option is retained
+without asking again; `current` continues to skip the display helper.
+`gate.restart_backoff_s` defaults to `2.0`, and the normal mode-readback and
+`pre_capture_wait_s` checks run again on every attempt. Tracking/runtime backends
+start only after startup succeeds (or the user explicitly skips a quality check).
+
+Failed-attempt logs are preserved under
+`LOG_DIR/startup_attempts/<session>/attempt-N/` before their root log files are
+reused. A missing/dead capture exhausts the shared budget with an error and all
+startup children stopped. After an exhausted quality-check budget, the existing
+R action also repeats the full startup; Enter retains the existing skip action.
+
+Set `gate.restart_full_startup_on_failure` to `false` for the earlier behavior:
+only services listed in `gate.restart_services_on_failure` are retried, without
+restarting the display helper. These service retries use the configured
+`gate.restart_clean_registries` and `gate.restart_backoff_s` settings.
 
 During the check, a capture process exit triggers recovery immediately. The
 quality gate fails after two seconds without stereo data. It still uses the
@@ -127,6 +142,9 @@ A green `Left controller calibrated. IMU prediction is active.` (or right/both)
 message appears when the runtime confirms yaw and translation calibration.
 Legacy runtimes without translation flags use their yaw-ready flags; disabled
 translation calibration does not block readiness once reported as disabled.
+Once a side is confirmed, its calibration hints stop until a new alignment
+status reports a reset. Trimming a service log preserves the console reader's
+position within the retained tail, so old calibration messages are not replayed.
 Readiness is announced again after a calibration reset and recovery. The manual
 controls prompt is refreshed after each batch of forwarded calibration messages
 when interactive controls are enabled. These messages use the existing
