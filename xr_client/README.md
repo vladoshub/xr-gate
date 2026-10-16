@@ -81,7 +81,11 @@ Detailed Linux config documentation is maintained in
 
 Switching the glasses to SBS may disconnect and re-enumerate their USB devices.
 The capture registry is written before camera/IMU devices are opened, so the
-client also waits for advancing sequences on each required SHM stream. The
+client also waits for sustained advancing sequences on each required SHM stream
+and synchronized stereo pairs. The default `stream_activity_stable_s` for
+`capture_service` is `1.0` (other services default to `0.0`). A single initial
+burst cannot satisfy this check. Stereo tolerance follows the gate command's
+`--stereo-max-delta-ms`, or the same 1 ms default. The
 `capture_service` config defaults to `stream_activity_timeout_s: 5.0`; other
 services keep registration-only readiness unless this option is enabled.
 VO and `no_imu` services do not wait for IMU data.
@@ -99,6 +103,18 @@ full five-second window and existing thresholds to assess image quality.
 Use `--quality-no-frame-timeout-s` in the gate command to adjust
 the stall timeout (`0` disables it). Existing JSON profiles pick up these
 defaults without edits.
+
+For Linux XREAL prestart options with readiness patterns, a running helper is
+not considered confirmation of the display mode. The client waits for an
+actual `display mode after` / `alive; mode=` readback matching the selected
+mode. `setting display mode` and `display mode before` never confirm readiness.
+GNU `stdbuf` (from coreutils) makes the existing helper's redirected C++ output
+line-buffered through its shell wrapper, so this also works with existing
+binaries. Once confirmed, the configured `pre_capture_wait_s` still applies;
+capture preparation completes before the quality gate timer starts. A helper
+that never confirms its mode produces a readiness error instead of silently
+starting capture after five seconds. Camera sync timeouts include latest frame
+sequences, publication ages and timestamp differences in the startup gate log.
 
 ## Controller IMU calibration messages
 

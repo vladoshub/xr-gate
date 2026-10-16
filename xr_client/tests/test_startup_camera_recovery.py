@@ -139,7 +139,8 @@ class StartupCameraRecoveryTest(unittest.TestCase):
             registry = Path(folder) / "capture.json"
             registry.write_text(json.dumps({"streams": {p.spec.stream_id: p.registry_entry() for p in publishers}}))
             spec = parse_service({"name": "capture_service", "command": ["capture"],
-                                  "stream_activity_timeout_s": 0.15}, folder, 30)
+                                  "stream_activity_timeout_s": 0.15,
+                                  "stream_activity_stable_s": 0}, folder, 30)
             waits = [WaitStream(str(registry), p.spec.stream_id) for p in publishers]
             launcher.running = [SimpleNamespace(spec=spec, process=SimpleNamespace(poll=lambda: None))]
             try:

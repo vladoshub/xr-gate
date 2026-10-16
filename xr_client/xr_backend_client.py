@@ -17,6 +17,7 @@ import os
 import queue
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -236,6 +237,20 @@ class Launcher:
         start = time.monotonic()
         last_status = start
         offset = 0
+        require_mode_confirmation = name == "xreal_display_helper" and bool(patterns)
+        readback = re.compile(r"(?:display mode after:\s*|alive;\s*mode=)(\d+)\b")
+        expected_modes = {int(match.group(1)) for pattern in patterns
+                          for match in [readback.search(pattern)] if match is not None}
+
+        def ready_line(line: str) -> bool:
+            # Profiles also contain mode-name substrings, which appear in the
+            # "before" and "setting" messages. Only a readback is confirmation.
+            if require_mode_confirmation:
+                match = readback.search(line)
+                if match is None or (expected_modes and int(match.group(1)) not in expected_modes):
+                    return False
+            return any(pattern in line for pattern in patterns)
+
         while True:
             running = self.is_service_running(name)
             if not running:
@@ -250,14 +265,14 @@ class Launcher:
                     chunk = text[offset:]
                     offset = len(text)
                     for line in chunk.splitlines():
-                        if any(pattern in line for pattern in patterns):
+                        if ready_line(line):
                             log(f"OK: {name} ready: {line}")
                             return
-                if patterns and any(pattern in text for pattern in patterns):
+                if patterns and any(ready_line(line) for line in text.splitlines()):
                     log(f"OK: {name} ready")
                     return
             elapsed = time.monotonic() - start
-            if min_alive_s > 0.0 and elapsed >= min_alive_s:
+            if not require_mode_confirmation and min_alive_s > 0.0 and elapsed >= min_alive_s:
                 log(f"OK: {name} is still running after {elapsed:.1f}s; continuing without log readiness confirmation")
                 return
             now = time.monotonic()
@@ -280,9 +295,18 @@ class Launcher:
             return
         log(f"Selected prestart option: {option.id} ({option.label})")
         if option.command:
+            service_name = option.service_name or option.id
+            command = list(option.command)
+            if sys.platform.startswith("linux") and service_name == "xreal_display_helper":
+                # The shipped C++ helper writes '\n' to stdout redirected to a
+                # file. GNU stdbuf also applies through the shell wrapper's exec.
+                stdbuf = shutil.which("stdbuf")
+                if stdbuf is None:
+                    self.fail("XREAL readiness needs line-buffered helper output; install coreutils (stdbuf)")
+                command = [stdbuf, "-oL", "-eL", *command]
             service = ServiceSpec(
-                name=option.service_name or option.id,
-                command=option.command,
+                name=service_name,
+                command=command,
                 enabled=True,
                 optional=False,
                 cwd=option.cwd or self.cfg.root_project,
@@ -548,34 +572,78 @@ class Launcher:
             time.sleep(0.25)
 
     def wait_for_stream_activity(self, spec: ServiceSpec, waits: Sequence[WaitStream]) -> None:
-        """Registration precedes device open; require new samples from this producer."""
+        """Require sustained fresh samples and synchronized camera pairs."""
         if spec.stream_activity_timeout_s <= 0.0 or not waits:
             return
         CaptureClient = _load_capture_client(self.cfg.root_project)
         clients: Dict[str, Any] = {}
         pending: Dict[Tuple[str, str], int] = {}
+        stereo_readers: Dict[str, Any] = {}
+        stable_s = max(0.0, spec.stream_activity_stable_s)
+        stable_since: Optional[float] = None
+        last_good: Optional[float] = None
+        pair = None
         try:
             for wait in waits:
                 if wait.registry not in clients:
                     streams = [item.stream for item in waits if item.registry == wait.registry]
                     clients[wait.registry] = CaptureClient.from_shm_registry(wait.registry, required_streams=streams)
                 pending[(wait.registry, wait.stream)] = clients[wait.registry].latest_sequence(wait.stream)
+            if stable_s > 0.0:
+                from capture_client import StereoPairReader
+                gate = getattr(self.cfg, "gate", None)
+                delta_ms = command_option_value(gate.command, "--stereo-max-delta-ms") if gate else None
+                max_delta_ns = int(float(delta_ms if delta_ms is not None else 1.0) * 1_000_000)
+                for registry, client in clients.items():
+                    infos = client.list_streams()
+                    cameras = [wait.stream for wait in waits if wait.registry == registry
+                               and str(infos[wait.stream].kind).upper() in ("IMAGE", "1")]
+                    if len(cameras) == 2:
+                        stereo_readers[registry] = StereoPairReader(client, cameras[0], cameras[1],
+                                                                  max_timestamp_delta_ns=max_delta_ns)
             log(f"Waiting for fresh data from {spec.name}: {', '.join(wait.stream for wait in waits)}")
+            if stable_s > 0.0:
+                log(f"Waiting for {stable_s:.1f}s of stable capture data"
+                    + (" and synchronized stereo pairs" if stereo_readers else ""))
             deadline = time.monotonic() + spec.stream_activity_timeout_s
-            while pending:
+            sequences = dict(pending)
+            while True:
                 if not self.is_running(spec.name):
                     self.fail(f"{spec.name} stopped before fresh stream data arrived")
-                for key, sequence in list(pending.items()):
+                missing = []
+                current = {}
+                for key, sequence in sequences.items():
                     registry, stream = key
-                    if clients[registry].latest_sequence(stream) > sequence:
-                        pending.pop(key)
-                if not pending:
-                    log(f"OK: {spec.name} streams are producing fresh data")
-                    return
+                    current[key] = clients[registry].latest_sequence(stream)
+                    if current[key] <= sequence:
+                        missing.append(stream)
+                pairs_ready = True
+                for reader in stereo_readers.values():
+                    pair = reader.read_next_pair(timeout_s=0.05, copy_payload=False)
+                    if pair is None:
+                        pairs_ready = False
+                    pair = None
+                now = time.monotonic()
+                if not missing and pairs_ready:
+                    if stable_since is None or (last_good is not None and now - last_good > 0.5):
+                        stable_since = now
+                    last_good = now
+                    sequences = current
+                    if now - stable_since >= stable_s:
+                        log(f"OK: {spec.name} streams are producing fresh data"
+                            + (f"; stable for {stable_s:.1f}s" if stable_s > 0.0 else "")
+                            + (", stereo synchronized" if stereo_readers else ""))
+                        return
+                elif last_good is not None and now - last_good > 0.5:
+                    stable_since = None
                 if time.monotonic() >= deadline:
-                    self.fail(f"{spec.name} has no fresh data on streams: {', '.join(stream for _, stream in pending)}")
+                    detail = ", ".join(missing) if missing else "stereo synchronization/stability"
+                    log(f"Capture readiness timeout: sequences={current}; stable_for="
+                        f"{0.0 if stable_since is None else now - stable_since:.2f}s")
+                    self.fail(f"{spec.name} has no fresh data on streams: {detail}")
                 time.sleep(0.05)
         finally:
+            pair = None
             for client in clients.values():
                 client.close()
 

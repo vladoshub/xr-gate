@@ -66,6 +66,7 @@ class ServiceSpec:
     env: Dict[str, str] = field(default_factory=dict)
     wait_streams: List[WaitStream] = field(default_factory=list)
     stream_activity_timeout_s: float = 0.0
+    stream_activity_stable_s: float = 0.0
     foreground: bool = False
     ready_message: str = ""
     start_delay_s: float = 0.3
@@ -193,6 +194,7 @@ def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: fl
         env=env,
         wait_streams=parse_wait_streams(item.get("wait_streams", []), default_timeout_s, root_project),
         stream_activity_timeout_s=float(item.get("stream_activity_timeout_s", 5.0 if name == "capture_service" else 0.0)),
+        stream_activity_stable_s=float(item.get("stream_activity_stable_s", 1.0 if name == "capture_service" else 0.0)),
         foreground=bool(item.get("foreground", False)),
         ready_message=str(item.get("ready_message", "")),
         start_delay_s=float(item.get("start_delay_s", 0.3)),

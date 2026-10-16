@@ -263,6 +263,22 @@ class CaptureServiceStereoSource:
     def read_next(self, timeout_s: float):
         return self.pairs.read_next_pair(timeout_s=timeout_s, copy_payload=True)
 
+    def diagnostics(self) -> str:
+        now_ns = time.monotonic_ns()
+        messages = []
+        timestamps = []
+        for stream in (self.pairs.cam0_stream, self.pairs.cam1_stream):
+            frame = self.client.read_latest_image(stream, copy_payload=False)
+            if frame is None:
+                messages.append(f"{stream}: seq={self.client.latest_sequence(stream)} unreadable")
+                continue
+            age_ms = max(0, now_ns - frame.monotonic_ns) / 1_000_000
+            messages.append(f"{stream}: seq={frame.sequence} age_ms={age_ms:.1f}")
+            timestamps.append(frame.timestamp_ns)
+        if len(timestamps) == 2:
+            messages.append(f"latest_delta_ms={abs(timestamps[0] - timestamps[1]) / 1_000_000:.3f}")
+        return "; ".join(messages)
+
     def close(self) -> None:
         self.client.close()
 
@@ -484,6 +500,9 @@ def run_stream_quality_gate(source: SyncedPacketSource, cfg: StartupGateConfig) 
         packet = source.read_next(timeout_s=read_timeout_s)
         if packet is None:
             print("[xr_startup_gate] WARN: stream quality sync timeout", flush=True)
+            diagnostics = getattr(source, "diagnostics", None)
+            if callable(diagnostics):
+                print(f"[xr_startup_gate] camera input: {diagnostics()}", flush=True)
             continue
 
         last_frame_s = time.monotonic()
