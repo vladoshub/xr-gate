@@ -54,6 +54,19 @@ layer.
 9 - toggle 6DoF/3DoF
 ```
 
+On Linux and WSL, keys `1` through `9` execute without Enter, as they do in
+the Windows console. Text aliases still use Enter. The client restores the
+terminal settings on exit and temporarily enables line editing for recovery
+prompts. Background services receive closed stdin so they cannot consume menu
+input; foreground services and standalone controller training keep their input.
+
+Key `5` stops the managed override controller process group, including children
+whose launcher shell has already exited. A failed stop is reported instead of
+forgetting the service. After an explicit stop, controller calibration console
+messages remain suppressed until the next controller start. The runtime log
+still records backend diagnostics. Controller IMU messages refresh the command
+prompt without printing the full menu; use `h` and Enter to display the menu.
+
 Key `3` changes only the Basalt estimator mode. When Basalt is running, the
 client stops it, updates the session-local command (`--mode vio` or
 `--mode vo`), removes the stale `hmd_pose` registry entry, and starts Basalt
@@ -99,7 +112,7 @@ message appears when the runtime confirms yaw and translation calibration.
 Legacy runtimes without translation flags use their yaw-ready flags; disabled
 translation calibration does not block readiness once reported as disabled.
 Readiness is announced again after a calibration reset and recovery. The manual
-controls menu is reprinted after each batch of forwarded calibration messages
+controls prompt is refreshed after each batch of forwarded calibration messages
 when interactive controls are enabled. These messages use the existing
 `XR_CLIENT_COLOR` setting and respect `NO_COLOR`.
 

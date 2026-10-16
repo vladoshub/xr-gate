@@ -14,6 +14,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -120,7 +121,7 @@ def _windows_taskkill_tree(proc: subprocess.Popen, *, force: bool) -> bool:
 
 
 def _terminate_process_group(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
+    if not IS_POSIX and proc.poll() is not None:
         return
     try:
         if IS_POSIX:
@@ -149,7 +150,7 @@ def _terminate_process_group(proc: subprocess.Popen) -> None:
 
 
 def _kill_process_group(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
+    if not IS_POSIX and proc.poll() is not None:
         return
     try:
         if IS_POSIX:
@@ -171,6 +172,44 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             pass
 
 
+def _process_tree_alive(proc: subprocess.Popen) -> bool:
+    if proc.poll() is None:
+        return True
+    if not IS_POSIX:
+        return False
+    try:
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    if sys.platform.startswith("linux"):
+        # A wrapper may have exited while its children still own devices.
+        # Orphan zombies cannot own devices and may await the container's init.
+        try:
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                if int(fields[2]) == proc.pid and fields[0] not in ("Z", "X"):
+                    return True
+            return False
+        except (OSError, ValueError, IndexError):
+            pass  # Retain the process-group check if /proc cannot be inspected.
+    return True
+
+
+def _wait_until_exited(processes: List[subprocess.Popen], deadline_s: float) -> bool:
+    while time.monotonic() < deadline_s:
+        if all(not _process_tree_alive(proc) for proc in processes):
+            return True
+        time.sleep(0.05)
+    return all(not _process_tree_alive(proc) for proc in processes)
+
+
 def terminate_one_process_tree(
     proc: subprocess.Popen,
     *,
@@ -178,28 +217,14 @@ def terminate_one_process_tree(
     kill_wait_s: float = 1.0,
 ) -> None:
     """Best-effort bounded shutdown for a standalone helper process."""
-    if proc.poll() is not None:
+    if not _process_tree_alive(proc):
         return
     _terminate_process_group(proc)
-    try:
-        proc.wait(timeout=max(0.0, graceful_wait_s))
+    if _wait_until_exited([proc], time.monotonic() + max(0.0, graceful_wait_s)):
         return
-    except Exception:
-        pass
-    if proc.poll() is None:
+    if _process_tree_alive(proc):
         _kill_process_group(proc)
-    try:
-        proc.wait(timeout=max(0.0, kill_wait_s))
-    except Exception:
-        pass
-
-
-def _wait_until_exited(items: List[RunningProcess], deadline_s: float) -> bool:
-    while time.monotonic() < deadline_s:
-        if all(item.process.poll() is not None for item in items):
-            return True
-        time.sleep(0.05)
-    return all(item.process.poll() is not None for item in items)
+    _wait_until_exited([proc], time.monotonic() + max(0.0, kill_wait_s))
 
 
 def terminate_running_processes(
@@ -207,17 +232,17 @@ def terminate_running_processes(
     *,
     log_fn: Callable[[str], None],
     kill_wait_s: float = 2.0,
-) -> None:
+) -> bool:
     """Stop children without allowing supervisor shutdown to hang forever.
 
-    The caller owns the `running` list. This function always clears it after
-    closing log files, even when a child had to be SIGKILLed/taskkill'ed.
+    The caller owns the `running` list. This function clears it after closing
+    log files and reports whether every process tree actually stopped.
     """
     for item in list(running):
         _set_limiter_stop(item)
 
     if not running:
-        return
+        return True
 
     log_fn("Stopping child processes...")
 
@@ -227,9 +252,9 @@ def terminate_running_processes(
 
     stop_timeout_s = max((float(item.spec.stop_timeout_s) for item in items), default=1.0)
     stop_timeout_s = max(0.2, stop_timeout_s)
-    _wait_until_exited(items, time.monotonic() + stop_timeout_s)
+    _wait_until_exited([item.process for item in items], time.monotonic() + stop_timeout_s)
 
-    alive = [item for item in items if item.process.poll() is None]
+    alive = [item for item in items if _process_tree_alive(item.process)]
     if alive:
         log_fn(
             "Force killing unresponsive child processes: "
@@ -237,9 +262,9 @@ def terminate_running_processes(
         )
         for item in reversed(alive):
             _kill_process_group(item.process)
-        _wait_until_exited(alive, time.monotonic() + max(0.2, kill_wait_s))
+        _wait_until_exited([item.process for item in alive], time.monotonic() + max(0.2, kill_wait_s))
 
-    still_alive = [item for item in items if item.process.poll() is None]
+    still_alive = [item for item in items if _process_tree_alive(item.process)]
     if still_alive:
         log_fn(
             "Warning: some child processes did not report exit after kill: "
@@ -258,3 +283,4 @@ def terminate_running_processes(
             pass
 
     running.clear()
+    return not still_alive

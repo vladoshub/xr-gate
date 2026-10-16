@@ -154,6 +154,7 @@ class Launcher:
         self._gate_visual_ready = False
         self._gate_imu_ready = False
         self._gate_quality_ready = False
+        self._controller_imu_console_suppressed = False
         self._last_gate_quality_hint: Optional[Tuple[int, int, int]] = None
         self.restart_history: Dict[str, List[float]] = {}
 
@@ -370,6 +371,11 @@ class Launcher:
                             pending = pending[-16 * 1024:]
                         console_updated = False
                         for line in lines:
+                            if self._controller_imu_console_suppressed:
+                                last_status = None
+                                last_ready = (False, False)
+                                translation_disabled.clear()
+                                continue
                             line = line.rstrip(b"\r")
                             match = CONTROLLER_IMU_ALIGNMENT_STATUS.fullmatch(line)
                             if match is not None and match.groups() != last_status:
@@ -411,7 +417,7 @@ class Launcher:
                                 )
                                 console_updated = True
                         if console_updated and self.manual_controls is not None and not self.manual_controls.stop_requested:
-                            self.manual_controls.print_menu()
+                            self.manual_controls.redraw_prompt()
                         continue
                     if item.limiter_stop.is_set() or item.process.poll() is not None:
                         return
@@ -459,6 +465,7 @@ class Launcher:
                 spec.command,
                 cwd=spec.cwd or self.cfg.root_project,
                 env=env,
+                stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 **self.popen_kwargs(),
@@ -472,6 +479,8 @@ class Launcher:
         item = RunningProcess(spec=spec, process=proc, log_path=log_path, log_file=log_file,
                               ble_cleanup_file=ble_cleanup_file)
         self.running.append(item)
+        if spec.name == "override_controller":
+            self._controller_imu_console_suppressed = False
         if spec.name == "xr_runtime_adapter":
             threading.Thread(
                 target=self.forward_controller_imu_status,
@@ -767,8 +776,15 @@ class Launcher:
             log(f"No running services to stop for: {', '.join(names)}")
             return
         log(f"Stopping services: {', '.join(item.spec.name for item in items)}")
-        terminate_running_processes(items, log_fn=log)
+        suppress_controller = "override_controller" in wanted
+        if suppress_controller:
+            self._controller_imu_console_suppressed = True
+        if not terminate_running_processes(items, log_fn=log):
+            if suppress_controller:
+                self._controller_imu_console_suppressed = False
+            self.fail(f"Services did not stop: {', '.join(names)}")
         self.running = [item for item in self.running if item.spec.name not in wanted]
+        log(f"Stopped services: {', '.join(names)}")
 
     def clean_registry_paths(self, paths: Sequence[str]) -> None:
         if not paths:
@@ -1487,7 +1503,8 @@ class Launcher:
             log("Startup gate failure prompt is unavailable; starting without gate", color="yellow")
             return "skip"
         while True:
-            raw = input("Startup gate action [Enter=start without gate, R=restart/check again]: ").strip().lower()
+            prompt = "Startup gate action [Enter=start without gate, R=restart/check again]: "
+            raw = (self.manual_controls.read_line(prompt) if self.manual_controls is not None else input(prompt)).strip().lower()
             if raw == "":
                 return "skip"
             if raw == "r":
@@ -1504,7 +1521,8 @@ class Launcher:
             log("Startup gate timeout prompt is unavailable; starting without gate", color="yellow")
             return "skip"
         while True:
-            raw = input("Startup gate action [Enter=start without gate, R=retry]: ").strip().lower()
+            prompt = "Startup gate action [Enter=start without gate, R=retry]: "
+            raw = (self.manual_controls.read_line(prompt) if self.manual_controls is not None else input(prompt)).strip().lower()
             if raw == "":
                 return "skip"
             if raw == "r":
@@ -1815,6 +1833,7 @@ class Launcher:
             self.tap_detector = None
         if self.manual_controls is not None:
             self.manual_controls.stop_requested = True
+            self.manual_controls.close()
         terminate_running_processes(self.running, log_fn=log)
 
 

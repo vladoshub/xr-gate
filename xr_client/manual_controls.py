@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Interactive keyboard controls for xr_backend_client.
 
-POSIX/WSL uses non-blocking ``select`` over ``stdin`` from the main supervisor
-loop. Native Windows cannot use ``select`` on console handles, so it uses
+POSIX/WSL uses cbreak mode and non-blocking ``select`` over ``stdin`` from the
+main supervisor loop. Native Windows cannot use ``select`` on console handles, so it uses
 ``msvcrt.kbhit()/getwch()`` instead. No background ``input()`` thread is used;
 therefore console controls cannot keep the supervisor alive during shutdown.
 """
@@ -24,7 +24,20 @@ except ImportError:
 class ManualControlPoller:
     def __init__(self) -> None:
         self.stop_requested = False
-        self._win_buffer = ""
+        self._input_buffer = ""
+        self._posix_fd = None
+        self._posix_terminal_state = None
+        if os.name == "posix" and sys.stdin.isatty():
+            try:
+                import termios
+                import tty
+                fd = sys.stdin.fileno()
+                state = termios.tcgetattr(fd)
+                tty.setcbreak(fd, termios.TCSANOW)
+                self._posix_fd = fd
+                self._posix_terminal_state = state
+            except (OSError, ValueError, termios.error):
+                pass  # Retain line-based controls if this TTY cannot use cbreak.
         self._prompt = "XR control [1/2/3/4/5/6/7/8/9/h/q]: "
         self.mapping: Dict[str, str] = {
             "1": "manual-restart-running-backends",
@@ -82,6 +95,34 @@ class ManualControlPoller:
     def _print_prompt(self) -> None:
         print(self._prompt, end="", flush=True)
 
+    def close(self) -> None:
+        """Restore the user's terminal after normal exit or a stop signal."""
+        if self._posix_fd is not None and self._posix_terminal_state is not None:
+            import termios
+            try:
+                termios.tcsetattr(self._posix_fd, termios.TCSANOW, self._posix_terminal_state)
+            except (OSError, ValueError, termios.error):
+                pass
+            self._posix_fd = None
+            self._posix_terminal_state = None
+
+    def read_line(self, prompt: str) -> str:
+        """Temporarily restore line editing for an interactive recovery prompt."""
+        if self._posix_fd is None:
+            return input(prompt)
+        import termios
+        import tty
+        termios.tcsetattr(self._posix_fd, termios.TCSANOW, self._posix_terminal_state)
+        try:
+            return input(prompt)
+        finally:
+            tty.setcbreak(self._posix_fd, termios.TCSANOW)
+
+    def redraw_prompt(self) -> None:
+        self._print_prompt()
+        if self._input_buffer:
+            print(self._input_buffer, end="", flush=True)
+
     def print_menu(self) -> None:
         print("", flush=True)
         print("XR backend controls:", flush=True)
@@ -96,6 +137,9 @@ class ManualControlPoller:
         print("  9 - toggle 6DoF/3DoF", flush=True)
         print("  h - show this menu", flush=True)
         print("  q - stop all and exit", flush=True)
+        if os.name == "posix":
+            print("  Keys 1-9 act without Enter; text commands use Enter."
+                  if self._posix_fd is not None else "  Type a command and press Enter.", flush=True)
         print("", flush=True)
         self._print_prompt()
 
@@ -134,11 +178,44 @@ class ManualControlPoller:
             return []
         if not ready:
             return []
+        if self._posix_fd is not None:
+            data = os.read(self._posix_fd, 4096)
+            if not data:
+                self.stop_requested = True
+                return []
+            events = []
+            for ch in data.decode("utf-8", errors="replace"):
+                events.extend(self._handle_character(ch, set("123456789")))
+            return events
         line = sys.stdin.readline()
         if line == "":
             self.stop_requested = True
             return []
         return self._handle_command(line)
+
+    def _handle_character(self, ch: str, single_key_commands: set) -> List[TapEvent]:
+        if ch in ("\x03", "\x04", "\x1a"):
+            self.stop_requested = True
+            print("Stopping...", flush=True)
+            return []
+        if ch in ("\r", "\n"):
+            print("", flush=True)
+            command = self._input_buffer
+            self._input_buffer = ""
+            return self._handle_command(command)
+        if ch in ("\b", "\x7f"):
+            if self._input_buffer:
+                self._input_buffer = self._input_buffer[:-1]
+                print("\b \b", end="", flush=True)
+            return []
+        lower = ch.lower()
+        if not self._input_buffer and lower in single_key_commands:
+            print(ch, flush=True)
+            return self._handle_command(lower)
+        if ch.isprintable():
+            self._input_buffer += ch
+            print(ch, end="", flush=True)
+        return []
 
     def _poll_windows(self) -> List[TapEvent]:
         """Poll native Windows console without select() or input() threads.
@@ -166,35 +243,7 @@ class ManualControlPoller:
                         pass
                 continue
 
-            # Ctrl+C / Ctrl+Z should stop the supervisor cleanly.
-            if ch in ("\x03", "\x1a"):
-                self.stop_requested = True
-                print("^C", flush=True)
+            events.extend(self._handle_character(ch, single_key_commands))
+            if self.stop_requested:
                 break
-
-            if ch in ("\r", "\n"):
-                print("", flush=True)
-                command = self._win_buffer
-                self._win_buffer = ""
-                events.extend(self._handle_command(command))
-                continue
-
-            if ch in ("\b", "\x7f"):
-                if self._win_buffer:
-                    self._win_buffer = self._win_buffer[:-1]
-                    print("\b \b", end="", flush=True)
-                continue
-
-            # Execute the common one-character commands immediately when the
-            # user has not started typing a longer alias.
-            lower = ch.lower()
-            if not self._win_buffer and lower in single_key_commands:
-                print(ch, flush=True)
-                events.extend(self._handle_command(lower))
-                continue
-
-            if ch.isprintable():
-                self._win_buffer += ch
-                print(ch, end="", flush=True)
-
         return events

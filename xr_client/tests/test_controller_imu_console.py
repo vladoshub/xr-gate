@@ -39,6 +39,25 @@ class ControllerImuConsoleTest(unittest.TestCase):
     def launcher(self, folder):
         return Launcher(SimpleNamespace(log_dir=folder, root_project=folder, log_max_bytes=0))
 
+    def test_explicit_stop_suppresses_calibration_until_controller_starts_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ready = status("yes", "yes", ("yes", "yes"))
+            progress = (b"[xr_runtime_adapter][imu-calibration] side=left yaw=collecting "
+                        b"translation=need_motion\n")
+            path = Path(folder) / "xr_runtime_adapter.log"
+            path.write_bytes(progress + ready)
+            item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
+                                   process=SimpleNamespace(poll=lambda: 0))
+            launcher = self.launcher(folder)
+            messages = []
+            with patch("xr_client.xr_backend_client.log", raw_status_logger(messages)):
+                launcher._controller_imu_console_suppressed = True
+                launcher.forward_controller_imu_status(item)
+                self.assertEqual(messages, [])
+                launcher._controller_imu_console_suppressed = False
+                launcher.forward_controller_imu_status(item)
+            self.assertEqual(messages, [line.decode().strip() for line in (progress, ready)])
+
     def test_progress_is_forwarded_even_after_both_yaw_flags_are_ready(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "xr_runtime_adapter.log"
