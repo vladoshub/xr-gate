@@ -98,7 +98,8 @@ def run_case(binary, directory, name):
     (case / "capture.json").write_text(json.dumps({"streams": {
         f"camera{i}": ring.info for i, ring in enumerate(cams)}}))
     (case / "pose.json").write_text(json.dumps({"streams": {"hmd_pose": pose.info}}))
-    (case / "calib.json").write_text(json.dumps(calibration(offset)))
+    calibration_path = case / "input calibration.json"
+    calibration_path.write_text(json.dumps(calibration(offset)))
     rng = random.Random(42)
     left = bytes(rng.randrange(256) for _ in range(WIDTH * HEIGHT))
     right = b"".join(left[y * WIDTH + 10:(y + 1) * WIDTH] + bytes(10) for y in range(HEIGHT))
@@ -123,7 +124,7 @@ def run_case(binary, directory, name):
 
     try:
         publish(1)
-        args = [str(binary), "--mode", "scan", "--calib", str(case / "calib.json"),
+        args = [str(binary), "--mode", "scan", "--calib", str(calibration_path),
                 "--capture-registry", str(case / "capture.json"),
                 "--pose-registry", str(case / "pose.json"),
                 "--scan-output-dir", str(case / "output"), "--scan-duration-sec", "1.0",
@@ -139,7 +140,9 @@ def run_case(binary, directory, name):
         if name == "no_rate_limit":
             args += ["--depth-rate-hz", "0", "--scan-duration-sec", ".15"]
         if name == "live_grid_scan":
-            args += ["--mapper-backend", "live_depth_grid"]
+            args += ["--mapper-backend", "live_depth_grid", "--num-threads", "0"]
+        if name == "time_offset":
+            args += ["--num-threads", "2"]
         if name == "save_error":
             (case / "output").mkdir()
             (case / "output" / "pointcloud.ply").symlink_to("/dev/full")
@@ -169,6 +172,11 @@ def run_case(binary, directory, name):
             print("runtime_reset: passed", flush=True)
             return
         meta = json.loads((case / "output" / "scan_metadata.json").read_text())
+        expected_threads = 0 if name == "live_grid_scan" else (2 if name == "time_offset" else 1)
+        assert meta["num_threads"] == expected_threads and meta["opencv_num_threads"] >= 1, meta
+        if expected_threads == 1:
+            assert meta["opencv_num_threads"] == 1, meta
+        assert meta["calibration_path"] == str(calibration_path), meta
         trajectory = (case / "output" / "trajectory.csv").read_text().splitlines()[1:]
         xs = [float(row.split(",")[3]) for row in trajectory]
         if name in {"no_depth", "interrupt"}:
@@ -210,6 +218,11 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
     check_profile(args.root)
+    for value in ["-1", "1.5", "bad"]:
+        invalid = subprocess.run([str(args.binary.resolve()), "--calib", "/missing/calibration.json",
+                                  "--num-threads=" + value], text=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert invalid.returncode != 0 and "--num-threads" in invalid.stdout, invalid.stdout
     with tempfile.TemporaryDirectory(prefix="xr-spatial-scanner-") as temporary:
         for name in ["normal", "time_offset", "reset_counter", "pose_jump", "pose_restart",
                      "capture_restart", "bad_frame", "depth_failure", "no_rate_limit",

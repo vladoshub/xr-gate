@@ -111,6 +111,8 @@ if(XR_SPATIAL_BUILD_TESTS)
   target_link_libraries(xr_spatial_scanner_test PRIVATE ${_spatial_libraries})
   add_test(NAME scanner_core COMMAND xr_spatial_scanner_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME spatial_launchers COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_test.py" --root "${XR_TRACKING_ROOT}")
   add_test(NAME scanner_shm COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/scanner_shm_test.py"
     --binary "$<TARGET_FILE:xr_spatial_backend>" --root "${XR_TRACKING_ROOT}")

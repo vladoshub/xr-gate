@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <limits>
 #include <vector>
@@ -116,14 +117,10 @@ struct SelectedStereoPair {
 std::optional<capture_client::StereoPair> read_stereo_pair_sequence(
     capture_client::ICaptureTransport& capture,
     uint64_t seq,
-    int64_t max_stereo_delta_ns,
     int64_t camera_time_offset_ns = 0) {
   capture_client::ImageFrame c0, c1;
   if (!capture.cam0().read_image_sequence(seq, c0)) return std::nullopt;
   if (!capture.cam1().read_image_sequence(seq, c1)) return std::nullopt;
-
-  const int64_t delta = c0.timestamp_ns - c1.timestamp_ns;
-  if (std::llabs(delta) > max_stereo_delta_ns) return std::nullopt;
 
   capture_client::StereoPair pair;
   pair.timestamp_ns = capture_client::shift_camera_timestamp_ns(
@@ -133,57 +130,73 @@ std::optional<capture_client::StereoPair> read_stereo_pair_sequence(
   return pair;
 }
 
-std::optional<SelectedStereoPair> read_latest_stereo_near_timestamp(
-    capture_client::ICaptureTransport& capture,
-    int64_t target_timestamp_ns,
-    uint64_t max_scan_back,
-    int64_t max_stereo_delta_ns,
-    int64_t camera_time_offset_ns = 0) {
-  const uint64_t latest0 = capture.cam0().latest_sequence();
-  const uint64_t latest1 = capture.cam1().latest_sequence();
-  const uint64_t latest = std::min(latest0, latest1);
-  if (latest == 0) return std::nullopt;
+// Camera sequences are immutable within one capture generation. Keep only the
+// search window so pose/rate polling never copies the same image payload again.
+// The selected pair stays valid until the next read/reset; depth consumes it by
+// reference. Failed reads are not cached, allowing partially published pairs to
+// become available on a later attempt.
+class StereoPairReader {
+ public:
+  StereoPairReader(uint64_t max_scan_back, int64_t max_stereo_delta_ns,
+                   int64_t camera_time_offset_ns = 0)
+      : scan_back_(std::max<uint64_t>(1, max_scan_back)),
+        max_stereo_delta_ns_(max_stereo_delta_ns),
+        camera_time_offset_ns_(camera_time_offset_ns) {}
 
-  const uint64_t scan_back = std::max<uint64_t>(1, max_scan_back);
-  const uint64_t min_seq = latest > scan_back ? latest - scan_back + 1 : 1;
-
-  std::optional<SelectedStereoPair> best;
-  int64_t best_age_ns = LLONG_MAX;
-  for (uint64_t seq = latest; seq >= min_seq; --seq) {
-    auto pair = read_stereo_pair_sequence(capture, seq, max_stereo_delta_ns, camera_time_offset_ns);
-    if (pair) {
-      const int64_t age_ns = std::llabs(pair->timestamp_ns - target_timestamp_ns);
-      if (age_ns < best_age_ns) {
-        best_age_ns = age_ns;
-        SelectedStereoPair selected;
-        selected.sequence = seq;
-        selected.age_to_target_ns = age_ns;
-        selected.pair = std::move(*pair);
-        best = std::move(selected);
-      }
-    }
-    if (seq == min_seq) break;
+  void reset() {
+    pairs_.clear();
+    last_latest_ = 0;
   }
-  return best;
-}
 
-std::optional<SelectedStereoPair> read_latest_stereo_pair(
-    capture_client::ICaptureTransport& capture,
-    int64_t max_stereo_delta_ns) {
-  const uint64_t latest0 = capture.cam0().latest_sequence();
-  const uint64_t latest1 = capture.cam1().latest_sequence();
-  const uint64_t latest = std::min(latest0, latest1);
-  if (latest == 0) return std::nullopt;
+  const SelectedStereoPair* read(capture_client::ICaptureTransport& capture,
+                                 std::optional<int64_t> target_timestamp_ns = std::nullopt) {
+    const uint64_t latest = std::min(capture.cam0().latest_sequence(),
+                                     capture.cam1().latest_sequence());
+    if (latest < last_latest_) reset();
+    last_latest_ = latest;
+    if (latest == 0) return nullptr;
 
-  auto pair = read_stereo_pair_sequence(capture, latest, max_stereo_delta_ns);
-  if (!pair) return std::nullopt;
+    const uint64_t min_seq = latest > scan_back_ ? latest - scan_back_ + 1 : 1;
+    pairs_.erase(pairs_.begin(), pairs_.lower_bound(min_seq));
+    SelectedStereoPair* best = nullptr;
+    int64_t best_age_ns = LLONG_MAX;
+    for (uint64_t seq = latest; seq >= min_seq; --seq) {
+      auto found = pairs_.find(seq);
+      if (found == pairs_.end()) {
+        auto pair = read_stereo_pair_sequence(capture, seq, camera_time_offset_ns_);
+        if (pair) {
+          SelectedStereoPair selected;
+          selected.sequence = seq;
+          selected.pair = std::move(*pair);
+          found = pairs_.emplace(seq, std::move(selected)).first;
+        }
+      }
+      if (found != pairs_.end()) {
+        const auto& pair = found->second.pair;
+        // A complete but unsynchronized pair is immutable too. Cache it so a
+        // persistent camera timestamp mismatch cannot cause repeated copies.
+        if (std::llabs(pair.cam0.timestamp_ns - pair.cam1.timestamp_ns) <= max_stereo_delta_ns_) {
+          const int64_t age_ns = target_timestamp_ns
+              ? std::llabs(pair.timestamp_ns - *target_timestamp_ns) : 0;
+          if (!best || age_ns < best_age_ns) {
+            best_age_ns = age_ns;
+            best = &found->second;
+            best->age_to_target_ns = age_ns;
+          }
+        }
+      }
+      if (!target_timestamp_ns || seq == min_seq) break;
+    }
+    return best;
+  }
 
-  SelectedStereoPair selected;
-  selected.sequence = latest;
-  selected.age_to_target_ns = 0;
-  selected.pair = std::move(*pair);
-  return selected;
-}
+ private:
+  uint64_t scan_back_;
+  int64_t max_stereo_delta_ns_;
+  int64_t camera_time_offset_ns_;
+  uint64_t last_latest_ = 0;
+  std::map<uint64_t, SelectedStereoPair> pairs_;
+};
 
 xr_runtime::HmdPoseF64V1 identity_pose_sample(uint64_t timestamp_ns) {
   xr_runtime::HmdPoseF64V1 pose{};
@@ -270,6 +283,7 @@ struct AppConfig {
   bool zero_disparity = true;
 
   xr_spatial_backend::StereoDepthConfig depth;
+  int num_threads = 2; // OpenCV workers; 0 selects OpenCV automatic parallelism.
   size_t max_accumulated_points = 1000000;
   float max_abs_map_coord_m = 100.0f;
   std::string tracking_origin = "first_pose"; // first_pose|absolute
@@ -339,6 +353,8 @@ void save_metadata(const fs::path& path,
   j["camera_resolution"] = {calib.cam0.width, calib.cam0.height};
   j["baseline_m"] = calib.baseline_m;
   j["depth_algorithm"] = "opencv_sgbm";
+  j["num_threads"] = cfg.num_threads;
+  j["opencv_num_threads"] = cv::getNumThreads();
   j["depth_num_disparities"] = cfg.depth.num_disparities;
   j["depth_block_size"] = cfg.depth.block_size;
   j["depth_rate_hz"] = cfg.depth.target_rate_hz;
@@ -785,6 +801,8 @@ int main(int argc, char** argv) {
   app.add_flag("--zero-disparity,!--no-zero-disparity", cfg.zero_disparity, "Use CALIB_ZERO_DISPARITY in stereoRectify");
 
   app.add_option("--depth-rate-hz", cfg.depth.target_rate_hz, "Target stereo depth processing rate");
+  app.add_option("--num-threads", cfg.num_threads, "OpenCV thread limit; 0 uses automatic parallelism")
+      ->check(CLI::NonNegativeNumber)->capture_default_str();
   app.add_option("--num-disparities", cfg.depth.num_disparities, "SGBM num disparities, rounded to multiple of 16");
   app.add_option("--min-disparity", cfg.depth.min_disparity, "SGBM minimum disparity; negative values are supported");
   app.add_option("--block-size", cfg.depth.block_size, "SGBM block size, odd >=3");
@@ -865,6 +883,10 @@ int main(int argc, char** argv) {
   CLI11_PARSE(app, argc, argv);
 
   try {
+    // OpenCV's 0 means sequential execution, so map our CLI 0 (automatic) to -1.
+    cv::setNumThreads(cfg.num_threads == 0 ? -1 : cfg.num_threads);
+    std::cout << "[xr_spatial_backend] num_threads=" << cfg.num_threads
+              << " opencv_num_threads=" << cv::getNumThreads() << "\n";
     std::cout << "[xr_spatial_backend] mode=" << cfg.mode << "\n";
     if (cfg.capture_transport == "tcp") cfg.capture_transport = "capture_tcp";
     std::cout << "[xr_spatial_backend] capture_transport=" << cfg.capture_transport << "\n";
@@ -1007,6 +1029,8 @@ int main(int argc, char** argv) {
     }
 
     const int64_t start_ns = now_ns();
+    StereoPairReader stereo_reader(pose_enabled ? cfg.stereo_pose_sync_scan_back : 1,
+                                   1'000'000, pose_enabled ? calib.camera_time_offset_ns : 0);
     int64_t last_depth_ns = 0;
     uint64_t summary_seq = 0;
     uint64_t proxy_mesh_seq = 0;
@@ -1057,6 +1081,7 @@ int main(int argc, char** argv) {
               auto reopened = std::make_unique<CameraOnlyShmCaptureTransport>(
                   cfg.capture_registry, cfg.camera0_stream, cfg.camera1_stream);
               capture = std::move(reopened);
+              stereo_reader.reset();
               ++capture_reattachments;
               std::cerr << "[xr_spatial_backend] reopened stalled camera SHM streams\n";
             } catch (const std::exception& e) {
@@ -1117,23 +1142,16 @@ int main(int argc, char** argv) {
             T_map_tracking_origin.reset();
             last_quality_pose.reset();
             last_depth_ns = 0;
+            stereo_reader.reset();
             sampling_logged = false;
             std::cerr << "[xr_spatial_backend] reset runtime map after pose-source discontinuity\n";
           }
           last_source_pose = *sampled_pose;
         }
 
-        std::optional<SelectedStereoPair> selected_pair;
-        if (pose_enabled) {
-          selected_pair = read_latest_stereo_near_timestamp(
-              *capture,
-              static_cast<int64_t>(sampled_pose->timestamp_ns),
-              cfg.stereo_pose_sync_scan_back,
-              1'000'000,
-              calib.camera_time_offset_ns);
-        } else {
-          selected_pair = read_latest_stereo_pair(*capture, 1'000'000);
-        }
+        const auto* selected_pair = stereo_reader.read(*capture, pose_enabled
+            ? std::optional<int64_t>(static_cast<int64_t>(sampled_pose->timestamp_ns))
+            : std::nullopt);
         if (!selected_pair) {
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
           continue;

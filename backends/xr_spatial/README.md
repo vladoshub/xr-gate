@@ -82,6 +82,10 @@ An explicit `CALIB_JSON` still takes priority. This keeps the scanner on the sam
 camera intrinsics and camera-to-IMU transform as the selected Basalt profile,
 including XREAL device-time calibration.
 
+All launchers also accept `--calib /path/to/calibration.json` (or `--calib=...`).
+The last explicit CLI value overrides both environment and profile paths before
+checking the file. Paths containing spaces are supported when quoted.
+
 With tracked pose input, camera timestamps are shifted by the calibration's
 `value0.cam_time_offset_ns` before matching frames to poses:
 `t_imu = t_camera + offset`. Source image timestamps remain unchanged. A frame
@@ -118,6 +122,29 @@ observation. Voxel PLY `observations` counts retained source points, including
 points from the same frame; it is not a count of independent frame detections.
 Scan mode accumulates points even if `live_depth_grid` is selected for display.
 Explicit CLI arguments override profile-derived arguments in the launchers.
+
+## CPU usage and thread count
+
+OpenCV uses one thread by default. Select a limit with `--num-threads N` or
+`XR_SPATIAL_NUM_THREADS=N` in a launcher's environment (including the `xr_client`
+service environment). An explicit CLI value has priority. `0` restores OpenCV's
+automatic parallelism; negative values are rejected. The backend logs the
+requested and effective counts and records them in scan metadata. This controls
+OpenCV work, not CPU affinity or transport threads.
+
+```bash
+./scripts/linux/start_xr_spatial_shm.sh --num-threads 2 --calib /path/to/calib.json
+./scripts/linux/start_xr_spatial_scan.sh --num-threads 1 --calib /path/to/calib.json
+```
+
+Stereo synchronization caches image pairs within `STEREO_POSE_SYNC_SCAN_BACK`
+(default 16), so pose polling and depth rate limiting reuse payloads already
+read from the capture transport. Only new sequences are copied. Memory use is
+bounded by this window (about 10 MB of GRAY8 pixels for 16 pairs at 480x640).
+Camera-only mode keeps one pair. The cache is cleared when cameras are reopened
+or their sequence restarts; pose resets still stop scans or clear runtime maps.
+Timestamp matching, calibration transforms, SGBM resolution/disparity settings,
+and the default depth rate remain unchanged.
 
 ## Scanner regression tests
 

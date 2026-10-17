@@ -128,6 +128,7 @@ echo "config: $SPATIAL_MAPPER_CONFIG"
 echo "binary: $SPATIAL_MAPPER_BIN"
 echo "mode: $SPATIAL_MAPPER_MODE"
 echo "calib: $CALIB_JSON"
+echo "OpenCV threads: $XR_SPATIAL_NUM_THREADS (0=automatic)"
 if [[ "$CAPTURE_TRANSPORT" == "shm" ]]; then
   echo "capture: transport=shm registry=$CAPTURE_REGISTRY streams=$CAMERA0_STREAM,$CAMERA1_STREAM"
 else
@@ -167,6 +168,7 @@ args=(
   --depth-frame-id "$DEPTH_FRAME_ID"
   --fisheye-balance "$FISHEYE_BALANCE"
   --depth-rate-hz "$DEPTH_RATE_HZ"
+  --num-threads "$XR_SPATIAL_NUM_THREADS"
   --min-disparity "$MIN_DISPARITY"
   --num-disparities "$NUM_DISPARITIES"
   --block-size "$BLOCK_SIZE"
