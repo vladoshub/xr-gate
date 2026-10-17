@@ -26,6 +26,7 @@ args=(
   --mode runtime
   --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-reattach-on-stale-ms "$CAPTURE_REATTACH_ON_STALE_MS"
   --capture-tcp-host "$CAPTURE_TCP_HOST"
   --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"
@@ -103,4 +104,4 @@ args=(
 [[ "${SPATIAL_LIVE_GRID_TRIANGLES_ENABLED:-1}" == "0" ]] && args+=(--no-spatial-live-grid-triangles-enabled) || args+=(--spatial-live-grid-triangles-enabled)
 [[ "${PUBLISH_SPATIAL_PROXY_MESH_SHM:-1}" == "0" ]] || args+=(--publish-spatial-proxy-mesh-shm)
 
-exec "$BIN_DIR/xr_spatial_backend" "${args[@]}"
+exec "$BIN_DIR/xr_spatial_backend" "${args[@]}" "$@"

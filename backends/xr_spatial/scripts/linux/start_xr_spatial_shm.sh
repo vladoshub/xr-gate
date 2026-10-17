@@ -145,6 +145,7 @@ args=(
   --mode "$SPATIAL_MAPPER_MODE"
   --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-reattach-on-stale-ms "$CAPTURE_REATTACH_ON_STALE_MS"
   --capture-tcp-host "$CAPTURE_TCP_HOST"
   --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"

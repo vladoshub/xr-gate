@@ -14,7 +14,7 @@
 #include <CLI/CLI.hpp>
 
 #include <capture_client/transports/capture_service_tcp_transport.hpp>
-#include <capture_client/sync/latest_stereo_reader.hpp>
+#include <capture_client/sync/recovering_stereo_reader.hpp>
 #include <capture_client/transports/shm_transport.hpp>
 #include <capture_client/transports/tcp_transport.hpp>
 #include <xr_video/contracts/stereo_video_contract.hpp>
@@ -158,6 +158,7 @@ std::string recorder_status_line(const xr_video::StereoVideoRecorder& recorder) 
   const auto st = recorder.status();
   std::ostringstream os;
   os << "recording=" << (st.active ? 1 : 0)
+     << " error=" << (st.error.empty() ? "none" : st.error)
      << " frames_written=" << st.frames_written
      << " input_frames_seen=" << st.input_frames_seen
      << " frames_skipped=" << st.frames_skipped
@@ -292,33 +293,34 @@ int main(int argc, char** argv) {
     std::cout << "output: " << output << "\n";
     std::cout << "rotate_degrees: " << rotate_degrees << "\n";
 
-    std::unique_ptr<capture_client::ICaptureTransport> transport;
-    if (input_transport == "capture_tcp") {
-      capture_client::CaptureServiceTcpTransportConfig cfg;
-      cfg.host = tcp_host;
-      cfg.port = tcp_port;
-      cfg.cam0_stream = cam0_stream;
-      cfg.cam1_stream = cam1_stream;
-      cfg.imu_stream = imu_stream;
-      cfg.subscribe_imu = false;
-      transport = std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(cfg));
-    } else if (input_transport == "tcp") {
-      capture_client::TcpCaptureTransportConfig cfg;
-      cfg.host = tcp_host;
-      cfg.port = tcp_port;
-      cfg.cam0_stream = cam0_stream;
-      cfg.cam1_stream = cam1_stream;
-      cfg.imu_stream = imu_stream;
-      transport = std::make_unique<capture_client::TcpCaptureTransport>(std::move(cfg));
-    } else if (input_transport == "shm") {
-      transport = std::make_unique<CameraOnlyShmCaptureTransport>(
-          registry_path, cam0_stream, cam1_stream);
-    } else {
-      throw std::runtime_error("unknown --input-transport: " + input_transport);
-    }
+    auto make_transport = [&]() -> std::unique_ptr<capture_client::ICaptureTransport> {
+      if (input_transport == "capture_tcp") {
+        capture_client::CaptureServiceTcpTransportConfig cfg;
+        cfg.host = tcp_host;
+        cfg.port = tcp_port;
+        cfg.cam0_stream = cam0_stream;
+        cfg.cam1_stream = cam1_stream;
+        cfg.imu_stream = imu_stream;
+        cfg.subscribe_imu = false;
+        return std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(cfg));
+      } else if (input_transport == "tcp") {
+        capture_client::TcpCaptureTransportConfig cfg;
+        cfg.host = tcp_host;
+        cfg.port = tcp_port;
+        cfg.cam0_stream = cam0_stream;
+        cfg.cam1_stream = cam1_stream;
+        cfg.imu_stream = imu_stream;
+        return std::make_unique<capture_client::TcpCaptureTransport>(std::move(cfg));
+      } else if (input_transport == "shm") {
+        return std::make_unique<CameraOnlyShmCaptureTransport>(
+            registry_path, cam0_stream, cam1_stream);
+      } else {
+        throw std::runtime_error("unknown --input-transport: " + input_transport);
+      }
+    };
 
-    capture_client::LatestStereoReader reader(
-        *transport,
+    capture_client::RecoveringStereoReader reader(
+        make_transport,
         static_cast<int64_t>(max_stereo_delta_ms * 1e6),
         !sequential,
         max_scan_back);
@@ -369,6 +371,7 @@ int main(int argc, char** argv) {
     }
 
     Stats stats;
+    uint64_t capture_generation = reader.generation();
     const auto start = std::chrono::steady_clock::now();
 
     while (!g_stop) {
@@ -382,6 +385,10 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      if (capture_generation != reader.generation()) {
+        capture_generation = reader.generation();
+        stats.last_capture_seq = 0;
+      }
       ++stats.frames;
       if (stats.last_capture_seq != 0 && pair->sequence() > stats.last_capture_seq + 1) {
         ++stats.sequence_gaps;
@@ -395,7 +402,11 @@ int main(int argc, char** argv) {
       const uint32_t output_width = frame.header.width;
       const uint32_t output_height = frame.header.height;
 
-      recorder.record(frame);
+      try {
+        recorder.record(frame);
+      } catch (const std::exception& e) {
+        std::cerr << "[xr_video_backend] recording stopped: " << e.what() << '\n';
+      }
 
       if ((output == "shm" || output == "both") && !shm_pub) {
         xr_video::StereoVideoShmPublisherConfig cfg;
@@ -454,7 +465,7 @@ int main(int argc, char** argv) {
             : 0.0;
 
     std::cout << "=== xr_video_backend summary ===\n";
-    std::cout << "input_transport: " << transport->type() << "\n";
+    std::cout << "input_transport: " << reader.transport_type() << "\n";
     std::cout << "output: " << output << "\n";
     std::cout << "rotate_degrees: " << rotate_degrees << "\n";
     std::cout << "frames: " << stats.frames << "\n";
@@ -470,6 +481,7 @@ int main(int argc, char** argv) {
     std::cout << "record_active_at_stop: " << (final_record_status_before_stop.active ? 1 : 0) << "\n";
     std::cout << "record_dir: " << final_record_status_before_stop.record_dir << "\n";
     std::cout << "record_frames_written: " << final_record_status_before_stop.frames_written << "\n";
+    std::cout << "record_error: " << final_record_status_before_stop.error << "\n";
     std::cout << "record_frames_skipped: " << final_record_status_before_stop.frames_skipped << "\n";
     return 0;
   } catch (const std::exception& e) {

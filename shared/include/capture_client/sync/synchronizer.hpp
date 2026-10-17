@@ -50,10 +50,12 @@ class StereoImuSynchronizer {
  public:
   StereoImuSynchronizer(ICaptureTransport& transport, int64_t max_stereo_delta_ns = 1'000'000,
                         double wait_for_imu_s = 0.05, bool use_imu = true,
-                        int64_t camera_time_offset_ns = 0, bool include_imu_after_frame = false)
+                        int64_t camera_time_offset_ns = 0, bool include_imu_after_frame = false,
+                        bool require_continuous_imu = false)
       : transport_(transport), max_stereo_delta_ns_(max_stereo_delta_ns),
         wait_for_imu_s_(wait_for_imu_s), use_imu_(use_imu),
-        camera_time_offset_ns_(camera_time_offset_ns), include_imu_after_frame_(include_imu_after_frame) {
+        camera_time_offset_ns_(camera_time_offset_ns), include_imu_after_frame_(include_imu_after_frame),
+        require_continuous_imu_(require_continuous_imu) {
     last_pair_seq_ = std::min(transport_.cam0().latest_sequence(), transport_.cam1().latest_sequence());
     if (use_imu_) last_imu_seq_ = transport_.imu().latest_sequence();
   }
@@ -61,12 +63,20 @@ class StereoImuSynchronizer {
   std::optional<SyncedStereoImu> read_next(double timeout_s = 1.0) {
     auto pair = read_next_pair(timeout_s);
     if (!pair) return std::nullopt;
+    if (require_continuous_imu_ && previous_camera_timestamp_ns_ &&
+        pair->timestamp_ns <= *previous_camera_timestamp_ns_) {
+      throw std::runtime_error("capture camera timestamp went backwards");
+    }
     SyncedStereoImu out;
     out.previous_camera_timestamp_ns = previous_camera_timestamp_ns_;
     out.pair = std::move(*pair);
     if (use_imu_) {
       wait_until_imu_at_least(out.pair.timestamp_ns, wait_for_imu_s_);
       out.imu_samples = read_imu_window_until(out.pair.timestamp_ns);
+      if (require_continuous_imu_ && (out.imu_samples.empty() ||
+          out.imu_samples.back().timestamp_ns <= out.pair.timestamp_ns)) {
+        throw std::runtime_error("capture IMU does not cover stereo frame");
+      }
     }
     previous_camera_timestamp_ns_ = out.pair.timestamp_ns;
     return out;
@@ -121,15 +131,27 @@ class StereoImuSynchronizer {
   std::vector<ImuSample> read_imu_window_until(int64_t timestamp_ns) {
     std::vector<ImuSample> samples;
     const uint64_t latest = transport_.imu().latest_sequence();
+    if (require_continuous_imu_ && latest < last_imu_seq_) {
+      throw std::runtime_error("capture IMU sequence restarted");
+    }
     if (latest <= last_imu_seq_) return samples;
 
     uint64_t new_last = last_imu_seq_;
     for (uint64_t seq = last_imu_seq_ + 1; seq <= latest; ++seq) {
       ImuSample s;
-      if (!transport_.imu().read_imu_sequence(seq, s)) continue;
+      if (!transport_.imu().read_imu_sequence(seq, s)) {
+        if (require_continuous_imu_) throw std::runtime_error("capture IMU ring overrun or missing sample");
+        continue;
+      }
+      if (require_continuous_imu_ && last_imu_timestamp_ns_ &&
+          (s.timestamp_ns <= *last_imu_timestamp_ns_ ||
+           s.timestamp_ns - *last_imu_timestamp_ns_ > 50'000'000)) {
+        throw std::runtime_error("capture IMU timestamp discontinuity");
+      }
       if (s.timestamp_ns <= timestamp_ns || include_imu_after_frame_) {
         samples.push_back(s);
         new_last = seq;
+        last_imu_timestamp_ns_ = s.timestamp_ns;
         // Basalt needs the first sample strictly after the frame to finish
         // interpolation/preintegration without waiting for the next image.
         if (s.timestamp_ns > timestamp_ns) break;
@@ -147,9 +169,11 @@ class StereoImuSynchronizer {
   bool use_imu_ = true;
   int64_t camera_time_offset_ns_ = 0;
   bool include_imu_after_frame_ = false;
+  bool require_continuous_imu_ = false;
   uint64_t last_pair_seq_ = 0;
   uint64_t last_imu_seq_ = 0;
   std::optional<int64_t> previous_camera_timestamp_ns_;
+  std::optional<int64_t> last_imu_timestamp_ns_;
 };
 
 }  // namespace capture_client

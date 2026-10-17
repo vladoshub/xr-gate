@@ -134,6 +134,9 @@ load_xr_spatial_profile() {
     exit 2
   fi
 
+  # Use the calibration selected by the tracking-sensor environment unless the
+  # caller explicitly selected CALIB_JSON. Profiles can still set a literal path.
+  set_default CALIB_JSON "${BASALT_CALIB:-}"
   # shellcheck source=/dev/null
   source "$XR_SPATIAL_CONFIG_RESOLVED"
 
@@ -146,6 +149,7 @@ load_xr_spatial_profile() {
   set_default CAPTURE_REGISTRY "/tmp/capture_service_streams.json"
   set_default CAPTURE_TCP_HOST "127.0.0.1"
   set_default CAPTURE_TCP_PORT "45660"
+  set_default CAPTURE_REATTACH_ON_STALE_MS "500"
   set_default CAMERA0_STREAM "camera0"
   set_default CAMERA1_STREAM "camera1"
   set_default IMU_STREAM "imu0"

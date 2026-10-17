@@ -127,19 +127,27 @@ class TcpCaptureTransport final : public ICaptureTransport {
         cam0_(std::make_unique<TcpStreamReader>(cfg_.cam0_stream, cfg_.camera_slots)),
         cam1_(std::make_unique<TcpStreamReader>(cfg_.cam1_stream, cfg_.camera_slots)),
         imu_(std::make_unique<TcpStreamReader>(cfg_.imu_stream, cfg_.imu_slots)) {
-    fd_ = capture_net_v1::connect_tcp(cfg_.host, cfg_.port);
-    running_ = true;
-    recv_thread_ = std::thread([this] { recv_loop(); });
+    try {
+      fd_ = capture_net_v1::connect_tcp(cfg_.host, cfg_.port);
+      running_ = true;
+      recv_thread_ = std::thread([this] { recv_loop(); });
 
-    const bool got_all = wait_for_required_first_packets(cfg_.first_packet_timeout_s);
-    if (!got_all) {
-      throw std::runtime_error(
-          "TcpCaptureTransport connected, but did not receive initial packets for required streams "
-          "within timeout.");
+      const bool got_all = wait_for_required_first_packets(cfg_.first_packet_timeout_s);
+      if (!got_all) {
+        throw std::runtime_error(
+            "TcpCaptureTransport connected, but did not receive initial packets for required streams "
+            "within timeout.");
+      }
+    } catch (...) {
+      stop();
+      throw;
     }
   }
 
-  ~TcpCaptureTransport() override {
+  ~TcpCaptureTransport() override { stop(); }
+
+ private:
+  void stop() {
     running_ = false;
     if (fd_ >= 0) {
       ::shutdown(fd_, SHUT_RDWR);
@@ -148,6 +156,7 @@ class TcpCaptureTransport final : public ICaptureTransport {
     capture_net_v1::close_fd(fd_);
   }
 
+ public:
   TcpCaptureTransport(const TcpCaptureTransport&) = delete;
   TcpCaptureTransport& operator=(const TcpCaptureTransport&) = delete;
 

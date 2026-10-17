@@ -14,6 +14,78 @@ hardware. It consumes runtime-normalized streams only.
 /tmp/runtime_tracking_streams.json : runtime_hand_tracking        # optional fallback
 ```
 
+## Controllers and optional OpenXR hands
+
+Controllers use the Touch interaction profile, including A/B/X/Y, analog
+trigger/squeeze and touch state. Simple-controller, Vive Wand and WMR binding
+profiles remain available. The Vive trackpad compatibility path uses the same
+Gear VR touch/motion/D-pad activation rules as the OpenVR driver. SteamVR sources
+are not modified by this integration.
+
+Both controller poses and the optional hand fallback are already in runtime
+coordinates. The driver copies position, orientation and valid velocities
+without applying the HMD transform a second time. A fresh
+`runtime_controller_state` frame is authoritative even if it explicitly marks a
+controller pose or input invalid.
+
+Native `XR_EXT_hand_tracking` publication is **disabled by default**. Enable it
+when starting (or restarting) the Monado service:
+
+```bash
+XR_MONADO_HAND_TRACKING=1 bin/drivers/monado_driver/start.sh
+```
+
+Leave the variable unset, or set `XR_MONADO_HAND_TRACKING=0`, to expose only
+controllers. The switch changes device capabilities at service startup; it does
+not require restarting the tracking backend. The normal controller/IMU path
+continues in either mode. The startup log reports the switch and each
+controller's hand-tracking capability.
+
+The opt-in hand devices consume `runtime_hand_tracking` alongside controllers.
+They expose 26 OpenXR joints using the existing 21-joint runtime data: measured
+wrist/finger joints are mapped directly, the palm uses its runtime position and
+orientation from `palm_*`, and the four missing finger metacarpals are
+estimated between wrist and proximal joint. Estimated poses are valid but are
+not marked as directly tracked. Zero/missing radii receive conservative defaults.
+The driver preserves the runtime's palm orientation, including configured
+offsets; any controller-only presentation correction belongs in the runtime.
+Invalid palm quaternions clear palm orientation validity without substituting
+the wrist orientation or discarding otherwise valid finger joints.
+Per-joint velocities are unavailable in the
+runtime contract and remain invalid; controller velocities are still passed
+through normally.
+
+Hands become inactive on no-hands, degraded/held tracking, missing joints,
+expired optical source timestamps or a missing/stale hand stream. IMU-only
+controller prediction never fabricates finger tracking. Invalid individual
+joints are returned with cleared validity flags and finite placeholder poses.
+
+After applying source changes, rebuild/install Monado using the normal installer:
+
+```bash
+XR_MONADO_DEVICE=xreal_ultra drivers/monado_driver/scripts/linux/install.sh
+```
+
+It installs the updated builder integration that registers the optional hand roles;
+copying only `xr_monado_driver.cpp` into an old Monado checkout is insufficient.
+Existing output-directory overrides such as `BIN_DIR` remain supported.
+
+## Driver regression checks
+
+The callback tests compile against the same Monado headers used for the build:
+
+```bash
+MONADO_DIR="$PWD/third_party/monado_driver" \
+  bash drivers/monado_driver/tests/run_tests.sh
+```
+
+Set `NLOHMANN_JSON_INCLUDE_DIR` if the JSON headers are outside the default
+compiler search path. Add `SANITIZE=1` for AddressSanitizer/UndefinedBehaviorSanitizer.
+These tests replace device allocation/debug/display helpers and incoming samples;
+they exercise the real input, pose and hand callbacks, including concurrent
+calls, default-off capabilities, analog/button handling and tracking loss.
+They do not replace an OpenXR application test with physical devices.
+
 ## Generic build and package target
 
 The same Monado binary can be packaged for any validated device target:

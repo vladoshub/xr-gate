@@ -60,10 +60,10 @@ StereoDepthProcessor::StereoDepthProcessor(StereoCalibration calibration, Stereo
 }
 
 void StereoDepthProcessor::ensure_maps(uint32_t width, uint32_t height) {
-  if (maps_ready_) return;
   if (int(width) != calibration_.cam0.width || int(height) != calibration_.cam0.height) {
     throw std::runtime_error("input image size does not match calibration resolution");
   }
+  if (maps_ready_) return;
   const cv::Size image_size(static_cast<int>(width), static_cast<int>(height));
   cv::fisheye::initUndistortRectifyMap(calibration_.K0, calibration_.D0, calibration_.R1, calibration_.P1,
                                        image_size, CV_16SC2, map0x_, map0y_);
@@ -75,6 +75,9 @@ void StereoDepthProcessor::ensure_maps(uint32_t width, uint32_t height) {
 StereoDepthResult StereoDepthProcessor::compute(const capture_client::ImageFrame& cam0,
                                                 const capture_client::ImageFrame& cam1) {
   ensure_maps(cam0.width, cam0.height);
+  if (cam1.width != cam0.width || cam1.height != cam0.height) {
+    throw std::runtime_error("stereo images must have matching calibrated dimensions");
+  }
 
   const cv::Mat left = image_to_mat(cam0);
   const cv::Mat right = image_to_mat(cam1);

@@ -154,3 +154,12 @@ devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
 
 `xcb` windowed mode can be useful for diagnostics, but the best current fallback VR
 experience is exclusive XREAL fullscreen with automatic monitor restore.
+
+## Optional native hand tracking
+
+`0001-add-xr-tracking-runtime-driver.patch` also registers the left/right optical
+hand-tracking roles when the corresponding device advertises the capability.
+The project-owned driver defaults that capability to off; set
+`XR_MONADO_HAND_TRACKING=1` before starting Monado to enable it. The installer
+also upgrades older copies of this integration when `RESET_MONADO_CHECKOUT=0`
+is used.

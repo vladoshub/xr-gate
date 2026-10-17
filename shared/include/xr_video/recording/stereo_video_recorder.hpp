@@ -33,12 +33,15 @@ struct StereoVideoRecorderStatus {
   uint64_t input_frames_seen = 0;
   uint64_t frames_written = 0;
   uint64_t frames_skipped = 0;
+  std::string error;
 };
 
 class StereoVideoRecorder {
  public:
   StereoVideoRecorder() = default;
-  ~StereoVideoRecorder() { stop(); }
+  ~StereoVideoRecorder() {
+    try { stop(); } catch (...) {}  // Explicit stop/record report errors to the caller.
+  }
 
   StereoVideoRecorder(const StereoVideoRecorder&) = delete;
   StereoVideoRecorder& operator=(const StereoVideoRecorder&) = delete;
@@ -57,6 +60,7 @@ class StereoVideoRecorder {
     st.input_frames_seen = input_frames_seen_;
     st.frames_written = frames_written_;
     st.frames_skipped = frames_skipped_;
+    st.error = error_;
     return st;
   }
 
@@ -65,13 +69,20 @@ class StereoVideoRecorder {
     stop_locked();
     if (cfg.every_n == 0) cfg.every_n = 1;
     cfg_ = std::move(cfg);
+    error_.clear();
     if (cfg_.record_dir.empty()) cfg_.record_dir = default_record_dir();
 
     current_dir_ = std::filesystem::path(cfg_.record_dir);
+    if (std::filesystem::exists(current_dir_ / "frames.csv") ||
+        std::filesystem::exists(current_dir_ / "metadata.json")) {
+      throw std::runtime_error("recording directory already contains a recording: " + current_dir_.string());
+    }
     std::filesystem::create_directories(current_dir_ / "cam0");
     std::filesystem::create_directories(current_dir_ / "cam1");
     if (cfg_.write_sbs) std::filesystem::create_directories(current_dir_ / "sbs");
 
+    if (frames_csv_.is_open()) frames_csv_.close();
+    frames_csv_.clear();
     frames_csv_.open(current_dir_ / "frames.csv", std::ios::out | std::ios::trunc);
     if (!frames_csv_) {
       throw std::runtime_error("failed to open recorder frames.csv in " + current_dir_.string());
@@ -79,6 +90,8 @@ class StereoVideoRecorder {
     frames_csv_ << "record_index,frame_sequence,source_timestamp_ns,publish_timestamp_ns,"
                    "left_timestamp_ns,right_timestamp_ns,width,height,pixel_format,"
                    "left_file,right_file,sbs_file\n";
+    frames_csv_.flush();
+    if (!frames_csv_) throw std::runtime_error("failed to write recorder frames.csv header");
 
     input_frames_seen_ = 0;
     frames_written_ = 0;
@@ -86,7 +99,12 @@ class StereoVideoRecorder {
     first_source_timestamp_ns_ = 0;
     last_source_timestamp_ns_ = 0;
     active_ = true;
-    write_metadata_locked(false);
+    try {
+      write_metadata_locked(false);
+    } catch (const std::exception& e) {
+      fail_locked(e.what());
+      throw;
+    }
   }
 
   void stop() {
@@ -108,42 +126,48 @@ class StereoVideoRecorder {
       return;
     }
 
-    validate_frame(frame);
-    if (frame.header.pixel_format != static_cast<uint32_t>(StereoVideoPixelFormat::Gray8)) {
-      throw std::runtime_error("primitive stereo recorder currently supports GRAY8 only");
+    try {
+      validate_frame(frame);
+      if (frame.header.pixel_format != static_cast<uint32_t>(StereoVideoPixelFormat::Gray8)) {
+        throw std::runtime_error("primitive stereo recorder currently supports GRAY8 only");
+      }
+
+      const uint64_t idx = frames_written_ + 1;
+      const std::string stem = zero_pad(idx, 8);
+      const std::string left_name = "cam0/" + stem + ".pgm";
+      const std::string right_name = "cam1/" + stem + ".pgm";
+      std::string sbs_name;
+
+      write_pgm(current_dir_ / left_name, frame.header.width, frame.header.height, frame.left);
+      write_pgm(current_dir_ / right_name, frame.header.width, frame.header.height, frame.right);
+      if (cfg_.write_sbs) {
+        sbs_name = "sbs/" + stem + ".pgm";
+        write_sbs_pgm(current_dir_ / sbs_name, frame);
+      }
+
+      if (first_source_timestamp_ns_ == 0) first_source_timestamp_ns_ = frame.header.source_timestamp_ns;
+      last_source_timestamp_ns_ = frame.header.source_timestamp_ns;
+
+      frames_csv_ << idx << ','
+                  << frame.header.sequence << ','
+                  << frame.header.source_timestamp_ns << ','
+                  << frame.header.publish_timestamp_ns << ','
+                  << frame.header.left_timestamp_ns << ','
+                  << frame.header.right_timestamp_ns << ','
+                  << frame.header.width << ','
+                  << frame.header.height << ','
+                  << frame.header.pixel_format << ','
+                  << left_name << ','
+                  << right_name << ','
+                  << sbs_name << '\n';
+
+      frames_csv_.flush();
+      if (!frames_csv_) throw std::runtime_error("failed to write recorder frames.csv");
+      ++frames_written_;
+    } catch (const std::exception& e) {
+      fail_locked(e.what());
+      throw;
     }
-
-    const uint64_t idx = frames_written_ + 1;
-    const std::string stem = zero_pad(idx, 8);
-    const std::string left_name = "cam0/" + stem + ".pgm";
-    const std::string right_name = "cam1/" + stem + ".pgm";
-    std::string sbs_name;
-
-    write_pgm(current_dir_ / left_name, frame.header.width, frame.header.height, frame.left);
-    write_pgm(current_dir_ / right_name, frame.header.width, frame.header.height, frame.right);
-    if (cfg_.write_sbs) {
-      sbs_name = "sbs/" + stem + ".pgm";
-      write_sbs_pgm(current_dir_ / sbs_name, frame);
-    }
-
-    if (first_source_timestamp_ns_ == 0) first_source_timestamp_ns_ = frame.header.source_timestamp_ns;
-    last_source_timestamp_ns_ = frame.header.source_timestamp_ns;
-
-    frames_csv_ << idx << ','
-                << frame.header.sequence << ','
-                << frame.header.source_timestamp_ns << ','
-                << frame.header.publish_timestamp_ns << ','
-                << frame.header.left_timestamp_ns << ','
-                << frame.header.right_timestamp_ns << ','
-                << frame.header.width << ','
-                << frame.header.height << ','
-                << frame.header.pixel_format << ','
-                << left_name << ','
-                << right_name << ','
-                << sbs_name << '\n';
-
-    ++frames_written_;
-    if ((frames_written_ % 30) == 0) frames_csv_.flush();
   }
 
  private:
@@ -158,7 +182,12 @@ class StereoVideoRecorder {
 #endif
     std::ostringstream os;
     os << "xr_video_record_" << std::put_time(&tm, "%Y%m%d_%H%M%S");
-    return (std::filesystem::temp_directory_path() / os.str()).string();
+    const auto base = std::filesystem::temp_directory_path() / os.str();
+    for (uint64_t suffix = 0;; ++suffix) {
+      auto path = std::filesystem::path(base.string() + (suffix ? "_" + std::to_string(suffix) : ""));
+      // Atomic creation also separates simultaneous recorder processes.
+      if (std::filesystem::create_directory(path)) return path.string();
+    }
   }
 
   static std::string zero_pad(uint64_t value, int width) {
@@ -178,6 +207,8 @@ class StereoVideoRecorder {
     if (!out) throw std::runtime_error("failed to open " + path.string());
     out << "P5\n" << width << ' ' << height << "\n255\n";
     out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+    out.close();
+    if (!out) throw std::runtime_error("failed to write " + path.string());
   }
 
   static void write_sbs_pgm(const std::filesystem::path& path, const StereoVideoFrame& frame) {
@@ -209,24 +240,46 @@ class StereoVideoRecorder {
         {"frames_skipped", frames_skipped_},
         {"first_source_timestamp_ns", first_source_timestamp_ns_},
         {"last_source_timestamp_ns", last_source_timestamp_ns_},
-        {"finalized", finalized}};
-    std::ofstream out(current_dir_ / "metadata.json", std::ios::out | std::ios::trunc);
-    if (out) out << j.dump(2) << '\n';
+        {"finalized", finalized},
+        {"error", error_}};
+    // Preserve the last complete metadata (initially finalized=false) if the
+    // disk fills while finalizing the recording.
+    const auto temporary = current_dir_ / "metadata.json.tmp";
+    std::ofstream out(temporary, std::ios::out | std::ios::trunc);
+    if (!out) throw std::runtime_error("failed to open recording metadata.json");
+    out << j.dump(2) << '\n';
+    out.close();
+    if (!out) throw std::runtime_error("failed to write recording metadata.json");
+    std::filesystem::rename(temporary, current_dir_ / "metadata.json");
+  }
+
+  void fail_locked(const std::string& error) {
+    error_ = error;
+    active_ = false;
+    if (frames_csv_.is_open()) frames_csv_.close();
+    try { write_metadata_locked(false); } catch (...) {}
   }
 
   void stop_locked() {
     if (!active_) return;
     active_ = false;
-    if (frames_csv_) {
-      frames_csv_.flush();
-      frames_csv_.close();
+    try {
+      if (frames_csv_.is_open()) {
+        frames_csv_.flush();
+        frames_csv_.close();
+        if (!frames_csv_) throw std::runtime_error("failed to finalize recorder frames.csv");
+      }
+      write_metadata_locked(true);
+    } catch (const std::exception& e) {
+      fail_locked(e.what());
+      throw;
     }
-    write_metadata_locked(true);
   }
 
   mutable std::mutex mu_;
   StereoVideoRecorderConfig cfg_;
   bool active_ = false;
+  std::string error_;
   std::filesystem::path current_dir_;
   std::ofstream frames_csv_;
   uint64_t input_frames_seen_ = 0;

@@ -71,7 +71,7 @@ index 2d95fba..fbc23af 100644
  	// If no driver is enabled, there is no way to create a HMD
  	bool may_create_hmd = xb->driver_identifier_count > 0;
  
-@@ -127,6 +142,38 @@ legacy_open_system_impl(struct xrt_builder *xb,
+@@ -127,6 +142,41 @@ legacy_open_system_impl(struct xrt_builder *xb,
  	xrt_result_t xret;
  	int ret;
  
@@ -105,6 +105,9 @@ index 2d95fba..fbc23af 100644
 +		tbrh->head = head;
 +		tbrh->left = left;
 +		tbrh->right = right;
++		// XR runtime optical hand tracking roles (opt-in on each device).
++		tbrh->hand_tracking.unobstructed.left = left->supported.hand_tracking ? left : NULL;
++		tbrh->hand_tracking.unobstructed.right = right->supported.hand_tracking ? right : NULL;
 +		return XRT_SUCCESS;
 +	}
  

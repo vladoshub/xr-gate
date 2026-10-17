@@ -74,3 +74,63 @@ requested. Pose input remains independent: `SPATIAL_POSE_INPUT=shm` can still
 consume a local `hmd_pose`, while `SPATIAL_POSE_INPUT=none` keeps output in
 camera coordinates. Automatic TCP profile probing remains disabled unless
 `CAPTURE_PROFILE_PROBE_ENABLED=1` is explicitly set.
+
+## Scanner recovery and output
+
+The launchers use the tracking sensor's `BASALT_CALIB` as the default calibration.
+An explicit `CALIB_JSON` still takes priority. This keeps the scanner on the same
+camera intrinsics and camera-to-IMU transform as the selected Basalt profile,
+including XREAL device-time calibration.
+
+With tracked pose input, camera timestamps are shifted by the calibration's
+`value0.cam_time_offset_ns` before matching frames to poses:
+`t_imu = t_camera + offset`. Source image timestamps remain unchanged. A frame
+is consumed only once even when `DEPTH_RATE_HZ=0` disables rate limiting.
+
+A scan stops before integrating a changed pose `reset_counter`, a restarted
+pose sequence, or a large pose-source jump. The accumulated part is saved in
+the selected output directory; worlds from different tracking epochs are not
+merged. The jump thresholds are `QUALITY_REINIT_DELTA_M/DEG` and apply even
+when the optional depth quality gate is disabled. Runtime mode clears its map
+and tracking origin on the same discontinuities and keeps running.
+
+Stalled camera SHM streams are reopened using the current capture registry.
+`CAPTURE_REATTACH_ON_STALE_MS=500` controls the timeout; `0` disables reopening.
+Restarted camera sequence numbers are accepted when their timestamps advance.
+A scan ending with stalled capture, no integrated points, or an interruption
+is marked incomplete rather than silently reported as a successful full scan.
+
+Depth errors drop the individual source frame. After 30 consecutive errors the
+scanner saves its accumulated data and exits with an error. Other processing
+exceptions also finalize the accumulated scan. Each output is saved separately,
+so a failed artifact does not prevent attempts to save the others. Write/flush
+failures are reported, including a full output disk.
+
+`scan_metadata.json` records `complete`, `stop_reason`, `frame_errors`,
+`capture_reattachments`, `camera_time_offset_ns`, `observed_points`, and
+`reservoir_sampling`. Exit codes are `0` for a completed scan, `2` for a saved
+incomplete scan, and `1` for processing or output errors.
+
+`MAX_ACCUMULATED_POINTS` must be positive. Once this memory budget is reached,
+uniform reservoir sampling keeps a bounded sample of the entire scan, allowing
+new areas to replace a portion of earlier points. It does not preserve every
+observation. Voxel PLY `observations` counts retained source points, including
+points from the same frame; it is not a count of independent frame detections.
+Scan mode accumulates points even if `live_depth_grid` is selected for display.
+Explicit CLI arguments override profile-derived arguments in the launchers.
+
+## Scanner regression tests
+
+Requires the same C++/OpenCV dependencies as the backend and Python 3:
+
+```bash
+cmake -S backends/xr_spatial -B build/tests/xr_spatial -DXR_SPATIAL_BUILD_TESTS=ON
+cmake --build build/tests/xr_spatial -j2
+ctest --test-dir build/tests/xr_spatial --output-on-failure
+```
+
+The tests exercise the production scanner and SGBM with synthetic stereo images
+and real SHM rings. They cover calibration selection, camera/IMU time offsets,
+pose resets and jumps, camera SHM replacement, frame errors, duplicate frames,
+point budgets, live-grid scanning, and failed output writes. No camera or HMD
+hardware is needed.

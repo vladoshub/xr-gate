@@ -226,26 +226,34 @@ class CaptureServiceTcpTransport final : public ICaptureTransport {
         cam0_(std::make_unique<TcpStreamReader>(cfg_.cam0_stream, cfg_.camera_slots)),
         cam1_(std::make_unique<TcpStreamReader>(cfg_.cam1_stream, cfg_.camera_slots)),
         imu_(std::make_unique<TcpStreamReader>(cfg_.imu_stream, cfg_.imu_slots)) {
-    fd_ = capture_service_tcp_detail::connect_tcp(cfg_.host, cfg_.port);
-    const nlohmann::json hello = capture_service_tcp_detail::read_hello(fd_);
-    validate_hello_streams(hello);
+    try {
+      fd_ = capture_service_tcp_detail::connect_tcp(cfg_.host, cfg_.port);
+      const nlohmann::json hello = capture_service_tcp_detail::read_hello(fd_);
+      validate_hello_streams(hello);
 
-    std::vector<std::string> streams{cfg_.cam0_stream, cfg_.cam1_stream};
-    if (cfg_.subscribe_imu) streams.push_back(cfg_.imu_stream);
-    capture_service_tcp_detail::write_subscribe(fd_, streams);
+      std::vector<std::string> streams{cfg_.cam0_stream, cfg_.cam1_stream};
+      if (cfg_.subscribe_imu) streams.push_back(cfg_.imu_stream);
+      capture_service_tcp_detail::write_subscribe(fd_, streams);
 
-    running_ = true;
-    recv_thread_ = std::thread([this] { recv_loop(); });
+      running_ = true;
+      recv_thread_ = std::thread([this] { recv_loop(); });
 
-    const bool got_all = wait_for_required_first_packets(cfg_.first_packet_timeout_s);
-    if (!got_all) {
-      throw std::runtime_error(
-          "CaptureServiceTcpTransport connected, but did not receive initial packets for required streams "
-          "within timeout.");
+      const bool got_all = wait_for_required_first_packets(cfg_.first_packet_timeout_s);
+      if (!got_all) {
+        throw std::runtime_error(
+            "CaptureServiceTcpTransport connected, but did not receive initial packets for required streams "
+            "within timeout.");
+      }
+    } catch (...) {
+      stop();
+      throw;
     }
   }
 
-  ~CaptureServiceTcpTransport() override {
+  ~CaptureServiceTcpTransport() override { stop(); }
+
+ private:
+  void stop() {
     running_ = false;
     if (fd_ >= 0) {
       ::shutdown(fd_, SHUT_RDWR);
@@ -254,6 +262,7 @@ class CaptureServiceTcpTransport final : public ICaptureTransport {
     capture_service_tcp_detail::close_fd(fd_);
   }
 
+ public:
   CaptureServiceTcpTransport(const CaptureServiceTcpTransport&) = delete;
   CaptureServiceTcpTransport& operator=(const CaptureServiceTcpTransport&) = delete;
 

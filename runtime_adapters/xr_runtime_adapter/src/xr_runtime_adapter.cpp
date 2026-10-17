@@ -5236,6 +5236,7 @@ int main(int argc, char** argv) {
     uint64_t last_hmd_seq = 0;
     std::string last_hmd_source_for_count;
     uint64_t last_hmd_reset_counter = 0;
+    std::optional<uint64_t> controller_primary_hmd_reset_counter;
     uint64_t last_hand_seq = 0;
     uint64_t last_consumed_hmd_seq = 0;
     std::string last_consumed_hmd_source;
@@ -5486,6 +5487,18 @@ int main(int argc, char** argv) {
             frame.hmd_valid = frame.hmd.sequence != 0;
           }
           if (frame.hmd_valid) {
+            if (selected_hmd_source == HmdPoseSourceKind::Primary6Dof &&
+                (selected_hmd.flags & xr_runtime::HMD_FLAG_POSE_VALID) != 0u) {
+              if (controller_primary_hmd_reset_counter &&
+                  *controller_primary_hmd_reset_counter != selected_hmd.reset_counter) {
+                // Capture/VIO recovery can change the world frame without a
+                // control-file edit. Discard the old optical/IMU world anchor.
+                runtime_controller_synthesis_state = {};
+                std::cout << "[xr_runtime_adapter] controller IMU state reset: "
+                          << "reason=hmd_reset_counter; yaw=reset\n";
+              }
+              controller_primary_hmd_reset_counter = selected_hmd.reset_counter;
+            }
             last_good_hmd = frame.raw_hmd;
             last_good_hmd_frame_id = frame.hmd_frame_id;
           }
