@@ -157,6 +157,8 @@ Without this, input will be limited to gestures (pinch, grab).
 
 Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime controller input.
 
+**If you have built-in Bluetooth, I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500.**
+
 You can use 2 identical Bluetooth controllers.
 
 Train your devices:
@@ -216,7 +218,7 @@ CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.j
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
-## Samsung Gear VR controllers:
+## Samsung Gear VR controllers (controllers with IMU):
 
 1. Copy config:
 
@@ -230,8 +232,6 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.j
 
 2. Connect controllers to PC
 
-   
-## If you have built-in Bluetooth, I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500.
 
 Without external USB
 
@@ -325,6 +325,11 @@ If you want to retrain, you can delete default.json for new train
 If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
 
 When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
+
+
+
+**If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
+
 
 
 
@@ -525,6 +530,8 @@ XR_OPENVR_DISPLAY_MODE=direct \
 ./devices/common/linux/scripts/openvr_driver/register_driver.sh
 ```
 
+
+**Start xr_client before run SteamVR**
 
 ### Start on Integrated GPU with USB-C video output without discrete GPU in system
 
