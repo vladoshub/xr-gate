@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "xr-gate"
-IMAGE = "xr-gate-runtime:v2.7.0"
+IMAGE = "xr-gate-runtime:v2.8.0"
 
 
 def read_env(path):

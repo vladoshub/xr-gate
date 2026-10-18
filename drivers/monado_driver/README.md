@@ -14,6 +14,30 @@ hardware. It consumes runtime-normalized streams only.
 /tmp/runtime_tracking_streams.json : runtime_hand_tracking        # optional fallback
 ```
 
+## Restarting the tracking stack
+
+On Linux, the driver automatically reconnects all three SHM streams when
+`xr_runtime_adapter` or the full XR Gate tracking stack restarts. The Monado
+service and its OpenXR devices can stay running. The stream names must remain
+the same (`runtime_hmd_pose`, `runtime_controller_state`, `runtime_hand_tracking`).
+
+An unlinked or resized SHM mapping is reopened before reading it, even while
+the previous sample is fresh. Sequence counters may restart at 1. A stream
+whose sequence stops advancing is reopened after 500 ms; missing or partially
+initialized objects are retried at most every 100 ms, without a background
+thread. Healthy mappings stay open. Existing sample-age checks still reject
+stale poses and inputs: reconnecting never refreshes their timestamps.
+
+While tracking is unavailable, controllers and optical hands become inactive;
+the HMD keeps the existing identity-pose fallback. Restored tracking resumes on
+the existing devices. A full VIO restart can reset the tracking origin, so the
+application may need recentering. Reconnection does not preserve the previous
+world map or controller IMU alignment state. If Monado itself is stopped by
+your launcher, its OpenXR session must still be started again.
+
+This requires rebuilding/installing Monado once after applying the patch.
+Capture, tracking backends, SteamVR and calibration files need no changes.
+
 ## Controllers and optional OpenXR hands
 
 Controllers use the Touch interaction profile, including A/B/X/Y, analog
@@ -71,6 +95,16 @@ copying only `xr_monado_driver.cpp` into an old Monado checkout is insufficient.
 Existing output-directory overrides such as `BIN_DIR` remain supported.
 
 ## Driver regression checks
+
+The Linux transport tests use real SHM objects and need no Monado checkout:
+
+```bash
+bash drivers/monado_driver/tests/run_posix_shm_tests.sh
+```
+
+They cover publisher replacement while the previous frame is still fresh,
+sequence reset, stopped/resumed streams, missing publishers, resized/truncated
+segments, incomplete/invalid headers and repeated restarts without FD leaks.
 
 The callback tests compile against the same Monado headers used for the build:
 

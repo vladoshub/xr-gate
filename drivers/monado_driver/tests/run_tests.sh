@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+bash "$ROOT/drivers/monado_driver/tests/run_posix_shm_tests.sh"
 MONADO_DIR="${MONADO_DIR:-$ROOT/third_party/monado_driver}"
 if [[ ! -f "$MONADO_DIR/src/xrt/include/xrt/xrt_device.h" ]]; then
   echo "Set MONADO_DIR to the Monado checkout used by drivers/monado_driver/scripts/linux/install.sh" >&2

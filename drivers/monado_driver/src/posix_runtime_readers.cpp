@@ -77,7 +77,29 @@ class MappedPosixShm {
   ~MappedPosixShm() { close_mapping(); }
 
   bool ensure_mapping(std::string* error) {
-    if (data_ != nullptr) return true;
+    const int64_t now = monotonic_now_ns();
+    if (data_ != nullptr) {
+      // mmap keeps an unlinked object alive after the publisher recreates the
+      // same name. Inspect the descriptor before accessing the mapped pages,
+      // including when the old sample is still fresh or sequence restarts at 1.
+      struct stat current {};
+      if (fstat(fd_, &current) != 0 || current.st_nlink == 0 ||
+          current.st_size <= 0 || static_cast<size_t>(current.st_size) != mapped_size_ ||
+          now - last_progress_ns_ >= kReattachAfterStallNs) {
+        close_mapping();
+        next_open_attempt_ns_ = 0;
+      } else {
+        return true;
+      }
+    }
+
+    // Missing/partially initialized streams must not cause shm_open/mmap work
+    // at the Monado callback rate. No sleep or polling thread is needed.
+    if (now < next_open_attempt_ns_) {
+      if (error) *error = "waiting to retry SHM " + shm_name_;
+      return false;
+    }
+    next_open_attempt_ns_ = now + kOpenRetryIntervalNs;
 
     fd_ = shm_open(shm_name_.c_str(), O_RDONLY, 0);
     if (fd_ < 0) {
@@ -86,8 +108,8 @@ class MappedPosixShm {
     }
 
     struct stat st {};
-    if (fstat(fd_, &st) != 0 || st.st_size <= 0) {
-      if (error) *error = "fstat failed for " + shm_name_ + ": " + std::strerror(errno);
+    if (fstat(fd_, &st) != 0 || st.st_nlink == 0 || st.st_size <= 0) {
+      if (error) *error = "SHM is unavailable or not initialized: " + shm_name_;
       close_mapping();
       return false;
     }
@@ -101,7 +123,16 @@ class MappedPosixShm {
       return false;
     }
     data_ = static_cast<const uint8_t*>(mapped);
+    last_progress_ns_ = now;
     return true;
+  }
+
+  void observe_sequence(uint64_t sequence) {
+    // Any change is progress: a producer restart may lower the sequence.
+    if (sequence != last_sequence_) {
+      last_sequence_ = sequence;
+      last_progress_ns_ = monotonic_now_ns();
+    }
   }
 
   template <typename HeaderT>
@@ -124,6 +155,15 @@ class MappedPosixShm {
       if (error) *error = "SHM slot header size mismatch";
       return false;
     }
+    // A replacement may be visible before its header is fully initialized.
+    // Check the entire ring layout without overflow before reading any slot.
+    if (h->version != 1 || h->header_size < sizeof(HeaderT) ||
+        h->header_size > mapped_size_ || h->slot_count == 0 ||
+        static_cast<size_t>(h->slot_stride) < static_cast<size_t>(slot_header_size) + payload_size ||
+        h->slot_count > (mapped_size_ - h->header_size) / h->slot_stride) {
+      if (error) *error = "SHM ring layout is invalid";
+      return false;
+    }
     return true;
   }
 
@@ -137,16 +177,23 @@ class MappedPosixShm {
       fd_ = -1;
     }
     mapped_size_ = 0;
+    last_sequence_ = 0;
+    last_progress_ns_ = 0;
   }
 
   const uint8_t* data() const { return data_; }
   size_t mapped_size() const { return mapped_size_; }
 
  private:
+  static constexpr int64_t kOpenRetryIntervalNs = 100LL * 1000 * 1000;
+  static constexpr int64_t kReattachAfterStallNs = 500LL * 1000 * 1000;
   std::string shm_name_;
   int fd_ = -1;
   const uint8_t* data_ = nullptr;
   size_t mapped_size_ = 0;
+  uint64_t last_sequence_ = 0;
+  int64_t last_progress_ns_ = 0;
+  int64_t next_open_attempt_ns_ = 0;
 };
 
 class PosixRuntimePoseReader final : public IRuntimePoseReader {
@@ -155,6 +202,7 @@ class PosixRuntimePoseReader final : public IRuntimePoseReader {
       : cfg_(std::move(cfg)), shm_(normalize_posix_shm_name(cfg_.shm_name, "runtime_hmd_pose")) {}
 
   bool read_latest(RuntimePoseSample& out, std::string* error) override {
+    out = {};
     if (!shm_.ensure_mapping(error)) return false;
     const char expected[8] = {'R', 'T', 'P', 'O', 'S', 'E', '1', '\0'};
     if (!shm_.validate_header_magic<xr_runtime::RingHeaderV1>(
@@ -173,6 +221,7 @@ class PosixRuntimePoseReader final : public IRuntimePoseReader {
       return false;
     }
 
+    shm_.observe_sequence(sequence);
     out.pose = pose;
     out.read_time_ns = monotonic_now_ns();
     const int64_t pose_ts = pose.timestamp_ns != 0 ? static_cast<int64_t>(pose.timestamp_ns)
@@ -194,6 +243,7 @@ class PosixRuntimeControllerStateReader final : public IRuntimeControllerStateRe
       : cfg_(std::move(cfg)), shm_(normalize_posix_shm_name(cfg_.shm_name, "runtime_controller_state")) {}
 
   bool read_latest(RuntimeControllerStateSample& out, std::string* error) override {
+    out = {};
     if (!shm_.ensure_mapping(error)) return false;
     const char expected[8] = {'R', 'T', 'C', 'T', 'R', 'L', '1', '\0'};
     if (!shm_.validate_header_magic<xr_runtime::RingHeaderV1>(
@@ -212,6 +262,7 @@ class PosixRuntimeControllerStateReader final : public IRuntimeControllerStateRe
       return false;
     }
 
+    shm_.observe_sequence(sequence);
     out.frame = frame;
     out.read_time_ns = monotonic_now_ns();
     const int64_t frame_ts = frame.timestamp_ns != 0 ? static_cast<int64_t>(frame.timestamp_ns)
@@ -233,6 +284,7 @@ class PosixRuntimeHandReader final : public IRuntimeHandReader {
       : cfg_(std::move(cfg)), shm_(normalize_posix_shm_name(cfg_.shm_name, "runtime_hand_tracking")) {}
 
   bool read_latest(RuntimeHandSample& out, std::string* error) override {
+    out = {};
     if (!shm_.ensure_mapping(error)) return false;
     const char expected[8] = {'H', 'T', 'R', 'K', 'R', 'G', '1', '\0'};
     if (!shm_.validate_header_magic<xr_tracking::TrackingRingHeaderV1>(
@@ -251,6 +303,7 @@ class PosixRuntimeHandReader final : public IRuntimeHandReader {
       return false;
     }
 
+    shm_.observe_sequence(sequence);
     out.frame = frame;
     out.read_time_ns = monotonic_now_ns();
     const int64_t frame_ts = frame.timestamp_ns != 0 ? static_cast<int64_t>(frame.timestamp_ns)

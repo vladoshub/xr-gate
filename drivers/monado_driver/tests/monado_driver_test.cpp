@@ -351,6 +351,51 @@ void test_invalid_joints() {
   assert(!runtime_hand_to_joint_set(side, joints) && !joints.is_active);
 }
 
+void test_stream_loss_and_resume() {
+  Fixture f(true);
+  f.head.is_hmd = true;
+  f.hmd->sample.pose.flags = xr_runtime::RUNTIME_HMD_FLAG_POSE_VALID;
+  f.hmd->sample.pose.tracking_status = 2;
+  f.hmd->sample.pose.confidence = 1.0f;
+  f.hmd->sample.pose.px = 0.25;
+  f.controller->sample.frame.left.buttons = xr_runtime::CONTROLLER_BUTTON_TRIGGER;
+  f.left->update_inputs(f.left);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).value.vec1.x == 1.0f);
+  xrt_space_relation relation{};
+  xrtd_get_tracked_pose(&f.head.base, XRT_INPUT_GENERIC_HEAD_POSE, 0, &relation);
+  assert(relation.pose.position.x == 0.25f);
+
+  f.hmd->available = f.controller->available = f.hand->available = false;
+  f.left->update_inputs(f.left);
+  assert(!input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).active);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).value.vec1.x == 0.0f);
+  f.left->get_tracked_pose(f.left, XRT_INPUT_TOUCH_GRIP_POSE, 0, &relation);
+  assert(relation.relation_flags == 0);
+  xrt_hand_joint_set joints{};
+  int64_t timestamp = 0;
+  f.left->get_hand_tracking(f.left, XRT_INPUT_HT_UNOBSTRUCTED_LEFT, 0, &joints, &timestamp);
+  assert(!joints.is_active && timestamp == 0);
+  xrtd_get_tracked_pose(&f.head.base, XRT_INPUT_GENERIC_HEAD_POSE, 0, &relation);
+  assert(relation.pose.position.x == 0.0f && relation.pose.orientation.w == 1.0f);
+
+  f.hmd->available = f.controller->available = f.hand->available = true;
+  f.hmd->sample.pose.px = -0.5;
+  f.controller->sample.frame.sequence = f.hand->sample.frame.sequence = 1;
+  f.controller->sample.frame.left.buttons = 0;
+  f.controller->sample.frame.left.thumbstick_x = -0.75f;
+  f.hand->sample.frame.source_timestamp_ns = static_cast<uint64_t>(monotonic_now_ns());
+  f.left->update_inputs(f.left);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).active);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).value.vec1.x == 0.0f);
+  assert(input(f.left, XRT_INPUT_TOUCH_THUMBSTICK).value.vec2.x == -0.75f);
+  f.left->get_tracked_pose(f.left, XRT_INPUT_TOUCH_GRIP_POSE, 0, &relation);
+  assert(relation.pose.position.x == 0.4f);
+  f.left->get_hand_tracking(f.left, XRT_INPUT_HT_UNOBSTRUCTED_LEFT, 0, &joints, &timestamp);
+  assert(joints.is_active && timestamp != 0);
+  xrtd_get_tracked_pose(&f.head.base, XRT_INPUT_GENERIC_HEAD_POSE, 0, &relation);
+  assert(relation.pose.position.x == -0.5f);
+}
+
 void test_parallel_callbacks() {
   Fixture f(true);
   auto run = [&](xrt_device* device, xrt_input_name name) {
@@ -377,6 +422,7 @@ int main() {
   test_skeleton_mapping_and_loss();
   test_palm_runtime_orientation();
   test_invalid_joints();
+  test_stream_loss_and_resume();
   test_parallel_callbacks();
-  std::cout << "Monado driver: 7 test groups passed\n";
+  std::cout << "Monado driver: 8 test groups passed\n";
 }
