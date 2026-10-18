@@ -190,7 +190,7 @@ quit
 Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output for USB should show "Powered: yes." The select and power commands select the adapter and
 
 
-
+### Train new devices (Optional)
 Train your devices.
 Choose this option if you don't have any controllers from the list below or you want to use your own layout (for example, use the keyboard for control)
 
@@ -213,7 +213,7 @@ When using external input, hands position and rotation from cameras, input from 
 
 
 
-## SUPPORTED BLUETOOTH CONTROLLERS
+## SUPPORTED BLUETOOTH CONTROLLERS (Recommended)
 
 ### VR-PARK controllers (NO IMU):
 
