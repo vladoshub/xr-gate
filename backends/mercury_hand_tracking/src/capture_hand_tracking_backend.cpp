@@ -22,7 +22,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <capture_client/sync/latest_stereo_reader.hpp>
+#include <capture_client/sync/recovering_stereo_reader.hpp>
 #include <capture_client/transports/shm_transport.hpp>
 #include <capture_client/transports/tcp_transport.hpp>
 #include <capture_client/transports/capture_service_tcp_transport.hpp>
@@ -534,6 +534,12 @@ int main(int argc, char** argv) {
   try {
     app.parse(argc, argv);
     publish_hand_shm = !no_hand_shm;
+    if (hand_tracker == "mercury" && app.get_option("--hand-format-version")->count() == 0) {
+      hand_format_version = 2;
+    }
+    if (hand_tracker == "mercury" && hand_format_version == 1) {
+      throw CLI::ValidationError("--hand-format-version", "Mercury requires V2; use --hand-format-version 2");
+    }
     if (hand_format_version != 1 && hand_format_version != 2) {
       std::cerr << "ERROR: --hand-format-version must be 1 or 2\n";
       return 2;
@@ -567,30 +573,37 @@ int main(int argc, char** argv) {
       std::cout << "hand_format_version: " << hand_format_version << "\n";
     }
 
-    std::unique_ptr<capture_client::ICaptureTransport> transport;
-    if (transport_type == "shm") {
-      transport = std::make_unique<CameraOnlyShmCaptureTransport>(
-          registry_path, cam0_stream, cam1_stream);
-    } else if (transport_type == "tcp") {
-      capture_client::TcpCaptureTransportConfig cfg;
-      cfg.host = tcp_host;
-      cfg.port = tcp_port;
-      cfg.cam0_stream = cam0_stream;
-      cfg.cam1_stream = cam1_stream;
-      cfg.imu_stream = imu_stream;
-      transport = std::make_unique<capture_client::TcpCaptureTransport>(std::move(cfg));
-    } else if (transport_type == "capture_tcp") {
-      capture_client::CaptureServiceTcpTransportConfig capture_tcp_cfg;
-      capture_tcp_cfg.host = tcp_host;
-      capture_tcp_cfg.port = tcp_port;
-      capture_tcp_cfg.cam0_stream = cam0_stream;
-      capture_tcp_cfg.cam1_stream = cam1_stream;
-      capture_tcp_cfg.imu_stream = imu_stream;
-      capture_tcp_cfg.subscribe_imu = false;
-      transport = std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(capture_tcp_cfg));
-    } else {
-      throw std::runtime_error("unknown --transport: " + transport_type + "; expected shm, tcp, or capture_tcp");
-    }
+    auto make_transport = [&]() -> std::unique_ptr<capture_client::ICaptureTransport> {
+      if (transport_type == "shm") {
+        return std::make_unique<CameraOnlyShmCaptureTransport>(
+            registry_path, cam0_stream, cam1_stream);
+      } else if (transport_type == "tcp") {
+        capture_client::TcpCaptureTransportConfig cfg;
+        cfg.host = tcp_host;
+        cfg.port = tcp_port;
+        cfg.cam0_stream = cam0_stream;
+        cfg.cam1_stream = cam1_stream;
+        cfg.imu_stream = imu_stream;
+        return std::make_unique<capture_client::TcpCaptureTransport>(std::move(cfg));
+      } else if (transport_type == "capture_tcp") {
+        capture_client::CaptureServiceTcpTransportConfig capture_tcp_cfg;
+        capture_tcp_cfg.host = tcp_host;
+        capture_tcp_cfg.port = tcp_port;
+        capture_tcp_cfg.cam0_stream = cam0_stream;
+        capture_tcp_cfg.cam1_stream = cam1_stream;
+        capture_tcp_cfg.imu_stream = imu_stream;
+        capture_tcp_cfg.subscribe_imu = false;
+        return std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(capture_tcp_cfg));
+      } else {
+        throw std::runtime_error("unknown --transport: " + transport_type + "; expected shm, tcp, or capture_tcp");
+      }
+    };
+
+    capture_client::RecoveringStereoReader reader(
+        make_transport,
+        static_cast<int64_t>(max_stereo_delta_ms * 1e6),
+        !sequential,
+        max_scan_back);
 
     std::unique_ptr<xr_tracking::HandTrackingShmPublisher> hand_publisher_v1;
     std::unique_ptr<xr_tracking::HandTrackingShmPublisherV2> hand_publisher_v2;
@@ -611,15 +624,9 @@ int main(int argc, char** argv) {
                 << " format=HAND_TRACKING_V" << hand_format_version << "\n";
     }
 
-    capture_client::LatestStereoReader reader(
-        *transport,
-        static_cast<int64_t>(max_stereo_delta_ms * 1e6),
-        !sequential,
-        max_scan_back);
-
     HandTrackingProcessor processor;
-    std::unique_ptr<xr_tracking::MercuryRuntimeProcessor> mercury_processor;
-    if (hand_tracker == "mercury") {
+    auto make_mercury_processor = [&]() -> std::unique_ptr<xr_tracking::MercuryRuntimeProcessor> {
+      if (hand_tracker != "mercury") return nullptr;
       if (mercury_detector_fusion) set_process_env("MERCURY_XR_DETECTOR_FUSION", "1");
       if (mercury_fusion_stereo_pairs) set_process_env("MERCURY_XR_DETECTOR_FUSION_STEREO_PAIRS", "1");
       set_process_env("MERCURY_MIN_DETECTION_CONFIDENCE", std::to_string(mercury_min_detection_confidence));
@@ -648,8 +655,10 @@ int main(int argc, char** argv) {
                 << "mercury_calib: " << mercury_cfg.calib_json << "\n"
                 << "mercury_detector_fusion: " << (mercury_detector_fusion ? "yes" : "no") << "\n"
                 << "mercury_fusion_stereo_pairs: " << (mercury_fusion_stereo_pairs ? "yes" : "no") << "\n";
-      mercury_processor = std::make_unique<xr_tracking::MercuryRuntimeProcessor>(std::move(mercury_cfg));
-    }
+      return std::make_unique<xr_tracking::MercuryRuntimeProcessor>(std::move(mercury_cfg));
+    };
+    auto mercury_processor = make_mercury_processor();
+    uint64_t capture_generation = reader.generation();
 
     Stats stats;
 
@@ -689,6 +698,12 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      if (capture_generation != reader.generation()) {
+        capture_generation = reader.generation();
+        ++reset_counter;
+        mercury_processor.reset();
+        mercury_processor = make_mercury_processor();
+      }
       auto result = processor.process(*pair);
 
       if (hand_publisher_v1) {
@@ -771,7 +786,7 @@ int main(int argc, char** argv) {
             : 0.0;
 
     std::cout << "=== capture_hand_tracking_backend summary ===\n";
-    std::cout << "transport: " << transport->type() << "\n";
+    std::cout << "transport: " << reader.transport_type() << "\n";
     std::cout << "frames: " << stats.frames << "\n";
     std::cout << "runtime_s: " << elapsed_s << "\n";
     std::cout << "runtime_rate_hz: " << (stats.frames / std::max(1e-9, elapsed_s)) << "\n";

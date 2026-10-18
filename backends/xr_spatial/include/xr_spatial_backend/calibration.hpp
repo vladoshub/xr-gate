@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include <opencv2/core.hpp>
@@ -31,6 +32,8 @@ struct StereoCalibration {
   cv::Mat R_c1_c0, t_c1_c0;
   cv::Mat R1, R2, P1, P2, Q;
   double baseline_m = 0.0;
+  // Kalibr/Basalt convention: t_imu = t_camera + offset.
+  int64_t camera_time_offset_ns = 0;
 };
 
 StereoCalibration load_stereo_calibration_json(const std::string& path);

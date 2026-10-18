@@ -36,6 +36,7 @@
 #include <basalt/utils/vio_config.h>
 #include <basalt/vi_estimator/vio_estimator.h>
 
+#include <basalt_input_feeder.hpp>
 #include <capture_client/sync/synchronizer.hpp>
 #include <capture_client/transports/shm_transport.hpp>
 #include <capture_client/transports/tcp_transport.hpp>
@@ -591,6 +592,9 @@ int main(int argc, char** argv) {
 
   try {
     bool backend_should_restart = false;
+    bool retry_capture = false;
+    uint64_t output_reset_counter = reset_counter;
+    const auto backend_started = std::chrono::steady_clock::now();
     do {
     backend_should_restart = false;
     BackendControlFile active_control;
@@ -602,6 +606,8 @@ int main(int argc, char** argv) {
       gravity_z = -std::abs(gravity_magnitude);
       reset_counter = active_control.reset_counter;
     }
+
+    output_reset_counter = std::max(output_reset_counter, reset_counter);
 
     std::cout << "== capture_basalt_backend native ==\n";
     std::cout << "transport: " << transport_type << "\n";
@@ -674,36 +680,47 @@ int main(int argc, char** argv) {
     basalt::Calibration<double> calib = load_calibration(cam_calib_path);
 
     std::unique_ptr<capture_client::ICaptureTransport> capture_transport;
-    if (transport_type == "shm") {
-      capture_transport = std::make_unique<capture_client::ShmCaptureTransport>(
-          registry_path, cam0_stream, cam1_stream, imu_stream, use_imu);
-    } else if (transport_type == "tcp") {
-      capture_client::TcpCaptureTransportConfig tcp_cfg;
-      tcp_cfg.host = tcp_host;
-      tcp_cfg.port = tcp_port;
-      tcp_cfg.cam0_stream = cam0_stream;
-      tcp_cfg.cam1_stream = cam1_stream;
-      tcp_cfg.imu_stream = imu_stream;
-      tcp_cfg.subscribe_imu = use_imu;
-      capture_transport = std::make_unique<capture_client::TcpCaptureTransport>(std::move(tcp_cfg));
-    } else if (transport_type == "capture_tcp") {
-      capture_client::CaptureServiceTcpTransportConfig capture_tcp_cfg;
-      capture_tcp_cfg.host = tcp_host;
-      capture_tcp_cfg.port = tcp_port;
-      capture_tcp_cfg.cam0_stream = cam0_stream;
-      capture_tcp_cfg.cam1_stream = cam1_stream;
-      capture_tcp_cfg.imu_stream = imu_stream;
-      capture_tcp_cfg.subscribe_imu = use_imu;
-      capture_transport = std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(capture_tcp_cfg));
-    } else {
-      throw std::runtime_error("unknown --transport: " + transport_type + "; expected shm, tcp, or capture_tcp");
+    for (;;) {
+      if (g_stop || (duration_s > 0 && std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - backend_started).count() >= duration_s)) return 0;
+      try {
+        if (transport_type == "shm") {
+          capture_transport = std::make_unique<capture_client::ShmCaptureTransport>(
+              registry_path, cam0_stream, cam1_stream, imu_stream, use_imu);
+        } else if (transport_type == "tcp") {
+          capture_client::TcpCaptureTransportConfig tcp_cfg;
+          tcp_cfg.host = tcp_host;
+          tcp_cfg.port = tcp_port;
+          tcp_cfg.cam0_stream = cam0_stream;
+          tcp_cfg.cam1_stream = cam1_stream;
+          tcp_cfg.imu_stream = imu_stream;
+          tcp_cfg.subscribe_imu = use_imu;
+          capture_transport = std::make_unique<capture_client::TcpCaptureTransport>(std::move(tcp_cfg));
+        } else if (transport_type == "capture_tcp") {
+          capture_client::CaptureServiceTcpTransportConfig capture_tcp_cfg;
+          capture_tcp_cfg.host = tcp_host;
+          capture_tcp_cfg.port = tcp_port;
+          capture_tcp_cfg.cam0_stream = cam0_stream;
+          capture_tcp_cfg.cam1_stream = cam1_stream;
+          capture_tcp_cfg.imu_stream = imu_stream;
+          capture_tcp_cfg.subscribe_imu = use_imu;
+          capture_transport = std::make_unique<capture_client::CaptureServiceTcpTransport>(std::move(capture_tcp_cfg));
+        } else {
+          throw std::runtime_error("unknown --transport: " + transport_type + "; expected shm, tcp, or capture_tcp");
+        }
+        break;
+      } catch (const std::exception& e) {
+        if (!retry_capture) throw;
+        std::cerr << "[capture_basalt_backend] capture reconnect failed: " << e.what() << "\n";
+        for (int i = 0; i < 10 && !g_stop; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
     }
     std::cout << "[capture_basalt_backend] capture transport ready: " << capture_transport->type() << "\n";
     const int64_t camera_time_offset_ns = use_imu ? calib.cam_time_offset_ns : 0;
     std::cout << "[capture_basalt_backend] cam_time_offset_ns=" << camera_time_offset_ns
               << " applied_once_before_imu_window (t_imu = t_camera + offset)\n";
     capture_client::StereoImuSynchronizer sync(
-        *capture_transport, 1'000'000, 0.05, use_imu, camera_time_offset_ns, true);
+        *capture_transport, 1'000'000, 0.05, use_imu, camera_time_offset_ns, true, use_imu);
 
     std::unique_ptr<xr_runtime::HmdPoseShmPublisher> pose_pub;
     if (publish_pose_shm) {
@@ -727,10 +744,15 @@ int main(int argc, char** argv) {
     out_state_queue.set_capacity(10000);
     opt_flow_ptr->output_queue = &vio->vision_data_queue;
     vio->out_state_queue = &out_state_queue;
-    vio->initialize(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    // Initialize only after the startup gates pass and a complete input exists.
+    // Sending nullptr as the first IMU to an initialized VIO aborts upstream.
+    bool estimator_started = false;
+    xr_basalt::InputFeeder<decltype(vio->imu_data_queue), basalt::ImuData<double>::Ptr>
+        imu_feeder(vio->imu_data_queue, [&] { return vio->finished.load(); });
 
     std::atomic_bool input_finished{false};
     std::atomic_bool control_reset_requested{false};
+    std::atomic_bool capture_reset_requested{false};
     std::atomic<double> requested_gravity_magnitude;
     requested_gravity_magnitude.store(gravity_magnitude);
     std::atomic<uint64_t> requested_reset_counter;
@@ -781,10 +803,11 @@ int main(int argc, char** argv) {
       Eigen::Quaterniond prev_q = Eigen::Quaterniond::Identity();
       int64_t prev_t_ns = 0;
 
-      while (!g_stop) {
+      for (;;) {
         basalt::PoseVelBiasState<double>::Ptr data;
         out_state_queue.pop(data);
         if (!data) break;
+        if (capture_reset_requested.load() || control_reset_requested.load()) continue;
 
         const Sophus::SE3d& pose = data->T_w_i;
         const Eigen::Vector3d p = pose.translation();
@@ -797,7 +820,7 @@ int main(int argc, char** argv) {
         hp.sequence = pose_count + 1;
         hp.timestamp_ns = static_cast<uint64_t>(data->t_ns);
         hp.source_timestamp_ns = static_cast<uint64_t>(data->t_ns);
-        hp.reset_counter = reset_counter;
+        hp.reset_counter = output_reset_counter;
 
         hp.px = p.x();
         hp.py = p.y();
@@ -858,7 +881,7 @@ int main(int argc, char** argv) {
     });
 
     std::thread input_thread([&]() {
-      const auto wall_start = std::chrono::steady_clock::now();
+      const auto wall_start = backend_started;
       bool startup_visual_ready = !startup_visual_gate;
       int startup_visual_consecutive_good = 0;
       size_t startup_visual_seen = 0;
@@ -866,15 +889,23 @@ int main(int argc, char** argv) {
       int startup_imu_consecutive_good = 0;
       size_t startup_imu_seen = 0;
 
+      auto last_packet = std::chrono::steady_clock::now();
+      try {
       while (!g_stop && !control_reset_requested.load()) {
+        if (estimator_started && vio->finished.load())
+          throw std::runtime_error("VIO stopped while capture is active");
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
         if (duration_s > 0.0 && elapsed >= duration_s) break;
 
         auto packet = sync.read_next(1.0);
         if (!packet) {
-          std::cerr << "[capture_basalt_backend] WARN: sync timeout\n";
+          if (std::chrono::steady_clock::now() - last_packet >= std::chrono::seconds(1)) {
+            throw std::runtime_error("capture stereo stream stalled");
+          }
           continue;
         }
+
+        last_packet = std::chrono::steady_clock::now();
 
         if (use_imu && packet->imu_samples.empty()) {
           std::cerr << "[capture_basalt_backend] WARN: empty IMU window at frame timestamp "
@@ -961,22 +992,36 @@ int main(int argc, char** argv) {
           continue;
         }
 
-        if (use_imu) {
-          for (const auto& s : packet->imu_samples) {
-            basalt::ImuData<double>::Ptr imu(new basalt::ImuData<double>);
-            imu->t_ns = s.timestamp_ns;
-            imu->gyro = Eigen::Vector3d(s.gyro_rad_s[0], s.gyro_rad_s[1], s.gyro_rad_s[2]);
-            imu->accel = Eigen::Vector3d(s.accel_m_s2[0], s.accel_m_s2[1], s.accel_m_s2[2]);
-            vio->imu_data_queue.push(imu);
-            imu_count_total++;
-          }
-        }
-
         basalt::OpticalFlowInput::Ptr input(new basalt::OpticalFlowInput);
         input->t_ns = packet->pair.timestamp_ns;
         input->img_data.emplace_back(make_basalt_image(packet->pair.cam0, image_scale));
         input->img_data.emplace_back(make_basalt_image(packet->pair.cam1, image_scale));
-        opt_flow_ptr->input_queue.push(input);
+
+        std::vector<basalt::ImuData<double>::Ptr> imu_batch;
+        if (use_imu) {
+          // The initial filter only needs gravity from the first sample after
+          // its first image. Older samples must not leave it waiting on EOS
+          // during initialization if a reset/stop arrives immediately.
+          const auto first = estimator_started ? packet->imu_samples.begin() : std::prev(packet->imu_samples.end());
+          for (auto it = first; it != packet->imu_samples.end(); ++it) {
+            const auto& s = *it;
+            basalt::ImuData<double>::Ptr imu(new basalt::ImuData<double>);
+            imu->t_ns = s.timestamp_ns;
+            imu->gyro = Eigen::Vector3d(s.gyro_rad_s[0], s.gyro_rad_s[1], s.gyro_rad_s[2]);
+            imu->accel = Eigen::Vector3d(s.accel_m_s2[0], s.accel_m_s2[1], s.accel_m_s2[2]);
+            imu_batch.push_back(std::move(imu));
+          }
+        }
+        if (!estimator_started) {
+          vio->initialize(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+          estimator_started = true;
+        }
+        imu_count_total += imu_batch.size();
+        if (use_imu) imu_feeder.submit(std::move(imu_batch));
+        while (!opt_flow_ptr->input_queue.try_push(input)) {
+          if (vio->finished.load()) throw std::runtime_error("VIO stopped accepting images");
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
 
         const size_t n = ++frame_count;
         if (n == 1) first_frame_ns = packet->pair.timestamp_ns;
@@ -997,8 +1042,19 @@ int main(int argc, char** argv) {
         }
       }
 
-      opt_flow_ptr->input_queue.push(nullptr);
-      vio->imu_data_queue.push(nullptr);
+      } catch (const std::exception& e) {
+        capture_reset_requested = true;
+        std::cerr << "[capture_basalt_backend] resetting capture/VIO: " << e.what() << "\n";
+      }
+      // IMU EOS is independent of the image queue, including after IMU loss.
+      imu_feeder.finish();
+      while (!opt_flow_ptr->input_queue.try_push(nullptr)) {
+        if (vio->finished.load()) {
+          basalt::OpticalFlowResult::Ptr unused;
+          vio->vision_data_queue.try_pop(unused);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
       input_finished = true;
       std::cout << "[capture_basalt_backend] input thread finished\n";
     });
@@ -1019,12 +1075,27 @@ int main(int argc, char** argv) {
 
     const auto run_start = std::chrono::steady_clock::now();
     input_thread.join();
+    if (queue_thread.joinable()) queue_thread.join();
     if (control_thread.joinable()) control_thread.join();
+    imu_feeder.join();
     vio->maybe_join();
+    // A VIO that stops on IMU EOS may leave optical flow blocked on its output.
+    // Keep draining until the optical-flow worker has joined, before destroying VIO.
+    std::atomic_bool flow_joined{false};
+    std::thread drain_flow([&] {
+      while (!flow_joined.load()) {
+        basalt::OpticalFlowResult::Ptr unused;
+        if (!vio->vision_data_queue.try_pop(unused))
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    });
+    opt_flow_ptr.reset();
+    flow_joined = true;
+    drain_flow.join();
     vio->drain_input_queues();
     out_state_queue.push(nullptr);
     state_thread.join();
-    if (!control_reset_requested.load()) g_stop = true;
+    if (!control_reset_requested.load() && !capture_reset_requested.load()) g_stop = true;
     if (queue_thread.joinable()) queue_thread.join();
     const auto run_end = std::chrono::steady_clock::now();
 
@@ -1061,10 +1132,15 @@ int main(int argc, char** argv) {
       backend_should_restart = true;
     }
 
+    if (capture_reset_requested.load() && !g_stop) backend_should_restart = true;
     if (backend_should_restart && !g_stop) {
-      std::cout << "[capture_basalt_backend] restarting internal VIO estimator after control reset; "
+      output_reset_counter = std::max(output_reset_counter + 1, reset_counter);
+      retry_capture = true;
+      // Announce the new epoch with its first valid pose. Publishing a fresh
+      // zero pose here could make runtime capture an invalid recenter origin.
+      std::cout << "[capture_basalt_backend] restarting capture/internal VIO estimator; "
                 << "gravity_magnitude=" << gravity_magnitude
-                << " reset_counter=" << reset_counter << "\n";
+                << " reset_counter=" << output_reset_counter << "\n";
       continue;
     }
 

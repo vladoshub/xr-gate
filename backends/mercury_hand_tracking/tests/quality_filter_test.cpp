@@ -8,7 +8,8 @@
 int main(int argc, char** argv) {
     using namespace xr_mercury_quality;
     Config config;
-    assert(config.enabled);
+    assert(!config.enabled);
+    config.enabled = true;
     if (argc == 2 && std::string(argv[1]) == "--replay") {
         int a0, a1;
         double m0, m1, error;
@@ -39,9 +40,9 @@ int main(int argc, char** argv) {
     unsetenv("MERCURY_XR_QUALITY_MIN_MEAN_XY");
     unsetenv("MERCURY_XR_QUALITY_WEAK_MEAN_XY");
     unsetenv("MERCURY_XR_QUALITY_MAX_WEAK_REPROJECTION");
-    assert(Config::from_environment().enabled);
+    assert(!Config::from_environment().enabled);
     setenv("MERCURY_XR_QUALITY_FILTER", "", 1);
-    assert(Config::from_environment().enabled);
+    assert(!Config::from_environment().enabled);
     for (const char* flag : {"0", "false", "no"}) {
         setenv("MERCURY_XR_QUALITY_FILTER", flag, 1);
         const Config disabled = Config::from_environment();

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <limits>
 #include <vector>
@@ -31,6 +32,7 @@
 #include <xr_spatial_backend/pointcloud_filter.hpp>
 #include <xr_spatial_backend/spatial_proxy_mesh_builder.hpp>
 #include <xr_spatial_backend/stereo_depth_processor.hpp>
+#include <xr_spatial_backend/temporal_depth_filter.hpp>
 
 namespace fs = std::filesystem;
 
@@ -116,71 +118,86 @@ struct SelectedStereoPair {
 std::optional<capture_client::StereoPair> read_stereo_pair_sequence(
     capture_client::ICaptureTransport& capture,
     uint64_t seq,
-    int64_t max_stereo_delta_ns) {
+    int64_t camera_time_offset_ns = 0) {
   capture_client::ImageFrame c0, c1;
   if (!capture.cam0().read_image_sequence(seq, c0)) return std::nullopt;
   if (!capture.cam1().read_image_sequence(seq, c1)) return std::nullopt;
 
-  const int64_t delta = c0.timestamp_ns - c1.timestamp_ns;
-  if (std::llabs(delta) > max_stereo_delta_ns) return std::nullopt;
-
   capture_client::StereoPair pair;
-  pair.timestamp_ns = std::max(c0.timestamp_ns, c1.timestamp_ns);
+  pair.timestamp_ns = capture_client::shift_camera_timestamp_ns(
+      std::max(c0.timestamp_ns, c1.timestamp_ns), camera_time_offset_ns);
   pair.cam0 = std::move(c0);
   pair.cam1 = std::move(c1);
   return pair;
 }
 
-std::optional<SelectedStereoPair> read_latest_stereo_near_timestamp(
-    capture_client::ICaptureTransport& capture,
-    int64_t target_timestamp_ns,
-    uint64_t max_scan_back,
-    int64_t max_stereo_delta_ns) {
-  const uint64_t latest0 = capture.cam0().latest_sequence();
-  const uint64_t latest1 = capture.cam1().latest_sequence();
-  const uint64_t latest = std::min(latest0, latest1);
-  if (latest == 0) return std::nullopt;
+// Camera sequences are immutable within one capture generation. Keep only the
+// search window so pose/rate polling never copies the same image payload again.
+// The selected pair stays valid until the next read/reset; depth consumes it by
+// reference. Failed reads are not cached, allowing partially published pairs to
+// become available on a later attempt.
+class StereoPairReader {
+ public:
+  StereoPairReader(uint64_t max_scan_back, int64_t max_stereo_delta_ns,
+                   int64_t camera_time_offset_ns = 0)
+      : scan_back_(std::max<uint64_t>(1, max_scan_back)),
+        max_stereo_delta_ns_(max_stereo_delta_ns),
+        camera_time_offset_ns_(camera_time_offset_ns) {}
 
-  const uint64_t scan_back = std::max<uint64_t>(1, max_scan_back);
-  const uint64_t min_seq = latest > scan_back ? latest - scan_back + 1 : 1;
-
-  std::optional<SelectedStereoPair> best;
-  int64_t best_age_ns = LLONG_MAX;
-  for (uint64_t seq = latest; seq >= min_seq; --seq) {
-    auto pair = read_stereo_pair_sequence(capture, seq, max_stereo_delta_ns);
-    if (pair) {
-      const int64_t age_ns = std::llabs(pair->timestamp_ns - target_timestamp_ns);
-      if (age_ns < best_age_ns) {
-        best_age_ns = age_ns;
-        SelectedStereoPair selected;
-        selected.sequence = seq;
-        selected.age_to_target_ns = age_ns;
-        selected.pair = std::move(*pair);
-        best = std::move(selected);
-      }
-    }
-    if (seq == min_seq) break;
+  void reset() {
+    pairs_.clear();
+    last_latest_ = 0;
   }
-  return best;
-}
 
-std::optional<SelectedStereoPair> read_latest_stereo_pair(
-    capture_client::ICaptureTransport& capture,
-    int64_t max_stereo_delta_ns) {
-  const uint64_t latest0 = capture.cam0().latest_sequence();
-  const uint64_t latest1 = capture.cam1().latest_sequence();
-  const uint64_t latest = std::min(latest0, latest1);
-  if (latest == 0) return std::nullopt;
+  const SelectedStereoPair* read(capture_client::ICaptureTransport& capture,
+                                 std::optional<int64_t> target_timestamp_ns = std::nullopt) {
+    const uint64_t latest = std::min(capture.cam0().latest_sequence(),
+                                     capture.cam1().latest_sequence());
+    if (latest < last_latest_) reset();
+    last_latest_ = latest;
+    if (latest == 0) return nullptr;
 
-  auto pair = read_stereo_pair_sequence(capture, latest, max_stereo_delta_ns);
-  if (!pair) return std::nullopt;
+    const uint64_t min_seq = latest > scan_back_ ? latest - scan_back_ + 1 : 1;
+    pairs_.erase(pairs_.begin(), pairs_.lower_bound(min_seq));
+    SelectedStereoPair* best = nullptr;
+    int64_t best_age_ns = LLONG_MAX;
+    for (uint64_t seq = latest; seq >= min_seq; --seq) {
+      auto found = pairs_.find(seq);
+      if (found == pairs_.end()) {
+        auto pair = read_stereo_pair_sequence(capture, seq, camera_time_offset_ns_);
+        if (pair) {
+          SelectedStereoPair selected;
+          selected.sequence = seq;
+          selected.pair = std::move(*pair);
+          found = pairs_.emplace(seq, std::move(selected)).first;
+        }
+      }
+      if (found != pairs_.end()) {
+        const auto& pair = found->second.pair;
+        // A complete but unsynchronized pair is immutable too. Cache it so a
+        // persistent camera timestamp mismatch cannot cause repeated copies.
+        if (std::llabs(pair.cam0.timestamp_ns - pair.cam1.timestamp_ns) <= max_stereo_delta_ns_) {
+          const int64_t age_ns = target_timestamp_ns
+              ? std::llabs(pair.timestamp_ns - *target_timestamp_ns) : 0;
+          if (!best || age_ns < best_age_ns) {
+            best_age_ns = age_ns;
+            best = &found->second;
+            best->age_to_target_ns = age_ns;
+          }
+        }
+      }
+      if (!target_timestamp_ns || seq == min_seq) break;
+    }
+    return best;
+  }
 
-  SelectedStereoPair selected;
-  selected.sequence = latest;
-  selected.age_to_target_ns = 0;
-  selected.pair = std::move(*pair);
-  return selected;
-}
+ private:
+  uint64_t scan_back_;
+  int64_t max_stereo_delta_ns_;
+  int64_t camera_time_offset_ns_;
+  uint64_t last_latest_ = 0;
+  std::map<uint64_t, SelectedStereoPair> pairs_;
+};
 
 xr_runtime::HmdPoseF64V1 identity_pose_sample(uint64_t timestamp_ns) {
   xr_runtime::HmdPoseF64V1 pose{};
@@ -208,6 +225,8 @@ void save_cloud_ply(const fs::path& path, const std::vector<xr_spatial_backend::
   for (const auto& p : points) {
     os << p.x << ' ' << p.y << ' ' << p.z << '\n';
   }
+  os.flush();
+  if (!os) throw std::runtime_error("failed to finish debug PLY: " + path.string());
 }
 
 std::vector<xr_spatial_backend::Vec3f> transform_points(
@@ -245,6 +264,7 @@ struct AppConfig {
   std::string camera0_stream = "camera0";
   std::string camera1_stream = "camera1";
   std::string imu_stream = "imu0";
+  double capture_reattach_on_stale_ms = 500.0;
 
   std::string pose_input = "shm"; // shm|none
   std::string pose_registry = "/tmp/tracking_streams.json";
@@ -264,6 +284,7 @@ struct AppConfig {
   bool zero_disparity = true;
 
   xr_spatial_backend::StereoDepthConfig depth;
+  int num_threads = 2; // OpenCV workers; 0 selects OpenCV automatic parallelism.
   size_t max_accumulated_points = 1000000;
   float max_abs_map_coord_m = 100.0f;
   std::string tracking_origin = "first_pose"; // first_pose|absolute
@@ -271,6 +292,7 @@ struct AppConfig {
   std::string mapper_backend = "live_depth_grid"; // live_depth_grid|pointcloud_fallback
   xr_spatial_backend::PointCloudFilterConfig point_filter;
   QualityGateConfig quality_gate;
+  xr_spatial_backend::TemporalDepthFilterConfig temporal_depth;
   xr_spatial_backend::SpatialProxyMeshBuildConfig proxy_mesh;
   bool publish_spatial_proxy_mesh_shm = false;
   std::string spatial_proxy_mesh_stream = "spatial_proxy_mesh";
@@ -304,11 +326,21 @@ void save_metadata(const fs::path& path,
                    const xr_spatial_backend::StereoCalibration& calib,
                    const xr_spatial_backend::PointCloudSpatialMap& map,
                    int64_t started_ns,
-                   int64_t ended_ns) {
+                   int64_t ended_ns,
+                   const std::string& stop_reason,
+                   bool complete,
+                   uint64_t capture_reattachments,
+                   uint64_t frame_errors,
+                   const xr_spatial_backend::TemporalDepthFilterStats& temporal_stats) {
   if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
   nlohmann::json j;
   j["mode"] = cfg.mode;
   j["duration_sec"] = double(ended_ns - started_ns) * 1e-9;
+  j["complete"] = complete;
+  j["stop_reason"] = stop_reason;
+  j["capture_reattachments"] = capture_reattachments;
+  j["frame_errors"] = frame_errors;
+  j["camera_time_offset_ns"] = calib.camera_time_offset_ns;
   j["capture_transport"] = cfg.capture_transport;
   j["capture_registry"] = cfg.capture_registry;
   j["capture_tcp_host"] = cfg.capture_tcp_host;
@@ -324,6 +356,8 @@ void save_metadata(const fs::path& path,
   j["camera_resolution"] = {calib.cam0.width, calib.cam0.height};
   j["baseline_m"] = calib.baseline_m;
   j["depth_algorithm"] = "opencv_sgbm";
+  j["num_threads"] = cfg.num_threads;
+  j["opencv_num_threads"] = cv::getNumThreads();
   j["depth_num_disparities"] = cfg.depth.num_disparities;
   j["depth_block_size"] = cfg.depth.block_size;
   j["depth_rate_hz"] = cfg.depth.target_rate_hz;
@@ -339,6 +373,18 @@ void save_metadata(const fs::path& path,
   j["depth_roi_x_max"] = cfg.depth.roi_x_max;
   j["depth_roi_y_min"] = cfg.depth.roi_y_min;
   j["depth_roi_y_max"] = cfg.depth.roi_y_max;
+  j["temporal_depth_filter"] = {
+      {"enabled", cfg.temporal_depth.enabled},
+      {"pose_available", cfg.pose_input == "shm"},
+      {"history_frames", cfg.temporal_depth.history_frames},
+      {"min_consistent_frames", cfg.temporal_depth.min_consistent_frames},
+      {"abs_tolerance_m", cfg.temporal_depth.abs_tolerance_m},
+      {"relative_tolerance", cfg.temporal_depth.relative_tolerance},
+      {"current_weight", cfg.temporal_depth.current_weight},
+      {"max_age_ms", cfg.temporal_depth.max_age_ms},
+      {"frames", temporal_stats.frames}, {"input_points", temporal_stats.input_points},
+      {"output_points", temporal_stats.output_points}, {"rejected_points", temporal_stats.rejected_points},
+      {"smoothed_points", temporal_stats.smoothed_points}, {"resets", temporal_stats.resets}};
   j["quality_gate_enabled"] = cfg.quality_gate.enabled;
   j["quality_min_raw_points"] = cfg.quality_gate.min_raw_points;
   j["quality_min_filtered_points"] = cfg.quality_gate.min_filtered_points;
@@ -368,6 +414,8 @@ void save_metadata(const fs::path& path,
   j["integrated_frames"] = map.integrated_frames();
   j["dropped_frames"] = map.dropped_frames();
   j["accumulated_points"] = map.points_tracking().size();
+  j["observed_points"] = map.observed_points();
+  j["reservoir_sampling"] = map.observed_points() > map.points_tracking().size();
   j["map_frame"] = cfg.map_frame_id;
   j["depth_frame"] = cfg.depth.depth_frame_id;
   j["pose_frame"] = cfg.pose_frame_id;
@@ -375,6 +423,8 @@ void save_metadata(const fs::path& path,
   std::ofstream os(path);
   if (!os) throw std::runtime_error("failed to write metadata: " + path.string());
   os << j.dump(2) << "\n";
+  os.flush();
+  if (!os) throw std::runtime_error("failed to finish metadata: " + path.string());
 }
 
 
@@ -389,10 +439,19 @@ double pose_translation_delta_m(const xr_runtime::HmdPoseF64V1& a,
 double pose_rotation_delta_deg(const xr_runtime::HmdPoseF64V1& a,
                                const xr_runtime::HmdPoseF64V1& b) {
   double dot = a.qw * b.qw + a.qx * b.qx + a.qy * b.qy + a.qz * b.qz;
-  dot = std::abs(dot);
+  const double na = a.qw*a.qw + a.qx*a.qx + a.qy*a.qy + a.qz*a.qz;
+  const double nb = b.qw*b.qw + b.qx*b.qx + b.qy*b.qy + b.qz*b.qz;
+  dot = std::abs(dot) / std::sqrt(na * nb);
   if (dot > 1.0) dot = 1.0;
   constexpr double kRadToDeg = 57.29577951308232;
   return 2.0 * std::acos(dot) * kRadToDeg;
+}
+
+bool pose_is_usable(const xr_runtime::HmdPoseF64V1& pose) {
+  const double n = pose.qw*pose.qw + pose.qx*pose.qx + pose.qy*pose.qy + pose.qz*pose.qz;
+  return (pose.flags & xr_runtime::HMD_FLAG_POSE_VALID) != 0 && pose.timestamp_ns != 0 &&
+      std::isfinite(pose.px) && std::isfinite(pose.py) && std::isfinite(pose.pz) &&
+      std::isfinite(n) && n > 1e-12;
 }
 
 size_t count_far_points(const xr_spatial_backend::PointCloudFrame& cloud, float far_depth_m) {
@@ -730,6 +789,8 @@ int main(int argc, char** argv) {
                  "Capture input transport: shm or capture_tcp (tcp is accepted as an alias for capture_tcp)")
       ->check(CLI::IsMember({"shm", "capture_tcp", "tcp"}));
   app.add_option("--capture-registry", cfg.capture_registry, "capture_service SHM registry path; used with --capture-transport=shm");
+  app.add_option("--capture-reattach-on-stale-ms", cfg.capture_reattach_on_stale_ms,
+                 "Reopen stalled camera SHM streams after this wall-clock interval; <=0 disables");
   app.add_option("--capture-tcp-host,--tcp-host", cfg.capture_tcp_host, "capture_service TCP host; used with --capture-transport=capture_tcp");
   app.add_option("--capture-tcp-port,--tcp-port", cfg.capture_tcp_port, "capture_service TCP port; used with --capture-transport=capture_tcp");
   app.add_option("--camera0-stream", cfg.camera0_stream, "Left/cam0 stream id");
@@ -755,6 +816,8 @@ int main(int argc, char** argv) {
   app.add_flag("--zero-disparity,!--no-zero-disparity", cfg.zero_disparity, "Use CALIB_ZERO_DISPARITY in stereoRectify");
 
   app.add_option("--depth-rate-hz", cfg.depth.target_rate_hz, "Target stereo depth processing rate");
+  app.add_option("--num-threads", cfg.num_threads, "OpenCV thread limit; 0 uses automatic parallelism")
+      ->check(CLI::NonNegativeNumber)->capture_default_str();
   app.add_option("--num-disparities", cfg.depth.num_disparities, "SGBM num disparities, rounded to multiple of 16");
   app.add_option("--min-disparity", cfg.depth.min_disparity, "SGBM minimum disparity; negative values are supported");
   app.add_option("--block-size", cfg.depth.block_size, "SGBM block size, odd >=3");
@@ -776,6 +839,14 @@ int main(int argc, char** argv) {
   app.add_option("--mapper-backend", cfg.mapper_backend, "Spatial mapper backend: live_depth_grid or pointcloud_fallback")->check(CLI::IsMember({"live_depth_grid", "pointcloud_fallback"}));
   app.add_option("--point-voxel-size-m", cfg.point_filter.voxel_size_m, "Per-frame voxel downsample size before accumulation; <=0 disables");
   app.add_option("--max-points-per-frame", cfg.point_filter.max_points, "Per-frame point cap after filtering; 0 disables");
+  app.add_flag("--temporal-depth-filter,!--no-temporal-depth-filter", cfg.temporal_depth.enabled,
+               "Confirm depth across distinct frames and smooth matching surfaces with camera-motion compensation (default: on)");
+  app.add_option("--temporal-history-frames", cfg.temporal_depth.history_frames, "Previous raw depth grids to retain (1..8)");
+  app.add_option("--temporal-min-consistent-frames", cfg.temporal_depth.min_consistent_frames, "Required consistent frames including current (1..history+1)");
+  app.add_option("--temporal-depth-tolerance-m", cfg.temporal_depth.abs_tolerance_m, "Absolute depth agreement tolerance in metres");
+  app.add_option("--temporal-depth-relative-tolerance", cfg.temporal_depth.relative_tolerance, "Relative depth agreement tolerance (fraction)");
+  app.add_option("--temporal-current-weight", cfg.temporal_depth.current_weight, "Current depth weight in smoothing (0..1)");
+  app.add_option("--temporal-max-age-ms", cfg.temporal_depth.max_age_ms, "Maximum age of historical depth grids");
   app.add_flag("--quality-gate-enabled,!--no-quality-gate-enabled", cfg.quality_gate.enabled, "Enable frame quality gate before map/TSDF integration");
   app.add_option("--quality-min-raw-points", cfg.quality_gate.min_raw_points, "Reject frame if raw depth cloud has fewer points; 0 disables");
   app.add_option("--quality-min-filtered-points", cfg.quality_gate.min_filtered_points, "Reject frame if filtered depth cloud has fewer points; 0 disables");
@@ -830,9 +901,15 @@ int main(int argc, char** argv) {
   app.add_flag("--save-debug-clouds,!--no-save-debug-clouds", cfg.save_debug_clouds, "Save first camera-frame and tracking-frame debug PLY clouds");
   app.add_option("--print-every", cfg.print_every, "Print every N integrated frames");
 
+  // Launchers append explicit CLI overrides after profile-derived defaults.
+  for (auto* option : app.get_options()) option->multi_option_policy(CLI::MultiOptionPolicy::TakeLast);
   CLI11_PARSE(app, argc, argv);
 
   try {
+    // OpenCV's 0 means sequential execution, so map our CLI 0 (automatic) to -1.
+    cv::setNumThreads(cfg.num_threads == 0 ? -1 : cfg.num_threads);
+    std::cout << "[xr_spatial_backend] num_threads=" << cfg.num_threads
+              << " opencv_num_threads=" << cv::getNumThreads() << "\n";
     std::cout << "[xr_spatial_backend] mode=" << cfg.mode << "\n";
     if (cfg.capture_transport == "tcp") cfg.capture_transport = "capture_tcp";
     std::cout << "[xr_spatial_backend] capture_transport=" << cfg.capture_transport << "\n";
@@ -849,6 +926,9 @@ int main(int argc, char** argv) {
     std::cout << "[xr_spatial_backend] calib=" << cfg.calibration_path << "\n";
 
     const bool pose_enabled = cfg.pose_input == "shm";
+    if (cfg.mode == "scan" && (!std::isfinite(cfg.scan_duration_sec) || cfg.scan_duration_sec <= 0.0)) {
+      throw std::runtime_error("--scan-duration-sec must be finite and > 0");
+    }
     if (!pose_enabled && cfg.map_frame != "camera") {
       throw std::runtime_error("--pose-input=none requires --map-frame=camera; use pose_input=shm for tracking/world-frame output");
     }
@@ -864,7 +944,22 @@ int main(int argc, char** argv) {
     xr_spatial_backend::compute_rectification(calib, cfg.fisheye_balance, cfg.zero_disparity);
     std::cout << "[xr_spatial_backend] calibration loaded: resolution="
               << calib.cam0.width << "x" << calib.cam0.height
-              << " baseline_m=" << calib.baseline_m << "\n";
+              << " baseline_m=" << calib.baseline_m
+              << " camera_time_offset_ns=" << calib.camera_time_offset_ns << "\n";
+
+    xr_spatial_backend::TemporalDepthFilter temporal_filter(cfg.temporal_depth,
+        calib.P1.at<double>(0, 0), calib.P1.at<double>(1, 1),
+        calib.P1.at<double>(0, 2), calib.P1.at<double>(1, 2));
+    std::cout << "[xr_spatial_backend] temporal_depth_filter=" << (cfg.temporal_depth.enabled ? "on" : "off")
+              << " min_frames=" << cfg.temporal_depth.min_consistent_frames
+              << " history=" << cfg.temporal_depth.history_frames
+              << " tolerance_m=" << cfg.temporal_depth.abs_tolerance_m
+              << " relative_tolerance=" << cfg.temporal_depth.relative_tolerance
+              << " current_weight=" << cfg.temporal_depth.current_weight
+              << " max_age_ms=" << cfg.temporal_depth.max_age_ms << "\n";
+    if (cfg.temporal_depth.enabled && !pose_enabled) {
+      std::cout << "[xr_spatial_backend] temporal depth bypassed: no tracked camera pose for motion compensation\n";
+    }
 
     std::unique_ptr<capture_client::ICaptureTransport> capture;
     if (cfg.capture_transport == "shm") {
@@ -971,6 +1066,8 @@ int main(int argc, char** argv) {
     }
 
     const int64_t start_ns = now_ns();
+    StereoPairReader stereo_reader(pose_enabled ? cfg.stereo_pose_sync_scan_back : 1,
+                                   1'000'000, pose_enabled ? calib.camera_time_offset_ns : 0);
     int64_t last_depth_ns = 0;
     uint64_t summary_seq = 0;
     uint64_t proxy_mesh_seq = 0;
@@ -978,336 +1075,485 @@ int main(int argc, char** argv) {
     uint32_t last_proxy_mesh_vertices = 0;
     uint32_t last_proxy_mesh_triangles = 0;
     uint32_t integrated_since_start = 0;
+    uint64_t last_capture_sequence = 0;
+    int64_t last_capture_progress_ns = start_ns;
+    int64_t next_capture_reattach_ns = 0;
+    uint64_t capture_reattachments = 0;
+    uint64_t temporal_pose_generation = pose_state.reattach_successes;
+    uint64_t frame_errors = 0;
+    uint32_t consecutive_frame_errors = 0;
+    bool sampling_logged = false;
+    std::string stop_reason = "interrupted";
+    bool scan_complete = false;
+    bool processing_failed = false;
     bool saved_first_debug_cloud = false;
     std::optional<xr_spatial_backend::Transform3d> T_map_tracking_origin;
-    std::optional<xr_runtime::HmdPoseF64V1> last_integrated_pose;
+    std::optional<xr_runtime::HmdPoseF64V1> last_source_pose;
     // Pose-step gate reference. Updated for every sampled pose, even when the frame is
     // rejected by depth/quality gates. This keeps pose_delta_m/deg as true
     // frame-to-frame motion instead of accumulated motion since the last integrated frame.
     std::optional<xr_runtime::HmdPoseF64V1> last_quality_pose;
 
-    while (!g_stop) {
-      if (cfg.mode == "scan") {
-        const double elapsed = double(now_ns() - start_ns) * 1e-9;
-        if (elapsed >= cfg.scan_duration_sec) break;
-      }
-
-      std::optional<xr_runtime::HmdPoseF64V1> sampled_pose;
-      if (pose_enabled) {
-        if (!pose_state.reader) {
-          maybe_reattach_pose_reader(pose_state, cfg, "reader_missing");
-          std::this_thread::sleep_for(std::chrono::milliseconds(2));
-          continue;
+    try {
+      while (!g_stop) {
+        if (cfg.mode == "scan") {
+          const double elapsed = double(now_ns() - start_ns) * 1e-9;
+          if (elapsed >= cfg.scan_duration_sec) {
+            stop_reason = "duration_elapsed";
+            scan_complete = true;
+            break;
+          }
         }
 
-        sampled_pose = pose_state.reader->latest();
-        if (!sampled_pose || (sampled_pose->flags & xr_runtime::HMD_FLAG_POSE_VALID) == 0u) {
-          maybe_reattach_pose_reader(pose_state, cfg, "no_valid_pose_sample");
-          std::cerr << "[xr_spatial_backend] WARN: no valid pose sample; dropping stereo frame"
-                    << " reattach_attempts=" << pose_state.reattach_attempts
-                    << " successes=" << pose_state.reattach_successes << "\n";
-          std::this_thread::sleep_for(std::chrono::milliseconds(2));
-          continue;
-        }
-
-        if (cfg.pose_reattach_on_stale_ms > 0.0) {
-          const double wall_age_ms = std::abs(
-              double(now_ns() - static_cast<int64_t>(sampled_pose->timestamp_ns))) / 1e6;
-          if (wall_age_ms > cfg.pose_reattach_on_stale_ms) {
-            maybe_reattach_pose_reader(pose_state, cfg, "stale_pose_wall_age");
-            sampled_pose = pose_state.reader ? pose_state.reader->latest() : std::nullopt;
-            if (!sampled_pose || (sampled_pose->flags & xr_runtime::HMD_FLAG_POSE_VALID) == 0u) {
-              std::this_thread::sleep_for(std::chrono::milliseconds(2));
-              continue;
+        if (cfg.capture_transport == "shm" && cfg.capture_reattach_on_stale_ms > 0.0) {
+          const int64_t wall_now = now_ns();
+          const uint64_t latest = std::min(capture->cam0().latest_sequence(), capture->cam1().latest_sequence());
+          if (latest != last_capture_sequence) {
+            last_capture_sequence = latest;
+            last_capture_progress_ns = wall_now;
+          }
+          if (double(wall_now - last_capture_progress_ns) / 1e6 > cfg.capture_reattach_on_stale_ms &&
+              wall_now >= next_capture_reattach_ns) {
+            next_capture_reattach_ns = wall_now + 500'000'000LL;
+            try {
+              auto reopened = std::make_unique<CameraOnlyShmCaptureTransport>(
+                  cfg.capture_registry, cfg.camera0_stream, cfg.camera1_stream);
+              capture = std::move(reopened);
+              stereo_reader.reset();
+              temporal_filter.reset();
+              ++capture_reattachments;
+              std::cerr << "[xr_spatial_backend] reopened stalled camera SHM streams\n";
+            } catch (const std::exception& e) {
+              std::cerr << "[xr_spatial_backend] WARN: camera SHM reattach failed: " << e.what() << "\n";
             }
           }
         }
-      }
 
-      std::optional<SelectedStereoPair> selected_pair;
-      if (pose_enabled) {
-        selected_pair = read_latest_stereo_near_timestamp(
-            *capture,
-            static_cast<int64_t>(sampled_pose->timestamp_ns),
-            cfg.stereo_pose_sync_scan_back,
-            1'000'000);
-      } else {
-        selected_pair = read_latest_stereo_pair(*capture, 1'000'000);
-      }
-      if (!selected_pair) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        continue;
-      }
-      auto& pair = selected_pair->pair;
-      const xr_runtime::HmdPoseF64V1 pose_for_log = sampled_pose.value_or(
-          identity_pose_sample(static_cast<uint64_t>(pair.timestamp_ns)));
+        std::optional<xr_runtime::HmdPoseF64V1> sampled_pose;
+        if (pose_enabled) {
+          if (!pose_state.reader) {
+            maybe_reattach_pose_reader(pose_state, cfg, "reader_missing");
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+          }
 
-      const int64_t min_interval_ns = cfg.depth.target_rate_hz > 0
-                                          ? static_cast<int64_t>(1e9 / double(cfg.depth.target_rate_hz))
-                                          : 0;
-      if (min_interval_ns > 0 && last_depth_ns > 0 &&
-          pair.timestamp_ns - last_depth_ns < min_interval_ns) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      last_depth_ns = pair.timestamp_ns;
+          sampled_pose = pose_state.reader->latest();
+          if (!sampled_pose || !pose_is_usable(*sampled_pose)) {
+            maybe_reattach_pose_reader(pose_state, cfg, "no_valid_pose_sample");
+            std::cerr << "[xr_spatial_backend] WARN: no valid pose sample; dropping stereo frame"
+                      << " reattach_attempts=" << pose_state.reattach_attempts
+                      << " successes=" << pose_state.reattach_successes << "\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+          }
 
-      const uint64_t pose_timestamp_ns = pose_enabled && sampled_pose
-          ? sampled_pose->timestamp_ns
-          : 0u;
-      const double pose_age_ms = pose_enabled && sampled_pose
-          ? std::abs(double(pair.timestamp_ns - static_cast<int64_t>(sampled_pose->timestamp_ns))) / 1e6
-          : 0.0;
-      const double health_pose_delta_m = pose_enabled && last_quality_pose ? pose_translation_delta_m(*last_quality_pose, *sampled_pose) : 0.0;
-      const double health_pose_delta_deg = pose_enabled && last_quality_pose ? pose_rotation_delta_deg(*last_quality_pose, *sampled_pose) : 0.0;
-      const bool stale_pose = pose_enabled && cfg.max_pose_age_ms > 0.0 && pose_age_ms > cfg.max_pose_age_ms;
-      const bool pose_reinit_suspected = pose_enabled && last_quality_pose &&
-          ((cfg.quality_gate.reinit_delta_m > 0.0 && health_pose_delta_m > cfg.quality_gate.reinit_delta_m) ||
-           (cfg.quality_gate.reinit_delta_deg > 0.0 && health_pose_delta_deg > cfg.quality_gate.reinit_delta_deg));
+          if (cfg.pose_reattach_on_stale_ms > 0.0) {
+            const double wall_age_ms = std::abs(
+                double(now_ns() - static_cast<int64_t>(sampled_pose->timestamp_ns))) / 1e6;
+            if (wall_age_ms > cfg.pose_reattach_on_stale_ms) {
+              maybe_reattach_pose_reader(pose_state, cfg, "stale_pose_wall_age");
+              sampled_pose = pose_state.reader ? pose_state.reader->latest() : std::nullopt;
+              if (!sampled_pose || !pose_is_usable(*sampled_pose)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+              }
+            }
+          }
 
-      std::string pose_action = "continue";
-      if (stale_pose && cfg.drop_stale_pose) {
-        pose_action = "drop_stale_pose";
-      } else if (pose_enabled && cfg.quality_gate.enabled && pose_reinit_suspected) {
-        pose_action = "drop_pose_reinit_suspected";
-      }
-      if (pose_health_csv) {
-        write_pose_health_row(pose_health_csv, pair.timestamp_ns, pose_for_log, pose_age_ms,
-                              health_pose_delta_m, health_pose_delta_deg,
-                              stale_pose, pose_reinit_suspected, pose_action);
-      }
-
-      if (stale_pose && cfg.drop_stale_pose) {
-        map.drop_frame();
-        std::cerr << "[xr_spatial_backend] WARN: stale pose age_ms=" << pose_age_ms
-                  << " scan_back=" << cfg.stereo_pose_sync_scan_back
-                  << "; dropping stereo frame\n";
-        if (sampled_pose) last_quality_pose = *sampled_pose;
-        continue;
-      }
-      if (pose_enabled && cfg.quality_gate.enabled && pose_reinit_suspected) {
-        map.drop_frame();
-        std::cerr << "[xr_spatial_backend] WARN: pose-source reinit suspected; dropping frame"
-                  << " pose_delta_m=" << health_pose_delta_m
-                  << " pose_delta_deg=" << health_pose_delta_deg << "\n";
-        if (sampled_pose) last_quality_pose = *sampled_pose;
-        continue;
-      }
-
-      auto depth = depth_processor.compute(pair.cam0, pair.cam1);
-      const size_t raw_points = depth.cloud.points.size();
-      xr_spatial_backend::PointCloudFilterStats filter_stats;
-      depth.cloud = xr_spatial_backend::filter_pointcloud(depth.cloud, cfg.point_filter, &filter_stats);
-      const size_t filtered_points = depth.cloud.points.size();
-      const size_t far_points = count_far_points(depth.cloud, cfg.quality_gate.far_depth_m);
-      const double far_fraction = filtered_points > 0
-                                      ? static_cast<double>(far_points) / static_cast<double>(filtered_points)
-                                      : 0.0;
-      const double pose_delta_m = pose_enabled && last_quality_pose ? pose_translation_delta_m(*last_quality_pose, *sampled_pose) : 0.0;
-      const double pose_delta_deg = pose_enabled && last_quality_pose ? pose_rotation_delta_deg(*last_quality_pose, *sampled_pose) : 0.0;
-
-      bool quality_accept = true;
-      std::string quality_reason = "accepted";
-      if (cfg.quality_gate.enabled) {
-        if (cfg.quality_gate.min_raw_points > 0 && raw_points < cfg.quality_gate.min_raw_points) {
-          quality_accept = false;
-          quality_reason = "raw_points_low";
-        } else if (cfg.quality_gate.min_filtered_points > 0 &&
-                   filtered_points < cfg.quality_gate.min_filtered_points) {
-          quality_accept = false;
-          quality_reason = "filtered_points_low";
-        } else if (cfg.quality_gate.far_depth_m > 0.0f &&
-                   far_fraction > static_cast<double>(cfg.quality_gate.max_far_point_fraction)) {
-          quality_accept = false;
-          quality_reason = "far_fraction_high";
-        } else if (pose_enabled && last_quality_pose && cfg.quality_gate.max_pose_delta_m > 0.0 &&
-                   pose_delta_m > cfg.quality_gate.max_pose_delta_m) {
-          quality_accept = false;
-          quality_reason = "pose_translation_jump";
-        } else if (pose_enabled && last_quality_pose && cfg.quality_gate.max_pose_delta_deg > 0.0 &&
-                   pose_delta_deg > cfg.quality_gate.max_pose_delta_deg) {
-          quality_accept = false;
-          quality_reason = "pose_rotation_jump";
+          // A changed source epoch invalidates all previously accumulated world points.
+          // This guard is independent of the optional depth/quality gate.
+          const double source_delta_m = last_source_pose
+              ? pose_translation_delta_m(*last_source_pose, *sampled_pose) : 0.0;
+          const double source_delta_deg = last_source_pose
+              ? pose_rotation_delta_deg(*last_source_pose, *sampled_pose) : 0.0;
+          const bool source_reset = last_source_pose &&
+              (sampled_pose->reset_counter != last_source_pose->reset_counter ||
+               sampled_pose->sequence < last_source_pose->sequence);
+          const bool source_jump = last_source_pose &&
+              ((cfg.quality_gate.reinit_delta_m > 0.0 &&
+                source_delta_m > cfg.quality_gate.reinit_delta_m) ||
+               (cfg.quality_gate.reinit_delta_deg > 0.0 &&
+                source_delta_deg > cfg.quality_gate.reinit_delta_deg));
+          if (source_reset || source_jump || temporal_pose_generation != pose_state.reattach_successes) {
+            temporal_filter.reset();
+          }
+          temporal_pose_generation = pose_state.reattach_successes;
+          if (cfg.map_frame == "tracking" && (source_reset || source_jump)) {
+            std::cerr << "[xr_spatial_backend] pose-source discontinuity"
+                      << " pose_delta_m=" << source_delta_m
+                      << " pose_delta_deg=" << source_delta_deg
+                      << " seq=" << last_source_pose->sequence << "->" << sampled_pose->sequence
+                      << " reset_counter=" << last_source_pose->reset_counter << "->" << sampled_pose->reset_counter
+                      << " pose_dt_ms=" << double(static_cast<int64_t>(sampled_pose->timestamp_ns) -
+                                                   static_cast<int64_t>(last_source_pose->timestamp_ns)) / 1e6
+                      << " integrated_frames=" << map.integrated_frames() << "\n";
+            if (cfg.mode == "scan") {
+              if (map.integrated_frames() == 0) {
+                // Startup can attach to an old or initializing pose before any
+                // usable depth arrives. No world points exist to preserve yet.
+                T_map_tracking_origin.reset();
+                last_quality_pose.reset();
+                last_depth_ns = 0;
+                last_source_pose = *sampled_pose;
+                std::cerr << "[xr_spatial_backend] restarting empty scan reference after pose-source discontinuity\n";
+                continue;
+              }
+              stop_reason = source_reset ? "pose_source_reset" : "pose_source_jump";
+              std::cerr << "[xr_spatial_backend] ending incomplete scan: " << stop_reason
+                        << "; preserving the map before the coordinate discontinuity\n";
+              break;
+            }
+            map.reset();
+            T_map_tracking_origin.reset();
+            last_quality_pose.reset();
+            last_depth_ns = 0;
+            stereo_reader.reset();
+            sampling_logged = false;
+            std::cerr << "[xr_spatial_backend] reset runtime map after pose-source discontinuity\n";
+          }
+          last_source_pose = *sampled_pose;
         }
-      }
 
-      if (quality_csv) {
-        write_quality_gate_row(quality_csv, pair.timestamp_ns, pose_for_log, quality_accept, quality_reason,
-                               pose_age_ms, raw_points, filtered_points, depth,
-                               cfg.quality_gate.far_depth_m, far_points, far_fraction,
-                               pose_delta_m, pose_delta_deg);
-      }
-      if (!quality_accept) {
-        map.drop_frame();
-        std::cerr << "[xr_spatial_backend] quality gate rejected frame reason=" << quality_reason
-                  << " raw_points=" << raw_points
-                  << " filtered_points=" << filtered_points
-                  << " far_fraction=" << far_fraction
-                  << " pose_delta_m=" << pose_delta_m
-                  << " pose_delta_deg=" << pose_delta_deg << "\n";
-        if (cfg.mapper_backend == "live_depth_grid" && spatial_proxy_mesh_pub && cfg.proxy_mesh.enabled) {
-          auto clear_grid = make_clear_live_depth_grid_payload(++proxy_mesh_seq,
-              static_cast<uint64_t>(pair.timestamp_ns), pose_timestamp_ns);
-          spatial_proxy_mesh_pub->publish(clear_grid);
+        const auto* selected_pair = stereo_reader.read(*capture, pose_enabled
+            ? std::optional<int64_t>(static_cast<int64_t>(sampled_pose->timestamp_ns))
+            : std::nullopt);
+        if (!selected_pair) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+          continue;
         }
-        if (sampled_pose) last_quality_pose = *sampled_pose;
-        continue;
-      }
+        auto& pair = selected_pair->pair;
+        // The rate limiter can be disabled; a source frame must still be consumed once.
+        if (last_depth_ns > 0 && pair.timestamp_ns <= last_depth_ns) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+        const xr_runtime::HmdPoseF64V1 pose_for_log = sampled_pose.value_or(
+            identity_pose_sample(static_cast<uint64_t>(pair.timestamp_ns)));
 
-      const xr_spatial_backend::Transform3d T_tracking_imu = pose_enabled
-          ? xr_spatial_backend::pose_to_transform(
-                sampled_pose->px, sampled_pose->py, sampled_pose->pz,
-                sampled_pose->qw, sampled_pose->qx, sampled_pose->qy, sampled_pose->qz)
-          : xr_spatial_backend::Transform3d{};
-      const xr_spatial_backend::Transform3d T_tracking_cam0_raw = pose_enabled
-          ? xr_spatial_backend::compose(T_tracking_imu, calib.T_imu_cam0)
-          : xr_spatial_backend::Transform3d{};
-      const xr_spatial_backend::Transform3d T_tracking_cam0_rect = pose_enabled
-          ? xr_spatial_backend::compose(T_tracking_cam0_raw, calib.T_cam0_raw_cam0_rect)
-          : xr_spatial_backend::Transform3d{};
+        const int64_t min_interval_ns = cfg.depth.target_rate_hz > 0
+                                            ? static_cast<int64_t>(1e9 / double(cfg.depth.target_rate_hz))
+                                            : 0;
+        if (min_interval_ns > 0 && last_depth_ns > 0 &&
+            pair.timestamp_ns - last_depth_ns < min_interval_ns) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+        last_depth_ns = pair.timestamp_ns;
 
+        const uint64_t pose_timestamp_ns = pose_enabled && sampled_pose
+            ? sampled_pose->timestamp_ns
+            : 0u;
+        const double pose_age_ms = pose_enabled && sampled_pose
+            ? std::abs(double(pair.timestamp_ns - static_cast<int64_t>(sampled_pose->timestamp_ns))) / 1e6
+            : 0.0;
+        const double health_pose_delta_m = pose_enabled && last_quality_pose ? pose_translation_delta_m(*last_quality_pose, *sampled_pose) : 0.0;
+        const double health_pose_delta_deg = pose_enabled && last_quality_pose ? pose_rotation_delta_deg(*last_quality_pose, *sampled_pose) : 0.0;
+        const bool stale_pose = pose_enabled && cfg.max_pose_age_ms > 0.0 && pose_age_ms > cfg.max_pose_age_ms;
+        const bool pose_reinit_suspected = pose_enabled && last_quality_pose &&
+            ((cfg.quality_gate.reinit_delta_m > 0.0 && health_pose_delta_m > cfg.quality_gate.reinit_delta_m) ||
+             (cfg.quality_gate.reinit_delta_deg > 0.0 && health_pose_delta_deg > cfg.quality_gate.reinit_delta_deg));
 
-      xr_spatial_backend::Transform3d T_map_cloud;
-      xr_spatial_backend::Vec3f hmd_position{};
-      if (cfg.map_frame == "camera") {
-        T_map_cloud = xr_spatial_backend::Transform3d{};
-        hmd_position = {0.0f, 0.0f, 0.0f};
-      } else if (cfg.map_frame == "tracking") {
-        if (!T_map_tracking_origin) {
-          if (cfg.tracking_origin == "first_pose") {
-            T_map_tracking_origin = xr_spatial_backend::inverse(T_tracking_imu);
-            std::cout << "[xr_spatial_backend] initialized scan-local tracking origin from first valid pose"
-                      << " p=(" << sampled_pose->px << "," << sampled_pose->py << "," << sampled_pose->pz << ")\n";
-          } else {
-            T_map_tracking_origin = xr_spatial_backend::Transform3d{};
-            std::cout << "[xr_spatial_backend] using absolute tracking coordinates for map output\n";
+        std::string pose_action = "continue";
+        if (stale_pose && cfg.drop_stale_pose) {
+          pose_action = "drop_stale_pose";
+        }
+        if (pose_health_csv) {
+          write_pose_health_row(pose_health_csv, pair.timestamp_ns, pose_for_log, pose_age_ms,
+                                health_pose_delta_m, health_pose_delta_deg,
+                                stale_pose, pose_reinit_suspected, pose_action);
+        }
+
+        if (stale_pose) temporal_filter.reset();
+        if (stale_pose && cfg.drop_stale_pose) {
+          map.drop_frame();
+          std::cerr << "[xr_spatial_backend] WARN: stale pose age_ms=" << pose_age_ms
+                    << " scan_back=" << cfg.stereo_pose_sync_scan_back
+                    << "; dropping stereo frame\n";
+          if (sampled_pose) last_quality_pose = *sampled_pose;
+          continue;
+        }
+        xr_spatial_backend::StereoDepthResult depth;
+        try {
+          depth = depth_processor.compute(pair.cam0, pair.cam1);
+          consecutive_frame_errors = 0;
+        } catch (const std::exception& e) {
+          ++frame_errors;
+          ++consecutive_frame_errors;
+          map.drop_frame();
+          std::cerr << "[xr_spatial_backend] WARN: dropping failed depth frame: " << e.what() << "\n";
+          if (consecutive_frame_errors >= 30) {
+            stop_reason = "depth_processing_failed";
+            processing_failed = true;
+            break;
+          }
+          continue;
+        }
+        const size_t raw_points = depth.cloud.points.size();
+        const xr_spatial_backend::Transform3d T_tracking_imu = pose_enabled
+            ? xr_spatial_backend::pose_to_transform(
+                  sampled_pose->px, sampled_pose->py, sampled_pose->pz,
+                  sampled_pose->qw, sampled_pose->qx, sampled_pose->qy, sampled_pose->qz)
+            : xr_spatial_backend::Transform3d{};
+        const xr_spatial_backend::Transform3d T_tracking_cam0_raw = pose_enabled
+            ? xr_spatial_backend::compose(T_tracking_imu, calib.T_imu_cam0)
+            : xr_spatial_backend::Transform3d{};
+        const xr_spatial_backend::Transform3d T_tracking_cam0_rect = pose_enabled
+            ? xr_spatial_backend::compose(T_tracking_cam0_raw, calib.T_cam0_raw_cam0_rect)
+            : xr_spatial_backend::Transform3d{};
+        xr_spatial_backend::TemporalDepthFilterStats temporal_frame_stats;
+        if (pose_enabled && !stale_pose) {
+          temporal_frame_stats = temporal_filter.apply(depth, T_tracking_cam0_rect, pair.timestamp_ns);
+        }
+        xr_spatial_backend::PointCloudFilterStats filter_stats;
+        depth.cloud = xr_spatial_backend::filter_pointcloud(depth.cloud, cfg.point_filter, &filter_stats);
+        const size_t filtered_points = depth.cloud.points.size();
+        const size_t far_points = count_far_points(depth.cloud, cfg.quality_gate.far_depth_m);
+        const double far_fraction = filtered_points > 0
+                                        ? static_cast<double>(far_points) / static_cast<double>(filtered_points)
+                                        : 0.0;
+        const double pose_delta_m = pose_enabled && last_quality_pose ? pose_translation_delta_m(*last_quality_pose, *sampled_pose) : 0.0;
+        const double pose_delta_deg = pose_enabled && last_quality_pose ? pose_rotation_delta_deg(*last_quality_pose, *sampled_pose) : 0.0;
+
+        bool quality_accept = true;
+        std::string quality_reason = "accepted";
+        if (cfg.quality_gate.enabled) {
+          if (cfg.quality_gate.min_raw_points > 0 && raw_points < cfg.quality_gate.min_raw_points) {
+            quality_accept = false;
+            quality_reason = "raw_points_low";
+          } else if (cfg.quality_gate.min_filtered_points > 0 &&
+                     filtered_points < cfg.quality_gate.min_filtered_points) {
+            quality_accept = false;
+            quality_reason = "filtered_points_low";
+          } else if (cfg.quality_gate.far_depth_m > 0.0f &&
+                     far_fraction > static_cast<double>(cfg.quality_gate.max_far_point_fraction)) {
+            quality_accept = false;
+            quality_reason = "far_fraction_high";
+          } else if (pose_enabled && last_quality_pose && cfg.quality_gate.max_pose_delta_m > 0.0 &&
+                     pose_delta_m > cfg.quality_gate.max_pose_delta_m) {
+            quality_accept = false;
+            quality_reason = "pose_translation_jump";
+          } else if (pose_enabled && last_quality_pose && cfg.quality_gate.max_pose_delta_deg > 0.0 &&
+                     pose_delta_deg > cfg.quality_gate.max_pose_delta_deg) {
+            quality_accept = false;
+            quality_reason = "pose_rotation_jump";
           }
         }
-        T_map_cloud = xr_spatial_backend::compose(*T_map_tracking_origin, T_tracking_cam0_rect);
-        hmd_position = xr_spatial_backend::transform_point(
-            *T_map_tracking_origin,
-            xr_spatial_backend::Vec3f{static_cast<float>(sampled_pose->px),
-                                     static_cast<float>(sampled_pose->py),
-                                     static_cast<float>(sampled_pose->pz)});
-      } else {
-        throw std::runtime_error("invalid --map-frame: " + cfg.map_frame + "; expected tracking or camera");
-      }
 
-      if (cfg.mode == "scan" && cfg.save_debug_clouds && !saved_first_debug_cloud && !depth.cloud.points.empty()) {
-        const fs::path debug_dir = scan_dir / "debug";
-        save_cloud_ply(debug_dir / "first_cloud_cam0_rect.ply", depth.cloud.points);
-        save_cloud_ply(debug_dir / "first_cloud_tracking_absolute.ply",
-                       transform_points(depth.cloud.points, T_tracking_cam0_rect));
-        // first_cloud_tracking.ply is kept as a compatibility alias for older commands.
-        save_cloud_ply(debug_dir / "first_cloud_tracking.ply",
-                       transform_points(depth.cloud.points, T_map_cloud));
-        save_cloud_ply(debug_dir / "first_cloud_map.ply",
-                       transform_points(depth.cloud.points, T_map_cloud));
-        saved_first_debug_cloud = true;
-        std::cout << "[xr_spatial_backend] saved first debug clouds: "
-                  << (debug_dir / "first_cloud_cam0_rect.ply") << " and "
-                  << (debug_dir / "first_cloud_tracking.ply") << "\n";
-      }
-      if (cfg.mapper_backend != "live_depth_grid") {
-        map.integrate(depth.cloud, T_map_cloud);
-      }
-      ++integrated_since_start;
-      if (sampled_pose) {
-        last_integrated_pose = *sampled_pose;
-        last_quality_pose = *sampled_pose;
-      }
-
-      if (traj) {
-        write_trajectory_row(traj, pair.timestamp_ns, pose_for_log, pose_age_ms, depth.cloud.points.size());
-      }
-
-      auto summary = map.make_summary(++summary_seq,
-                                      pair.timestamp_ns,
-                                      pose_timestamp_ns,
-                                      pose_age_ms,
-                                      stale_pose,
-                                      cfg.mode == "scan",
-                                      depth.cloud,
-                                      hmd_position);
-      if (spatial_pub) spatial_pub->publish(summary);
-
-      if (spatial_proxy_mesh_pub && cfg.proxy_mesh.enabled) {
-        const int64_t publish_now_ns = now_ns();
-        const int64_t proxy_period_ns = cfg.proxy_mesh.rate_hz > 0.0
-            ? static_cast<int64_t>(1e9 / cfg.proxy_mesh.rate_hz)
-            : 0;
-        if (last_proxy_mesh_publish_ns == 0 || proxy_period_ns <= 0 ||
-            publish_now_ns - last_proxy_mesh_publish_ns >= proxy_period_ns) {
-          xr_spatial::RuntimeSpatialProxyMeshF32V1 proxy_mesh{};
-          if (cfg.mapper_backend == "live_depth_grid") {
-            proxy_mesh = make_live_depth_grid_payload(
-                depth, T_map_cloud, ++proxy_mesh_seq,
-                static_cast<uint64_t>(pair.timestamp_ns), pose_timestamp_ns, cfg.proxy_mesh);
-          } else {
-            proxy_mesh = xr_spatial_backend::build_spatial_proxy_mesh_from_points(
-                map.points_tracking(), ++proxy_mesh_seq, static_cast<uint64_t>(pair.timestamp_ns), cfg.proxy_mesh);
-            proxy_mesh.pose_timestamp_ns = pose_timestamp_ns;
+        if (quality_csv) {
+          write_quality_gate_row(quality_csv, pair.timestamp_ns, pose_for_log, quality_accept, quality_reason,
+                                 pose_age_ms, raw_points, filtered_points, depth,
+                                 cfg.quality_gate.far_depth_m, far_points, far_fraction,
+                                 pose_delta_m, pose_delta_deg);
+        }
+        if (!quality_accept) {
+          map.drop_frame();
+          std::cerr << "[xr_spatial_backend] quality gate rejected frame reason=" << quality_reason
+                    << " raw_points=" << raw_points
+                    << " filtered_points=" << filtered_points
+                    << " far_fraction=" << far_fraction
+                    << " pose_delta_m=" << pose_delta_m
+                    << " pose_delta_deg=" << pose_delta_deg << "\n";
+          if (cfg.mapper_backend == "live_depth_grid" && spatial_proxy_mesh_pub && cfg.proxy_mesh.enabled) {
+            auto clear_grid = make_clear_live_depth_grid_payload(++proxy_mesh_seq,
+                static_cast<uint64_t>(pair.timestamp_ns), pose_timestamp_ns);
+            spatial_proxy_mesh_pub->publish(clear_grid);
           }
-          spatial_proxy_mesh_pub->publish(proxy_mesh);
-          last_proxy_mesh_vertices = proxy_mesh.vertex_count;
-          last_proxy_mesh_triangles = proxy_mesh.triangle_count;
-          last_proxy_mesh_publish_ns = publish_now_ns;
+          if (sampled_pose) last_quality_pose = *sampled_pose;
+          continue;
+        }
+
+        xr_spatial_backend::Transform3d T_map_cloud;
+        xr_spatial_backend::Vec3f hmd_position{};
+        if (cfg.map_frame == "camera") {
+          T_map_cloud = xr_spatial_backend::Transform3d{};
+          hmd_position = {0.0f, 0.0f, 0.0f};
+        } else if (cfg.map_frame == "tracking") {
+          if (!T_map_tracking_origin) {
+            if (cfg.tracking_origin == "first_pose") {
+              T_map_tracking_origin = xr_spatial_backend::inverse(T_tracking_imu);
+              std::cout << "[xr_spatial_backend] initialized scan-local tracking origin from first valid pose"
+                        << " p=(" << sampled_pose->px << "," << sampled_pose->py << "," << sampled_pose->pz << ")\n";
+            } else {
+              T_map_tracking_origin = xr_spatial_backend::Transform3d{};
+              std::cout << "[xr_spatial_backend] using absolute tracking coordinates for map output\n";
+            }
+          }
+          T_map_cloud = xr_spatial_backend::compose(*T_map_tracking_origin, T_tracking_cam0_rect);
+          hmd_position = xr_spatial_backend::transform_point(
+              *T_map_tracking_origin,
+              xr_spatial_backend::Vec3f{static_cast<float>(sampled_pose->px),
+                                       static_cast<float>(sampled_pose->py),
+                                       static_cast<float>(sampled_pose->pz)});
+        } else {
+          throw std::runtime_error("invalid --map-frame: " + cfg.map_frame + "; expected tracking or camera");
+        }
+
+        if (cfg.mode == "scan" && cfg.save_debug_clouds && !saved_first_debug_cloud && !depth.cloud.points.empty()) {
+          const fs::path debug_dir = scan_dir / "debug";
+          save_cloud_ply(debug_dir / "first_cloud_cam0_rect.ply", depth.cloud.points);
+          save_cloud_ply(debug_dir / "first_cloud_tracking_absolute.ply",
+                         transform_points(depth.cloud.points, T_tracking_cam0_rect));
+          // first_cloud_tracking.ply is kept as a compatibility alias for older commands.
+          save_cloud_ply(debug_dir / "first_cloud_tracking.ply",
+                         transform_points(depth.cloud.points, T_map_cloud));
+          save_cloud_ply(debug_dir / "first_cloud_map.ply",
+                         transform_points(depth.cloud.points, T_map_cloud));
+          saved_first_debug_cloud = true;
+          std::cout << "[xr_spatial_backend] saved first debug clouds: "
+                    << (debug_dir / "first_cloud_cam0_rect.ply") << " and "
+                    << (debug_dir / "first_cloud_tracking.ply") << "\n";
+        }
+        if (cfg.mode == "scan" || cfg.mapper_backend != "live_depth_grid") {
+          map.integrate(depth.cloud, T_map_cloud);
+          if (!sampling_logged && map.observed_points() > map.points_tracking().size()) {
+            sampling_logged = true;
+            std::cout << "[xr_spatial_backend] point cap reached; retaining a bounded sample of the entire scan\n";
+          }
+        }
+        if (!depth.cloud.points.empty()) ++integrated_since_start;
+        if (sampled_pose) {
+          last_quality_pose = *sampled_pose;
+        }
+
+        if (traj) {
+          write_trajectory_row(traj, pair.timestamp_ns, pose_for_log, pose_age_ms, depth.cloud.points.size());
+        }
+
+        auto summary = map.make_summary(++summary_seq,
+                                        pair.timestamp_ns,
+                                        pose_timestamp_ns,
+                                        pose_age_ms,
+                                        stale_pose,
+                                        cfg.mode == "scan",
+                                        depth.cloud,
+                                        hmd_position);
+        if (spatial_pub) spatial_pub->publish(summary);
+
+        if (spatial_proxy_mesh_pub && cfg.proxy_mesh.enabled) {
+          const int64_t publish_now_ns = now_ns();
+          const int64_t proxy_period_ns = cfg.proxy_mesh.rate_hz > 0.0
+              ? static_cast<int64_t>(1e9 / cfg.proxy_mesh.rate_hz)
+              : 0;
+          if (last_proxy_mesh_publish_ns == 0 || proxy_period_ns <= 0 ||
+              publish_now_ns - last_proxy_mesh_publish_ns >= proxy_period_ns) {
+            xr_spatial::RuntimeSpatialProxyMeshF32V1 proxy_mesh{};
+            if (cfg.mapper_backend == "live_depth_grid") {
+              proxy_mesh = make_live_depth_grid_payload(
+                  depth, T_map_cloud, ++proxy_mesh_seq,
+                  static_cast<uint64_t>(pair.timestamp_ns), pose_timestamp_ns, cfg.proxy_mesh);
+            } else {
+              proxy_mesh = xr_spatial_backend::build_spatial_proxy_mesh_from_points(
+                  map.points_tracking(), ++proxy_mesh_seq, static_cast<uint64_t>(pair.timestamp_ns), cfg.proxy_mesh);
+              proxy_mesh.pose_timestamp_ns = pose_timestamp_ns;
+            }
+            spatial_proxy_mesh_pub->publish(proxy_mesh);
+            last_proxy_mesh_vertices = proxy_mesh.vertex_count;
+            last_proxy_mesh_triangles = proxy_mesh.triangle_count;
+            last_proxy_mesh_publish_ns = publish_now_ns;
+          }
+        }
+
+        if (cfg.print_every > 0 && integrated_since_start > 0 &&
+            integrated_since_start % static_cast<uint32_t>(cfg.print_every) == 0) {
+          std::cout << "[xr_spatial_backend] integrated=" << integrated_since_start
+                    << " cloud_points=" << depth.cloud.points.size()
+                    << " grid=" << depth.live_grid_width << "x" << depth.live_grid_height
+                    << " grid_valid=" << depth.live_grid_valid_points
+                    << " proxy_vertices=" << last_proxy_mesh_vertices
+                    << " proxy_triangles=" << last_proxy_mesh_triangles
+                    << " temporal_reject=" << temporal_frame_stats.rejected_points
+                    << " temporal_smooth=" << temporal_frame_stats.smoothed_points
+                    << " filter_in=" << filter_stats.input_points
+                    << " roi_reject=" << depth.rejected_roi_pixels
+                    << " far_fraction=" << far_fraction
+                    << " accumulated=" << map.points_tracking().size()
+                    << " depth_mean_m=" << depth.cloud.mean_depth_m
+                    << " pose_age_ms=" << pose_age_ms
+                    << " hmd_clearance_m=" << summary.hmd_clearance_m
+                    << " flags=0x" << std::hex << summary.status_flags << std::dec
+                    << "\n";
         }
       }
 
-      if (cfg.print_every > 0 && integrated_since_start % static_cast<uint32_t>(cfg.print_every) == 0) {
-        std::cout << "[xr_spatial_backend] integrated=" << integrated_since_start
-                  << " cloud_points=" << depth.cloud.points.size()
-                  << " grid=" << depth.live_grid_width << "x" << depth.live_grid_height
-                  << " grid_valid=" << depth.live_grid_valid_points
-                  << " proxy_vertices=" << last_proxy_mesh_vertices
-                  << " proxy_triangles=" << last_proxy_mesh_triangles
-                  << " filter_in=" << filter_stats.input_points
-                  << " roi_reject=" << depth.rejected_roi_pixels
-                  << " far_fraction=" << far_fraction
-                  << " accumulated=" << map.points_tracking().size()
-                  << " depth_mean_m=" << depth.cloud.mean_depth_m
-                  << " pose_age_ms=" << pose_age_ms
-                  << " hmd_clearance_m=" << summary.hmd_clearance_m
-                  << " flags=0x" << std::hex << summary.status_flags << std::dec
-                  << "\n";
-      }
+    } catch (const std::exception& e) {
+      processing_failed = true;
+      stop_reason = "processing_error";
+      std::cerr << "[xr_spatial_backend][ERROR] " << e.what()
+                << (cfg.mode == "scan" ? "; saving accumulated scan data\n" : "\n");
     }
 
     const int64_t end_ns = now_ns();
-    if (traj) traj.flush();
-    if (quality_csv) quality_csv.flush();
-
     if (cfg.mode == "scan") {
+      if (processing_failed) scan_complete = false;
+      if (map.integrated_frames() == 0 && scan_complete && !processing_failed) {
+        stop_reason = "no_frames_integrated";
+        scan_complete = false;
+      } else if (scan_complete && cfg.capture_transport == "shm" &&
+                 cfg.capture_reattach_on_stale_ms > 0.0 &&
+                 double(end_ns - last_capture_progress_ns) / 1e6 > cfg.capture_reattach_on_stale_ms) {
+        stop_reason = "capture_stalled";
+        scan_complete = false;
+      }
       std::cout << "[xr_spatial_backend] finalizing scan\n";
+      bool save_failed = false;
+      const auto save_artifact = [&](const auto& write) {
+        try {
+          write();
+        } catch (const std::exception& e) {
+          save_failed = true;
+          std::cerr << "[xr_spatial_backend][ERROR] saving scan artifact: " << e.what() << "\n";
+        }
+      };
+      const auto flush_csv = [&](std::ofstream& os, const char* name) {
+        if (!os.is_open()) return;
+        os.flush();
+        if (!os) throw std::runtime_error(std::string("failed to finish ") + name);
+      };
+      save_artifact([&] { flush_csv(traj, "trajectory.csv"); });
+      save_artifact([&] { flush_csv(quality_csv, "quality_gate.csv"); });
+      save_artifact([&] { flush_csv(pose_health_csv, "pose_health.csv"); });
       if (cfg.save_pointcloud_ply) {
-        map.save_pointcloud_ply(scan_dir / "pointcloud.ply");
+        save_artifact([&] { map.save_pointcloud_ply(scan_dir / "pointcloud.ply"); });
       }
       if (cfg.save_voxel_pointcloud_ply) {
-        const auto voxel_stats = map.save_voxel_pointcloud_ply(scan_dir / "voxel_pointcloud.ply",
+        save_artifact([&] {
+          const auto voxel_stats = map.save_voxel_pointcloud_ply(scan_dir / "voxel_pointcloud.ply",
                                                                cfg.scan_voxel_size_m,
                                                                cfg.scan_min_observations,
                                                                cfg.scan_max_voxel_points);
-        std::cout << "[xr_spatial_backend] saved voxel_pointcloud.ply"
-                  << " input_points=" << voxel_stats.input_points
-                  << " output_voxels=" << voxel_stats.output_voxels
-                  << " rejected_low_observations=" << voxel_stats.rejected_low_observations
-                  << " voxel_size_m=" << cfg.scan_voxel_size_m
-                  << " min_observations=" << cfg.scan_min_observations << "\n";
+          std::cout << "[xr_spatial_backend] saved voxel_pointcloud.ply"
+                    << " input_points=" << voxel_stats.input_points
+                    << " output_voxels=" << voxel_stats.output_voxels
+                    << " rejected_low_observations=" << voxel_stats.rejected_low_observations
+                    << " voxel_size_m=" << cfg.scan_voxel_size_m
+                    << " min_observations=" << cfg.scan_min_observations << "\n";
+        });
       }
       if (cfg.proxy_mesh.enabled) {
-        auto proxy_mesh = xr_spatial_backend::build_spatial_proxy_mesh_from_points(
-            map.points_tracking(), ++proxy_mesh_seq, static_cast<uint64_t>(end_ns), cfg.proxy_mesh);
-        xr_spatial_backend::save_spatial_proxy_mesh_ply(scan_dir / "spatial_proxy_mesh.ply", proxy_mesh);
+        save_artifact([&] {
+          auto proxy_mesh = xr_spatial_backend::build_spatial_proxy_mesh_from_points(
+              map.points_tracking(), ++proxy_mesh_seq, static_cast<uint64_t>(end_ns), cfg.proxy_mesh);
+          xr_spatial_backend::save_spatial_proxy_mesh_ply(scan_dir / "spatial_proxy_mesh.ply", proxy_mesh);
+        });
+      }
+      if (save_failed) {
+        scan_complete = false;
+        stop_reason = "save_error";
       }
       if (cfg.save_metadata_json) {
-        save_metadata(scan_dir / "scan_metadata.json", cfg, calib, map, start_ns, end_ns);
+        save_artifact([&] {
+          save_metadata(scan_dir / "scan_metadata.json", cfg, calib, map, start_ns, end_ns,
+                        stop_reason, scan_complete, capture_reattachments, frame_errors, temporal_filter.stats());
+        });
       }
-      std::cout << "[xr_spatial_backend] scan saved to " << scan_dir << "\n";
-      if (cfg.exit_after_scan) return 0;
+      std::cout << "[xr_spatial_backend] scan output=" << scan_dir
+                << " complete=" << (scan_complete && !save_failed ? "yes" : "no")
+                << " reason=" << (save_failed ? "save_error" : stop_reason) << "\n";
+      if (save_failed || processing_failed) return 1;
+      return scan_complete ? 0 : 2;
     }
 
-    return 0;
+    return processing_failed ? 1 : 0;
   } catch (const std::exception& e) {
     std::cerr << "[xr_spatial_backend][ERROR] " << e.what() << "\n";
     return 1;

@@ -53,7 +53,45 @@ parse_xr_spatial_profile_cli() {
   # shellcheck source=/dev/null
   source "$helper"
   capture_profile_parse_cli "$@"
-  XR_SPATIAL_FORWARD_ARGS=("${CAPTURE_PROFILE_FORWARD_ARGS[@]}")
+  # Resolve these before profile validation, rather than forwarding a different
+  # --calib only after the profile's (possibly missing) file has been checked.
+  set -- "${CAPTURE_PROFILE_FORWARD_ARGS[@]}"
+  XR_SPATIAL_FORWARD_ARGS=()
+  XR_SPATIAL_CLI_CALIB=""
+  XR_SPATIAL_CLI_NUM_THREADS=""
+  local option value
+  while (( $# > 0 )); do
+    case "$1" in
+      --calib|--calib=*|--num-threads|--num-threads=*)
+        option="${1%%=*}"
+        if [[ "$1" == *=* ]]; then
+          value="${1#*=}"
+          shift
+        else
+          if (( $# < 2 )); then
+            echo "[xr_spatial_profile][ERROR] $option requires a value" >&2
+            return 2
+          fi
+          value="$2"
+          shift 2
+        fi
+        if [[ -z "$value" || "$value" == --* ]]; then
+          echo "[xr_spatial_profile][ERROR] $option requires a value" >&2
+          return 2
+        fi
+        if [[ "$option" == --calib ]]; then
+          XR_SPATIAL_CLI_CALIB="$value"
+        else
+          if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+            echo "[xr_spatial_profile][ERROR] --num-threads must be an integer >= 0" >&2
+            return 2
+          fi
+          XR_SPATIAL_CLI_NUM_THREADS="$value"
+        fi
+        ;;
+      *) XR_SPATIAL_FORWARD_ARGS+=("$1"); shift ;;
+    esac
+  done
   if [[ -n "$CAPTURE_PROFILE_CLI_OVERRIDE" ]]; then
     XR_SPATIAL_PROFILE="$CAPTURE_PROFILE_CLI_OVERRIDE"
     SPATIAL_MAPPER_PROFILE="$CAPTURE_PROFILE_CLI_OVERRIDE"
@@ -134,8 +172,20 @@ load_xr_spatial_profile() {
     exit 2
   fi
 
+  # Use the calibration selected by the tracking-sensor environment unless the
+  # caller explicitly selected CALIB_JSON. Profiles can still set a literal path.
+  set_default CALIB_JSON "${BASALT_CALIB:-}"
+  [[ -z "${XR_SPATIAL_CLI_CALIB:-}" ]] || CALIB_JSON="$XR_SPATIAL_CLI_CALIB"
   # shellcheck source=/dev/null
   source "$XR_SPATIAL_CONFIG_RESOLVED"
+  # An explicit CLI choice also overrides profiles with literal assignments.
+  [[ -z "${XR_SPATIAL_CLI_CALIB:-}" ]] || CALIB_JSON="$XR_SPATIAL_CLI_CALIB"
+  [[ -z "${XR_SPATIAL_CLI_NUM_THREADS:-}" ]] || XR_SPATIAL_NUM_THREADS="$XR_SPATIAL_CLI_NUM_THREADS"
+  set_default XR_SPATIAL_NUM_THREADS "2"
+  if [[ ! "$XR_SPATIAL_NUM_THREADS" =~ ^[0-9]+$ ]]; then
+    echo "[$log_prefix][ERROR] XR_SPATIAL_NUM_THREADS must be an integer >= 0" >&2
+    exit 2
+  fi
 
   if [[ -n "${XR_SPATIAL_APP_HOME:-}" && "$ROOT_PROJECT" == "$XR_SPATIAL_APP_HOME" ]]; then
     set_default BIN_DIR "$XR_SPATIAL_APP_HOME"
@@ -146,6 +196,7 @@ load_xr_spatial_profile() {
   set_default CAPTURE_REGISTRY "/tmp/capture_service_streams.json"
   set_default CAPTURE_TCP_HOST "127.0.0.1"
   set_default CAPTURE_TCP_PORT "45660"
+  set_default CAPTURE_REATTACH_ON_STALE_MS "500"
   set_default CAMERA0_STREAM "camera0"
   set_default CAMERA1_STREAM "camera1"
   set_default IMU_STREAM "imu0"
@@ -185,6 +236,13 @@ load_xr_spatial_profile() {
   set_default DEPTH_ROI_X_MAX "1.0"
   set_default DEPTH_ROI_Y_MIN "0.0"
   set_default DEPTH_ROI_Y_MAX "1.0"
+  set_default XR_SPATIAL_TEMPORAL_FILTER_ENABLED "1"
+  set_default XR_SPATIAL_TEMPORAL_HISTORY_FRAMES "2"
+  set_default XR_SPATIAL_TEMPORAL_MIN_FRAMES "2"
+  set_default XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M "0.04"
+  set_default XR_SPATIAL_TEMPORAL_REL_TOLERANCE "0.03"
+  set_default XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT "0.6"
+  set_default XR_SPATIAL_TEMPORAL_MAX_AGE_MS "500"
   set_default QUALITY_GATE_ENABLED "1"
   set_default QUALITY_MIN_RAW_POINTS "1000"
   set_default QUALITY_MIN_FILTERED_POINTS "500"
@@ -281,7 +339,7 @@ require_xr_spatial_calibration() {
     echo "[$log_prefix][ERROR] CALIB_JSON is not set." >&2
     echo "[$log_prefix][ERROR] Put the calibration JSON path in a profile under:" >&2
     echo "[$log_prefix][ERROR]   $ROOT_PROJECT/backends/xr_spatial/configs/profiles/" >&2
-    echo "[$log_prefix][ERROR] or pass CALIB_JSON=/path/to/calib.json." >&2
+    echo "[$log_prefix][ERROR] or pass --calib /path/to/calib.json (or CALIB_JSON=/path/to/calib.json)." >&2
     exit 2
   fi
   if [[ ! -f "$CALIB_JSON" ]]; then

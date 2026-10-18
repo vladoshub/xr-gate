@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,7 @@ class PointCloudSpatialMap {
   const std::vector<Vec3f>& points_tracking() const { return points_tracking_; }
   uint32_t integrated_frames() const { return integrated_frames_; }
   uint32_t dropped_frames() const { return dropped_frames_; }
+  uint64_t observed_points() const { return observed_points_; }
 
  private:
   size_t max_accumulated_points_ = 1000000;
@@ -60,6 +62,8 @@ class PointCloudSpatialMap {
   uint32_t integrated_frames_ = 0;
   uint32_t dropped_frames_ = 0;
   uint32_t last_frame_points_ = 0;
+  uint64_t observed_points_ = 0;
+  std::mt19937_64 reservoir_rng_{0};
 };
 
 }  // namespace xr_spatial_backend

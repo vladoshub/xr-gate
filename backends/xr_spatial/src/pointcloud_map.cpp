@@ -52,6 +52,7 @@ struct VoxelAccum {
 
 PointCloudSpatialMap::PointCloudSpatialMap(size_t max_accumulated_points, float max_abs_map_coord_m)
     : max_accumulated_points_(max_accumulated_points), max_abs_map_coord_m_(max_abs_map_coord_m) {
+  if (max_accumulated_points_ == 0) throw std::invalid_argument("max_accumulated_points must be > 0");
   points_tracking_.reserve(std::min<size_t>(max_accumulated_points_, 500000));
 }
 
@@ -60,6 +61,8 @@ void PointCloudSpatialMap::reset() {
   integrated_frames_ = 0;
   dropped_frames_ = 0;
   last_frame_points_ = 0;
+  observed_points_ = 0;
+  reservoir_rng_.seed(0);
 }
 
 void PointCloudSpatialMap::integrate(const PointCloudFrame& cloud_camera, const Transform3d& T_tracking_camera) {
@@ -69,14 +72,22 @@ void PointCloudSpatialMap::integrate(const PointCloudFrame& cloud_camera, const 
     return;
   }
 
-  last_frame_points_ = static_cast<uint32_t>(cloud_camera.points.size());
+  last_frame_points_ = 0;
   for (const Vec3f& p : cloud_camera.points) {
-    if (points_tracking_.size() >= max_accumulated_points_) break;
     const Vec3f q = transform_point(T_tracking_camera, p);
     if (!is_finite(q) || !within_abs_limit(q, max_abs_map_coord_m_)) continue;
-    points_tracking_.push_back(q);
+    ++last_frame_points_;
+    ++observed_points_;
+    if (points_tracking_.size() < max_accumulated_points_) {
+      points_tracking_.push_back(q);
+    } else {
+      // Uniform bounded sample of the entire scan, rather than a frozen prefix.
+      const uint64_t index = std::uniform_int_distribution<uint64_t>(0, observed_points_ - 1)(reservoir_rng_);
+      if (index < points_tracking_.size()) points_tracking_[index] = q;
+    }
   }
-  ++integrated_frames_;
+  if (last_frame_points_ != 0) ++integrated_frames_;
+  else ++dropped_frames_;
 }
 
 void PointCloudSpatialMap::drop_frame() {
@@ -161,6 +172,8 @@ void PointCloudSpatialMap::save_pointcloud_ply(const std::filesystem::path& path
   for (const Vec3f& p : points_tracking_) {
     os << p.x << ' ' << p.y << ' ' << p.z << '\n';
   }
+  os.flush();
+  if (!os) throw std::runtime_error("failed to finish pointcloud PLY: " + path.string());
 }
 
 VoxelizedPointCloudStats PointCloudSpatialMap::save_voxel_pointcloud_ply(
@@ -242,6 +255,8 @@ VoxelizedPointCloudStats PointCloudSpatialMap::save_voxel_pointcloud_ply(
        << red << ' ' << green << ' ' << blue << ' '
        << c.n << '\n';
   }
+  os.flush();
+  if (!os) throw std::runtime_error("failed to finish voxel pointcloud PLY: " + path.string());
   return stats;
 }
 

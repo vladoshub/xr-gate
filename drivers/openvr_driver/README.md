@@ -32,6 +32,35 @@ builds with this option disabled do not compile or link the TCP client/parser.
 /tmp/runtime_tracking_streams.json : runtime_hand_tracking        # optional fallback
 ```
 
+## Linux SHM restart recovery
+
+The pose, hand and controller readers check whether their mapped SHM object is
+still linked and has its original size before reading it. When a runtime
+publisher unlinks/recreates its segment, the driver closes the old mapping and
+opens the current segment automatically, including a restarted sequence number.
+Without this check, an old mapping remains readable with frozen data and the
+controller poses can remain unavailable until SteamVR is restarted. Missing,
+truncated or incompatible segments are rejected and retried on subsequent frames.
+The usual sample-age checks still apply to a stopped publisher.
+
+`XR_OPENVR_BUILD_TESTS=ON` also enables the `openvr_posix_shm` test on Linux. It
+uses the production readers with real SHM rings to cover publisher replacement,
+live updates, missing segments, truncation, invalid headers and stale samples.
+
+For an Alyx failure, distinguish a reversed trackpad axis in SteamVR's input
+test from reversed player movement. The driver forwards the runtime stick X/Y
+values directly; its log reports them as `runtime controller left ... stick=(x,y)`.
+Reversed movement alone can also involve the controller pose or game bindings,
+so restart recovery is not proof of the cause of an axis inversion.
+
+Before restarting SteamVR during a failure, save `vrserver.txt` from Steam's
+`logs` directory. On Linux, this command also shows whether its runtime SHM file
+descriptors refer to unlinked objects (marked `(deleted)`):
+
+```bash
+ls -l /proc/"$(pgrep -n vrserver)"/fd | grep -E 'runtime_(hmd_pose|hand_tracking|controller_state)'
+```
+
 ## Package driver directory
 
 Historical XREAL packages keep their existing names, for example:

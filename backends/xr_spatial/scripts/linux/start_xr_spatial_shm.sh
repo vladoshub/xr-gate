@@ -128,6 +128,8 @@ echo "config: $SPATIAL_MAPPER_CONFIG"
 echo "binary: $SPATIAL_MAPPER_BIN"
 echo "mode: $SPATIAL_MAPPER_MODE"
 echo "calib: $CALIB_JSON"
+echo "OpenCV threads: $XR_SPATIAL_NUM_THREADS (0=automatic)"
+echo "TEMPORAL_DEPTH enabled=$XR_SPATIAL_TEMPORAL_FILTER_ENABLED min_frames=$XR_SPATIAL_TEMPORAL_MIN_FRAMES history=$XR_SPATIAL_TEMPORAL_HISTORY_FRAMES tolerance_m=$XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M relative=$XR_SPATIAL_TEMPORAL_REL_TOLERANCE weight=$XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT max_age_ms=$XR_SPATIAL_TEMPORAL_MAX_AGE_MS"
 if [[ "$CAPTURE_TRANSPORT" == "shm" ]]; then
   echo "capture: transport=shm registry=$CAPTURE_REGISTRY streams=$CAMERA0_STREAM,$CAMERA1_STREAM"
 else
@@ -145,6 +147,7 @@ args=(
   --mode "$SPATIAL_MAPPER_MODE"
   --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-reattach-on-stale-ms "$CAPTURE_REATTACH_ON_STALE_MS"
   --capture-tcp-host "$CAPTURE_TCP_HOST"
   --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"
@@ -166,6 +169,13 @@ args=(
   --depth-frame-id "$DEPTH_FRAME_ID"
   --fisheye-balance "$FISHEYE_BALANCE"
   --depth-rate-hz "$DEPTH_RATE_HZ"
+  --num-threads "$XR_SPATIAL_NUM_THREADS"
+  --temporal-history-frames "$XR_SPATIAL_TEMPORAL_HISTORY_FRAMES"
+  --temporal-min-consistent-frames "$XR_SPATIAL_TEMPORAL_MIN_FRAMES"
+  --temporal-depth-tolerance-m "$XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M"
+  --temporal-depth-relative-tolerance "$XR_SPATIAL_TEMPORAL_REL_TOLERANCE"
+  --temporal-current-weight "$XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT"
+  --temporal-max-age-ms "$XR_SPATIAL_TEMPORAL_MAX_AGE_MS"
   --min-disparity "$MIN_DISPARITY"
   --num-disparities "$NUM_DISPARITIES"
   --block-size "$BLOCK_SIZE"
@@ -212,6 +222,7 @@ args=(
   --print-every "$PRINT_EVERY"
 )
 
+[[ "${XR_SPATIAL_TEMPORAL_FILTER_ENABLED:-1}" == "0" ]] && args+=(--no-temporal-depth-filter) || args+=(--temporal-depth-filter)
 [[ "${DROP_STALE_POSE:-1}" == "0" ]] && args+=(--no-drop-stale-pose)
 [[ "${QUALITY_GATE_ENABLED:-1}" == "0" ]] && args+=(--no-quality-gate-enabled) || args+=(--quality-gate-enabled)
 [[ "${QUALITY_WRITE_CSV:-0}" == "0" ]] && args+=(--no-quality-write-csv) || args+=(--quality-write-csv)

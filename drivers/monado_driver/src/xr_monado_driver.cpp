@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 
 extern "C" {
@@ -44,6 +45,8 @@ constexpr uint32_t kDefaultControllerMaxAgeMs = 250;
 constexpr uint32_t kDefaultHandMaxAgeMs = 250;
 
 struct XrRuntimeIo {
+  // Pose, input and hand-tracker callbacks may run on different Monado threads.
+  std::mutex mutex;
   RuntimePoseReaderConfig hmd_cfg;
   RuntimeControllerStateReaderConfig controller_cfg;
   RuntimeHandReaderConfig hand_cfg;
@@ -67,6 +70,7 @@ struct XrTrackingDevice {
   bool is_hmd = false;
   bool is_controller = false;
   bool left = false;
+  bool hand_tracking_enabled = false;
 
   XrRuntimeIo* io = nullptr;
   bool owns_io = false;
@@ -91,9 +95,42 @@ static struct xrt_binding_input_pair wmr_to_vive_inputs[] = {
     {XRT_INPUT_VIVE_AIM_POSE, XRT_INPUT_WMR_AIM_POSE},
 };
 
-static struct xrt_binding_profile wmr_binding_profiles[] = {
+static struct xrt_binding_input_pair wmr_inputs[] = {
+    {XRT_INPUT_WMR_GRIP_POSE, XRT_INPUT_WMR_GRIP_POSE},
+    {XRT_INPUT_WMR_AIM_POSE, XRT_INPUT_WMR_AIM_POSE},
+    {XRT_INPUT_WMR_TRIGGER_VALUE, XRT_INPUT_WMR_TRIGGER_VALUE},
+    {XRT_INPUT_WMR_SQUEEZE_CLICK, XRT_INPUT_WMR_SQUEEZE_CLICK},
+    {XRT_INPUT_WMR_THUMBSTICK, XRT_INPUT_WMR_THUMBSTICK},
+    {XRT_INPUT_WMR_THUMBSTICK_CLICK, XRT_INPUT_WMR_THUMBSTICK_CLICK},
+    {XRT_INPUT_WMR_MENU_CLICK, XRT_INPUT_WMR_MENU_CLICK},
+    {XRT_INPUT_WMR_TRACKPAD_CLICK, XRT_INPUT_WMR_TRACKPAD_CLICK},
+    {XRT_INPUT_WMR_TRACKPAD_TOUCH, XRT_INPUT_WMR_TRACKPAD_TOUCH},
+    {XRT_INPUT_WMR_TRACKPAD, XRT_INPUT_WMR_TRACKPAD},
+};
+
+static struct xrt_binding_profile controller_binding_profiles[] = {
     {XRT_DEVICE_SIMPLE_CONTROLLER, wmr_to_simple_inputs, ARRAY_SIZE(wmr_to_simple_inputs), nullptr, 0},
     {XRT_DEVICE_VIVE_WAND, wmr_to_vive_inputs, ARRAY_SIZE(wmr_to_vive_inputs), nullptr, 0},
+    {XRT_DEVICE_WMR_CONTROLLER, wmr_inputs, ARRAY_SIZE(wmr_inputs), nullptr, 0},
+};
+
+// Touch provides face buttons and analog squeeze. Keep the WMR inputs as
+// compatibility sources for the existing simple-controller/Vive/WMR bindings.
+constexpr enum xrt_input_name kControllerInputNames[] = {
+    XRT_INPUT_WMR_GRIP_POSE, XRT_INPUT_WMR_AIM_POSE,
+    XRT_INPUT_WMR_TRIGGER_VALUE, XRT_INPUT_WMR_SQUEEZE_CLICK,
+    XRT_INPUT_WMR_THUMBSTICK, XRT_INPUT_WMR_THUMBSTICK_CLICK,
+    XRT_INPUT_WMR_MENU_CLICK, XRT_INPUT_WMR_TRACKPAD_CLICK,
+    XRT_INPUT_WMR_TRACKPAD_TOUCH, XRT_INPUT_WMR_TRACKPAD,
+    XRT_INPUT_TOUCH_GRIP_POSE, XRT_INPUT_TOUCH_AIM_POSE,
+    XRT_INPUT_TOUCH_TRIGGER_VALUE, XRT_INPUT_TOUCH_TRIGGER_TOUCH,
+    XRT_INPUT_TOUCH_SQUEEZE_VALUE, XRT_INPUT_TOUCH_THUMBSTICK,
+    XRT_INPUT_TOUCH_THUMBSTICK_CLICK, XRT_INPUT_TOUCH_THUMBSTICK_TOUCH,
+    XRT_INPUT_TOUCH_MENU_CLICK, XRT_INPUT_TOUCH_SYSTEM_CLICK,
+    XRT_INPUT_TOUCH_A_CLICK, XRT_INPUT_TOUCH_A_TOUCH,
+    XRT_INPUT_TOUCH_B_CLICK, XRT_INPUT_TOUCH_B_TOUCH,
+    XRT_INPUT_TOUCH_X_CLICK, XRT_INPUT_TOUCH_X_TOUCH,
+    XRT_INPUT_TOUCH_Y_CLICK, XRT_INPUT_TOUCH_Y_TOUCH,
 };
 
 XrTrackingDevice* from_xdev(struct xrt_device* xdev) {
@@ -351,24 +388,6 @@ void sanitize_pose(struct xrt_pose* pose) {
   }
 }
 
-struct xrt_quat quat_multiply(const struct xrt_quat& a, const struct xrt_quat& b) {
-  return quatf(
-      a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-      a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-      a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-      a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w);
-}
-
-struct xrt_quat quat_conjugate(const struct xrt_quat& q) {
-  return quatf(q.w, -q.x, -q.y, -q.z);
-}
-
-struct xrt_vec3 quat_rotate_vec(const struct xrt_quat& q, const struct xrt_vec3& v) {
-  const struct xrt_quat p = quatf(0.0f, v.x, v.y, v.z);
-  const struct xrt_quat r = quat_multiply(quat_multiply(q, p), quat_conjugate(q));
-  return vec3(r.x, r.y, r.z);
-}
-
 void relation_zero(struct xrt_space_relation* out_relation) {
   std::memset(out_relation, 0, sizeof(*out_relation));
   out_relation->pose.orientation = quat_identity();
@@ -519,41 +538,187 @@ void relation_from_runtime_controller_side(const xr_runtime::RuntimeControllerSi
   relation_from_pose_velocity(out_relation, position, orientation, &linear_velocity, &angular_velocity);
 }
 
-void relation_from_hand_side_hmd_relative(const xr_tracking::HandSideF32V2& side,
-                                          const xr_runtime::RuntimeHmdPoseF64V1& hmd,
-                                          struct xrt_space_relation* out_relation) {
-  const struct xrt_vec3 hmd_pos = vec3(static_cast<float>(hmd.px),
-                                      static_cast<float>(hmd.py),
-                                      static_cast<float>(hmd.pz));
-  const struct xrt_quat hmd_rot = quatf(static_cast<float>(hmd.qw),
-                                       static_cast<float>(hmd.qx),
-                                       static_cast<float>(hmd.qy),
-                                       static_cast<float>(hmd.qz));
-
-  const struct xrt_vec3 hand_rel = vec3(side.controller_px, side.controller_py, side.controller_pz);
-  const struct xrt_vec3 hand_rel_rotated = quat_rotate_vec(hmd_rot, hand_rel);
-  const struct xrt_vec3 position = vec3(hmd_pos.x + hand_rel_rotated.x,
-                                       hmd_pos.y + hand_rel_rotated.y,
-                                       hmd_pos.z + hand_rel_rotated.z);
-
-  const struct xrt_quat hand_rel_rot = quatf(side.controller_qw, side.controller_qx, side.controller_qy, side.controller_qz);
-  const struct xrt_quat orientation = quat_multiply(hmd_rot, hand_rel_rot);
-
+void relation_from_hand_side(const xr_tracking::HandSideF32V2& side,
+                             struct xrt_space_relation* out_relation) {
+  // runtime_hand_tracking is already in runtime/world space, including the
+  // HMD transform, origin and configured offsets. Applying the HMD again here
+  // would double both the translation and rotation on the fallback path.
+  const struct xrt_vec3 position = vec3(side.controller_px, side.controller_py, side.controller_pz);
+  const struct xrt_quat orientation = quatf(side.controller_qw, side.controller_qx,
+                                            side.controller_qy, side.controller_qz);
   struct xrt_vec3 linear_velocity{};
   struct xrt_vec3 angular_velocity{};
   const struct xrt_vec3* linear_velocity_ptr = nullptr;
   const struct xrt_vec3* angular_velocity_ptr = nullptr;
 
   if ((side.flags & xr_tracking::HAND_LINEAR_VELOCITY_VALID) != 0u) {
-    linear_velocity = quat_rotate_vec(hmd_rot, vec3(side.vx, side.vy, side.vz));
+    linear_velocity = vec3(side.vx, side.vy, side.vz);
     linear_velocity_ptr = &linear_velocity;
   }
   if ((side.flags & xr_tracking::HAND_ANGULAR_VELOCITY_VALID) != 0u) {
-    angular_velocity = quat_rotate_vec(hmd_rot, vec3(side.wx, side.wy, side.wz));
+    angular_velocity = vec3(side.wx, side.wy, side.wz);
     angular_velocity_ptr = &angular_velocity;
   }
 
   relation_from_pose_velocity(out_relation, position, orientation, linear_velocity_ptr, angular_velocity_ptr);
+}
+
+bool runtime_hand_has_optical_joints(const RuntimeHandSample& sample,
+                                     const xr_tracking::HandSideF32V2& side,
+                                     bool left,
+                                     uint32_t max_age_ms) {
+  if (!runtime_hand_side_is_valid(sample.frame, side, left) ||
+      !std::isfinite(side.confidence) ||
+      side.status != static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Tracking) ||
+      (side.flags & xr_tracking::HAND_JOINTS_VALID) == 0u ||
+      (sample.frame.flags & xr_tracking::HAND_FLAG_JOINTS_VALID) == 0u ||
+      side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2 ||
+      sample.frame.source_timestamp_ns == 0u) return false;
+  // The runtime republishes at its tick rate. Check the optical source time as
+  // well, so republishing cannot keep an old skeleton active indefinitely.
+  const int64_t age_ns = sample.read_time_ns - static_cast<int64_t>(sample.frame.source_timestamp_ns);
+  return max_age_ms == 0u || age_ns <= static_cast<int64_t>(max_age_ms) * 1000000LL;
+}
+
+bool finite_position(const struct xrt_vec3& position) {
+  return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
+}
+
+constexpr uint32_t kJointPoseValid = XRT_SPACE_RELATION_POSITION_VALID_BIT |
+                                      XRT_SPACE_RELATION_ORIENTATION_VALID_BIT;
+constexpr uint32_t kJointPoseTracked = XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
+                                        XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT;
+
+bool runtime_joint_to_monado(const xr_tracking::HandJointF32V2& src,
+                             struct xrt_hand_joint_value& dst) {
+  dst = {};
+  dst.relation.pose.orientation = quat_identity();
+  const auto position = vec3(src.px, src.py, src.pz);
+  const auto orientation = quatf(src.qw, src.qx, src.qy, src.qz);
+  // The 21-joint stream has producers using XRT relation flags and producers
+  // using skeleton26 flags. Both use the low two bits for pose validity (in
+  // opposite order). Only publish a complete, finite pose from either form.
+  if ((src.flags & 3u) != 3u || !std::isfinite(src.confidence) || src.confidence <= 0.0f ||
+      !finite_position(position) || !quat_is_valid(orientation)) return false;
+  dst.relation.pose.position = position;
+  dst.relation.pose.orientation = quat_normalize(orientation);
+  uint32_t flags = kJointPoseValid;
+  flags |= src.flags & kJointPoseTracked;
+  // skeleton26 TRACKED is bit 3; the stream carries no per-joint velocities.
+  if ((src.flags & 8u) != 0u && (src.flags & kJointPoseTracked) == 0u) flags |= kJointPoseTracked;
+  dst.relation.relation_flags = static_cast<xrt_space_relation_flags>(flags);
+  dst.radius = std::isfinite(src.radius_m) && src.radius_m > 0.0f ? src.radius_m : 0.008f;
+  return true;
+}
+
+bool runtime_hand_to_joint_set(const xr_tracking::HandSideF32V2& side,
+                               struct xrt_hand_joint_set& out) {
+  out = {};
+  for (auto& joint : out.values.hand_joint_set_default) joint.relation.pose.orientation = quat_identity();
+  relation_zero(&out.hand_pose);
+  if (side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2) return false;
+
+  // Inverse of Mercury's native 26 -> 21 mapping. The runtime carries wrist,
+  // four thumb joints and four joints per remaining finger.
+  constexpr enum xrt_hand_joint joint_map[] = {
+      XRT_HAND_JOINT_WRIST,
+      XRT_HAND_JOINT_THUMB_METACARPAL, XRT_HAND_JOINT_THUMB_PROXIMAL,
+      XRT_HAND_JOINT_THUMB_DISTAL, XRT_HAND_JOINT_THUMB_TIP,
+      XRT_HAND_JOINT_INDEX_PROXIMAL, XRT_HAND_JOINT_INDEX_INTERMEDIATE,
+      XRT_HAND_JOINT_INDEX_DISTAL, XRT_HAND_JOINT_INDEX_TIP,
+      XRT_HAND_JOINT_MIDDLE_PROXIMAL, XRT_HAND_JOINT_MIDDLE_INTERMEDIATE,
+      XRT_HAND_JOINT_MIDDLE_DISTAL, XRT_HAND_JOINT_MIDDLE_TIP,
+      XRT_HAND_JOINT_RING_PROXIMAL, XRT_HAND_JOINT_RING_INTERMEDIATE,
+      XRT_HAND_JOINT_RING_DISTAL, XRT_HAND_JOINT_RING_TIP,
+      XRT_HAND_JOINT_LITTLE_PROXIMAL, XRT_HAND_JOINT_LITTLE_INTERMEDIATE,
+      XRT_HAND_JOINT_LITTLE_DISTAL, XRT_HAND_JOINT_LITTLE_TIP,
+  };
+  static_assert(ARRAY_SIZE(joint_map) == xr_tracking::HAND_JOINT_COUNT_V2);
+  for (uint32_t i = 0; i < ARRAY_SIZE(joint_map); ++i) {
+    if (side.joints[i].joint_id == i) {
+      runtime_joint_to_monado(side.joints[i], out.values.hand_joint_set_default[joint_map[i]]);
+    }
+  }
+  auto& wrist = out.values.hand_joint_set_default[XRT_HAND_JOINT_WRIST];
+  const auto palm_position = vec3(side.palm_px, side.palm_py, side.palm_pz);
+  if ((wrist.relation.relation_flags & kJointPoseValid) != kJointPoseValid ||
+      !finite_position(palm_position)) {
+    out = {};
+    return false;
+  }
+  wrist.radius = side.joints[0].radius_m > 0.0f ? wrist.radius : 0.018f;
+
+  auto& palm = out.values.hand_joint_set_default[XRT_HAND_JOINT_PALM];
+  palm.relation.pose.position = palm_position;
+  // The runtime owns the final palm pose and any configured corrections.
+  // Do not replace its orientation with another joint or a controller pose.
+  const auto palm_orientation = quatf(side.palm_qw, side.palm_qx, side.palm_qy, side.palm_qz);
+  uint32_t palm_flags = XRT_SPACE_RELATION_POSITION_VALID_BIT;
+  if (quat_is_valid(palm_orientation)) {
+    palm.relation.pose.orientation = quat_normalize(palm_orientation);
+    palm_flags |= XRT_SPACE_RELATION_ORIENTATION_VALID_BIT;
+  }
+  // An invalid palm quaternion keeps an identity placeholder with orientation
+  // validity cleared. The measured wrist/finger joints remain available.
+  palm.relation.relation_flags = static_cast<xrt_space_relation_flags>(palm_flags);
+  palm.radius = 0.020f;
+
+  constexpr enum xrt_hand_joint metacarpals[] = {
+      XRT_HAND_JOINT_INDEX_METACARPAL, XRT_HAND_JOINT_MIDDLE_METACARPAL,
+      XRT_HAND_JOINT_RING_METACARPAL, XRT_HAND_JOINT_LITTLE_METACARPAL,
+  };
+  for (auto metacarpal : metacarpals) {
+    const auto& proximal = out.values.hand_joint_set_default[metacarpal + 1];
+    if ((proximal.relation.relation_flags & kJointPoseValid) != kJointPoseValid) continue;
+    auto& joint = out.values.hand_joint_set_default[metacarpal];
+    joint = proximal;
+    const auto& a = wrist.relation.pose.position;
+    const auto& b = proximal.relation.pose.position;
+    joint.relation.pose.position = vec3(a.x + 0.25f * (b.x - a.x),
+                                         a.y + 0.25f * (b.y - a.y),
+                                         a.z + 0.25f * (b.z - a.z));
+    // These four joints are reconstructed, never advertised as measured.
+    joint.relation.relation_flags = static_cast<xrt_space_relation_flags>(kJointPoseValid);
+  }
+
+  // All joints already use runtime/world coordinates. Keep the base transform
+  // at identity; Monado applies the device tracking origin exactly once.
+  out.hand_pose.relation_flags = static_cast<xrt_space_relation_flags>(kJointPoseValid | kJointPoseTracked);
+  out.is_active = true;
+  return true;
+}
+
+xrt_result_t xrtd_hand_tracking_feature(struct xrt_device* xdev, enum xrt_device_feature_type type) {
+  const auto* dev = from_xdev(xdev);
+  if (!dev || !dev->is_controller || !dev->hand_tracking_enabled) return XRT_ERROR_FEATURE_NOT_SUPPORTED;
+  const auto expected = dev->left ? XRT_DEVICE_FEATURE_HAND_TRACKING_LEFT : XRT_DEVICE_FEATURE_HAND_TRACKING_RIGHT;
+  // Tracking already runs in xr_runtime_adapter. Monado's feature-use callbacks
+  // acknowledge use of this hand without starting/stopping the shared backend.
+  return type == expected ? XRT_SUCCESS : XRT_ERROR_FEATURE_NOT_SUPPORTED;
+}
+
+xrt_result_t xrtd_get_hand_tracking(struct xrt_device* xdev,
+                                    enum xrt_input_name name,
+                                    int64_t desired_timestamp_ns,
+                                    struct xrt_hand_joint_set* out_value,
+                                    int64_t* out_timestamp_ns) {
+  (void)desired_timestamp_ns;  // Return the measured sample time, without finger extrapolation.
+  *out_value = {};
+  *out_timestamp_ns = 0;
+  auto* dev = from_xdev(xdev);
+  if (!dev || !dev->io || !dev->is_controller || !dev->hand_tracking_enabled) return XRT_ERROR_INPUT_UNSUPPORTED;
+  const auto expected = dev->left ? XRT_INPUT_HT_UNOBSTRUCTED_LEFT : XRT_INPUT_HT_UNOBSTRUCTED_RIGHT;
+  if (name != expected) return XRT_ERROR_INPUT_UNSUPPORTED;
+
+  auto& io = *dev->io;
+  std::lock_guard<std::mutex> lock(io.mutex);
+  if (!read_hand(io)) return XRT_SUCCESS;
+  const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
+  if (!runtime_hand_has_optical_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms)) return XRT_SUCCESS;
+  if (runtime_hand_to_joint_set(side, *out_value)) {
+    *out_timestamp_ns = static_cast<int64_t>(io.last_hand.frame.source_timestamp_ns);
+  }
+  return XRT_SUCCESS;
 }
 
 bool controller_pose_input_name(enum xrt_input_name name) {
@@ -566,6 +731,8 @@ bool controller_pose_input_name(enum xrt_input_name name) {
     case XRT_INPUT_SIMPLE_AIM_POSE:
     case XRT_INPUT_VIVE_GRIP_POSE:
     case XRT_INPUT_VIVE_AIM_POSE:
+    case XRT_INPUT_TOUCH_GRIP_POSE:
+    case XRT_INPUT_TOUCH_AIM_POSE:
       return true;
     default:
       return false;
@@ -585,6 +752,7 @@ xrt_result_t xrtd_get_tracked_pose(struct xrt_device* xdev,
   }
 
   XrRuntimeIo& io = *dev->io;
+  std::lock_guard<std::mutex> lock(io.mutex);
 
   if (dev->is_hmd) {
     if (name != XRT_INPUT_GENERIC_HEAD_POSE) return XRT_ERROR_INPUT_UNSUPPORTED;
@@ -607,14 +775,16 @@ xrt_result_t xrtd_get_tracked_pose(struct xrt_device* xdev,
       const auto& side = dev->left ? io.last_controller.frame.left : io.last_controller.frame.right;
       if (runtime_controller_side_has_pose(side, dev->left)) {
         relation_from_runtime_controller_side(side, out_relation);
-        return XRT_SUCCESS;
       }
+      // A fresh composed frame is authoritative, including an explicitly
+      // invalid pose in controller-only/calibration/lost-hand modes.
+      return XRT_SUCCESS;
     }
 
-    if (read_hand(io) && (io.have_hmd || read_hmd(io))) {
+    if (read_hand(io)) {
       const xr_tracking::HandSideF32V2& hand_side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
       if (runtime_hand_side_is_valid(io.last_hand.frame, hand_side, dev->left)) {
-        relation_from_hand_side_hmd_relative(hand_side, io.last_hmd.pose, out_relation);
+        relation_from_hand_side(hand_side, out_relation);
         return XRT_SUCCESS;
       }
     }
@@ -706,112 +876,157 @@ xrt_result_t xrtd_get_view_poses(struct xrt_device* xdev,
   return XRT_SUCCESS;
 }
 
+bool is_hand_tracking_input(enum xrt_input_name name) {
+  return name == XRT_INPUT_HT_UNOBSTRUCTED_LEFT || name == XRT_INPUT_HT_UNOBSTRUCTED_RIGHT;
+}
+
 void clear_controller_inputs(struct xrt_device* xdev, int64_t now_ns) {
   for (uint32_t i = 0; i < xdev->input_count; ++i) {
-    xdev->inputs[i].active = false;
-    xdev->inputs[i].timestamp = now_ns;
-    std::memset(&xdev->inputs[i].value, 0, sizeof(xdev->inputs[i].value));
+    auto& input = xdev->inputs[i];
+    if (is_hand_tracking_input(input.name)) continue;
+    input.active = false;
+    input.timestamp = now_ns;
+    std::memset(&input.value, 0, sizeof(input.value));
   }
 }
 
+float finite_clamp(float value, float low, float high) {
+  return std::isfinite(value) ? std::clamp(value, low, high) : 0.0f;
+}
+
+float controller_value_or_button(float value, uint64_t buttons, uint64_t bit) {
+  value = finite_clamp(value, 0.0f, 1.0f);
+  // Digital-only controllers need a value, but an existing analog value must
+  // survive even when the runtime's gesture/button threshold is also active.
+  return value > 0.0f ? value : ((buttons & bit) != 0ull ? 1.0f : 0.0f);
+}
+
 void publish_controller_inputs(struct xrt_device* xdev,
-                               float trigger,
-                               float grip,
-                               float stick_x,
-                               float stick_y,
-                               bool menu_click,
-                               bool stick_click,
-                               int64_t now_ns) {
-  for (uint32_t i = 0; i < xdev->input_count; ++i) {
-    xdev->inputs[i].active = true;
-    xdev->inputs[i].timestamp = now_ns;
-    std::memset(&xdev->inputs[i].value, 0, sizeof(xdev->inputs[i].value));
+                               const xr_runtime::RuntimeControllerSideStateV1& side,
+                               int64_t timestamp_ns) {
+  const uint64_t buttons = side.buttons;
+  const uint64_t touches = side.touches;
+  const auto pressed = [buttons](uint64_t bit) { return (buttons & bit) != 0ull; };
+  const auto touched = [buttons, touches](uint64_t bit) { return ((touches | buttons) & bit) != 0ull; };
+  const float trigger = controller_value_or_button(side.trigger, buttons, xr_runtime::CONTROLLER_BUTTON_TRIGGER);
+  const float grip = controller_value_or_button(side.grip, buttons, xr_runtime::CONTROLLER_BUTTON_GRIP);
+  float stick_x = finite_clamp(side.thumbstick_x, -1.0f, 1.0f);
+  float stick_y = finite_clamp(side.thumbstick_y, -1.0f, 1.0f);
+  if (std::abs(stick_x) < 0.05f) {
+    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT)) stick_x = -1.0f;
+    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT)) stick_x = 1.0f;
   }
+  if (std::abs(stick_y) < 0.05f) {
+    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN)) stick_y = -1.0f;
+    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_UP)) stick_y = 1.0f;
+  }
+  const bool stick_click = pressed(xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) ||
+                           pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_CENTER);
+  const bool stick_touch = (touches & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull;
+  const bool axis_active = std::abs(stick_x) >= 0.05f || std::abs(stick_y) >= 0.05f;
+  const bool dpad_direction = pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT |
+                                      xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT |
+                                      xr_runtime::CONTROLLER_BUTTON_DPAD_UP |
+                                      xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN);
+  // Match the existing OpenVR Gear VR compatibility behavior, independently of
+  // the physical stick/centre switch. Capacitive motion can drive Vive bindings.
+  const bool trackpad_click = stick_click || stick_touch || axis_active || dpad_direction;
+  const bool trackpad_touch = stick_touch || axis_active || trackpad_click;
 
-  const float trigger_value = std::clamp(trigger, 0.0f, 1.0f);
-  const float grip_value = std::clamp(grip, 0.0f, 1.0f);
+  for (uint32_t i = 0; i < xdev->input_count; ++i) {
+    auto& input = xdev->inputs[i];
+    if (is_hand_tracking_input(input.name)) continue;
+    input.active = true;
+    input.timestamp = timestamp_ns;
+    std::memset(&input.value, 0, sizeof(input.value));
+    switch (input.name) {
+      case XRT_INPUT_WMR_TRIGGER_VALUE:
+      case XRT_INPUT_TOUCH_TRIGGER_VALUE: input.value.vec1.x = trigger; break;
+      case XRT_INPUT_TOUCH_SQUEEZE_VALUE: input.value.vec1.x = grip; break;
+      case XRT_INPUT_WMR_SQUEEZE_CLICK:
+        input.value.boolean = grip >= 0.55f || pressed(xr_runtime::CONTROLLER_BUTTON_GRIP); break;
+      case XRT_INPUT_WMR_THUMBSTICK:
+      case XRT_INPUT_WMR_TRACKPAD:
+      case XRT_INPUT_TOUCH_THUMBSTICK: input.value.vec2 = {stick_x, stick_y}; break;
+      case XRT_INPUT_WMR_THUMBSTICK_CLICK:
+      case XRT_INPUT_TOUCH_THUMBSTICK_CLICK: input.value.boolean = stick_click; break;
+      case XRT_INPUT_TOUCH_THUMBSTICK_TOUCH:
+        input.value.boolean = stick_touch || stick_click || axis_active; break;
+      case XRT_INPUT_WMR_TRACKPAD_CLICK: input.value.boolean = trackpad_click; break;
+      case XRT_INPUT_WMR_TRACKPAD_TOUCH: input.value.boolean = trackpad_touch; break;
+      case XRT_INPUT_WMR_MENU_CLICK:
+        input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_MENU | xr_runtime::CONTROLLER_BUTTON_SYSTEM); break;
+      case XRT_INPUT_TOUCH_MENU_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_MENU); break;
+      case XRT_INPUT_TOUCH_SYSTEM_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_SYSTEM); break;
+      case XRT_INPUT_TOUCH_TRIGGER_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_TRIGGER); break;
+      case XRT_INPUT_TOUCH_A_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_A); break;
+      case XRT_INPUT_TOUCH_A_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_A); break;
+      case XRT_INPUT_TOUCH_B_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_B); break;
+      case XRT_INPUT_TOUCH_B_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_B); break;
+      case XRT_INPUT_TOUCH_X_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_X); break;
+      case XRT_INPUT_TOUCH_X_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_X); break;
+      case XRT_INPUT_TOUCH_Y_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_Y); break;
+      case XRT_INPUT_TOUCH_Y_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_Y); break;
+      default: break;  // Pose inputs have no scalar/button value.
+    }
+  }
+}
 
-  // WMR exposes trigger as a value and squeeze as a click in this Monado path.
-  // If the upstream runtime controller stream only reports digital button bits,
-  // the caller promotes those bits into trigger/grip values before reaching this
-  // helper. This mirrors the working SteamVR/OpenVR driver behavior.
-  xdev->inputs[2].value.vec1.x = trigger_value;                           // WMR trigger value
-  xdev->inputs[3].value.boolean = grip_value >= 0.5f;                     // WMR squeeze click
-  xdev->inputs[4].value.vec2.x = std::clamp(stick_x, -1.0f, 1.0f);        // WMR thumbstick
-  xdev->inputs[4].value.vec2.y = std::clamp(stick_y, -1.0f, 1.0f);
-  xdev->inputs[5].value.boolean = stick_click;
-  xdev->inputs[6].value.boolean = menu_click;
-  xdev->inputs[7].value.boolean = stick_click;                            // Trackpad click fallback
-  xdev->inputs[8].value.boolean = stick_click;                            // Trackpad touch fallback
-  xdev->inputs[9].value.vec2.x = xdev->inputs[4].value.vec2.x;            // Trackpad mirrors stick
-  xdev->inputs[9].value.vec2.y = xdev->inputs[4].value.vec2.y;
+bool runtime_controller_side_has_input(const xr_runtime::RuntimeControllerSideStateV1& side, bool left) {
+  const uint32_t role = left ? xr_runtime::CONTROLLER_SIDE_LEFT : xr_runtime::CONTROLLER_SIDE_RIGHT;
+  const uint32_t required = xr_runtime::RUNTIME_CONTROLLER_CONNECTED | xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID;
+  return side.role == role && (side.flags & required) == required &&
+         (side.flags & xr_runtime::RUNTIME_CONTROLLER_INPUT_STALE) == 0u;
 }
 
 xrt_result_t xrtd_update_inputs(struct xrt_device* xdev) {
   XrTrackingDevice* dev = from_xdev(xdev);
-  if (dev == nullptr || dev->io == nullptr || !dev->is_controller) {
-    return XRT_SUCCESS;
-  }
+  if (dev == nullptr || dev->io == nullptr || !dev->is_controller) return XRT_SUCCESS;
 
   const int64_t now_ns = monotonic_now_ns();
   XrRuntimeIo& io = *dev->io;
+  std::lock_guard<std::mutex> lock(io.mutex);
   const bool have_controller = read_controller_state(io);
-  const bool have_hand = !have_controller && read_hand(io);
+  const bool have_hand = (dev->hand_tracking_enabled || !have_controller) && read_hand(io);
+  clear_controller_inputs(xdev, now_ns);
 
   if (have_controller) {
     const auto& side = dev->left ? io.last_controller.frame.left : io.last_controller.frame.right;
-    const uint64_t buttons = side.buttons;
-    const float trigger = std::clamp(side.trigger, 0.0f, 1.0f);
-    const float grip = std::clamp(side.grip, 0.0f, 1.0f);
-    float stick_x = std::clamp(side.thumbstick_x, -1.0f, 1.0f);
-    float stick_y = std::clamp(side.thumbstick_y, -1.0f, 1.0f);
-
-    if (std::abs(stick_x) < 0.05f) {
-  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT) != 0ull) stick_x = -1.0f;
-      if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT) != 0ull) stick_x = 1.0f;
-}
-if (std::abs(stick_y) < 0.05f) {
-  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) stick_y = -1.0f;
-      if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_UP) != 0ull) stick_y = 1.0f;
-}
-
-    const bool trigger_click = trigger >= 0.55f ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_TRIGGER) != 0ull;
-    const bool grip_click = grip >= 0.55f ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_GRIP) != 0ull;
-    const bool thumbstick_click =
-        (buttons & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_CENTER) != 0ull;
-    const bool menu_click =
-        (buttons & xr_runtime::CONTROLLER_BUTTON_MENU) != 0ull ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_SYSTEM) != 0ull;
-
-    // Monado's WMR/simple binding path has no separate trigger-click input in
-    // this device layout, so promote digital trigger/grip bits into their
-    // corresponding analog/click values. This is the important part for
-    // button-only controller_override modes.
-    const float trigger_value = trigger_click ? std::max(trigger, 1.0f) : trigger;
-    const float grip_value = grip_click ? std::max(grip, 1.0f) : grip;
-
-    publish_controller_inputs(xdev, trigger_value, grip_value, stick_x, stick_y, menu_click, thumbstick_click, now_ns);
-    return XRT_SUCCESS;
-  }
-
-  if (have_hand) {
-    const xr_tracking::HandSideF32V2& hand_side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
-    if (runtime_hand_side_is_valid(io.last_hand.frame, hand_side, dev->left)) {
-      const float trigger = (hand_side.flags & xr_tracking::HAND_PINCH_VALID) != 0u
-                                ? std::clamp(hand_side.pinch_strength, 0.0f, 1.0f)
-                                : 0.0f;
-      const float grip = (hand_side.flags & xr_tracking::HAND_GRAB_VALID) != 0u
-                             ? std::clamp(hand_side.grab_strength, 0.0f, 1.0f)
-                             : 0.0f;
-      publish_controller_inputs(xdev, trigger, grip, 0.0f, 0.0f, false, false, now_ns);
-      return XRT_SUCCESS;
+    if (runtime_controller_side_has_input(side, dev->left)) {
+      publish_controller_inputs(xdev, side, static_cast<int64_t>(io.last_controller.frame.timestamp_ns));
+    }
+  } else if (have_hand) {
+    const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
+    if (runtime_hand_side_is_valid(io.last_hand.frame, side, dev->left)) {
+      xr_runtime::RuntimeControllerSideStateV1 input{};
+      input.buttons = side.reserved0 & xr_runtime::CONTROLLER_BUTTON_KNOWN_MASK;
+      if ((side.flags & xr_tracking::HAND_PINCH_VALID) != 0u) {
+        input.trigger = side.pinch_strength;
+        if (side.pinch_active != 0u) input.buttons |= xr_runtime::CONTROLLER_BUTTON_TRIGGER;
+      }
+      if ((side.flags & xr_tracking::HAND_GRAB_VALID) != 0u) {
+        input.grip = side.grab_strength;
+        if (side.grab_active != 0u) input.buttons |= xr_runtime::CONTROLLER_BUTTON_GRIP;
+      }
+      publish_controller_inputs(xdev, input, now_ns);
     }
   }
 
-  clear_controller_inputs(xdev, now_ns);
+  // Pose availability is independent of buttons/gestures being non-neutral.
+  const auto& controller_side = dev->left ? io.last_controller.frame.left : io.last_controller.frame.right;
+  const auto& hand_side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
+  const bool have_pose = have_controller ? runtime_controller_side_has_pose(controller_side, dev->left)
+      : (have_hand && runtime_hand_side_is_valid(io.last_hand.frame, hand_side, dev->left));
+  for (uint32_t i = 0; i < ARRAY_SIZE(kControllerInputNames); ++i) {
+    if (controller_pose_input_name(xdev->inputs[i].name)) xdev->inputs[i].active = have_pose;
+  }
+
+  if (dev->hand_tracking_enabled) {
+    const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
+    auto& input = xdev->inputs[ARRAY_SIZE(kControllerInputNames)];
+    input.active = have_hand && runtime_hand_has_optical_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms);
+    input.timestamp = have_hand ? static_cast<int64_t>(io.last_hand.frame.source_timestamp_ns) : now_ns;
+  }
   return XRT_SUCCESS;
 }
 
@@ -1011,43 +1226,54 @@ extern "C" struct xrt_device* xr_tracking_runtime_controller_create(struct xrt_d
     XrTrackingDevice* hmd = from_xdev(hmd_xdev);
     if (hmd != nullptr) io = hmd->io;
   }
-  if (io == nullptr) io = create_runtime_io();
-
-  constexpr uint32_t kInputCount = 10;
+  const bool owns_io = io == nullptr;
+  if (owns_io) io = create_runtime_io();
+  const bool hand_tracking_enabled = env_truthy("XR_MONADO_HAND_TRACKING");
+  const uint32_t kInputCount = ARRAY_SIZE(kControllerInputNames) + (hand_tracking_enabled ? 1u : 0u);
   auto* dev = U_DEVICE_ALLOCATE(XrTrackingDevice, U_DEVICE_ALLOC_NO_FLAGS, kInputCount, 0);
-  if (dev == nullptr) return nullptr;
+  if (dev == nullptr) {
+    if (owns_io) delete io;
+    return nullptr;
+  }
 
   dev->is_hmd = false;
   dev->is_controller = true;
   dev->left = left;
+  dev->hand_tracking_enabled = hand_tracking_enabled;
   dev->io = io;
-  dev->owns_io = (hmd_xdev == nullptr);
+  dev->owns_io = owns_io;
 
   struct xrt_device* xdev = &dev->base;
   sanitize_tracking_origin_metadata(xdev);
-  xdev->name = XRT_DEVICE_WMR_CONTROLLER;
+  xdev->name = XRT_DEVICE_TOUCH_CONTROLLER;
   xdev->device_type = left ? XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER : XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
   xdev->supported.orientation_tracking = true;
   xdev->supported.position_tracking = true;
-  xdev->binding_profiles = wmr_binding_profiles;
-  xdev->binding_profile_count = ARRAY_SIZE(wmr_binding_profiles);
+  xdev->supported.hand_tracking = hand_tracking_enabled;
+  xdev->binding_profiles = controller_binding_profiles;
+  xdev->binding_profile_count = ARRAY_SIZE(controller_binding_profiles);
 
   std::snprintf(xdev->str, sizeof(xdev->str), "%s %s controller", kDriverName, left ? "left" : "right");
   std::snprintf(xdev->serial, sizeof(xdev->serial), "xr-tracking-monado-%s-controller-001", left ? "left" : "right");
 
-  xdev->inputs[0].name = XRT_INPUT_WMR_GRIP_POSE;
-  xdev->inputs[1].name = XRT_INPUT_WMR_AIM_POSE;
-  xdev->inputs[2].name = XRT_INPUT_WMR_TRIGGER_VALUE;
-  xdev->inputs[3].name = XRT_INPUT_WMR_SQUEEZE_CLICK;
-  xdev->inputs[4].name = XRT_INPUT_WMR_THUMBSTICK;
-  xdev->inputs[5].name = XRT_INPUT_WMR_THUMBSTICK_CLICK;
-  xdev->inputs[6].name = XRT_INPUT_WMR_MENU_CLICK;
-  xdev->inputs[7].name = XRT_INPUT_WMR_TRACKPAD_CLICK;
-  xdev->inputs[8].name = XRT_INPUT_WMR_TRACKPAD_TOUCH;
-  xdev->inputs[9].name = XRT_INPUT_WMR_TRACKPAD;
+  for (uint32_t i = 0; i < ARRAY_SIZE(kControllerInputNames); ++i) {
+    xdev->inputs[i].name = kControllerInputNames[i];
+  }
+  if (hand_tracking_enabled) {
+    xdev->inputs[ARRAY_SIZE(kControllerInputNames)].name =
+        left ? XRT_INPUT_HT_UNOBSTRUCTED_LEFT : XRT_INPUT_HT_UNOBSTRUCTED_RIGHT;
+  }
 
-  xdev->update_inputs = xrtd_update_inputs;
   u_device_populate_function_pointers(xdev, xrtd_get_tracked_pose, xrtd_destroy);
+  // populate_function_pointers installs a noop update_inputs callback.
+  xdev->update_inputs = xrtd_update_inputs;
+  if (hand_tracking_enabled) {
+    xdev->get_hand_tracking = xrtd_get_hand_tracking;
+    xdev->begin_feature = xrtd_hand_tracking_feature;
+    xdev->end_feature = xrtd_hand_tracking_feature;
+  }
+  std::fprintf(stderr, "[xr_tracking_monado] %s controller profile=touch hand_tracking=%s\n",
+               left ? "left" : "right", hand_tracking_enabled ? "enabled" : "disabled");
   u_var_add_root(dev, left ? "XR Tracking Runtime Left Controller" : "XR Tracking Runtime Right Controller", true);
   return xdev;
 }

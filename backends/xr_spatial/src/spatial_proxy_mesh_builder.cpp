@@ -162,6 +162,8 @@ void save_spatial_proxy_mesh_ply(const std::filesystem::path& path,
     const auto& t = mesh.triangles[i];
     os << "3 " << t.i0 << ' ' << t.i1 << ' ' << t.i2 << '\n';
   }
+  os.flush();
+  if (!os) throw std::runtime_error("failed to finish spatial proxy mesh PLY: " + path.string());
 }
 
 }  // namespace xr_spatial_backend

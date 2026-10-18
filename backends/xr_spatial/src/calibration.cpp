@@ -78,6 +78,7 @@ StereoCalibration load_stereo_calibration_json(const std::string& path) {
   }
 
   StereoCalibration c;
+  c.camera_time_offset_ns = v0.value("cam_time_offset_ns", int64_t{0});
   c.cam0 = read_intrinsics(intr.at(0), res.at(0));
   c.cam1 = read_intrinsics(intr.at(1), res.at(1));
   c.K0 = K(c.cam0);

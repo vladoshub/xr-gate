@@ -39,6 +39,7 @@ add_executable(capture_basalt_backend
 target_compile_features(capture_basalt_backend PRIVATE cxx_std_17)
 
 target_include_directories(capture_basalt_backend PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/include"
   "${XR_TRACKING_ROOT}/shared/include"
   ${OpenCV_INCLUDE_DIRS}
 )

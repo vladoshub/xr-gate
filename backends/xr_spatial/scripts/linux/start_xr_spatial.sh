@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=xr_spatial_profile.sh
 source "$SCRIPT_DIR/xr_spatial_profile.sh"
+parse_xr_spatial_profile_cli "$@"
+set -- "${XR_SPATIAL_FORWARD_ARGS[@]}"
 
 load_xr_spatial_profile "start_xr_spatial"
 require_xr_spatial_calibration "start_xr_spatial"
@@ -12,6 +14,8 @@ echo "[start_xr_spatial] ROOT_PROJECT=$ROOT_PROJECT"
 echo "[start_xr_spatial] CONFIG=$SPATIAL_MAPPER_CONFIG"
 echo "[start_xr_spatial] PROFILE=${SPATIAL_MAPPER_PROFILE_NAME:-${SPATIAL_MAPPER_PROFILE:-reference}}"
 echo "[start_xr_spatial] CALIB_JSON=$CALIB_JSON"
+echo "[start_xr_spatial] XR_SPATIAL_NUM_THREADS=$XR_SPATIAL_NUM_THREADS (0=automatic)"
+echo "[start_xr_spatial] TEMPORAL_DEPTH enabled=$XR_SPATIAL_TEMPORAL_FILTER_ENABLED min_frames=$XR_SPATIAL_TEMPORAL_MIN_FRAMES history=$XR_SPATIAL_TEMPORAL_HISTORY_FRAMES tolerance_m=$XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M relative=$XR_SPATIAL_TEMPORAL_REL_TOLERANCE weight=$XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT max_age_ms=$XR_SPATIAL_TEMPORAL_MAX_AGE_MS"
 echo "[start_xr_spatial] CALIB_PROFILE_NAME=$CALIB_PROFILE_NAME"
 echo "[start_xr_spatial] CAPTURE transport=$CAPTURE_TRANSPORT registry=$CAPTURE_REGISTRY tcp=$CAPTURE_TCP_HOST:$CAPTURE_TCP_PORT streams=$CAMERA0_STREAM,$CAMERA1_STREAM"
 echo "[start_xr_spatial] POSE input=$SPATIAL_POSE_INPUT registry=$POSE_REGISTRY stream=$POSE_STREAM wait=${POSE_WAIT_TIMEOUT_SEC:-0}s retry=${POSE_RETRY_INTERVAL_MS:-500}ms reattach_stale=$POSE_REATTACH_ON_STALE_MS"
@@ -26,6 +30,7 @@ args=(
   --mode runtime
   --capture-transport "$CAPTURE_TRANSPORT"
   --capture-registry "$CAPTURE_REGISTRY"
+  --capture-reattach-on-stale-ms "$CAPTURE_REATTACH_ON_STALE_MS"
   --capture-tcp-host "$CAPTURE_TCP_HOST"
   --capture-tcp-port "$CAPTURE_TCP_PORT"
   --camera0-stream "$CAMERA0_STREAM"
@@ -47,6 +52,13 @@ args=(
   --depth-frame-id "$DEPTH_FRAME_ID"
   --fisheye-balance "$FISHEYE_BALANCE"
   --depth-rate-hz "$DEPTH_RATE_HZ"
+  --num-threads "$XR_SPATIAL_NUM_THREADS"
+  --temporal-history-frames "$XR_SPATIAL_TEMPORAL_HISTORY_FRAMES"
+  --temporal-min-consistent-frames "$XR_SPATIAL_TEMPORAL_MIN_FRAMES"
+  --temporal-depth-tolerance-m "$XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M"
+  --temporal-depth-relative-tolerance "$XR_SPATIAL_TEMPORAL_REL_TOLERANCE"
+  --temporal-current-weight "$XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT"
+  --temporal-max-age-ms "$XR_SPATIAL_TEMPORAL_MAX_AGE_MS"
   --min-disparity "$MIN_DISPARITY"
   --num-disparities "$NUM_DISPARITIES"
   --block-size "$BLOCK_SIZE"
@@ -93,6 +105,7 @@ args=(
   --print-every "$PRINT_EVERY"
 )
 
+[[ "${XR_SPATIAL_TEMPORAL_FILTER_ENABLED:-1}" == "0" ]] && args+=(--no-temporal-depth-filter) || args+=(--temporal-depth-filter)
 [[ "${DROP_STALE_POSE:-1}" == "0" ]] && args+=(--no-drop-stale-pose)
 [[ "${QUALITY_GATE_ENABLED:-1}" == "0" ]] && args+=(--no-quality-gate-enabled) || args+=(--quality-gate-enabled)
 [[ "${QUALITY_WRITE_CSV:-1}" == "0" ]] && args+=(--no-quality-write-csv) || args+=(--quality-write-csv)
@@ -103,4 +116,4 @@ args=(
 [[ "${SPATIAL_LIVE_GRID_TRIANGLES_ENABLED:-1}" == "0" ]] && args+=(--no-spatial-live-grid-triangles-enabled) || args+=(--spatial-live-grid-triangles-enabled)
 [[ "${PUBLISH_SPATIAL_PROXY_MESH_SHM:-1}" == "0" ]] || args+=(--publish-spatial-proxy-mesh-shm)
 
-exec "$BIN_DIR/xr_spatial_backend" "${args[@]}"
+exec "$BIN_DIR/xr_spatial_backend" "${args[@]}" "$@"
