@@ -162,7 +162,7 @@ cd ~/xr-gate-release/xr-gate
 **4. I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500. This can help reduce lag and connection loss if you have built-in Bluetooth.**
 
 
-### Switch to external Bluetooth
+### Switch to external Bluetooth (Optional)
 Without external Bluetooth
 
 ```bash
