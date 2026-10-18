@@ -276,7 +276,7 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.j
 2. Connect controllers to PC
 
 
-## Pair controllers
+### Pair controllers
 
 Enable controllers and pair (separate commands):
 
