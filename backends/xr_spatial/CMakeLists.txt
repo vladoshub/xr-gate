@@ -59,6 +59,7 @@ add_executable(xr_spatial_backend
   src/xr_spatial_backend.cpp
   src/calibration.cpp
   src/stereo_depth_processor.cpp
+  src/temporal_depth_filter.cpp
   src/pose_reader.cpp
   src/pointcloud_map.cpp
   src/pointcloud_filter.cpp
@@ -103,13 +104,17 @@ if(XR_SPATIAL_BUILD_TESTS)
   enable_testing()
   add_executable(xr_spatial_scanner_test
     tests/scanner_test.cpp
-    src/calibration.cpp src/stereo_depth_processor.cpp src/pose_reader.cpp
+    src/calibration.cpp src/stereo_depth_processor.cpp src/temporal_depth_filter.cpp src/pose_reader.cpp
     src/pointcloud_map.cpp src/pointcloud_filter.cpp src/spatial_proxy_mesh_builder.cpp)
   get_target_property(_spatial_includes xr_spatial_backend INCLUDE_DIRECTORIES)
   get_target_property(_spatial_libraries xr_spatial_backend LINK_LIBRARIES)
   target_include_directories(xr_spatial_scanner_test PRIVATE ${_spatial_includes})
   target_link_libraries(xr_spatial_scanner_test PRIVATE ${_spatial_libraries})
   add_test(NAME scanner_core COMMAND xr_spatial_scanner_test)
+  add_executable(xr_spatial_temporal_test tests/temporal_depth_filter_test.cpp src/temporal_depth_filter.cpp)
+  target_include_directories(xr_spatial_temporal_test PRIVATE ${_spatial_includes})
+  target_link_libraries(xr_spatial_temporal_test PRIVATE ${_spatial_libraries})
+  add_test(NAME temporal_depth COMMAND xr_spatial_temporal_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME spatial_launchers COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_test.py" --root "${XR_TRACKING_ROOT}")

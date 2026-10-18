@@ -151,6 +151,37 @@ int main() {
     pose.px = std::numeric_limits<double>::infinity();
     check(!pose_is_usable(pose), "non-finite pose accepted");
 
+    // The live publisher must consume the same temporal result as the scanner,
+    // including holes and smoothed coordinates, rather than the raw SGBM grid.
+    TemporalDepthFilter temporal({}, 100, 100, 0, 0);
+    auto depth_grid = [](float z) {
+      StereoDepthResult d;
+      d.live_grid_width = d.live_grid_height = 2;
+      d.live_grid_decimation = 1;
+      d.live_grid_points = {{0, 0, z}, {.01f * z, 0, z}, {0, .01f * z, z}, {.01f * z, .01f * z, z}};
+      d.live_grid_valid.assign(4, 1);
+      d.candidate_pixels = 4;
+      return d;
+    };
+    auto depth = depth_grid(1);
+    temporal.apply(depth, {}, 1'000'000'000);
+    SpatialProxyMeshBuildConfig mesh_cfg;
+    auto mesh = make_live_depth_grid_payload(depth, {}, 1, 1, 1, mesh_cfg);
+    check(mesh.valid_point_count == 0 &&
+          (mesh.status_flags & xr_spatial::RUNTIME_SPATIAL_PROXY_MESH_FLAG_CLEAR_FRAME),
+          "temporal warm-up did not clear live depth");
+    depth = depth_grid(1.02f);
+    depth.live_grid_points[0].z = .4f;
+    temporal.apply(depth, {}, 1'100'000'000);
+    mesh = make_live_depth_grid_payload(depth, {}, 2, 2, 2, mesh_cfg);
+    check(mesh.valid_point_count == 3 && depth.cloud.points.size() == 3 &&
+          !std::isfinite(mesh.vertices[0].z) && std::abs(mesh.vertices[1].z - 1.012f) < 1e-5f,
+          "live grid bypassed temporal rejection/smoothing");
+    for (uint32_t i = 0; i < mesh.triangle_count; ++i) {
+      check(mesh.triangles[i].i0 != 0 && mesh.triangles[i].i1 != 0 && mesh.triangles[i].i2 != 0,
+            "live triangle references a temporally rejected pixel");
+    }
+
 #ifdef __linux__
     cloud.points = {{0,0,1}};
     map.integrate(cloud, {});

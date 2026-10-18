@@ -88,13 +88,14 @@ printf '%s\n%s\n' "$BASALT_CALIB" "$CALIB_JSON"
 
 
 def run_case(binary, directory, name):
+    scenario = name.removeprefix("temporal_")
     case = directory / name
     case.mkdir()
     prefix = f"xr_spatial_test_{os.getpid()}_{name}"
     cams = [Ring(prefix + f"_cam{i}") for i in range(2)]
     pose = Ring(prefix + "_pose", pose=True)
     proc = None
-    offset = -28_111_831 if name == "time_offset" else 0
+    offset = -28_111_831 if scenario == "time_offset" else 0
     (case / "capture.json").write_text(json.dumps({"streams": {
         f"camera{i}": ring.info for i, ring in enumerate(cams)}}))
     (case / "pose.json").write_text(json.dumps({"streams": {"hmd_pose": pose.info}}))
@@ -103,23 +104,33 @@ def run_case(binary, directory, name):
     rng = random.Random(42)
     left = bytes(rng.randrange(256) for _ in range(WIDTH * HEIGHT))
     right = b"".join(left[y * WIDTH + 10:(y + 1) * WIDTH] + bytes(10) for y in range(HEIGHT))
-    if name == "no_depth":
+    if scenario in {"no_depth", "empty_interrupt"}:
         left = right = bytes(WIDTH * HEIGHT)
     base = time.monotonic_ns()
 
     def publish(seq):
         ts = base + (seq - 1) * 40_000_000
-        cam_seq = seq - 6 if name == "capture_restart" and seq >= 7 else seq
-        bad = (name == "bad_frame" and seq == 7) or (name == "depth_failure" and seq >= 7)
+        cam_seq = seq - 6 if scenario == "capture_restart" and seq >= 7 else seq
+        bad = (scenario == "bad_frame" and seq == 7) or (scenario == "depth_failure" and seq >= 7)
         for camera, image in zip(cams, [left, right]):
+            if scenario.startswith("startup_") and seq < 4:
+                image = bytes(WIDTH * HEIGHT)
+            if scenario == "depth_spike" and seq == 7 and camera is cams[1]:
+                image = b"".join(left[y * WIDTH + 24:(y + 1) * WIDTH] + bytes(24) for y in range(HEIGHT))
             camera.write(cam_seq, ts, image, bad)
-        x = .25 if name == "reset_counter" and seq >= 7 else 0.
-        if name == "pose_jump" and seq >= 7:
+        x = .25 if scenario == "reset_counter" and seq >= 7 else 0.
+        if scenario == "pose_jump" and seq >= 7:
             x = 2.
-        reset = int(name in {"reset_counter", "runtime_reset"} and seq >= 7)
-        pose_seq = seq - 6 if name == "pose_restart" and seq >= 7 else seq
+        if scenario == "startup_jump" and seq >= 3:
+            x = 2.
+        reset = int(scenario in {"reset_counter", "runtime_reset"} and seq >= 7)
+        if scenario == "startup_reset" and seq >= 3:
+            reset = 1
+        rotated = scenario == "startup_rotation" and seq >= 3
+        pose_seq = seq - 6 if scenario == "pose_restart" and seq >= 7 else seq
         data = POSE.pack(1, POSE.size, pose_seq, ts + offset, ts + offset, reset,
-                         x, 0., 0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 2, 1, 1., 0)
+                         x, 0., 0., 0. if rotated else 1., 0., 0., 1. if rotated else 0.,
+                         0., 0., 0., 0., 0., 0., 2, 1, 1., 0)
         pose.write(seq, ts + offset, data)
 
     try:
@@ -133,76 +144,117 @@ def run_case(binary, directory, name):
                 "--no-save-debug-clouds", "--no-save-voxel-pointcloud-ply",
                 "--tracking-origin", "absolute", "--print-every", "1",
                 "--mapper-backend", "pointcloud_fallback"]
-        if name == "capture_restart":
+        if not name.startswith("temporal_"):
+            args += ["--no-temporal-depth-filter"]
+        if scenario == "disabled":
+            # Check CLI11 flag precedence as used by the launchers.
+            args += ["--temporal-depth-filter", "--no-temporal-depth-filter"]
+        if scenario == "three_frames":
+            args += ["--temporal-min-consistent-frames", "3"]
+        if scenario == "camera_only":
+            args += ["--pose-input", "none", "--map-frame", "camera"]
+        if scenario == "capture_restart":
             args += ["--capture-reattach-on-stale-ms", "100"]
-        if name == "depth_failure":
+        if scenario == "depth_failure":
             args += ["--scan-duration-sec", "2"]
-        if name == "no_rate_limit":
+        if scenario == "no_rate_limit":
             args += ["--depth-rate-hz", "0", "--scan-duration-sec", ".15"]
-        if name == "live_grid_scan":
+        if scenario == "live_grid_scan":
             args += ["--mapper-backend", "live_depth_grid", "--num-threads", "0"]
-        if name == "time_offset":
+        if scenario == "time_offset":
             args += ["--num-threads", "2"]
-        if name == "save_error":
+        if scenario == "save_error":
             (case / "output").mkdir()
             (case / "output" / "pointcloud.ply").symlink_to("/dev/full")
-        if name == "point_cap":
+        if scenario == "point_cap":
             args += ["--max-accumulated-points", "100"]
-        if name == "runtime_reset":
+        if scenario == "runtime_reset":
             args += ["--mode", "runtime"]
         proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        if name != "no_rate_limit":
+        if scenario != "no_rate_limit":
             for seq in range(2, 100):
                 time.sleep(.04)
                 if proc.poll() is not None:
                     break
-                if name == "capture_restart" and seq == 7:
+                if scenario == "capture_restart" and seq == 7:
                     for camera in cams:
                         camera.close()
                     cams = [Ring(prefix + f"_cam{i}") for i in range(2)]
                 publish(seq)
-                if name in {"interrupt", "runtime_reset"} and seq >= 14:
+                if scenario in {"interrupt", "empty_interrupt", "runtime_reset"} and seq >= 14:
                     time.sleep(.05)
                     proc.send_signal(signal.SIGINT)
                     break
         log = proc.communicate(timeout=5)[0]
-        if name == "runtime_reset":
+        if scenario == "runtime_reset":
             assert proc.returncode == 0 and "reset runtime map" in log, log
             assert "integrated=" in log.split("reset runtime map")[-1], log
             print("runtime_reset: passed", flush=True)
             return
         meta = json.loads((case / "output" / "scan_metadata.json").read_text())
-        expected_threads = 0 if name == "live_grid_scan" else (2 if name == "time_offset" else 1)
+        expected_threads = 0 if scenario == "live_grid_scan" else (2 if scenario == "time_offset" else 1)
         assert meta["num_threads"] == expected_threads and meta["opencv_num_threads"] >= 1, meta
         if expected_threads == 1:
             assert meta["opencv_num_threads"] == 1, meta
         assert meta["calibration_path"] == str(calibration_path), meta
-        trajectory = (case / "output" / "trajectory.csv").read_text().splitlines()[1:]
+        trajectory = ((case / "output" / "trajectory.csv").read_text().splitlines()[1:]
+                      if scenario != "camera_only" else [])
+        if name.startswith("temporal_"):
+            tf = meta["temporal_depth_filter"]
+            if scenario == "disabled":
+                assert not tf["enabled"] and tf["frames"] == 0, meta
+            elif scenario == "camera_only":
+                assert tf["enabled"] and not tf["pose_available"] and tf["frames"] == 0, meta
+                assert "temporal depth bypassed" in log, log
+            else:
+                assert tf["enabled"] and tf["frames"] >= 7, meta
+                assert tf["rejected_points"] > 0 and tf["smoothed_points"] > 0, meta
+                assert tf["output_points"] > 0 and meta["integrated_frames"] < tf["frames"], meta
+                assert tf["min_consistent_frames"] == (3 if scenario == "three_frames" else 2), meta
+                if scenario in {"capture_restart", "startup_reset"}:
+                    assert tf["resets"] >= 1, meta
+                if scenario == "depth_spike":
+                    # The transient closer stereo surface must not enter the PLY.
+                    depths = [float(row.split()[2]) for row in
+                              (case / "output" / "pointcloud.ply").read_text().split("end_header\n", 1)[1].splitlines()]
+                    assert depths and min(depths) > 1.0, (meta, min(depths))
         xs = [float(row.split(",")[3]) for row in trajectory]
-        if name in {"no_depth", "interrupt"}:
+        if scenario in {"no_depth", "interrupt"}:
             assert proc.returncode == 2 and not meta["complete"], log
-            assert meta["stop_reason"] == ("no_frames_integrated" if name == "no_depth" else "interrupted"), meta
-        elif name in {"reset_counter", "pose_jump", "pose_restart"}:
+            assert meta["stop_reason"] == ("no_frames_integrated" if scenario == "no_depth" else "interrupted"), meta
+        elif scenario == "empty_interrupt":
+            assert proc.returncode == 2 and not meta["complete"] and meta["integrated_frames"] == 0, log
+            assert meta["stop_reason"] == "interrupted", meta
+        elif scenario in {"reset_counter", "pose_jump", "pose_restart"}:
             assert proc.returncode == 2 and not meta["complete"] and xs and max(xs) == 0, log
-            assert meta["stop_reason"] == ("pose_source_jump" if name == "pose_jump" else "pose_source_reset"), meta
-        elif name == "save_error":
+            assert meta["stop_reason"] == ("pose_source_jump" if scenario == "pose_jump" else "pose_source_reset"), meta
+        elif scenario == "save_error":
             assert proc.returncode == 1 and not meta["complete"] and meta["stop_reason"] == "save_error", log
-        elif name == "depth_failure":
+        elif scenario == "depth_failure":
             assert proc.returncode == 1 and not meta["complete"] and meta["frame_errors"] >= 30, log
             assert meta["accumulated_points"] > 0 and (case / "output" / "pointcloud.ply").exists(), log
         else:
             assert proc.returncode == 0 and meta["complete"] and meta["accumulated_points"] > 0, log
-            if name == "capture_restart":
+            if scenario == "capture_restart":
                 assert meta["capture_reattachments"] >= 1 and meta["integrated_frames"] > 7, log
-            elif name == "bad_frame":
+            elif scenario == "bad_frame":
                 assert meta["frame_errors"] == 1 and meta["integrated_frames"] > 7, log
-            elif name == "no_rate_limit":
+            elif scenario == "no_rate_limit":
                 assert meta["integrated_frames"] == 1, meta
-            elif name == "time_offset":
+            elif scenario == "time_offset":
                 assert max(float(row.split(",")[2]) for row in trajectory) == 0, log
                 assert meta["camera_time_offset_ns"] == offset, meta
-            elif name == "point_cap":
+            elif scenario == "point_cap":
                 assert meta["accumulated_points"] == 100 and meta["reservoir_sampling"], meta
+            elif scenario.startswith("startup_"):
+                assert "restarting empty scan reference" in log and "pose-source discontinuity" in log, log
+                assert meta["integrated_frames"] >= 7, meta
+                if scenario == "startup_jump":
+                    assert all(float(row.split(",")[3]) == 2. for row in trajectory
+                               if int(row.split(",")[-1]) > 0), trajectory
+                    assert "pose_delta_m=2" in log, log
+                if scenario == "startup_rotation":
+                    assert "pose_delta_deg=180" in log, log
         print(f"{name}: passed ({meta['integrated_frames']} frames, {meta['stop_reason']})", flush=True)
     finally:
         if proc is not None and proc.poll() is None:
@@ -226,7 +278,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix="xr-spatial-scanner-") as temporary:
         for name in ["normal", "time_offset", "reset_counter", "pose_jump", "pose_restart",
                      "capture_restart", "bad_frame", "depth_failure", "no_rate_limit",
-                     "live_grid_scan", "point_cap", "save_error", "no_depth", "interrupt", "runtime_reset"]:
+                     "live_grid_scan", "point_cap", "save_error", "no_depth", "interrupt", "runtime_reset",
+                     "startup_jump", "startup_rotation", "startup_reset", "empty_interrupt",
+                     "temporal_normal", "temporal_three_frames", "temporal_disabled", "temporal_camera_only",
+                     "temporal_capture_restart", "temporal_startup_reset", "temporal_depth_spike"]:
             run_case(args.binary.resolve(), Path(temporary), name)
 
 

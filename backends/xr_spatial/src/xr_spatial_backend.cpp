@@ -32,6 +32,7 @@
 #include <xr_spatial_backend/pointcloud_filter.hpp>
 #include <xr_spatial_backend/spatial_proxy_mesh_builder.hpp>
 #include <xr_spatial_backend/stereo_depth_processor.hpp>
+#include <xr_spatial_backend/temporal_depth_filter.hpp>
 
 namespace fs = std::filesystem;
 
@@ -291,6 +292,7 @@ struct AppConfig {
   std::string mapper_backend = "live_depth_grid"; // live_depth_grid|pointcloud_fallback
   xr_spatial_backend::PointCloudFilterConfig point_filter;
   QualityGateConfig quality_gate;
+  xr_spatial_backend::TemporalDepthFilterConfig temporal_depth;
   xr_spatial_backend::SpatialProxyMeshBuildConfig proxy_mesh;
   bool publish_spatial_proxy_mesh_shm = false;
   std::string spatial_proxy_mesh_stream = "spatial_proxy_mesh";
@@ -328,7 +330,8 @@ void save_metadata(const fs::path& path,
                    const std::string& stop_reason,
                    bool complete,
                    uint64_t capture_reattachments,
-                   uint64_t frame_errors) {
+                   uint64_t frame_errors,
+                   const xr_spatial_backend::TemporalDepthFilterStats& temporal_stats) {
   if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
   nlohmann::json j;
   j["mode"] = cfg.mode;
@@ -370,6 +373,18 @@ void save_metadata(const fs::path& path,
   j["depth_roi_x_max"] = cfg.depth.roi_x_max;
   j["depth_roi_y_min"] = cfg.depth.roi_y_min;
   j["depth_roi_y_max"] = cfg.depth.roi_y_max;
+  j["temporal_depth_filter"] = {
+      {"enabled", cfg.temporal_depth.enabled},
+      {"pose_available", cfg.pose_input == "shm"},
+      {"history_frames", cfg.temporal_depth.history_frames},
+      {"min_consistent_frames", cfg.temporal_depth.min_consistent_frames},
+      {"abs_tolerance_m", cfg.temporal_depth.abs_tolerance_m},
+      {"relative_tolerance", cfg.temporal_depth.relative_tolerance},
+      {"current_weight", cfg.temporal_depth.current_weight},
+      {"max_age_ms", cfg.temporal_depth.max_age_ms},
+      {"frames", temporal_stats.frames}, {"input_points", temporal_stats.input_points},
+      {"output_points", temporal_stats.output_points}, {"rejected_points", temporal_stats.rejected_points},
+      {"smoothed_points", temporal_stats.smoothed_points}, {"resets", temporal_stats.resets}};
   j["quality_gate_enabled"] = cfg.quality_gate.enabled;
   j["quality_min_raw_points"] = cfg.quality_gate.min_raw_points;
   j["quality_min_filtered_points"] = cfg.quality_gate.min_filtered_points;
@@ -824,6 +839,14 @@ int main(int argc, char** argv) {
   app.add_option("--mapper-backend", cfg.mapper_backend, "Spatial mapper backend: live_depth_grid or pointcloud_fallback")->check(CLI::IsMember({"live_depth_grid", "pointcloud_fallback"}));
   app.add_option("--point-voxel-size-m", cfg.point_filter.voxel_size_m, "Per-frame voxel downsample size before accumulation; <=0 disables");
   app.add_option("--max-points-per-frame", cfg.point_filter.max_points, "Per-frame point cap after filtering; 0 disables");
+  app.add_flag("--temporal-depth-filter,!--no-temporal-depth-filter", cfg.temporal_depth.enabled,
+               "Confirm depth across distinct frames and smooth matching surfaces with camera-motion compensation (default: on)");
+  app.add_option("--temporal-history-frames", cfg.temporal_depth.history_frames, "Previous raw depth grids to retain (1..8)");
+  app.add_option("--temporal-min-consistent-frames", cfg.temporal_depth.min_consistent_frames, "Required consistent frames including current (1..history+1)");
+  app.add_option("--temporal-depth-tolerance-m", cfg.temporal_depth.abs_tolerance_m, "Absolute depth agreement tolerance in metres");
+  app.add_option("--temporal-depth-relative-tolerance", cfg.temporal_depth.relative_tolerance, "Relative depth agreement tolerance (fraction)");
+  app.add_option("--temporal-current-weight", cfg.temporal_depth.current_weight, "Current depth weight in smoothing (0..1)");
+  app.add_option("--temporal-max-age-ms", cfg.temporal_depth.max_age_ms, "Maximum age of historical depth grids");
   app.add_flag("--quality-gate-enabled,!--no-quality-gate-enabled", cfg.quality_gate.enabled, "Enable frame quality gate before map/TSDF integration");
   app.add_option("--quality-min-raw-points", cfg.quality_gate.min_raw_points, "Reject frame if raw depth cloud has fewer points; 0 disables");
   app.add_option("--quality-min-filtered-points", cfg.quality_gate.min_filtered_points, "Reject frame if filtered depth cloud has fewer points; 0 disables");
@@ -923,6 +946,20 @@ int main(int argc, char** argv) {
               << calib.cam0.width << "x" << calib.cam0.height
               << " baseline_m=" << calib.baseline_m
               << " camera_time_offset_ns=" << calib.camera_time_offset_ns << "\n";
+
+    xr_spatial_backend::TemporalDepthFilter temporal_filter(cfg.temporal_depth,
+        calib.P1.at<double>(0, 0), calib.P1.at<double>(1, 1),
+        calib.P1.at<double>(0, 2), calib.P1.at<double>(1, 2));
+    std::cout << "[xr_spatial_backend] temporal_depth_filter=" << (cfg.temporal_depth.enabled ? "on" : "off")
+              << " min_frames=" << cfg.temporal_depth.min_consistent_frames
+              << " history=" << cfg.temporal_depth.history_frames
+              << " tolerance_m=" << cfg.temporal_depth.abs_tolerance_m
+              << " relative_tolerance=" << cfg.temporal_depth.relative_tolerance
+              << " current_weight=" << cfg.temporal_depth.current_weight
+              << " max_age_ms=" << cfg.temporal_depth.max_age_ms << "\n";
+    if (cfg.temporal_depth.enabled && !pose_enabled) {
+      std::cout << "[xr_spatial_backend] temporal depth bypassed: no tracked camera pose for motion compensation\n";
+    }
 
     std::unique_ptr<capture_client::ICaptureTransport> capture;
     if (cfg.capture_transport == "shm") {
@@ -1042,6 +1079,7 @@ int main(int argc, char** argv) {
     int64_t last_capture_progress_ns = start_ns;
     int64_t next_capture_reattach_ns = 0;
     uint64_t capture_reattachments = 0;
+    uint64_t temporal_pose_generation = pose_state.reattach_successes;
     uint64_t frame_errors = 0;
     uint32_t consecutive_frame_errors = 0;
     bool sampling_logged = false;
@@ -1082,6 +1120,7 @@ int main(int argc, char** argv) {
                   cfg.capture_registry, cfg.camera0_stream, cfg.camera1_stream);
               capture = std::move(reopened);
               stereo_reader.reset();
+              temporal_filter.reset();
               ++capture_reattachments;
               std::cerr << "[xr_spatial_backend] reopened stalled camera SHM streams\n";
             } catch (const std::exception& e) {
@@ -1123,16 +1162,42 @@ int main(int argc, char** argv) {
 
           // A changed source epoch invalidates all previously accumulated world points.
           // This guard is independent of the optional depth/quality gate.
+          const double source_delta_m = last_source_pose
+              ? pose_translation_delta_m(*last_source_pose, *sampled_pose) : 0.0;
+          const double source_delta_deg = last_source_pose
+              ? pose_rotation_delta_deg(*last_source_pose, *sampled_pose) : 0.0;
           const bool source_reset = last_source_pose &&
               (sampled_pose->reset_counter != last_source_pose->reset_counter ||
                sampled_pose->sequence < last_source_pose->sequence);
           const bool source_jump = last_source_pose &&
               ((cfg.quality_gate.reinit_delta_m > 0.0 &&
-                pose_translation_delta_m(*last_source_pose, *sampled_pose) > cfg.quality_gate.reinit_delta_m) ||
+                source_delta_m > cfg.quality_gate.reinit_delta_m) ||
                (cfg.quality_gate.reinit_delta_deg > 0.0 &&
-                pose_rotation_delta_deg(*last_source_pose, *sampled_pose) > cfg.quality_gate.reinit_delta_deg));
+                source_delta_deg > cfg.quality_gate.reinit_delta_deg));
+          if (source_reset || source_jump || temporal_pose_generation != pose_state.reattach_successes) {
+            temporal_filter.reset();
+          }
+          temporal_pose_generation = pose_state.reattach_successes;
           if (cfg.map_frame == "tracking" && (source_reset || source_jump)) {
+            std::cerr << "[xr_spatial_backend] pose-source discontinuity"
+                      << " pose_delta_m=" << source_delta_m
+                      << " pose_delta_deg=" << source_delta_deg
+                      << " seq=" << last_source_pose->sequence << "->" << sampled_pose->sequence
+                      << " reset_counter=" << last_source_pose->reset_counter << "->" << sampled_pose->reset_counter
+                      << " pose_dt_ms=" << double(static_cast<int64_t>(sampled_pose->timestamp_ns) -
+                                                   static_cast<int64_t>(last_source_pose->timestamp_ns)) / 1e6
+                      << " integrated_frames=" << map.integrated_frames() << "\n";
             if (cfg.mode == "scan") {
+              if (map.integrated_frames() == 0) {
+                // Startup can attach to an old or initializing pose before any
+                // usable depth arrives. No world points exist to preserve yet.
+                T_map_tracking_origin.reset();
+                last_quality_pose.reset();
+                last_depth_ns = 0;
+                last_source_pose = *sampled_pose;
+                std::cerr << "[xr_spatial_backend] restarting empty scan reference after pose-source discontinuity\n";
+                continue;
+              }
               stop_reason = source_reset ? "pose_source_reset" : "pose_source_jump";
               std::cerr << "[xr_spatial_backend] ending incomplete scan: " << stop_reason
                         << "; preserving the map before the coordinate discontinuity\n";
@@ -1198,6 +1263,7 @@ int main(int argc, char** argv) {
                                 stale_pose, pose_reinit_suspected, pose_action);
         }
 
+        if (stale_pose) temporal_filter.reset();
         if (stale_pose && cfg.drop_stale_pose) {
           map.drop_frame();
           std::cerr << "[xr_spatial_backend] WARN: stale pose age_ms=" << pose_age_ms
@@ -1223,6 +1289,21 @@ int main(int argc, char** argv) {
           continue;
         }
         const size_t raw_points = depth.cloud.points.size();
+        const xr_spatial_backend::Transform3d T_tracking_imu = pose_enabled
+            ? xr_spatial_backend::pose_to_transform(
+                  sampled_pose->px, sampled_pose->py, sampled_pose->pz,
+                  sampled_pose->qw, sampled_pose->qx, sampled_pose->qy, sampled_pose->qz)
+            : xr_spatial_backend::Transform3d{};
+        const xr_spatial_backend::Transform3d T_tracking_cam0_raw = pose_enabled
+            ? xr_spatial_backend::compose(T_tracking_imu, calib.T_imu_cam0)
+            : xr_spatial_backend::Transform3d{};
+        const xr_spatial_backend::Transform3d T_tracking_cam0_rect = pose_enabled
+            ? xr_spatial_backend::compose(T_tracking_cam0_raw, calib.T_cam0_raw_cam0_rect)
+            : xr_spatial_backend::Transform3d{};
+        xr_spatial_backend::TemporalDepthFilterStats temporal_frame_stats;
+        if (pose_enabled && !stale_pose) {
+          temporal_frame_stats = temporal_filter.apply(depth, T_tracking_cam0_rect, pair.timestamp_ns);
+        }
         xr_spatial_backend::PointCloudFilterStats filter_stats;
         depth.cloud = xr_spatial_backend::filter_pointcloud(depth.cloud, cfg.point_filter, &filter_stats);
         const size_t filtered_points = depth.cloud.points.size();
@@ -1280,19 +1361,6 @@ int main(int argc, char** argv) {
           if (sampled_pose) last_quality_pose = *sampled_pose;
           continue;
         }
-
-        const xr_spatial_backend::Transform3d T_tracking_imu = pose_enabled
-            ? xr_spatial_backend::pose_to_transform(
-                  sampled_pose->px, sampled_pose->py, sampled_pose->pz,
-                  sampled_pose->qw, sampled_pose->qx, sampled_pose->qy, sampled_pose->qz)
-            : xr_spatial_backend::Transform3d{};
-        const xr_spatial_backend::Transform3d T_tracking_cam0_raw = pose_enabled
-            ? xr_spatial_backend::compose(T_tracking_imu, calib.T_imu_cam0)
-            : xr_spatial_backend::Transform3d{};
-        const xr_spatial_backend::Transform3d T_tracking_cam0_rect = pose_enabled
-            ? xr_spatial_backend::compose(T_tracking_cam0_raw, calib.T_cam0_raw_cam0_rect)
-            : xr_spatial_backend::Transform3d{};
-
 
         xr_spatial_backend::Transform3d T_map_cloud;
         xr_spatial_backend::Vec3f hmd_position{};
@@ -1393,6 +1461,8 @@ int main(int argc, char** argv) {
                     << " grid_valid=" << depth.live_grid_valid_points
                     << " proxy_vertices=" << last_proxy_mesh_vertices
                     << " proxy_triangles=" << last_proxy_mesh_triangles
+                    << " temporal_reject=" << temporal_frame_stats.rejected_points
+                    << " temporal_smooth=" << temporal_frame_stats.smoothed_points
                     << " filter_in=" << filter_stats.input_points
                     << " roi_reject=" << depth.rejected_roi_pixels
                     << " far_fraction=" << far_fraction
@@ -1415,7 +1485,7 @@ int main(int argc, char** argv) {
     const int64_t end_ns = now_ns();
     if (cfg.mode == "scan") {
       if (processing_failed) scan_complete = false;
-      if (map.integrated_frames() == 0 && !processing_failed) {
+      if (map.integrated_frames() == 0 && scan_complete && !processing_failed) {
         stop_reason = "no_frames_integrated";
         scan_complete = false;
       } else if (scan_complete && cfg.capture_transport == "shm" &&
@@ -1473,7 +1543,7 @@ int main(int argc, char** argv) {
       if (cfg.save_metadata_json) {
         save_artifact([&] {
           save_metadata(scan_dir / "scan_metadata.json", cfg, calib, map, start_ns, end_ns,
-                        stop_reason, scan_complete, capture_reattachments, frame_errors);
+                        stop_reason, scan_complete, capture_reattachments, frame_errors, temporal_filter.stats());
         });
       }
       std::cout << "[xr_spatial_backend] scan output=" << scan_dir

@@ -75,6 +75,53 @@ consume a local `hmd_pose`, while `SPATIAL_POSE_INPUT=none` keeps output in
 camera coordinates. Automatic TCP profile probing remains disabled unless
 `CAPTURE_PROFILE_PROBE_ENABLED=1` is explicitly set.
 
+## Temporal depth filter
+
+Motion-compensated temporal filtering is **enabled by default** for tracked
+stereo depth, both saved point clouds and the live organized depth grid. Before
+per-frame voxel filtering, previous **raw** grids are reprojected into the current
+rectified camera using the existing calibration and timestamp-matched HMD pose.
+A point needs agreement in two of the current and two previous depth frames.
+Only agreeing depths are smoothed; missing current pixels are never filled with
+old geometry. Disparity/debug images remain the raw SGBM output.
+
+Disable it for any launcher, including the scanner:
+
+```bash
+XR_SPATIAL_TEMPORAL_FILTER_ENABLED=0 bash bin/backends/xr_spatial/scripts/linux/start_xr_spatial_scan.sh
+# Or append --no-temporal-depth-filter to any launcher/backend command.
+```
+
+The CLI accepts `--temporal-depth-filter` to enable it explicitly; the last flag
+wins over the launcher's environment-derived flag. Default settings:
+
+| Environment | Backend option | Default |
+| --- | --- | --- |
+| `XR_SPATIAL_TEMPORAL_FILTER_ENABLED` | `--temporal-depth-filter` / `--no-temporal-depth-filter` | `1` |
+| `XR_SPATIAL_TEMPORAL_HISTORY_FRAMES` | `--temporal-history-frames` | `2` (range 1–8) |
+| `XR_SPATIAL_TEMPORAL_MIN_FRAMES` | `--temporal-min-consistent-frames` | `2` (includes current frame) |
+| `XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M` | `--temporal-depth-tolerance-m` | `0.04` m |
+| `XR_SPATIAL_TEMPORAL_REL_TOLERANCE` | `--temporal-depth-relative-tolerance` | `0.03` |
+| `XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT` | `--temporal-current-weight` | `0.6` |
+| `XR_SPATIAL_TEMPORAL_MAX_AGE_MS` | `--temporal-max-age-ms` | `500` |
+
+Agreement uses `max(absolute tolerance, relative tolerance * current depth)`.
+Smoothing keeps the current camera ray and blends current depth with the mean
+of matching historical depths. With defaults, a newly visible surface needs one
+additional depth frame (about 100 ms at 10 Hz). This also delays moving foreground
+surfaces; it is intended to reject transient stereo outliers, not track objects.
+
+History clears after pose-source discontinuities, camera/pose SHM reattachment,
+nonmonotonic depth timestamps, grid changes, or expiration. Without tracked pose
+(`SPATIAL_POSE_INPUT=none`), the filter is bypassed and logged because camera
+motion cannot be compensated safely. Stale poses also reset/bypass the filter
+when `--no-drop-stale-pose` allows a frame through. At low depth rates, increase
+`XR_SPATIAL_TEMPORAL_MAX_AGE_MS` to cover the confirmation interval.
+
+Scan metadata contains a `temporal_depth_filter` object with settings and totals
+for processed/rejected/smoothed points and history resets. Existing calibration
+files and coordinate conventions are unchanged.
+
 ## Scanner recovery and output
 
 The launchers use the tracking sensor's `BASALT_CALIB` as the default calibration.
@@ -91,12 +138,21 @@ With tracked pose input, camera timestamps are shifted by the calibration's
 `t_imu = t_camera + offset`. Source image timestamps remain unchanged. A frame
 is consumed only once even when `DEPTH_RATE_HZ=0` disables rate limiting.
 
-A scan stops before integrating a changed pose `reset_counter`, a restarted
+A scan with accumulated points stops before integrating a changed pose `reset_counter`, a restarted
 pose sequence, or a large pose-source jump. The accumulated part is saved in
 the selected output directory; worlds from different tracking epochs are not
 merged. The jump thresholds are `QUALITY_REINIT_DELTA_M/DEG` and apply even
 when the optional depth quality gate is disabled. Runtime mode clears its map
 and tracking origin on the same discontinuities and keeps running.
+
+Before the first integrated depth frame, a pose discontinuity resets the empty
+scan's pose reference and scanning continues. This allows attachment during
+tracking initialization without mixing points from different tracking epochs.
+The log reports translation/rotation deltas, pose sequences, reset counters and
+the pose time interval. Once points have been integrated, discontinuities still
+stop and save an incomplete scan. Finalization preserves the actual stop reason;
+`no_frames_integrated` is used only when the requested duration elapsed without
+any integrated frames.
 
 Stalled camera SHM streams are reopened using the current capture registry.
 `CAPTURE_REATTACH_ON_STALE_MS=500` controls the timeout; `0` disables reopening.

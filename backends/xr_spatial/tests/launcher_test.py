@@ -65,6 +65,34 @@ def main():
                 assert argv[-2:] == ["--print-every", "7"], argv
                 if launcher == "start_xr_spatial_tcp.sh":
                     assert argv[argv.index("--capture-transport") + 1] == "capture_tcp", argv
+            # Temporal filtering defaults on, can be disabled through environment,
+            # and explicit CLI flags/options remain last for CLI11 TakeLast.
+            for enabled, flag in [("", "--temporal-depth-filter"), ("0", "--no-temporal-depth-filter")]:
+                argv = run(launcher, ["--calib", str(calibration)],
+                           {"XR_SPATIAL_TEMPORAL_FILTER_ENABLED": enabled})
+                assert flag in argv, argv
+                for option, expected in [("--temporal-history-frames", "2"),
+                                         ("--temporal-min-consistent-frames", "2"),
+                                         ("--temporal-depth-tolerance-m", "0.04"),
+                                         ("--temporal-depth-relative-tolerance", "0.03"),
+                                         ("--temporal-current-weight", "0.6"),
+                                         ("--temporal-max-age-ms", "500")]:
+                    assert argv[argv.index(option) + 1] == expected, argv
+            argv = run(launcher, ["--calib", str(calibration), "--no-temporal-depth-filter"],
+                       {"XR_SPATIAL_TEMPORAL_HISTORY_FRAMES": "3",
+                        "XR_SPATIAL_TEMPORAL_MIN_FRAMES": "3",
+                        "XR_SPATIAL_TEMPORAL_ABS_TOLERANCE_M": "0.02",
+                        "XR_SPATIAL_TEMPORAL_REL_TOLERANCE": "0.01",
+                        "XR_SPATIAL_TEMPORAL_CURRENT_WEIGHT": "0.8",
+                        "XR_SPATIAL_TEMPORAL_MAX_AGE_MS": "750"})
+            assert argv[-1] == "--no-temporal-depth-filter" and "--temporal-depth-filter" in argv, argv
+            for option, expected in [("--temporal-history-frames", "3"),
+                                     ("--temporal-min-consistent-frames", "3"),
+                                     ("--temporal-depth-tolerance-m", "0.02"),
+                                     ("--temporal-depth-relative-tolerance", "0.01"),
+                                     ("--temporal-current-weight", "0.8"),
+                                     ("--temporal-max-age-ms", "750")]:
+                assert argv[argv.index(option) + 1] == expected, argv
             for options in [["--calib"], ["--calib="], ["--calib", "--num-threads", "1"],
                             ["--calib", str(calibration), "--num-threads"],
                             ["--calib", str(calibration), "--num-threads=-1"],
@@ -84,7 +112,7 @@ def main():
                        {"XR_SPATIAL_CONFIG": ""})
             check_options(argv, str(calibration), "2")
             assert "--capture-profile" not in argv, argv
-            print(f"{launcher}: calibration and thread overrides passed", flush=True)
+            print(f"{launcher}: calibration, thread and temporal filter overrides passed", flush=True)
 
 
 if __name__ == "__main__":

@@ -86,7 +86,18 @@ class PosixRuntimeControllerStateReader final : public IRuntimeControllerStateRe
 
  private:
   bool ensure_mapping(std::string* error) {
-    if (data_ != nullptr) return true;
+    if (data_ != nullptr) {
+      // Runtime publishers unlink/recreate SHM on restart. mmap keeps the old
+      // object alive, so reading it can succeed forever with a frozen sample.
+      // Check the open descriptor before touching its mapping (also handles a
+      // resized/truncated segment without accessing pages beyond the file).
+      struct stat current {};
+      if (fstat(fd_, &current) == 0 && current.st_nlink != 0 &&
+          current.st_size > 0 && static_cast<size_t>(current.st_size) == mapped_size_) {
+        return true;
+      }
+      close_mapping();
+    }
 
     fd_ = shm_open(shm_name_.c_str(), O_RDONLY, 0);
     if (fd_ < 0) {

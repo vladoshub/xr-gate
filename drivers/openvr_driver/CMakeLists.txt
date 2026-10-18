@@ -167,4 +167,16 @@ if(XR_OPENVR_BUILD_TESTS)
   add_test(NAME openvr_app_tcp COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_tcp_test.py"
            --probe "$<TARGET_FILE:openvr_app_tcp_probe>")
   set_tests_properties(openvr_app_tcp PROPERTIES TIMEOUT 45)
+  if(UNIX AND NOT APPLE)
+    add_executable(openvr_posix_shm_test tests/posix_shm_test.cpp
+      src/runtime_pose_reader.cpp src/runtime_hand_reader.cpp src/runtime_controller_state_reader.cpp
+      src/platform/posix_runtime_pose_reader.cpp src/platform/posix_runtime_hand_reader.cpp
+      src/platform/posix_runtime_controller_state_reader.cpp)
+    target_compile_features(openvr_posix_shm_test PRIVATE cxx_std_17)
+    target_include_directories(openvr_posix_shm_test PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src" "${XR_TRACKING_ROOT}/shared/include")
+    target_link_libraries(openvr_posix_shm_test PRIVATE Threads::Threads rt)
+    add_test(NAME openvr_posix_shm COMMAND openvr_posix_shm_test)
+    set_tests_properties(openvr_posix_shm PROPERTIES TIMEOUT 15)
+  endif()
 endif()
