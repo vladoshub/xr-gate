@@ -153,15 +153,46 @@ cd ~/xr-gate-release/xr-gate
 ## 2. Optional: train override controller input (once)
 
 
-Without this, input will be limited to gestures (pinch, grab).
+**1. Without this, input will be limited to gestures (pinch, grab).**
 
-Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime controller input.
+**2. Bluetooth controllers, USB keyboards, and joysticks can be mapped to runtime controller input.**
 
-**If you have built-in Bluetooth, I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500.**
+**3. You can use 2 identical Bluetooth controllers.**
 
-You can use 2 identical Bluetooth controllers.
+**4. I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500. This can help reduce lag and connection loss if you have built-in Bluetooth.**
 
-Train your devices:
+
+### Switch to external Bluetooth
+Without external Bluetooth
+
+```bash
+bluetoothctl list
+```
+
+Remember the MAC address of the built-in adapter. Then connect the USB and repeat the command—the MAC address that appears is its own.
+
+```bash
+bluetoothctl
+```
+
+Inside, execute the following, substituting the actual MAC addresses:
+
+```bash
+select AA:AA:AA:AA:AA:AA
+power off
+
+select BB:BB:BB:BB:BB:BB
+power on
+show
+quit
+```
+
+Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output for USB should show "Powered: yes." The select and power commands select the adapter and
+
+
+
+Train your devices.
+Choose this option if you don't have any controllers from the list below or you want to use your own layout (for example, use the keyboard for control)
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -170,11 +201,23 @@ devices/common/linux/scripts/override_controller/start_override_controller.sh
 
 The config will be saved in ~/.config/xr_tracking/override_controller/default.json
 
+If you want to retrain, you can delete default.json for new train
+
+If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
+
+When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
 
 
-## VR-PARK controllers:
 
-**Perhaps this setting will work with other similar joysticks (4 unique action buttons + a simple stick for mouse movement)**
+**If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
+
+
+
+## SUPPORTED BLUETOOTH CONTROLLERS
+
+### VR-PARK controllers (NO IMU):
+
+**Perhaps this setting will work with other similar bluetooth joysticks (4 unique action buttons + a simple stick for mouse movement)**
 
 
 1. Copy config:
@@ -218,7 +261,7 @@ CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.j
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
 
-## Samsung Gear VR controllers (controllers with IMU):
+### Samsung Gear VR controllers (IMU):
 
 1. Copy config:
 
@@ -231,33 +274,6 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.j
 
 
 2. Connect controllers to PC
-
-
-Without external USB
-
-```bash
-bluetoothctl list
-```
-
-Remember the MAC address of the built-in adapter. Then connect the USB and repeat the command—the MAC address that appears is its own.
-
-```bash
-bluetoothctl
-```
-
-Inside, execute the following, substituting the actual MAC addresses:
-
-```bash
-select AA:AA:AA:AA:AA:AA
-power off
-
-select BB:BB:BB:BB:BB:BB
-power on
-show
-quit
-```
-
-Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output for USB should show "Powered: yes." The select and power commands select the adapter and 
 
 
 ## Pair controllers
@@ -318,19 +334,6 @@ sed -i \
   -e 's|"PROVIDERS": "evdev"|"PROVIDERS": "evdev,gearvr_ble"|' \
   ~/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json
 ```
-
-
-If you want to retrain, you can delete default.json for new train
-
-If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
-
-When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
-
-
-
-**If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
-
-
 
 
 ## 3. Run xr_client
@@ -485,7 +488,8 @@ bluetoothctl power on
 
 
 
-Run xr_client
+### Run xr_client
+
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra

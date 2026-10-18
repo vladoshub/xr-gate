@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "xr-gate"
-IMAGE = "xr-gate-runtime:v2.6.0"
+IMAGE = "xr-gate-runtime:v2.7.0"
 
 
 def read_env(path):
@@ -40,9 +40,11 @@ def read_env(path):
 
 
 def settings():
-    values = read_env(ROOT / ".env")
+    # Device-specific defaults belong to the shipped environment profile.
+    values = read_env(ROOT / ".env.example")
+    values.update(read_env(ROOT / ".env"))
     values.update(os.environ)
-    for key in ("XR_BLUETOOTH", "XR_VIDEO_TCP"):
+    for key in ("XR_BLUETOOTH", "XR_VIDEO_TCP", "XR_REQUIRE_CAMERA", "XR_REQUIRE_HIDRAW"):
         if values.get(key, "0") not in ("0", "1"):
             raise ValueError(f"{key} must be 0 or 1")
     for key, default in (("XR_TCP_PORT", "45810"), ("XR_VIDEO_PORT", "45700")):
@@ -90,9 +92,9 @@ def usb_identity(path):
 
 
 def selected_ids(env):
-    values = {x.strip().lower() for x in env.get("XR_USB_IDS", "3318:0426").split(",") if x.strip()}
-    if not values or any(not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", x) for x in values):
-        raise ValueError("XR_USB_IDS must contain VID:PID pairs, for example 3318:0426")
+    values = {x.strip().lower() for x in env.get("XR_USB_IDS", "").split(",") if x.strip()}
+    if any(not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", x) for x in values):
+        raise ValueError("XR_USB_IDS must contain comma-separated four-digit VID:PID pairs")
     return values
 
 
@@ -103,14 +105,22 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
                                int(re.search(r"\d+$", p.name).group())))
     requested = env.get("XR_CAMERA_DEVICE", "")
     if requested:
+        if not identities:
+            # An explicit camera is sufficient without a vendor selector. Do
+            # not discover unrelated cameras or USB/HID nodes in this mode.
+            videos = [p for p in (sysroot / "class/video4linux").glob("video*")
+                      if str(devroot / p.name) == requested]
         videos = [p for p in videos if str(devroot / p.name) == requested] + [p for p in videos if str(devroot / p.name) != requested]
         if not videos or str(devroot / videos[0].name) != requested:
-            raise RuntimeError(f"XR_CAMERA_DEVICE does not belong to XR_USB_IDS: {requested}")
+            raise RuntimeError(f"XR_CAMERA_DEVICE not found or does not belong to XR_USB_IDS: {requested}")
     devices = []
     for index, path in enumerate(videos):
         devices.append((str(devroot / path.name), f"/dev/video{index}"))
     for path in sorted((sysroot / "class/hidraw").glob("hidraw*")):
         if usb_identity(path) in identities:
+            devices.append((str(devroot / path.name), f"/dev/{path.name}"))
+    for path in sorted((sysroot / "class/tty").glob("tty*")):
+        if re.fullmatch(r"tty(?:ACM|USB)\d+", path.name) and usb_identity(path) in identities:
             devices.append((str(devroot / path.name), f"/dev/{path.name}"))
     for path in sorted((sysroot / "bus/usb/devices").glob("*")):
         if usb_identity(path) in identities and (path / "busnum").is_file() and (path / "devnum").is_file():
@@ -120,19 +130,23 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
         if not re.fullmatch(r"/dev/input/event\d+", node):
             raise ValueError(f"Use an explicit /dev/input/eventN in XR_INPUT_DEVICES: {node}")
         devices.append((node, node))
+    for node in filter(None, (p.strip() for p in env.get("XR_SERIAL_DEVICES", "").split(","))):
+        if not re.fullmatch(r"/dev/(?:tty(?:ACM|USB)\d+|serial/by-id/[^/:]+)", node) or Path(node).name in (".", ".."):
+            raise ValueError(f"Use /dev/ttyACMN, /dev/ttyUSBN or /dev/serial/by-id/<id> in XR_SERIAL_DEVICES: {node}")
+        devices.append((node, node))
     return list(dict.fromkeys(devices))
 
 
 def hardware_override(env):
     devices = discover(env)
-    if not any(target == "/dev/video0" for _, target in devices):
-        raise RuntimeError("No XREAL UVC camera found. Attach USB to this host/WSL and run ./xr-gate doctor")
-    if not any("/hidraw" in target for _, target in devices):
-        raise RuntimeError("No XREAL hidraw node found. Check hidraw/USB passthrough with ./xr-gate doctor")
+    if env.get("XR_REQUIRE_CAMERA", "1") == "1" and not any(target == "/dev/video0" for _, target in devices):
+        raise RuntimeError("No selected UVC camera found. Set XR_USB_IDS or XR_CAMERA_DEVICE, or XR_REQUIRE_CAMERA=0 for camera-free profiles")
+    if env.get("XR_REQUIRE_HIDRAW", "0") == "1" and not any("/hidraw" in target for _, target in devices):
+        raise RuntimeError("No selected hidraw node found. Check XR_USB_IDS and USB passthrough, or set XR_REQUIRE_HIDRAW=0")
     for source, _ in devices:
         if not Path(source).exists() or not stat.S_ISCHR(Path(source).stat().st_mode):
             raise RuntimeError(f"Device missing or not a character device: {source}")
-    service = {"devices": [f"{source}:{target}:rw" for source, target in devices]}
+    service = {"devices": [f"{source}:{target}:rw" for source, target in devices]} if devices else {}
     volumes = []
     if Path("/run/udev").is_dir():
         volumes.append({"type": "bind", "source": "/run/udev", "target": "/run/udev", "read_only": True})

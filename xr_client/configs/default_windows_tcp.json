@@ -2,6 +2,12 @@
   "title": "Windows native capture/display/OpenVR + WSL2 backends profile (out/xreal_ultra_windows)",
   "device_env": "{root}/devices/xreal_ultra/xreal_ultra.windows.env",
   "device_env_required": false,
+  "windows_launcher": {
+    "device": "xreal_ultra",
+    "out_dir": "out/xreal_ultra_windows",
+    "env_script": "{device_scripts}/xreal_ultra_out_env.ps1",
+    "network_loader": "{device_scripts}/load_windows_wsl2_network_env.ps1"
+  },
   "log_dir": "{temp}/xr_backend_client_logs",
   "clean_registries": false,
   "registries_to_clean": [],

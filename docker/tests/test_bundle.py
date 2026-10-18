@@ -52,18 +52,69 @@ class BundleTest(unittest.TestCase):
                 link = sysroot / "class" / category / name
                 link.parent.mkdir(parents=True, exist_ok=True)
                 link.symlink_to(actual)
-            mapped = xr_gate.discover({}, sysroot, devroot)
+            mapped = xr_gate.discover({"XR_USB_IDS": "3318:0426"}, sysroot, devroot)
             self.assertIn((str(devroot / "video8"), "/dev/video0"), mapped)
             self.assertIn((str(devroot / "hidraw3"), "/dev/hidraw3"), mapped)
             self.assertIn((str(devroot / "bus/usb/001/007"), str(devroot / "bus/usb/001/007")), mapped)
             self.assertFalse(any("/008" in source or source == str(devroot / "video0") for source, _ in mapped))
-            selected = xr_gate.discover({"XR_CAMERA_DEVICE": str(devroot / "video9")}, sysroot, devroot)
+            selected = xr_gate.discover({"XR_USB_IDS": "3318:0426", "XR_CAMERA_DEVICE": str(devroot / "video9")}, sysroot, devroot)
             self.assertEqual(selected[0], (str(devroot / "video9"), "/dev/video0"))
+            explicit = xr_gate.discover({"XR_CAMERA_DEVICE": str(devroot / "video0")}, sysroot, devroot)
+            self.assertEqual(explicit, [(str(devroot / "video0"), "/dev/video0")])
+            self.assertEqual(xr_gate.discover({}, sysroot, devroot), [])
 
     def test_absent_usb_is_an_error_before_container_creation(self):
         with patch.object(xr_gate, "discover", return_value=[]):
-            with self.assertRaisesRegex(RuntimeError, "No XREAL UVC"):
+            with self.assertRaisesRegex(RuntimeError, "No selected UVC"):
                 xr_gate.hardware_override({})
+
+    def test_camera_only_and_serial_imu_profiles_do_not_require_hidraw(self):
+        devices = [("/dev/null", "/dev/video0"), ("/dev/zero", "/dev/ttyACM0")]
+        with patch.object(xr_gate, "discover", return_value=devices):
+            runtime = xr_gate.hardware_override({})["services"]["runtime"]
+            self.assertEqual(runtime["devices"], ["/dev/null:/dev/video0:rw", "/dev/zero:/dev/ttyACM0:rw"])
+            with self.assertRaisesRegex(RuntimeError, "No selected hidraw"):
+                xr_gate.hardware_override({"XR_REQUIRE_HIDRAW": "1"})
+
+    def test_remote_profile_can_run_without_local_usb_devices(self):
+        with patch.object(xr_gate, "discover", return_value=[]):
+            runtime = xr_gate.hardware_override({"XR_REQUIRE_CAMERA": "0"})["services"]["runtime"]
+            self.assertNotIn("devices", runtime)
+
+    def test_serial_discovery_follows_selected_usb_identity_and_explicit_nodes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sysroot, devroot = Path(folder) / "sys", Path(folder) / "dev"
+            for name, vendor in (("ttyACM0", "1234"), ("ttyUSB1", "5678")):
+                usb = sysroot / "devices" / name
+                usb.mkdir(parents=True)
+                (usb / "idVendor").write_text(vendor)
+                (usb / "idProduct").write_text("abcd")
+                actual = usb / "tty" / name
+                actual.mkdir(parents=True)
+                link = sysroot / "class/tty" / name
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(actual)
+            mapped = xr_gate.discover({"XR_USB_IDS": "1234:abcd", "XR_SERIAL_DEVICES": "/dev/serial/by-id/custom-imu"}, sysroot, devroot)
+            self.assertEqual(mapped, [(str(devroot / "ttyACM0"), "/dev/ttyACM0"),
+                                      ("/dev/serial/by-id/custom-imu", "/dev/serial/by-id/custom-imu")])
+            for invalid in ("/dev", "/dev/serial/by-id/..", "/dev/serial/by-id/a/b", "/etc/passwd"):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    xr_gate.discover({"XR_SERIAL_DEVICES": invalid}, sysroot, devroot)
+
+    def test_device_defaults_are_loaded_from_the_environment_profile(self):
+        with patch.dict(os.environ, {}, clear=True):
+            env = xr_gate.settings()
+        self.assertEqual(xr_gate.selected_ids(env), {"3318:0426"})
+        self.assertEqual(xr_gate.selected_ids({}), set())
+        with patch.dict(os.environ, {"XR_USB_IDS": "1234:abcd", "XR_REQUIRE_HIDRAW": "0"}, clear=True):
+            self.assertEqual(xr_gate.selected_ids(xr_gate.settings()), {"1234:abcd"})
+        with patch.dict(os.environ, {"XR_REQUIRE_CAMERA": "yes"}, clear=True), self.assertRaises(ValueError):
+            xr_gate.settings()
+
+    def test_explicit_serial_nodes_still_have_to_be_character_devices(self):
+        with patch.object(xr_gate, "discover", return_value=[("/etc/hosts", "/dev/ttyACM0")]):
+            with self.assertRaisesRegex(RuntimeError, "not a character device"):
+                xr_gate.hardware_override({"XR_REQUIRE_CAMERA": "0"})
 
     def test_evdev_requires_explicit_event_nodes(self):
         with self.assertRaises(ValueError):

@@ -41,6 +41,7 @@ try:
         resolve_config_argument,
     )
     from .manual_controls import ManualControlPoller
+    from .startup_rules import load_startup_rules
     from .process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
     from .tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent, _load_capture_client
 except ImportError:
@@ -57,6 +58,7 @@ except ImportError:
         resolve_config_argument,
     )
     from manual_controls import ManualControlPoller
+    from startup_rules import load_startup_rules
     from process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
     from tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent, _load_capture_client
 
@@ -149,6 +151,9 @@ class Launcher:
     def __init__(self, cfg: ClientConfig, *, dry_run: bool = False) -> None:
         self.cfg = cfg
         self.dry_run = dry_run
+        self.startup_rules = getattr(cfg, "service_startup_rules", None)
+        if self.startup_rules is None:
+            self.startup_rules = load_startup_rules()
         self.log_dir = Path(cfg.log_dir)
         self.running: List[RunningProcess] = []
         self.stop_requested = False
@@ -237,7 +242,7 @@ class Launcher:
             valid = ", ".join(option.choice for option in spec.options)
             print(f"Invalid choice. Use one of: {valid}.", flush=True)
 
-    def wait_prestart_readiness(self, name: str, log_path: Path, patterns: Sequence[str], timeout_s: float, min_alive_s: float, status_interval_s: float) -> None:
+    def wait_prestart_readiness(self, name: str, log_path: Path, patterns: Sequence[str], timeout_s: float, min_alive_s: float, status_interval_s: float, *, startup_rule: Optional[str] = None) -> None:
         if not patterns and min_alive_s <= 0.0:
             return
         log(f"Waiting for {name} readiness in {log_path}")
@@ -245,17 +250,18 @@ class Launcher:
         start = time.monotonic()
         last_status = start
         offset = 0
-        require_mode_confirmation = name == "xreal_display_helper" and bool(patterns)
-        readback = re.compile(r"(?:display mode after:\s*|alive;\s*mode=)(\d+)\b")
-        expected_modes = {int(match.group(1)) for pattern in patterns
-                          for match in [readback.search(pattern)] if match is not None}
+        rule = self.startup_rules.get(name, startup_rule)
+        readback = rule.confirmation_regex if rule.enabled and patterns else None
+        require_confirmation = readback is not None
+        expected_values = set()
+        if readback is not None and rule.match_expected_value:
+            expected_values = {match.group(1) for pattern in patterns
+                               for match in [readback.search(pattern)] if match is not None}
 
         def ready_line(line: str) -> bool:
-            # Profiles also contain mode-name substrings, which appear in the
-            # "before" and "setting" messages. Only a readback is confirmation.
-            if require_mode_confirmation:
+            if readback is not None:
                 match = readback.search(line)
-                if match is None or (expected_modes and int(match.group(1)) not in expected_modes):
+                if match is None or (expected_values and match.group(1) not in expected_values):
                     return False
             return any(pattern in line for pattern in patterns)
 
@@ -280,7 +286,7 @@ class Launcher:
                     log(f"OK: {name} ready")
                     return
             elapsed = time.monotonic() - start
-            if not require_mode_confirmation and min_alive_s > 0.0 and elapsed >= min_alive_s:
+            if not require_confirmation and min_alive_s > 0.0 and elapsed >= min_alive_s:
                 log(f"OK: {name} is still running after {elapsed:.1f}s; continuing without log readiness confirmation")
                 return
             now = time.monotonic()
@@ -306,12 +312,11 @@ class Launcher:
         if option.command:
             service_name = option.service_name or option.id
             command = list(option.command)
-            if sys.platform.startswith("linux") and service_name == "xreal_display_helper":
-                # The shipped C++ helper writes '\n' to stdout redirected to a
-                # file. GNU stdbuf also applies through the shell wrapper's exec.
+            rule = self.startup_rules.get(service_name, option.startup_rule)
+            if sys.platform.startswith("linux") and rule.enabled and rule.line_buffered_output:
                 stdbuf = shutil.which("stdbuf")
                 if stdbuf is None:
-                    self.fail("XREAL readiness needs line-buffered helper output; install coreutils (stdbuf)")
+                    self.fail(f"{service_name} readiness needs line-buffered helper output; install coreutils (stdbuf)")
                 command = [stdbuf, "-oL", "-eL", *command]
             service = ServiceSpec(
                 name=service_name,
@@ -334,6 +339,7 @@ class Launcher:
                     option.wait_timeout_s,
                     option.readiness_min_alive_s,
                     option.readiness_status_interval_s,
+                    startup_rule=option.startup_rule,
                     )
         if spec.pre_capture_wait_s > 0.0:
             log(f"Waiting {spec.pre_capture_wait_s:.1f}s before starting capture_service")

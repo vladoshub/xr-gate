@@ -191,6 +191,8 @@ $PackageRunClient = Join-Path $OutRoot "run_xr_client.ps1"
 @'
 param(
   [string]$Config = "",
+  [string]$Device = "",
+  [string]$OutRoot = "",
   [switch]$DryRun,
   [switch]$NoStartupGate
 )
@@ -208,6 +210,8 @@ $argsList = @(
 if (-not [string]::IsNullOrWhiteSpace($Config)) {
   $argsList += @("-Config", $Config)
 }
+if (-not [string]::IsNullOrWhiteSpace($Device)) { $argsList += @("-Device", $Device) }
+if (-not [string]::IsNullOrWhiteSpace($OutRoot)) { $argsList += @("-OutRoot", $OutRoot) }
 if ($DryRun) { $argsList += "-DryRun" }
 if ($NoStartupGate) { $argsList += "-NoStartupGate" }
 

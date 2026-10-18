@@ -102,6 +102,10 @@ cp exported-configs/xr_client/xreal_ultra.json config/xr_client.json
 
 Первый UVC capture node устройства (sysfs index 0) отображается в `/dev/video0` контейнера: штатный capture-конфиг продолжает работать, даже если на хосте очки оказались `/dev/video8`. Можно выбрать конкретную камеру через `XR_CAMERA_DEVICE=/dev/video8`. Она должна относиться к указанному VID:PID. Результат отображения виден в `doctor`.
 
+USB-параметры берутся из `.env.example`, затем переопределяются `.env` и окружением. Для другого оборудования укажи его VID:PID в `XR_USB_IDS` через запятую и выбери соответствующий runtime-профиль/конфиг. Для выбранных USB-устройств также передаются serial-узлы `ttyACM*`/`ttyUSB*`. Отдельную IMU можно добавить через `XR_SERIAL_DEVICES=/dev/serial/by-id/<id>` либо `/dev/ttyACM0,/dev/ttyUSB0`, даже если её VID:PID отличается от камеры.
+
+`XR_REQUIRE_CAMERA=1` требует локальную камеру. HID по умолчанию необязателен; для профиля с HID задай `XR_REQUIRE_HIDRAW=1`. Для удалённого/TCP-профиля очисти `XR_USB_IDS`, задай `XR_REQUIRE_CAMERA=0` и оставь остальные selectors локальных устройств пустыми. `XR_CAMERA_DEVICE=/dev/videoN` при пустом `XR_USB_IDS` выбирает только эту камеру без автоматического проброса других камер/HID/USB. Все передаваемые узлы проверяются на существование и тип character device. Пути камеры и serial-IMU в runtime-конфиге должны соответствовать mappings контейнера.
+
 После переподключения USB, сна Windows или повторного `usbipd attach` **останови и заново запусти контейнер**. Docker привязывает устройства при создании; скрипт заново определит актуальные номера. `docker restart` не обновляет эти mappings.
 
 ## Bluetooth

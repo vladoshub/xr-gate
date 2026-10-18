@@ -29,6 +29,7 @@ try:
         service_env_name,
     )
     from .tap_controls import ImuTapControlsSpec, parse_imu_tap_controls
+    from .startup_rules import ServiceStartupRules, load_startup_rules
 except ImportError:
     from common import (
         IS_POSIX,
@@ -46,6 +47,7 @@ except ImportError:
         service_env_name,
     )
     from tap_controls import ImuTapControlsSpec, parse_imu_tap_controls
+    from startup_rules import ServiceStartupRules, load_startup_rules
 
 @dataclass(frozen=True)
 class WaitStream:
@@ -128,6 +130,7 @@ class PrestartOptionSpec:
     readiness_min_alive_s: float = 0.0
     readiness_status_interval_s: float = 1.0
     stop_timeout_s: float = 1.0
+    startup_rule: Optional[str] = None
 
 
 @dataclass
@@ -158,6 +161,7 @@ class ClientConfig:
     imu_tap_controls: Optional[ImuTapControlsSpec]
     post_gate_services: List[ServiceSpec]
     foreground_services: List[ServiceSpec]
+    service_startup_rules: ServiceStartupRules = field(default_factory=load_startup_rules)
 
 
 def parse_wait_streams(items: Iterable[Dict[str, Any]], default_timeout_s: float, root_project: str) -> List[WaitStream]:
@@ -283,6 +287,9 @@ def parse_prestart_option(item: Dict[str, Any], root_project: str, index: int) -
     env = {str(k): expand_path(str(v), root_project) for k, v in dict(item.get("env", {})).items()}
     service_name_raw = item.get("service_name")
     service_name = str(service_name_raw) if service_name_raw else None
+    startup_rule = item.get("startup_rule")
+    if startup_rule is not None and (not isinstance(startup_rule, str) or not startup_rule):
+        raise ValueError(f"prestart option {option_id}: startup_rule must be a non-empty service name")
     raw_aliases = item.get("aliases", [])
     if isinstance(raw_aliases, str):
         aliases = [raw_aliases]
@@ -303,6 +310,7 @@ def parse_prestart_option(item: Dict[str, Any], root_project: str, index: int) -
         readiness_min_alive_s=float(item.get("readiness_min_alive_s", 0.0)),
         readiness_status_interval_s=float(item.get("readiness_status_interval_s", 1.0)),
         stop_timeout_s=float(item.get("stop_timeout_s", 1.0)),
+        startup_rule=startup_rule,
     )
 
 
@@ -1271,6 +1279,25 @@ def load_config(path: Optional[str]) -> ClientConfig:
     root_project = _load_config_device_env(data, initial_root_project)
     log_dir = expand_path(str(data.get("log_dir", "/tmp/xr_backend_client_logs")), root_project)
     wait_timeout_s = float(data.get("wait_timeout_s", 30.0))
+    rules_config = data.get("service_startup_rules", {})
+    if not isinstance(rules_config, dict):
+        raise ValueError("service_startup_rules must be an object")
+    rules_enabled = rules_config.get("enabled", True)
+    if not isinstance(rules_enabled, bool):
+        raise ValueError("service_startup_rules.enabled must be a boolean")
+    rules_path = rules_config.get("config")
+    if rules_path is not None:
+        if not isinstance(rules_path, str) or not rules_path:
+            raise ValueError("service_startup_rules.config must be a non-empty path")
+        rules_path = Path(expand_path(rules_path, root_project))
+        if not rules_path.is_absolute():
+            directory = Path(expand_path(path)).resolve().parent if path else Path(__file__).resolve().parent / "configs"
+            rules_path = directory / rules_path
+    startup_rules = load_startup_rules(rules_path, enabled=rules_enabled)
+    prestart = parse_prestart_control(data.get("prestart_control"), root_project)
+    if prestart is not None:
+        for option in prestart.options:
+            startup_rules.get(option.service_name or option.id, option.startup_rule)
 
     return ClientConfig(
         root_project=root_project,
@@ -1280,12 +1307,13 @@ def load_config(path: Optional[str]) -> ClientConfig:
         wait_timeout_s=wait_timeout_s,
         log_max_bytes=int(data.get("log_max_bytes", 1048576)),
         log_trim_interval_s=float(data.get("log_trim_interval_s", 2.0)),
-        prestart_control=parse_prestart_control(data.get("prestart_control"), root_project),
+        prestart_control=prestart,
         pre_gate_services=[parse_service(x, root_project, wait_timeout_s) for x in data.get("pre_gate_services", [])],
         gate=parse_gate(data.get("gate"), root_project),
         imu_tap_controls=parse_imu_tap_controls(data.get("imu_tap_controls"), root_project),
         post_gate_services=[parse_service(x, root_project, wait_timeout_s) for x in data.get("post_gate_services", [])],
         foreground_services=[parse_service(x, root_project, wait_timeout_s) for x in data.get("foreground_services", [])],
+        service_startup_rules=startup_rules,
     )
 
 

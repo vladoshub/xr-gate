@@ -150,7 +150,7 @@ fi
 
 TOOLS_SRC_DIR="$BACKEND_DIR/debug"
 mkdir -p "$INSTALL_BIN_DIR/tools"
-for tool in calibrate_controller_accelerometer.py record_controller_imu.py calibrate_imu_axes.py calibrate_controller_orientation_offset.py calibrate_optical_grip.py apply_optical_grip_calibration.py calibrate_grip.sh watch_controller_input_stream.py; do
+for tool in calibrate_controller_accelerometer.py record_controller_imu.py calibrate_imu_axes.py calibrate_controller_orientation_offset.py calibrate_optical_grip.py apply_optical_grip_calibration.py optical_grip_config.py calibrate_grip.sh watch_controller_input_stream.py; do
   if [[ -f "$TOOLS_SRC_DIR/$tool" ]]; then
     cp -f "$TOOLS_SRC_DIR/$tool" "$INSTALL_BIN_DIR/tools/$tool"
     chmod +x "$INSTALL_BIN_DIR/tools/$tool"

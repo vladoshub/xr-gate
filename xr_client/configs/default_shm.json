@@ -10,6 +10,10 @@
   "wait_timeout_s": 30,
   "log_max_bytes": 1048576,
   "log_trim_interval_s": 2,
+  "service_startup_rules": {
+    "enabled": true,
+    "config": "service_startup_rules.yaml"
+  },
   "prestart_control": {
     "enabled": true,
     "enable_env": "RUN_PRESTART_CONTROL",
@@ -30,6 +34,7 @@
         "label": "60Hz high-refresh SBS/3D",
         "description": "start display helper",
         "service_name": "xreal_display_helper",
+        "startup_rule": "xreal_display_helper",
         "command": [
           "{device_scripts}/xreal_display_helper/start_xreal_helper_60hz.sh"
         ],
@@ -50,6 +55,7 @@
         "label": "90Hz high-refresh SBS/3D",
         "description": "start display helper",
         "service_name": "xreal_display_helper",
+        "startup_rule": "xreal_display_helper",
         "command": [
           "{device_scripts}/xreal_display_helper/start_xreal_helper_90hz.sh"
         ],

@@ -15,6 +15,12 @@ from pathlib import Path
 import stat
 import tempfile
 
+from optical_grip_config import (
+    CANDIDATE_SCHEMA, LEGACY_CANDIDATE_SCHEMA,
+    config_device_snapshot, legacy_basis, normalized_quaternion,
+    MIN_GRAVITY_SAMPLES, MAX_UP_ERROR_DEG, MAX_UP_SPREAD_DEG,
+)
+
 RUNTIME_BINARIES = (
     "bin/override_controller/override_controller",
     "bin/runtime_adapters/xr_runtime_adapter/xr_runtime_adapter",
@@ -42,12 +48,22 @@ def apply(config_path,candidate_path,runtime_root,write=False,replace_existing=F
     raw=config_path.read_bytes()
     config=json.loads(raw)
     candidate=json.loads(candidate_path.read_text())
-    if candidate.get("schema")!="gearvr_optical_grip_trial_v1":
+    if not isinstance(candidate,dict) or not isinstance(config,dict) or not isinstance(config.get("devices"),list):
+        raise ValueError("Expected config/candidate objects with devices lists")
+    schema=candidate.get("schema")
+    if schema not in (CANDIDATE_SCHEMA, LEGACY_CANDIDATE_SCHEMA):
         raise ValueError("Unknown calibration schema")
+    generic=schema==CANDIDATE_SCHEMA
+    guarded=generic or replace_existing
     entries=candidate["devices"]
-    if len({x["device_id"] for x in entries})!=len(entries):
-        raise ValueError("Duplicate device_id in calibration")
-    if replace_existing and (candidate.get("status")!="stable_optical_reference" or
+    if not isinstance(entries,list) or not 1<=len(entries)<=2:
+        raise ValueError("Calibration requires one or two device entries")
+    if any(not isinstance(x,dict) or type(x.get("device_id")) is not int or x["device_id"]<=0 or
+           x.get("side") not in ("left","right") for x in entries):
+        raise ValueError("Invalid calibration device_id/side")
+    if len({x["device_id"] for x in entries})!=len(entries) or len({x["side"] for x in entries})!=len(entries):
+        raise ValueError("Duplicate device_id or side in calibration")
+    if guarded and (candidate.get("status")!="stable_optical_reference" or
             not isinstance(candidate.get("expected_config_sha256"),str) or
             len(candidate["expected_config_sha256"])!=64 or
             any("expected_orientation_offset" not in x for x in entries)):
@@ -64,18 +80,33 @@ def apply(config_path,candidate_path,runtime_root,write=False,replace_existing=F
         if len(found)!=1 or found[0].get("imu_side")!=entry["side"]:
             raise ValueError("Expected unique device_id "+str(entry["device_id"])+" for "+entry["side"])
         d=found[0]
-        transform=d.get("orientation_transform",{})
-        basis=transform.get("basis_rotation",{})
-        if not transform.get("enabled") or any(transform.get(k,False) for k in
-                ("invert_x","invert_y","invert_z")) or any(
-                abs(float(basis.get(k,0))-v)>1e-6 for k,v in
-                (("rx_deg",-90),("ry_deg",0),("rz_deg",0))):
-            raise ValueError("Expected recorded -90 X orientation basis")
-        q=[float(x) for x in entry["quaternion_xyzw"]]
-        norm=math.sqrt(sum(x*x for x in q))
-        if len(q)!=4 or not all(math.isfinite(x) for x in q) or abs(norm-1)>1e-5:
+        snapshot=config_device_snapshot(d)
+        if generic:
+            if ("expected_orientation_transform" not in entry or
+                    snapshot["orientation_transform"]!=entry["expected_orientation_transform"]):
+                raise ValueError("orientation_transform changed since recording; record again")
+            if "expected_fingerprint" not in entry or snapshot["fingerprint"]!=entry["expected_fingerprint"]:
+                raise ValueError("Device fingerprint changed since recording; record again")
+            gravity=entry.get("gravity_validation")
+            if not isinstance(gravity,dict):
+                raise ValueError("Measured gravity validation is required; make a new recording")
+            up=gravity.get("up_vector",[])
+            valid_up=isinstance(up,list) and len(up)==3 and all(
+                isinstance(x,(int,float)) and not isinstance(x,bool) and math.isfinite(x) for x in up)
+            if (type(gravity.get("samples")) is not int or gravity["samples"]<MIN_GRAVITY_SAMPLES or not valid_up or
+                    abs(sum(x*x for x in up)-1)>1e-5):
+                raise ValueError("Invalid measured gravity reference")
+            angle=math.degrees(math.acos(max(-1.,min(1.,up[1]))))
+            spread=gravity.get("spread_p90_deg")
+            if (isinstance(spread,bool) or not isinstance(spread,(int,float)) or not math.isfinite(spread) or
+                    not 0<=spread<=MAX_UP_SPREAD_DEG or angle>MAX_UP_ERROR_DEG):
+                raise ValueError("IMU gravity is inconsistent with runtime +Y up")
+        elif not legacy_basis(snapshot["orientation_transform"]):
+            raise ValueError("Legacy calibration requires its recorded Gear VR basis; make a new recording")
+        value=entry["quaternion_xyzw"]
+        q=normalized_quaternion(value)
+        if abs(math.sqrt(sum(x*x for x in value))-1)>1e-5:
             raise ValueError("Invalid normalized quaternion")
-        q=[x/norm for x in q]
         old=d.get("orientation_offset",{})
         if replace_existing and old!=entry["expected_orientation_offset"]:
             # Exact same calibrated offset is handled idempotently below.
@@ -95,11 +126,11 @@ def apply(config_path,candidate_path,runtime_root,write=False,replace_existing=F
         changes.append(entry["device_id"])
     if not changes:
         return {"status":"already_applied","config":str(config_path)}
-    if replace_existing and hashlib.sha256(raw).hexdigest()!=candidate["expected_config_sha256"]:
+    if guarded and hashlib.sha256(raw).hexdigest()!=candidate["expected_config_sha256"]:
         raise ValueError("Config changed since guided recording; record again")
     if not write:
         return {"status":"ready","device_ids":changes,"config":str(config_path),"write":False}
-    if replace_existing:
+    if guarded:
         require_stopped(runtime_root)
         backup=config_path.with_name(config_path.name+".before-guided-grip-"+
                                     datetime.now().strftime("%Y%m%d_%H%M%S_%f")+".bak")

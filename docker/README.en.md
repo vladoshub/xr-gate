@@ -99,6 +99,22 @@ capture node maps to **/dev/video0 inside the container**, preserving the releas
 profile even if the host uses `/dev/video8`. Set **XR_CAMERA_DEVICE** to select a
 specific capture node of the same USB identity.
 
+USB selectors come from `.env.example`, overridden by `.env` and the shell.
+There is no vendor identity embedded in the orchestration code. For another
+device, set `XR_USB_IDS` to its comma-separated VID:PID pairs and select its
+runtime profile/config. Selected USB devices also expose their `ttyACM*` and
+`ttyUSB*` serial nodes. `XR_SERIAL_DEVICES=/dev/serial/by-id/<id>` (or explicit
+`/dev/ttyACM0,/dev/ttyUSB0`) adds only the named serial devices, including an IMU
+with a USB identity different from the camera.
+
+`XR_REQUIRE_CAMERA=1` checks for a local camera. HID is optional by default;
+set `XR_REQUIRE_HIDRAW=1` for profiles that need it. For a remote/TCP-only
+profile, use `XR_USB_IDS=`, `XR_REQUIRE_CAMERA=0`, and leave other local device
+selectors empty. An explicit `XR_CAMERA_DEVICE=/dev/videoN` can select a camera
+without `XR_USB_IDS`; this mode does not discover other cameras/HID/USB devices.
+Listed nodes must exist and be character devices; the whole `/dev` is never
+mounted. Match capture/IMU paths in the runtime config to the container mapping.
+
 After reconnecting USB, Windows sleep, or `usbipd attach`, **stop and recreate
 the container** with this helper. `docker restart` does not refresh device
 mappings. The kernel/drivers belong to the Linux/WSL host; missing UVC/HID nodes

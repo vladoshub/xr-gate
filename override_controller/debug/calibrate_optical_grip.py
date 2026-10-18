@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Guided two-hand optical grip calibration; Python 3 + NumPy/SciPy.
+"""Guided optical grip calibration for selected IMU controllers; Python 3 + NumPy/SciPy.
 
 Fit O(t) = world_yaw * I(t) * mount, using camera-source-time IMU
 interpolation. Existing provider offsets are removed before fitting a new
 absolute local mount. Runtime/presentation yaw never enters the observations.
 """
 from __future__ import annotations
+
+from optical_grip_config import (
+    RECORDING_SCHEMA, REPORT_SCHEMA, CANDIDATE_SCHEMA,
+    LEGACY_RECORDING_SCHEMA, LEGACY_CANDIDATE_SCHEMA,
+    config_device_snapshot, legacy_basis, MIN_GRAVITY_SAMPLES, MAX_UP_ERROR_DEG, MAX_UP_SPREAD_DEG,
+)
 
 import argparse
 from collections import defaultdict
@@ -53,31 +59,24 @@ def quaternion(text):
     return normalized([float(v) for v in values])
 
 
-def load_devices(config):
+def load_devices(config, sides=("left", "right")):
+    if (not isinstance(sides, (list, tuple)) or not sides or len(set(sides)) != len(sides) or
+            any(side not in ("left", "right") for side in sides)):
+        raise ValueError("Нужно выбрать left, right или обе руки")
+    if not isinstance(config, dict) or not isinstance(config.get("devices"), list) or any(
+            not isinstance(d, dict) for d in config["devices"]):
+        raise ValueError("Конфиг должен содержать массив devices[] с объектами устройств")
     selected = {}
-    for side in ("left", "right"):
+    for side in sides:
         found = [d for d in config.get("devices", []) if d.get("imu_side") == side]
         if len(found) != 1:
             raise ValueError(f"Нужен ровно один devices[] с imu_side={side}")
         device = found[0]
-        if not isinstance(device.get("id"), int) or device["id"] <= 0:
+        if type(device.get("id")) is not int or device["id"] <= 0:
             raise ValueError("Устройство должно иметь положительный device_id")
-        transform = device.get("orientation_transform", {})
-        basis = transform.get("basis_rotation", {})
-        if not transform.get("enabled") or any(transform.get(k, False) for k in
-                ("invert_x", "invert_y", "invert_z")) or any(
-                abs(float(basis.get(k, 0)) - v) > 1e-6 for k, v in
-                (("rx_deg", -90), ("ry_deg", 0), ("rz_deg", 0))):
-            raise ValueError("Этот мастер рассчитан на исходные оси Gear VR: −90° X, без инверсий")
-        offset = device.get("orientation_offset", {})
-        if offset.get("enabled"):
-            normalized(offset.get("quaternion_xyzw"))
-            if offset.get("multiply_order", "post") not in ("post", "local", "pre", "world"):
-                raise ValueError("Неизвестный порядок orientation_offset")
-        selected[side] = {"id": device["id"], "imu_side": side,
-                          "orientation_transform": transform, "orientation_offset": offset}
-    if selected["left"]["id"] == selected["right"]["id"]:
-        raise ValueError("device_id левой и правой руки должны различаться")
+        selected[side] = {"id": device["id"], "imu_side": side, **config_device_snapshot(device)}
+    if len({d["id"] for d in selected.values()}) != len(selected):
+        raise ValueError("device_id выбранных рук должны различаться")
     return selected
 
 
@@ -107,9 +106,68 @@ class Pairs:
     frames: int
     head_motion_deg: float
     coverage_deg: list
+    gravity: dict | None = None
 
 
-def make_pairs(records, side, offset):
+def gravity_reference(records, side, offset):
+    """Check the published basis using stationary neutral poses, not device names.
+
+    Diagnostics already contain provider orientation/force after config transforms.
+    Do not apply orientation_transform again. Undo a previous local mount on both
+    quaternion and force; a previous pre/world offset changes only quaternion.
+    """
+    prefix = "controller_" + side + "_"
+    samples = {}
+    for record in records:
+        if record["phase"] != "neutral":
+            continue
+        f = record["fields"]
+        try:
+            it = int(f[prefix + "imu_orientation_ns"])
+            st = int(f[prefix + "imu_sample_ns"])
+            tick = int(f["controller_tick_ns"])
+            if (f.get(prefix + "imu_active") != "yes" or
+                    not int(f.get(prefix + "imu_data_flags", "0")) & (1 << 3) or
+                    int(f.get(prefix + "imu_sample_flags", "0")) & 3 != 3 or
+                    not (0 < it <= tick and tick - it < 150_000_000) or
+                    not (0 < st <= tick and abs(st - it) <= 20_000_000)):
+                continue
+            if st in samples:
+                continue
+            vector = lambda key: np.asarray([float(x) for x in f[prefix + key].strip("()").split(",")])
+            force, gyro = vector("imu_force"), vector("imu_gyro")
+            if (force.shape != (3,) or gyro.shape != (3,) or not np.isfinite(force).all() or
+                    not np.isfinite(gyro).all() or np.linalg.norm(gyro) > .35 or
+                    abs(np.linalg.norm(force) - 9.80665) > 1.5):
+                continue
+            rotation = remove_offset(R.from_quat(quaternion(f[prefix + "imu_q"])), offset)
+            if offset.get("enabled") and offset.get("multiply_order", "post") in ("post", "local"):
+                force = R.from_quat(normalized(offset["quaternion_xyzw"])).apply(force)
+            up = rotation.apply(force)
+            samples[st] = up / np.linalg.norm(up)
+        except (ValueError, KeyError, TypeError):
+            continue
+    if len(samples) < MIN_GRAVITY_SAMPLES or max(samples, default=0) - min(samples, default=0) < 250_000_000:
+        raise ValueError("Мало неподвижных IMU-кадров для проверки вертикали: держи кисть спокойно "
+                         "в neutral; нужны imu_force/imu_gyro и актуальные timestamps в диагностике")
+    directions = np.asarray(list(samples.values()))
+    up = np.median(directions, axis=0)
+    norm = np.linalg.norm(up)
+    if norm < .5:
+        raise ValueError("Неустойчивая вертикаль IMU: повтори неподвижную фазу neutral")
+    up /= norm
+    angle = float(np.degrees(np.arccos(np.clip(up[1], -1, 1))))
+    spread = float(np.percentile(np.degrees(np.arccos(np.clip(directions @ up, -1, 1))), 90))
+    if spread > MAX_UP_SPREAD_DEG:
+        raise ValueError(f"Вертикаль IMU неустойчива ({spread:.1f}°): повтори neutral без движения")
+    if angle > MAX_UP_ERROR_DEG:
+        raise ValueError(f"Вертикаль IMU отклонена от +Y на {angle:.1f}°: проверь orientation_transform "
+                         "и инициализацию AHRS; локальная калибровка хвата не исправляет мировой базис")
+    return {"samples": len(samples), "up_vector": up.tolist(),
+            "up_error_deg": angle, "spread_p90_deg": spread}
+
+
+def make_pairs(records, side, offset, require_gravity=True):
     prefix = "controller_" + side + "_"
     imu, optical, heads, epochs, resets = {}, {}, [], set(), set()
     for record in records:
@@ -174,7 +232,8 @@ def make_pairs(records, side, offset):
         head_motion = float(np.percentile(np.degrees((hr[0].inv() * hr).magnitude()), 90))
         if head_motion > 8:
             raise ValueError(f"Голова двигалась слишком сильно ({head_motion:.1f}°); повтори круг")
-    return Pairs(ir, op, phases, len(ots), head_motion, coverage)
+    gravity = gravity_reference(records, side, offset) if require_gravity else None
+    return Pairs(ir, op, phases, len(ots), head_motion, coverage, gravity)
 
 
 def residual(mount, world_yaw, data):
@@ -220,20 +279,24 @@ def metrics(mount, world_yaw, data):
             "orientation_median_deg": float(np.median(error)),
             "orientation_p90_deg": float(np.percentile(error, 90)),
             "yaw_median_deg": float(np.median(yaw)), "yaw_p90_deg": float(np.percentile(yaw, 90)),
-            "head_motion_p90_deg": data.head_motion_deg, "motion_axis_std_deg": data.coverage_deg}
+            "head_motion_p90_deg": data.head_motion_deg, "motion_axis_std_deg": data.coverage_deg,
+            "gravity": data.gravity}
 
 
 def quality(stat, args):
     return stat["orientation_median_deg"] <= args.max_orientation_median_deg and stat["yaw_p90_deg"] <= args.max_yaw_p90_deg
 
 
-def assess(rounds, device, args):
+def assess(rounds, device, args, legacy_recording=False):
     fits, details = [], []
     for number in sorted(rounds):
         if fits and number != fits[-1][0] + 1:
             fits.clear()
         try:
-            data = make_pairs(rounds[number], device["imu_side"], device["orientation_offset"])
+            if legacy_recording and not legacy_basis(device["orientation_transform"]):
+                raise ValueError("Старая запись без проверки вертикали требует исходный базис Gear VR; сделай новую запись")
+            data = make_pairs(rounds[number], device["imu_side"], device["orientation_offset"],
+                              require_gravity=not legacy_recording)
             mount, yaws, condition = fit_mount([data])
             stat = metrics(mount, yaws[0], data)
             details.append({"round": number, "metrics": stat, "jacobian_ratio": condition,
@@ -274,20 +337,24 @@ def assess(rounds, device, args):
     result["session_world_yaw_persisted"] = False
     entry = {"device_id": device["id"], "side": device["imu_side"],
              "method": "guided_independent_optical_grip", "quaternion_xyzw": q.tolist(),
-             "expected_orientation_offset": device["orientation_offset"]}
+             "expected_orientation_offset": device["orientation_offset"],
+             "expected_orientation_transform": device["orientation_transform"],
+             "expected_fingerprint": device["fingerprint"],
+             "gravity_validation": last[1].gravity}
     return entry, result
 
 
 class LiveLog:
-    def __init__(self, path):
+    def __init__(self, path, sides=("left", "right")):
         self.path = path
         self.file = path.open("rb")
         self.identity = (path.stat().st_dev, path.stat().st_ino)
         startup = self.file.read(200_000).decode(errors="replace")
-        if re.search(r"runtime_controller_(left|right)_imu_orientation_transform: enabled=true", startup):
+        if any(re.search(r"runtime_controller_" + side + r"_imu_orientation_transform: enabled=true", startup)
+               for side in sides):
             self.file.close()
             raise ValueError("В runtime включено дополнительное преобразование осей IMU. "
-                             "Этот мастер требует штатных осей provider без дополнительного runtime transform.")
+                             "Отключи дополнительный runtime transform для выбранной руки; базис задаётся в конфиге override_controller.")
         self.file.seek(0, os.SEEK_END)
         self.partial = b""
 
@@ -356,39 +423,50 @@ def print_result(result):
 def run(args):
     args.out.mkdir(parents=True, exist_ok=False)
     grouped = {"left": {}, "right": {}}
+    legacy = False
     if args.replay:
         with args.replay.open() as f:
             header = json.loads(next(f))
-            if header.get("schema") != "gearvr_guided_grip_recording_v1":
+            schema = header.get("schema")
+            if schema not in (RECORDING_SCHEMA, LEGACY_RECORDING_SCHEMA):
                 raise ValueError("Неизвестный формат записи мастера")
+            legacy = schema == LEGACY_RECORDING_SCHEMA
+            sides = ([args.side] if args.side in ("left", "right") else
+                     (["left", "right"] if args.side == "both" else header.get("selected_sides", ["left", "right"])))
+            if not isinstance(header.get("devices"), dict):
+                raise ValueError("В записи отсутствует снимок устройств")
+            devices = load_devices({"devices": list(header["devices"].values())}, sides)
             for line in f:
                 record = json.loads(line)
-                if record.get("kind") == "frame":
+                if not isinstance(record, dict):
+                    raise ValueError("Запись содержит строку без объекта frame")
+                if record.get("kind") == "frame" and record.get("side") in devices:
                     grouped[record["side"]].setdefault(record["round"], []).append(record)
-        devices = load_devices({"devices": list(header["devices"].values())})
         reports, entries = [], []
-        for side in ("left", "right"):
-            entry, report = assess(grouped[side], devices[side], args)
+        for side in sides:
+            entry, report = assess(grouped[side], devices[side], args, legacy_recording=legacy)
             reports.append(report)
             if entry:
                 entries.append(entry)
             print_result(report)
     else:
+        sides = [args.side] if args.side in ("left", "right") else ["left", "right"]
         raw = args.config.read_bytes()
-        devices = load_devices(json.loads(raw))
-        header = {"schema": "gearvr_guided_grip_recording_v1", "config_sha256": digest(raw),
-                  "devices": devices, "created_at": datetime.now().astimezone().isoformat()}
-        print("\nКалибровка обеих рук по живой оптике. Сядь, держи голову спокойно.")
-        print("Сохраняй обычный игровой хват. Вторую руку убери из кадра, не перекрывай первую.")
-        print("XR Gate должен быть запущен заново с этим gearvr.json, PRINT_EVERY=1 и диагностикой.")
+        devices = load_devices(json.loads(raw), sides)
+        header = {"schema": RECORDING_SCHEMA, "config_sha256": digest(raw),
+                  "selected_sides": sides, "devices": devices,
+                  "created_at": datetime.now().astimezone().isoformat()}
+        print("\nКалибровка выбранных контроллеров по живой оптике. Сядь, держи голову спокойно.")
+        print("Сохраняй обычный игровой хват. Другую руку убери из кадра, не перекрывай первую.")
+        print(f"XR Gate должен быть запущен заново с {args.config}, PRINT_EVERY=1 и диагностикой.")
         print("Старая локальная поправка будет снята из данных перед расчётом. Конфиг пока не меняется.")
         input("Нажми Enter, когда всё готово: ")
         reports, entries = [], []
-        reader = LiveLog(args.log)
+        reader = LiveLog(args.log, sides)
         try:
             with (args.out / "recording.jsonl").open("w") as sink:
                 sink.write(json.dumps(header, ensure_ascii=False) + "\n")
-                for side in ("right", "left"):
+                for side in (s for s in ("right", "left") if s in sides):
                     input(f"\nВозьми {'правый' if side == 'right' else 'левый'} контроллер обычным хватом. Enter: ")
                     report = {"side": side, "stable": False, "rounds": []}
                     for number in range(1, args.max_rounds + 1):
@@ -408,19 +486,24 @@ def run(args):
             reader.close()
         if digest(args.config.read_bytes()) != header["config_sha256"]:
             raise ValueError("Конфиг изменился во время записи; результат не применяется")
-    report = {"schema": "gearvr_guided_grip_report_v1", "hands": reports,
-              "status": "stable_optical_reference" if len(entries) == 2 else "insufficient_or_unstable",
+    report = {"schema": "gearvr_guided_grip_report_v1" if legacy else REPORT_SCHEMA,
+              "selected_sides": sides, "hands": reports,
+              "status": "stable_optical_reference" if len(entries) == len(sides) else "insufficient_or_unstable",
               "thresholds": {"min_rounds": args.min_rounds, "stable_deg": args.stable_deg,
                              "max_yaw_p90_deg": args.max_yaw_p90_deg,
-                             "max_orientation_median_deg": args.max_orientation_median_deg},
+                             "max_orientation_median_deg": args.max_orientation_median_deg,
+                             "gravity_up_max_error_deg": MAX_UP_ERROR_DEG,
+                             "gravity_spread_p90_max_deg": MAX_UP_SPREAD_DEG},
               "limitations": ["Stability and residuals are relative to Mercury optical estimates, not physical ground truth.",
                               "The last round verifies a fixed mount but is also used for the stability stopping decision.",
-                              "A changed grip or unreliable optical orientation may prevent calibration."]}
+                              "A changed grip or unreliable optical orientation may prevent calibration.",
+                              "Legacy recordings retain their original Gear VR basis check and lack measured gravity validation."]}
     write_json(args.out / "calibration_report.json", report)
-    if len(entries) != 2:
-        print("\nСтабильная калибровка обеих рук не получена. Конфиг не изменён; запись и отчёт сохранены.")
+    if len(entries) != len(sides):
+        print("\nСтабильная калибровка выбранных рук не получена. Конфиг не изменён; запись и отчёт сохранены.")
         return 2
-    candidate = {"schema": "gearvr_optical_grip_trial_v1", "status": "stable_optical_reference",
+    candidate = {"schema": LEGACY_CANDIDATE_SCHEMA if legacy else CANDIDATE_SCHEMA,
+                 "status": "stable_optical_reference",
                  "expected_config_sha256": header["config_sha256"], "devices": entries}
     write_json(args.out / "calibration_candidate.json", candidate)
     print(f"\nГотово: {args.out / 'calibration_candidate.json'}")
@@ -434,6 +517,8 @@ def run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", type=Path, default=Path("~/.config/xr_tracking/override_controller/gearvr.json"))
+    p.add_argument("--side", choices=("left", "right", "both"),
+                   help="Calibrate one hand or both; replay defaults to the recorded selection")
     p.add_argument("--runtime-root", type=Path, default=Path("~/xr-gate-release/xr-gate"))
     p.add_argument("--log", type=Path, default=Path(os.environ.get("LOG_DIR", "/tmp/xr_backend_client_logs")) / "xr_runtime_adapter.log")
     p.add_argument("--out", type=Path, default=Path("~/.local/share/xr_tracking/override_controller/optical_grip") / datetime.now().strftime("%Y%m%d_%H%M%S_%f"))

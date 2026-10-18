@@ -1,0 +1,12 @@
+# Set enabled: false to disable all additional startup rules. The ordinary
+# wait_log_any/readiness_min_alive_s checks from the JSON config still apply.
+enabled: true
+services:
+  xreal_display_helper:
+    enabled: true
+    # GNU stdbuf on Linux makes the helper's redirected stdout visible promptly.
+    line_buffered_output: true
+    # A "setting" or "before" message is not a successful device readback.
+    confirmation_regex: '(?:display mode after:\s*|alive;\s*mode=)(\d+)\b'
+    # Group 1 must match a value extracted from wait_log_any, when present.
+    match_expected_value: true

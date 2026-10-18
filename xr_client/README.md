@@ -40,6 +40,92 @@ The Leap Motion profile still uses the XREAL display device environment, then
 loads `devices/leap_motion_uvc_nrf54l15/tracking.env` as the tracking-sensor
 layer.
 
+## Service startup rules
+
+Additional prestart checks are defined in `configs/service_startup_rules.yaml`.
+The bundled YAML is loaded by default, including for existing JSON profiles.
+It preserves the display helper's confirmed-mode readback and Linux `stdbuf`
+behavior. Install the Python dependency for source/native Windows runs:
+
+```bash
+python -m pip install -r xr_client/requirements.txt
+```
+
+`configs/default_shm.json` explicitly selects the YAML with a top-level block:
+
+```json
+"service_startup_rules": {
+  "enabled": true,
+  "config": "service_startup_rules.yaml"
+}
+```
+
+A relative YAML path is resolved beside the selected JSON file; absolute paths
+and the usual `{root}` placeholders also work. When copying this JSON to another
+directory, copy the YAML too or point `config` to the existing YAML. Omitting
+the block uses the bundled YAML beside `xr_client` regardless of JSON location.
+An explicitly configured missing/invalid file is reported before startup.
+
+Each prestart option can select a YAML service rule independently of the actual
+process name:
+
+```json
+"service_name": "my_display_process",
+"startup_rule": "xreal_display_helper"
+```
+
+If `startup_rule` is omitted, the YAML key is the option's `service_name` (or
+`id` when unnamed). Services without a rule use ordinary JSON readiness checks.
+An explicitly selected unknown rule is an error. Add another device's behavior
+by adding a service entry to YAML, without editing Python:
+
+```yaml
+enabled: true
+services:
+  my_display:
+    enabled: true
+    line_buffered_output: false
+    confirmation_regex: 'confirmed=(\w+)'
+    match_expected_value: true
+```
+
+`confirmation_regex` requires a matching confirmation line, preventing the
+`readiness_min_alive_s` fallback from bypassing confirmation when `wait_log_any`
+is configured. With `match_expected_value`, capture group 1 must match a value
+extracted from `wait_log_any`, if those patterns contain such a value. The line
+must also satisfy `wait_log_any`. Linux `line_buffered_output` uses GNU `stdbuf`.
+
+Set `service_startup_rules.enabled` to `false` in JSON to disable all additional
+rules without loading YAML. Alternatively set `enabled: false` at YAML root or
+under a particular service. Disabling rules retains ordinary
+`wait_log_any`/`readiness_min_alive_s` behavior; skipping the entire display
+helper is still controlled by `prestart_control`/the `current` option.
+
+## Windows launcher profiles
+
+`scripts/windows/run_xr_client.ps1` resolves the selected JSON before starting
+Python. An optional `windows_launcher` block supplies device-specific bootstrap:
+
+```json
+"windows_launcher": {
+  "device": "my_headset",
+  "out_dir": "out/my_windows_bundle"
+}
+```
+
+The shipped `default_windows_tcp.json` keeps its existing XREAL device, output
+directory, `env_script` and `network_loader` in this block. A custom profile
+without the block uses `generic` and loads no vendor scripts. Optional script
+paths resolve against `-Root` and support `{root}`, `{device}` and `{device_scripts}`. A network loader
+defines `Import-XrWindowsNetworkEnv -Root <root>` and runs before Python expands
+network placeholders.
+
+`-Device` overrides `XR_TARGET_DEVICE`/`XR_DEVICE_TARGET`, then the JSON device.
+`-OutRoot` overrides `XR_OUT_ROOT`. Explicit device/bin/script environment paths
+are preserved. A deployed package with `bin/` uses its own root as output root;
+source checkouts use `out_dir`, defaulting to `out/xr-gate_windows`.
+`XR_PYTHON_BIN` can select an explicit Python executable.
+
 ## Common manual controls
 
 ```text

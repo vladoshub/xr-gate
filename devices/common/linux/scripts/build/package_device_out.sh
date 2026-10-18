@@ -231,7 +231,7 @@ print("version:", sys.version.split()[0])
 
 # Required for packaged runtime Python tools after legacy Python capture_service removal.
 # Native capture_service_cpp/xr_video do not require Python HID, PyGObject or GStreamer.
-# yaml is kept for runtime_debug_viewer configs and kalibr_to_basalt calibration helper.
+# yaml is used by xr_client startup rules, runtime_debug_viewer and calibration helpers.
 required = ("yaml", "numpy", "cv2")
 failed = []
 for name in required:
@@ -895,6 +895,8 @@ required=(
   "$XR_OUT_ROOT/devices/common/common.env"
   "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
+  "$XR_OUT_BIN_ROOT/python/xr_client/startup_rules.py"
+  "$XR_OUT_BIN_ROOT/python/xr_client/configs/service_startup_rules.yaml"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_service_cpp"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_tcp_probe"
   "$XR_OUT_BIN_ROOT/scripts/capture_service_cpp/start_capture_service_cpp.sh"

@@ -120,6 +120,7 @@ set(OVERRIDE_CONTROLLER_TOOL_FILES
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_controller_orientation_offset.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_optical_grip.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/apply_optical_grip_calibration.py"
+  "${CMAKE_CURRENT_LIST_DIR}/debug/optical_grip_config.py"
   "${CMAKE_CURRENT_LIST_DIR}/debug/calibrate_grip.sh"
   "${CMAKE_CURRENT_LIST_DIR}/debug/watch_controller_input_stream.py"
 )

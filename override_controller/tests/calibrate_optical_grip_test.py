@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic end-to-end checks; these do not replace a real camera test."""
 import contextlib
+from copy import deepcopy
 import hashlib
 import io
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "debug"))
@@ -33,9 +35,11 @@ def config_fixture():
 MOUNTS = {"left": R.from_rotvec([.35, -.2, .4]), "right": R.from_rotvec([-.2, .3, .5])}
 
 
-def records(side, number, device, mount=None, pure_yaw=False):
+def records(side, number, device, mount=None, pure_yaw=False, world_tilt=None, imu_period_ms=40, optical_period_ms=30):
     rng = np.random.default_rng(1067 + number)
-    old = R.from_quat(device["orientation_offset"]["quaternion_xyzw"])
+    offset = device.get("orientation_offset", {})
+    old = R.from_quat(offset["quaternion_xyzw"]) if offset.get("enabled") else R.identity()
+    world_tilt = R.identity() if world_tilt is None else world_tilt
     mount = MOUNTS[side] if mount is None else mount
     world = R.from_rotvec([0, .3 + number * .005, 0])
     prefix = "controller_" + side + "_"
@@ -52,10 +56,21 @@ def records(side, number, device, mount=None, pure_yaw=False):
     frames = []
     optical_cache = {}
     for tick_ms in range(0, 8001, 10):
-        imu_ms = ((tick_ms - 40) // 40) * 40
-        opt_ms = ((tick_ms - 60) // 30) * 30
-        imu = attitude(imu_ms)
-        imu = old * imu if device["orientation_offset"]["multiply_order"] == "pre" else imu * old
+        imu_ms = ((tick_ms - 40) // imu_period_ms) * imu_period_ms
+        opt_ms = ((tick_ms - 60) // optical_period_ms) * optical_period_ms
+        # Diagnostics already contain the configured provider basis. Their
+        # canonical world is +Y up, irrespective of the native sensor axes.
+        base_imu = attitude(imu_ms)
+        force = base_imu.inv().apply([0, 9.80665, 0])
+        gyro = (base_imu.inv() * attitude(imu_ms + 1)).as_rotvec() / .001
+        imu = world_tilt * base_imu
+        if offset.get("enabled"):
+            if offset.get("multiply_order", "post") in ("pre", "world"):
+                imu = old * imu
+            else:
+                imu = imu * old
+                force = old.inv().apply(force)
+                gyro = old.inv().apply(gyro)
         if opt_ms not in optical_cache:
             noise = R.from_rotvec(rng.normal(0, np.radians(.15), 3))
             optical_cache[opt_ms] = noise * world * attitude(opt_ms) * mount
@@ -65,6 +80,10 @@ def records(side, number, device, mount=None, pure_yaw=False):
             "controller_optical_source_ns": str(origin + opt_ms * 1_000_000),
             prefix + "imu_orientation_ns": str(origin + imu_ms * 1_000_000),
             prefix + "imu_active": "yes", prefix + "imu_data_flags": "8", prefix + "imu_q": text(imu),
+            prefix + "imu_sample_ns": str(origin + imu_ms * 1_000_000),
+            prefix + "imu_sample_flags": "3",
+            prefix + "imu_force": "(" + ",".join(str(x) for x in force) + ")",
+            prefix + "imu_gyro": "(" + ",".join(str(x) for x in gyro) + ")",
             prefix + "raw_optical_q": text(optical_cache[opt_ms]),
             prefix + "raw_optical_status": "1", prefix + "accepted_optical_status": "1",
             prefix + "imu_epoch": "2", "hmd_reset_counter": "1", "hmd_q": "(0,0,0,1)"}
@@ -116,6 +135,206 @@ class CalibrationTests(unittest.TestCase):
         frames[-1]["fields"]["controller_right_imu_epoch"] = "3"
         with self.assertRaisesRegex(ValueError, "перезапустился"):
             wizard.make_pairs(frames, "right", self.devices["right"]["orientation_offset"])
+
+    def test_generic_bases_and_inversions_are_not_applied_twice(self):
+        for transform in [
+            {}, {"enabled": False}, {"enabled": True},
+            {"enabled": True, "invert_x": True, "basis_rotation": {"rx_deg": -90, "ry_deg": 37}},
+            {"enabled": True, "invert_z": True, "basis_rotation": {"rx_deg": 90, "ry_deg": -21}},
+            {"enabled": True, "invert_x": True, "invert_y": True,
+             "basis_rotation": {"rx_deg": -90, "rz_deg": 180}},
+            {"enabled": True, "basis_rotation": {"rx_deg": 23, "ry_deg": -42, "rz_deg": 17}},
+        ]:
+            with self.subTest(transform=transform):
+                cfg = config_fixture()
+                cfg["devices"] = [cfg["devices"][1]]
+                cfg["devices"][0]["orientation_transform"] = transform
+                device = wizard.load_devices(cfg, ["right"])["right"]
+                frame = records("right", 1, device)
+                data = wizard.make_pairs(frame, "right", device["orientation_offset"])
+                mount, _, _ = wizard.fit_mount([data])
+                error = np.degrees((mount.inv() * MOUNTS["right"]).magnitude())
+                self.assertLess(error, .5)
+                self.assertLess(data.gravity["up_error_deg"], .01)
+
+    def test_gravity_rejects_bad_world_basis_and_stale_or_missing_force(self):
+        device = self.devices["right"]
+        frames = records("right", 1, device, world_tilt=R.from_euler("x", 35, degrees=True))
+        with self.assertRaisesRegex(ValueError, "отклонена от \\+Y"):
+            wizard.make_pairs(frames, "right", device["orientation_offset"])
+        for mode in ("missing", "stale", "accelerating", "turning", "no_accel_flag", "no_gyro_flag"):
+            with self.subTest(mode=mode):
+                frames = records("right", 1, device)
+                for frame in frames:
+                    f = frame["fields"]
+                    if mode == "missing":
+                        f.pop("controller_right_imu_force")
+                    elif mode == "stale":
+                        f["controller_right_imu_sample_ns"] = str(int(f["controller_right_imu_sample_ns"]) - 100_000_000)
+                    elif mode == "accelerating":
+                        f["controller_right_imu_force"] = "(0,25,0)"
+                    elif mode == "turning":
+                        f["controller_right_imu_gyro"] = "(0,2,0)"
+                    elif mode == "no_accel_flag":
+                        f["controller_right_imu_sample_flags"] = "1"
+                    else:
+                        f["controller_right_imu_sample_flags"] = "2"
+                with self.assertRaisesRegex(ValueError, "проверки вертикали"):
+                    wizard.make_pairs(frames, "right", device["orientation_offset"])
+
+    def test_gravity_with_pre_post_and_disabled_offsets(self):
+        for side, order in (("left", "pre"), ("right", "post"), ("right", "disabled")):
+            with self.subTest(side=side, order=order):
+                device = deepcopy(self.devices[side])
+                if order == "disabled":
+                    device["orientation_offset"] = {}
+                frames = records(side, 1, device)
+                gravity = wizard.gravity_reference(frames, side, device["orientation_offset"])
+                self.assertLess(gravity["up_error_deg"], .001)
+                self.assertLess(gravity["spread_p90_deg"], .001)
+
+    def test_current_basis_validation_and_selected_side(self):
+        cfg = config_fixture()
+        cfg["devices"] = [cfg["devices"][1]]
+        self.assertEqual(set(wizard.load_devices(cfg, ["right"])), {"right"})
+        with self.assertRaisesRegex(ValueError, "imu_side=left"):
+            wizard.load_devices(cfg)
+        for transform in [[], {"enabled": "true"}, {"enabled": True, "invert_x": 1},
+                          {"basis_rotation": []}, {"basis_rotation": {"rx_deg": float("nan")}}]:
+            cfg["devices"][0]["orientation_transform"] = transform
+            with self.subTest(transform=transform), self.assertRaises(ValueError):
+                wizard.load_devices(cfg, ["right"])
+
+    def test_source_time_at_different_imu_and_optical_rates(self):
+        device = self.devices["right"]
+        for imu_ms, optical_ms in ((2, 30), (10, 40), (40, 30)):
+            with self.subTest(imu_ms=imu_ms, optical_ms=optical_ms):
+                frames = records("right", 1, device, imu_period_ms=imu_ms, optical_period_ms=optical_ms)
+                data = wizard.make_pairs(frames, "right", device["orientation_offset"])
+                mount, _, _ = wizard.fit_mount([data])
+                self.assertLess(np.degrees((mount.inv() * MOUNTS["right"]).magnitude()), .5)
+
+    def test_single_hand_generic_replay_apply_and_changed_basis_guard(self):
+        cfg_data = config_fixture()
+        cfg_data["devices"][1]["orientation_transform"] = {"enabled": False}
+        cfg_data["devices"][1]["fingerprint"] = {"backend": "custom_serial", "uniq": "imu-42"}
+        device = wizard.load_devices(cfg_data, ["right"])["right"]
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            cfg = folder / "custom-controller.json"
+            cfg.write_text(json.dumps(cfg_data))
+            original = cfg.read_bytes()
+            recording = folder / "recording.jsonl"
+            with recording.open("w") as f:
+                f.write(json.dumps({"schema": wizard.RECORDING_SCHEMA,
+                    "selected_sides": ["right"], "devices": {"right": device},
+                    "config_sha256": hashlib.sha256(original).hexdigest()}) + "\n")
+                for n in (1, 2, 3):
+                    for frame in records("right", n, device):
+                        f.write(json.dumps(frame) + "\n")
+            out = folder / "result"
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = wizard.main(["--replay", str(recording), "--config", str(cfg), "--out", str(out)])
+            self.assertEqual(result, 0)
+            candidate = out / "calibration_candidate.json"
+            data = json.loads(candidate.read_text())
+            self.assertEqual(data["schema"], wizard.CANDIDATE_SCHEMA)
+            self.assertEqual([d["side"] for d in data["devices"]], ["right"])
+            self.assertNotIn("session_world_yaw", data["devices"][0])
+            runtime = folder / "runtime"
+            for relative, marker in [("bin/override_controller/override_controller", "optical_grip_vectors_revision=1"),
+                    ("bin/runtime_adapters/xr_runtime_adapter/xr_runtime_adapter", "controller_left_yaw_reference_ns=")]:
+                p = runtime / relative
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(marker)
+            self.assertEqual(apply(cfg, candidate, runtime, False, True)["status"], "ready")
+            for key, value, error in [("orientation_transform", {"enabled": True}, "orientation_transform"),
+                                      ("fingerprint", {"backend": "custom_serial", "uniq": "other"}, "fingerprint")]:
+                changed = deepcopy(cfg_data)
+                changed["devices"][1][key] = value
+                cfg.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, error):
+                    apply(cfg, candidate, runtime, False, True)
+            cfg.write_bytes(original)
+            with mock.patch("apply_optical_grip_calibration.require_stopped", side_effect=ValueError("runtime running")):
+                with self.assertRaisesRegex(ValueError, "runtime running"):
+                    apply(cfg, candidate, runtime, True, True)
+            self.assertEqual(cfg.read_bytes(), original)
+            self.assertFalse(list(folder.glob("*.bak")))
+            applied = apply(cfg, candidate, runtime, True, True)
+            updated = json.loads(cfg.read_text())
+            self.assertEqual(updated["devices"][0], cfg_data["devices"][0])
+            self.assertEqual(updated["keep_acceleration_calibration"], cfg_data["keep_acceleration_calibration"])
+            self.assertEqual(updated["devices"][1]["orientation_transform"], {"enabled": False})
+            self.assertEqual(Path(applied["backup"]).read_bytes(), original)
+            self.assertEqual(apply(cfg, candidate, runtime, True, True)["status"], "already_applied")
+            # Idempotency must not hide a subsequent basis/physical-device change.
+            updated["devices"][1]["orientation_transform"] = {"enabled": True}
+            cfg.write_text(json.dumps(updated))
+            with self.assertRaisesRegex(ValueError, "orientation_transform"):
+                apply(cfg, candidate, runtime, True, True)
+
+    def test_live_cli_single_hand_capture_keeps_generic_snapshots(self):
+        cfg_data = config_fixture()
+        cfg_data["devices"] = [cfg_data["devices"][1]]
+        cfg_data["devices"][0]["orientation_transform"] = {"enabled": True, "invert_x": True,
+            "basis_rotation": {"rx_deg": -90, "ry_deg": 23}}
+        device = wizard.load_devices(cfg_data, ["right"])["right"]
+        selected = []
+        def collect(reader, side, number, seconds, settle, sink):
+            selected.append(side)
+            frames = records(side, number, device)
+            for frame in frames:
+                sink.write(json.dumps(frame) + "\n")
+            return frames
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            cfg = folder / "controller.json"
+            cfg.write_text(json.dumps(cfg_data))
+            original = cfg.read_bytes()
+            log = folder / "runtime.log"
+            log.write_text("runtime_controller_left_imu_orientation_transform: enabled=true\n")
+            out = folder / "result"
+            with mock.patch("builtins.input", return_value=""), mock.patch.object(wizard, "collect", collect), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                result = wizard.main(["--config", str(cfg), "--side", "right", "--log", str(log), "--out", str(out)])
+            self.assertEqual(result, 0)
+            self.assertEqual(selected, ["right"] * 3)
+            self.assertEqual(cfg.read_bytes(), original)
+            header = json.loads((out / "recording.jsonl").read_text().splitlines()[0])
+            self.assertEqual(header["schema"], wizard.RECORDING_SCHEMA)
+            self.assertEqual(header["selected_sides"], ["right"])
+            self.assertEqual(header["devices"]["right"]["orientation_transform"], device["orientation_transform"])
+            candidate = json.loads((out / "calibration_candidate.json").read_text())
+            self.assertEqual(candidate["devices"][0]["expected_orientation_transform"], device["orientation_transform"])
+            self.assertGreater(candidate["devices"][0]["gravity_validation"]["samples"], 10)
+
+    def test_legacy_replay_without_force_still_uses_original_guard(self):
+        device = self.devices["right"]
+        frames = deepcopy(self.frames["right"])
+        for values in frames.values():
+            for frame in values:
+                for field in ("imu_force", "imu_gyro", "imu_sample_ns", "imu_sample_flags"):
+                    frame["fields"].pop("controller_right_" + field)
+        entry, result = wizard.assess(frames, device, self.limits, legacy_recording=True)
+        self.assertTrue(result["stable"])
+        self.assertIsNone(entry["gravity_validation"])
+        entry, result = wizard.assess(frames, device, self.limits)
+        self.assertIsNone(entry)
+        changed = deepcopy(device)
+        changed["orientation_transform"] = {"enabled": False}
+        entry, result = wizard.assess(frames, changed, self.limits, legacy_recording=True)
+        self.assertIsNone(entry)
+        self.assertIn("Старая запись", result["rounds"][0]["rejected"])
+
+    def test_selected_side_does_not_require_other_runtime_transform_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "runtime.log"
+            log.write_text("runtime_controller_left_imu_orientation_transform: enabled=true\n")
+            reader = wizard.LiveLog(log, ["right"])
+            reader.close()
+            with self.assertRaisesRegex(ValueError, "runtime transform"):
+                wizard.LiveLog(log, ["left"])
 
     def test_partial_lines_rotation_and_replay_apply(self):
         with tempfile.TemporaryDirectory() as directory:
