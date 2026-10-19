@@ -10,20 +10,23 @@ for the cameras/HID does not carry DisplayPort video.
 
 ## 1. Download the Windows package
 
-After the accompanying patch has been applied and GitHub Actions has completed:
+After GitHub Actions has completed:
 
 1. Open the repository's **Actions → XR Gate split build** and the successful run
    for the patched commit.
 2. Download artifact **xr-gate-steamvr-windows-x64**. The Linux v2.3.0 runtime ZIP
    does not contain this new Windows driver.
-3. Extract the artifact, then extract **xr-gate-steamvr-windows-x64-60Hz-direct.zip**
-   into a permanent folder, for example `C:\XR-Gate-SteamVR\60Hz-direct`.
+3. Extract the artifact, then extract a ZIP for the frequency and mode you built,
+   for example **xr-gate-steamvr-windows-x64-60Hz-direct.zip**, into a permanent
+   folder such as `C:\XR-Gate-SteamVR\60Hz-direct`.
 4. The inner **xr_tracking** folder must contain `driver.vrdrivermanifest`,
    `bin\win64\driver_xr_tracking.dll`, `resources`, and the BAT files.
 
-The job also builds 90 Hz and `extended_sbs` variants. Start with 60 Hz. Register
-only one XR Gate package at a time. A published release from this workflow also
-contains the four Windows ZIPs and SHA-256 files.
+The job builds the frequencies and modes selected in **Run workflow**. Defaults
+produce four ZIPs: 60/90 Hz × `direct`/`extended_sbs`. Start with 60 Hz and register
+only one XR Gate package at a time. Enable **Include Windows SteamVR driver
+packages in the GitHub Release** to attach the selected ZIPs and SHA-256 files
+when publishing a release.
 
 ## 2. Install the SteamVR driver
 
@@ -139,10 +142,21 @@ From an x64 Developer PowerShell in the repository root:
 ctest --test-dir build\drivers\openvr_driver\windows_Release -C Release --output-on-failure
 ```
 
-Output: `build\drivers\openvr_driver\windows_Release\xr_tracking`. The separate
-Windows CI job runs the same tests and packages 60/90 Hz direct/extended variants.
-No hardware is available on hosted CI: actual SteamVR loading, GPU Direct Mode,
-XREAL USB and Bluetooth need on-device validation.
+Output: `build\drivers\openvr_driver\windows_Release\xr_tracking`.
+
+To build in GitHub Actions:
+
+1. Open **Actions → XR Gate split build → Run workflow**.
+2. Set `windows_openvr_frequencies`, for example `60 90`, and
+   `windows_openvr_modes`, for example `direct extended_sbs` or just
+   `extended_sbs`. Separate values with spaces, commas, or semicolons. The
+   existing `openvr_frequencies` and `openvr_modes` fields configure Linux only.
+3. To attach the Windows packages to a release, enable `publish_release` and
+   `release_windows_driver`, then set `release_tag`. With `release_windows_driver`
+   disabled, Windows ZIPs remain available as workflow artifacts and a Windows
+   build failure does not prevent publication of successful Linux packages.
+4. Run the workflow and download artifact **xr-gate-steamvr-windows-x64** or the
+   selected ZIPs and SHA-256 files from the release.
 
 Sources: [Valve Direct Mode help](https://help.steampowered.com/en/wizard/HelpWithGameIssue/?appid=250820&issueid=370&nodeid=52),
 [XR Gate root README](https://github.com/vladoshub/xr-gate#quick-start),

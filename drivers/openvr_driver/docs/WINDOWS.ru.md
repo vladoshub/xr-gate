@@ -10,19 +10,22 @@ DisplayPort-видео.
 
 ## 1. Скачать Windows-пакет
 
-После применения сопровождающего патча и успешного запуска GitHub Actions:
+После успешного запуска GitHub Actions:
 
 1. Откройте **Actions → XR Gate split build** и успешную сборку изменённого commit.
 2. Скачайте artifact **xr-gate-steamvr-windows-x64**. В Linux-релизе v2.3.0 этого
    нового Windows-драйвера нет.
-3. Распакуйте artifact, затем **xr-gate-steamvr-windows-x64-60Hz-direct.zip**
-   в постоянную папку, например `C:\XR-Gate-SteamVR\60Hz-direct`.
+3. Распакуйте artifact, затем ZIP для выбранных при сборке частоты и режима,
+   например **xr-gate-steamvr-windows-x64-60Hz-direct.zip**, в постоянную папку
+   вроде `C:\XR-Gate-SteamVR\60Hz-direct`.
 4. Внутри **xr_tracking** должны находиться `driver.vrdrivermanifest`,
    `bin\win64\driver_xr_tracking.dll`, `resources` и BAT-файлы.
 
-CI также собирает варианты 90 Hz и `extended_sbs`. Начните с 60 Hz. Одновременно
-регистрируйте только один пакет XR Gate. При публикации релиза этим workflow
-четыре Windows ZIP и файлы SHA-256 также появляются в Release.
+CI собирает частоты и режимы, выбранные в **Run workflow**. По умолчанию это
+четыре ZIP: 60/90 Hz × `direct`/`extended_sbs`. Начните с 60 Hz и регистрируйте
+только один пакет XR Gate одновременно. Чтобы добавить выбранные ZIP и файлы
+SHA-256 в релиз, включите **Include Windows SteamVR driver packages in the
+GitHub Release**.
 
 ## 2. Установить SteamVR-драйвер
 
@@ -139,10 +142,21 @@ Docker публикует `127.0.0.1:45810` Linux-хоста; WSL передаё
 ctest --test-dir build\drivers\openvr_driver\windows_Release -C Release --output-on-failure
 ```
 
-Результат — `build\drivers\openvr_driver\windows_Release\xr_tracking`. Отдельный
-Windows-job выполняет эти тесты и упаковывает варианты 60/90 Hz direct/extended.
-В hosted CI нет оборудования: загрузку SteamVR, GPU Direct Mode, USB XREAL и
-Bluetooth необходимо проверять на устройстве.
+Результат — `build\drivers\openvr_driver\windows_Release\xr_tracking`.
+
+Для сборки в GitHub Actions:
+
+1. Откройте **Actions → XR Gate split build → Run workflow**.
+2. Задайте `windows_openvr_frequencies`, например `60 90`, и
+   `windows_openvr_modes`, например `direct extended_sbs` или только
+   `extended_sbs`. Разделяйте значения пробелами, запятыми или точками с запятой.
+   Прежние поля `openvr_frequencies` и `openvr_modes` задают только Linux-сборку.
+3. Для добавления Windows-пакетов в релиз включите `publish_release` и
+   `release_windows_driver`, затем задайте `release_tag`. Если
+   `release_windows_driver` выключен, Windows ZIP остаются в артефактах workflow,
+   а ошибка Windows-сборки не мешает публикации успешно собранных Linux-пакетов.
+4. Запустите workflow и скачайте артефакт **xr-gate-steamvr-windows-x64** либо
+   выбранные ZIP и файлы SHA-256 из релиза.
 
 Источники: [Valve: Direct Mode](https://help.steampowered.com/en/wizard/HelpWithGameIssue/?appid=250820&issueid=370&nodeid=52),
 [корневой README XR Gate](https://github.com/vladoshub/xr-gate#quick-start),

@@ -13,13 +13,23 @@ name: XR Gate split build
         required: false
         default: avx2
       openvr_frequencies:
-        description: "OpenVR driver frequencies to build"
+        description: "Linux OpenVR driver frequencies to build"
         required: false
         default: "60 90"
       openvr_modes:
-        description: "OpenVR driver modes to build"
+        description: "Linux OpenVR driver modes to build"
         required: false
         default: "direct"
+      windows_openvr_frequencies:
+        description: "Windows OpenVR driver frequencies to build (for example 60 90)"
+        type: string
+        required: false
+        default: "60 90"
+      windows_openvr_modes:
+        description: "Windows OpenVR driver modes to build (direct, extended_sbs)"
+        type: string
+        required: false
+        default: "direct extended_sbs"
       include_xrizer:
         description: "Build optional xrizer GPL component with license and Corresponding Source"
         type: boolean
@@ -40,6 +50,11 @@ name: XR Gate split build
         type: boolean
         required: false
         default: false
+      release_windows_driver:
+        description: "Include Windows SteamVR driver packages in the GitHub Release"
+        type: boolean
+        required: false
+        default: true
       release_tag:
         description: "Release tag, for example v0.1.0"
         type: string
@@ -69,6 +84,9 @@ env:
   XR_BUILD_VENDOR_COMPONENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.include_vendor_components == false && '0' || '1' }}
   XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
   XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
+  XR_WINDOWS_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_openvr_frequencies || '60 90' }}
+  XR_WINDOWS_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_openvr_modes || 'direct extended_sbs' }}
+  XR_RELEASE_WINDOWS_DRIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.release_windows_driver && '1' || '0' }}
 
 defaults:
   run:
@@ -761,6 +779,26 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v6
+      - name: Validate Windows driver selection
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $frequencies = @($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split '[\s,;]+' | Where-Object { $_ } | Select-Object -Unique)
+          $modes = @($env:XR_WINDOWS_OPENVR_BUILD_MODES -split '[\s,;]+' | Where-Object { $_ } | Select-Object -Unique)
+          if (!$frequencies.Count -or !$modes.Count) { throw 'Select at least one Windows OpenVR frequency and mode.' }
+          foreach ($frequency in $frequencies) {
+            if ($frequency -cnotmatch '^[1-9][0-9]{0,3}$' -or [int]$frequency -gt 1000) {
+              throw "Invalid Windows OpenVR frequency '$frequency'; use integer Hz values from 1 to 1000."
+            }
+          }
+          foreach ($mode in $modes) {
+            if (@('direct', 'extended_sbs') -cnotcontains $mode) {
+              throw "Invalid Windows OpenVR mode '$mode'; use direct or extended_sbs."
+            }
+          }
+          "XR_WINDOWS_OPENVR_BUILD_FREQUENCIES=$($frequencies -join ' ')" >> $env:GITHUB_ENV
+          "XR_WINDOWS_OPENVR_BUILD_MODES=$($modes -join ' ')" >> $env:GITHUB_ENV
+          "Windows driver frequencies: $($frequencies -join ', ')" >> $env:GITHUB_STEP_SUMMARY
+          "Windows driver modes: $($modes -join ', ')" >> $env:GITHUB_STEP_SUMMARY
       - name: OpenVR SDK (same pinned commit as Linux driver)
         uses: actions/checkout@v6
         with:
@@ -790,8 +828,8 @@ jobs:
           $dist = Join-Path $root 'dist-windows-steamvr'
           New-Item -ItemType Directory -Force $dist | Out-Null
           $tested = $false
-          foreach ($frequency in @(60, 90)) {
-            foreach ($mode in @('direct', 'extended_sbs')) {
+          foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
+            foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
               & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
                 -Generator Ninja -BuildType Release -Device xreal_ultra `
                 -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
@@ -833,7 +871,7 @@ jobs:
       - build-steamvr-windows
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         github.event_name == 'workflow_dispatch' &&
         (
           inputs.publish_release == true ||
@@ -843,7 +881,7 @@ jobs:
         needs.hand-tracking-models-mercury.result == 'success' &&
         needs.merge-package.result == 'success'
         && needs.check-24-on-26.result == 'success'
-        && needs.build-steamvr-windows.result == 'success'
+        && (inputs.release_windows_driver == false || needs.build-steamvr-windows.result == 'success')
       }}
     timeout-minutes: 20
     permissions:
@@ -865,6 +903,7 @@ jobs:
           path: release-assets/models
 
       - name: Download Windows SteamVR packages
+        if: ${{ env.XR_RELEASE_WINDOWS_DRIVER == '1' }}
         uses: actions/download-artifact@v4
         with:
           name: xr-gate-steamvr-windows-x64
@@ -892,12 +931,18 @@ jobs:
 
           test -f release-assets/models/hand-tracking-models-mercury.tar.gz
           test -f release-assets/unpack-helper/unpack_xr_gate.sh
-          for frequency in 60 90; do
-            for mode in direct extended_sbs; do
-              test -f "release-assets/windows-steamvr/xr-gate-steamvr-windows-x64-${frequency}Hz-${mode}.zip"
+          if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
+            read -r -a windows_frequencies <<< "$(printf '%s' "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" | tr ',;[:space:]' ' ')"
+            read -r -a windows_modes <<< "$(printf '%s' "$XR_WINDOWS_OPENVR_BUILD_MODES" | tr ',;[:space:]' ' ')"
+            for frequency in "${windows_frequencies[@]}"; do
+              for mode in "${windows_modes[@]}"; do
+                archive="release-assets/windows-steamvr/xr-gate-steamvr-windows-x64-${frequency}Hz-${mode}.zip"
+                test -f "$archive"
+                test -f "$archive.sha256"
+              done
             done
-          done
-          (cd release-assets/windows-steamvr && sha256sum -c ./*.sha256)
+            (cd release-assets/windows-steamvr && sha256sum -c ./*.sha256)
+          fi
 
           for ubuntu in 24.04 26.04; do
             rm -rf verify/runtime
@@ -964,7 +1009,9 @@ jobs:
             release-assets/models/hand-tracking-models-mercury.tar.gz
             release-assets/unpack-helper/unpack_xr_gate.sh
           )
-          ASSETS+=(release-assets/windows-steamvr/*.zip release-assets/windows-steamvr/*.sha256)
+          if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
+            ASSETS+=(release-assets/windows-steamvr/*.zip release-assets/windows-steamvr/*.sha256)
+          fi
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             for ubuntu in 24.04 26.04; do
               source_dir="release-assets/xrizer-source/xrizer-corresponding-source-ubuntu-${ubuntu}"
