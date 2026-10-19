@@ -10,7 +10,7 @@
 4. Extract the ZIP to a permanent folder. Open its `xr-gate-windows` folder. Keep the `drivers`, `hardware`, `linux` and `windows` subfolders together.
 5. Open a regular Windows PowerShell in this folder. Run all commands below there.
 
-## 2. Configure your hardware
+## 2. Configure your hardware (skip for XREAL Air 2 Ultra)
 
 For XREAL Air 2 Ultra, the supplied preset is ready to use. Create your settings file once:
 
@@ -48,7 +48,7 @@ For Gear VR controllers, use:
 .\INSTALL.cmd -GearVR
 ~~~
 
-2. Approve the administrator prompt. If a restart is requested, restart Windows and run the same command again.
+2. Approve the administrator prompt. Restart Windows and run the same command again.
 3. If Ubuntu opens for the first time, create a Linux username and password, enter `exit`, then run the installation command again.
 4. If asked to restart Ubuntu, save your work in it and run:
 
