@@ -21,10 +21,10 @@ Supported:
 
 ### Controllers
 
-| Device | Buttons / stick | IMU | Status |
-| --- | --- | --- | --- |
-| Samsung Gear VR controller | Yes | Built-in | Supported |
-| VR-PARK Bluetooth controller | Yes | No | Supported |
+| Device | Buttons / stick | IMU | Status | Notes |
+| --- | --- | --- | --- | --- |
+| Samsung Gear VR controller | Yes | Built-in | Supported | These are excellent controllers with a touchpad and buttons. Used ones are also available. They're powered by two AAA batteries, so there's no battery degradation. They're also lightweight and compact enough to pair well with AR glasses. Currently, hand tracking is supported using the IMU, but calibration is required each time you first launch. Partial position prediction is also supported using the accelerometer and the last known velocity before optical tracking is lost. Operation also depends on a Bluetooth module; a separate one often works much better |
+| VR-PARK Bluetooth controller | Yes | No | Supported | An inexpensive controller. Suitable for applications where fast movements are not required and only button input is required |
 
 
 **For installation and usage instructions, see:**
