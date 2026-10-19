@@ -23,8 +23,7 @@ Supported:
 
 | Device | Buttons / stick | IMU | Status | Notes |
 | --- | --- | --- | --- | --- |
-| Samsung Gear VR controller | Yes | Built-in | Supported | 
-Excellent controllers with a touchpad and buttons. Used ones are available. They are powered by two AAA batteries, so there's no battery degradation. They are also lightweight and compact enough to pair well with AR glasses. Currently, hand tracking is supported using the IMU reading. Partial position prediction is also supported using the accelerometer and the last known velocity before optical tracking was lost. It is recommended to calibrate each time you first launch the controller. Operation also depends on the Bluetooth module; a separate module often works better |
+| Samsung Gear VR controller | Yes | Built-in | Supported | Excellent controllers with a touchpad and buttons. Used ones are available. They are powered by two AAA batteries, so there's no battery degradation. They are also lightweight and compact enough to pair well with AR glasses. Currently, hand tracking is supported using the IMU reading. Partial position prediction is also supported using the accelerometer and the last known velocity before optical tracking was lost. It is recommended to calibrate each time you first launch the controller. Operation also depends on the Bluetooth module; a separate module often works better |
 | VR-PARK Bluetooth controller | Yes | No | Supported | An inexpensive controller. Suitable for applications where fast movements are not required and only button input is required |
 
 
