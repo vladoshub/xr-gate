@@ -31,7 +31,7 @@ sudo ./xr-gate build
 
 Wait for the build to finish. The first build needs an internet connection.
 
-## 4. Start XR Gate
+## 4. Start XR Gate (using XREAL ULTRA glasses as an example)
 
 Connect the XREAL glasses, then run:
 
