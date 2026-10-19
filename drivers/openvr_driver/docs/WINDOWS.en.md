@@ -14,8 +14,7 @@ After GitHub Actions has completed:
 
 1. Open the repository's **Actions → XR Gate split build** and the successful run
    for the patched commit.
-2. Download artifact **xr-gate-steamvr-windows-x64**. The Linux v2.3.0 runtime ZIP
-   does not contain this new Windows driver.
+2. Download artifact **xr-gate-steamvr-windows-x64**.
 3. Extract the artifact, then extract a ZIP for the frequency and mode you built,
    for example **xr-gate-steamvr-windows-x64-60Hz-direct.zip**, into a permanent
    folder such as `C:\XR-Gate-SteamVR\60Hz-direct`.

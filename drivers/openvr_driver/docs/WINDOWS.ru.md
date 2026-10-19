@@ -13,8 +13,7 @@ DisplayPort-видео.
 После успешного запуска GitHub Actions:
 
 1. Откройте **Actions → XR Gate split build** и успешную сборку изменённого commit.
-2. Скачайте artifact **xr-gate-steamvr-windows-x64**. В Linux-релизе v2.3.0 этого
-   нового Windows-драйвера нет.
+2. Скачайте artifact **xr-gate-steamvr-windows-x64**.
 3. Распакуйте artifact, затем ZIP для выбранных при сборке частоты и режима,
    например **xr-gate-steamvr-windows-x64-60Hz-direct.zip**, в постоянную папку
    вроде `C:\XR-Gate-SteamVR\60Hz-direct`.
