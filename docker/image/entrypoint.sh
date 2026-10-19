@@ -17,9 +17,12 @@ export RUNTIME_APP_TCP_HOST=0.0.0.0
 export RUNTIME_APP_TCP_PORT=45810
 
 config_root="${XR_CONFIG_ROOT:-/config}"
-config="${XR_PROFILE:-xreal_ultra}"
+config="${XR_PROFILE:-}"
 if [[ -f "$config_root/xr_client.json" ]]; then
   config="$config_root/xr_client.json"
+elif [[ -z "$config" ]]; then
+  echo '[xr-gate] Select XR_PROFILE in your hardware env or provide config/xr_client.json.' >&2
+  exit 1
 fi
 if [[ -f "$config_root/override_controller.json" ]]; then
   # Respect Gear VR's gearvr.json (or the user's explicit CONFIG_PATH).

@@ -46,7 +46,15 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable --now docker bluetooth
 
-for module in uvcvideo hid_generic btusb; do
+module_names="$(python3 - "$(dirname "$0")" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from xr_gate import kernel_modules, settings
+print(' '.join(kernel_modules(settings())))
+PY
+)"
+read -r -a modules <<< "$module_names"
+for module in "${modules[@]}"; do
   if ! modprobe "$module"; then
     echo "Module $module unavailable. Install the matching Linux kernel modules, then run sudo ./xr-gate doctor." >&2
   fi

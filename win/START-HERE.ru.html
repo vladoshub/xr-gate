@@ -1,92 +1,96 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows + WSL2</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
 <nav class="languages" aria-label="Language"><a href="START-HERE.html" lang="en">English</a><a href="START-HERE.ru.html" lang="ru" aria-current="page">Русский</a></nav>
-<h1>XR Gate: установка в Windows через WSL2</h1>
-<h2>1. Подготовь Windows</h2>
+<h1>XR Gate в Windows</h1>
+<h2>1. Скачайте и подготовьте</h2>
 <ol start="1">
-<li>Используй Windows 11 x64 и процессор с поддержкой AVX2.</li>
-<li>Установи Steam и SteamVR. Один раз открой SteamVR, затем закрой его.</li>
-<li>Распакуй весь архив в постоянную папку, например C:\XR-Gate-WSL. Сохрани подпапки linux и windows рядом с XrGate-Wsl.ps1.</li>
-<li>Открой обычный Windows PowerShell в этой папке. Все команды ниже выполняй в Windows.</li>
+<li>Нужны Windows 11 x64 и процессор с поддержкой AVX2.</li>
+<li>Установите Steam и SteamVR. Один раз откройте SteamVR, затем закройте его.</li>
+<li>Скачайте <strong>xr-gate-windows.zip</strong> из <a href="https://github.com/vladoshub/xr-gate/releases">Releases</a> или artifact <strong>xr-gate-windows</strong> из своего запуска CI.</li>
+<li>Распакуйте ZIP в постоянную папку. Откройте вложенную папку <code>xr-gate-windows</code>. Сохраните подпапки <code>drivers</code>, <code>hardware</code>, <code>linux</code> и <code>windows</code> вместе.</li>
+<li>Откройте в этой папке обычный Windows PowerShell. Все команды ниже выполняйте в нём.</li>
 </ol>
-<h2>2. Установи XR Gate</h2>
+<h2>2. Настройте оборудование</h2>
+<p>Для XREAL Air 2 Ultra готовый профиль уже настроен. Один раз создайте файл своих настроек:</p>
+<pre><code>if (!(Test-Path .env)) { Copy-Item .env.example .env }
+</code></pre>
+<p>Для другого устройства скопируйте универсальный шаблон:</p>
+<pre><code>Copy-Item hardware\generic.env.example hardware\my-device.env
+</code></pre>
+<p>Отредактируйте <code>hardware/my-device.env</code>, затем укажите <code>XR_HARDWARE_ENV=hardware/my-device.env</code> в <code>.env</code>.</p>
 <ol start="1">
-<li>Дважды щёлкни INSTALL.cmd или выполни:</li>
+<li>Укажите профиль запуска в <code>XR_PROFILE</code> и имя устройства в <code>XR_TARGET_DEVICE</code>.</li>
+<li>Укажите VID:PID камер и IMU в <code>XR_USB_IDS</code>. Для ручного выбора выполните <code>usbipd list</code> и задайте <code>XR_USB_BUS_IDS</code> в <code>.env</code>. Для нескольких устройств разделите BUSID запятыми. Вместо них можно задать постоянные пути Windows USB instance в <code>XR_USB_INSTANCE_IDS</code>.</li>
+<li>При необходимости задайте Linux-пути камеры, HID, serial и устройств ввода: <code>XR_CAMERA_DEVICE</code>, <code>XR_HIDRAW_DEVICES</code>, <code>XR_SERIAL_DEVICES</code>, <code>XR_INPUT_DEVICES</code>. Если профиль использует камеру, включите <code>XR_REQUIRE_CAMERA=1</code>.</li>
+<li>Укажите подходящий скрипт настройки из релиза в <code>XR_DEVICE_ACCESS_SCRIPT</code> или оставьте поле пустым. Перечислите нужные модули Linux в <code>XR_KERNEL_MODULES</code>.</li>
+<li>Задайте <code>XR_WINDOW_WIDTH</code>, <code>XR_WINDOW_HEIGHT</code>, <code>XR_RENDER_WIDTH</code>, <code>XR_RENDER_HEIGHT</code>, <code>XR_DISPLAY_FREQUENCY_HZ</code> и оптические параметры своего дисплея.</li>
 </ol>
-<pre><code>.\INSTALL.cmd</code></pre>
-<p>Для контроллеров Gear VR используй эту команду:</p>
-<pre><code>.\INSTALL.cmd -GearVR</code></pre>
+<p>Чтобы переопределить сохранённый выбор, укажите настройку прямо в <code>.env</code>. Выбирайте частоту и <code>XR_DISPLAY_MODE</code> (<code>direct</code> или <code>extended_sbs</code>), которые есть в архиве. Для отдельного Bluetooth-донгла укажите его BUSID в <code>XR_BLUETOOTH_BUS_ID</code>. Для отключения сохранённого донгла укажите <code>XR_BLUETOOTH=0</code>; для отключения Gear VR — <code>XR_GEARVR=0</code>. Если SteamVR не найден автоматически, задайте <code>XR_STEAMVR_PATH</code>.</p>
+<h2>3. Установите</h2>
+<ol start="1">
+<li>Дважды щёлкните <strong>INSTALL.cmd</strong> или выполните:</li>
+</ol>
+<pre><code>.\INSTALL.cmd
+</code></pre>
+<p>Для контроллеров Gear VR используйте:</p>
+<pre><code>.\INSTALL.cmd -GearVR
+</code></pre>
 <ol start="2">
-<li>Подтверди запрос прав администратора Windows.</li>
-<li>Если установщик запросит перезагрузку Windows, сохрани работу, перезагрузи компьютер и повтори команду установки.</li>
-<li>Если откроется окно Ubuntu, создай имя Linux-пользователя и пароль. В командной строке Ubuntu введи exit, затем повтори команду установки.</li>
-<li>Если установщик попросит перезапустить Ubuntu после включения systemd, сохрани работу в Ubuntu и выполни:</li>
+<li>Подтвердите запрос прав администратора. Если запрошена перезагрузка, перезапустите Windows и повторите ту же команду.</li>
+<li>Если Ubuntu открылась впервые, создайте имя Linux-пользователя и пароль, введите <code>exit</code> и повторите команду установки.</li>
+<li>Если запрошен перезапуск Ubuntu, сохраните в ней работу и выполните:</li>
 </ol>
 <pre><code>wsl --terminate Ubuntu-24.04
-.\INSTALL.cmd</code></pre>
-<p>Повтори свои параметры установки, например -GearVR. Код завершения 20 означает, что нужно выполнить указанное действие и повторить установку.</p>
-<ol start="6">
-<li>Если регистрация драйвера была отложена, закрой SteamVR и выполни:</li>
-</ol>
-<pre><code>.\DRIVER.cmd</code></pre>
-<p>Если SteamVR не найден, укажи папку его установки:</p>
-<pre><code>.\DRIVER.cmd -SteamVR &#x27;D:\SteamLibrary\steamapps\common\SteamVR&#x27;</code></pre>
-<h2>3. Подготовь очки (на примере очков XREAL ULTRA)</h2>
-<ol start="1">
-<li>Подключи видеоканал XREAL Air 2 Ultra к видеокарте Windows через USB-C с видеовыходом или питаемый адаптер DP/HDMI → USB-C.</li>
-<li>Надень очки или активируй их датчик присутствия.</li>
-<li>Удерживай Brightness Up (+) примерно три секунды до сигнала, чтобы включить полный SBS.</li>
-<li>В Windows открой Параметры → Система → Дисплей и выбери «Расширить эти экраны». Выбери очки и установи 3840×1080 и 60 Hz.</li>
-<li>Нажми «Определить» и запомни номер, который появится в очках. Если очков нет среди экранов Windows, открой настройки разработчика SteamVR, нажми «Выключить прямой режим», затем закрой SteamVR и повтори шаг 4.</li>
-<li>При закрытом SteamVR дважды щёлкни DISPLAY.cmd или выполни:</li>
-</ol>
-<pre><code>.\DISPLAY.cmd</code></pre>
-<ol start="7">
-<li>Выбери строку списка с экраном очков. Сопоставь номер DISPLAY с кнопкой «Определить» в Windows; для различения экранов используй также название. Команда сохранит выбор и настроит вывод в расширенном SBS.</li>
-<li>Если используешь Gear VR, выполни раздел 5 перед запуском.</li>
-</ol>
-<h2>4. Запусти XR Gate и SteamVR</h2>
-<ol start="1">
-<li>Подключи очки и включи SBS. Контроллеры с IMU положи на ровную поверхность и держи неподвижно во время начальной калибровки.</li>
-<li>Дважды щёлкни RUN.cmd или выполни:</li>
-</ol>
-<pre><code>.\RUN.cmd</code></pre>
-<ol start="3">
-<li>В консоли xr_client пройди стартовые подсказки и калибровку. Не закрывай камеры; обеспечь хорошее освещение. При запуске трекинга несколько секунд плавно двигай головой.</li>
-<li>Дождись открытия SteamVR.</li>
-<li>Для этой настройки оставь прямой режим SteamVR выключенным.</li>
-<li>Если XR Gate заблокирован, открой Settings → Startup/Shutdown → Manage Add-ons и включи его.</li>
-<li>Проверь, что в очках появилась сцена SteamVR и она реагирует на движение головы, затем запускай игру.</li>
-</ol>
-<p>Для следующих запусков включи SBS и запусти RUN.cmd. Команда повторно применит сохранённый выбор экрана с его текущими координатами рабочего стола. После смены кабеля/порта или если сохранённый экран не найден, закрой SteamVR и снова запусти DISPLAY.cmd.</p>
-<p>Чтобы запустить только xr_client:</p>
-<pre><code>.\CONSOLE.cmd</code></pre>
-<p>Если настройка занимает больше 180 секунд, закончи действия в открытом окне xr_client и снова запусти RUN.cmd. Чтобы увеличить ожидание:</p>
-<pre><code>.\RUN.cmd -TimeoutSeconds 300</code></pre>
-<p>Если очки нужно выбрать вручную:</p>
-<pre><code>usbipd list
-.\USB.cmd -XrealBusId 1-2</code></pre>
-<p>Замени 1-2 на BUSID очков из usbipd list.</p>
-<h2>5. Настрой контроллеры Gear VR</h2>
-<ol start="1">
-<li>Подключи очки и выделенный USB Bluetooth-донгл. Если при установке Gear VR не был включён, выполни:</li>
-</ol>
-<pre><code>.\INSTALL.cmd -GearVR</code></pre>
-<ol start="2">
-<li>Найди BUSID донгла:</li>
-</ol>
-<pre><code>usbipd list</code></pre>
-<ol start="3">
-<li>Подключи донгл к WSL:</li>
-</ol>
-<pre><code>.\USB.cmd -BluetoothBusId 1-4</code></pre>
-<p>Замени 1-4 на BUSID своего донгла.</p>
-<ol start="4">
-<li>Открой консоль сопряжения Bluetooth:</li>
-</ol>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair</code></pre>
+.\INSTALL.cmd
+</code></pre>
+<p>Если меняли <code>XR_DISTRIBUTION</code>, используйте указанное там имя дистрибутива. Повторите <code>-GearVR</code>, если использовали его.</p>
 <ol start="5">
-<li>Переведи контроллеры в режим сопряжения и введи команды в bluetoothctl. Вместо MAC_LEFT и MAC_RIGHT укажи реальные адреса контроллеров:</li>
+<li>Если регистрация драйвера отложена, закройте SteamVR и выполните:</li>
+</ol>
+<pre><code>.\DRIVER.cmd
+</code></pre>
+<h2>4. Выберите дисплей</h2>
+<p>Для <strong>extended_sbs</strong>:</p>
+<ol start="1">
+<li>Подключите видеовход очков к видеокарте Windows и включите SBS на очках.</li>
+<li>В настройках дисплея Windows выберите <strong>Расширить эти экраны</strong>. Установите для очков разрешение и частоту из аппаратного env.</li>
+<li>Отключите прямой режим SteamVR и закройте SteamVR.</li>
+<li>Выполните:</li>
+</ol>
+<pre><code>.\DISPLAY.cmd
+</code></pre>
+<ol start="5">
+<li>Выберите строку очков по кнопке <strong>Определить</strong> в Windows. Чтобы закрепить имя выхода, укажите <code>XR_DISPLAY_NAME</code> в <code>.env</code> и повторите команду.</li>
+</ol>
+<p>Для <strong>direct</strong> используйте <code>Direct-Mode-Guide.bat</code> в выбранной папке <code>drivers/&lt;частота&gt;Hz-direct/xr_tracking</code>.</p>
+<h2>5. Запустите</h2>
+<ol start="1">
+<li>Подключите устройства. Положите IMU-контроллеры на ровную поверхность и не двигайте их.</li>
+<li>Выполните:</li>
+</ol>
+<pre><code>.\RUN.cmd
+</code></pre>
+<ol start="3">
+<li>Пройдите стартовые подсказки и калибровку в открывшейся консоли. Оставьте её открытой и дождитесь SteamVR.</li>
+<li>При запросе включите дополнение XR Gate в SteamVR. Проверьте гарнитуру и запустите игру.</li>
+</ol>
+<p>Для следующего сеанса подключите устройства и снова запустите <strong>RUN.cmd</strong>. После смены порта дисплея закройте SteamVR и повторите <strong>DISPLAY.cmd</strong>.</p>
+<p>Для запуска трекинга без открытия SteamVR:</p>
+<pre><code>.\CONSOLE.cmd
+</code></pre>
+<h2>6. Подключите контроллеры Gear VR</h2>
+<ol start="1">
+<li>Укажите BUSID донгла в <code>XR_BLUETOOTH_BUS_ID</code> в <code>.env</code>, затем подключите устройства:</li>
+</ol>
+<pre><code>.\USB.cmd
+</code></pre>
+<ol start="2">
+<li>Откройте консоль сопряжения:</li>
+</ol>
+<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair
+</code></pre>
+<ol start="3">
+<li>Включите режим сопряжения на контроллерах. Подставьте их адреса вместо <code>MAC_LEFT</code> и <code>MAC_RIGHT</code> и введите:</li>
 </ol>
 <pre><code>power on
 agent on
@@ -99,168 +103,31 @@ pair MAC_RIGHT
 trust MAC_RIGHT
 connect MAC_RIGHT
 scan off
-quit</code></pre>
-<ol start="6">
-<li>Запусти мастер регистрации контроллеров:</li>
-</ol>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR</code></pre>
-<ol start="7">
-<li>По подсказкам назначь левый и правый контроллеры и сохрани конфигурацию.</li>
-<li>Запусти RUN.cmd.</li>
-</ol>
-<p>Если уже есть конфигурация gearvr.json, импортируй её вместо повторной регистрации:</p>
-<pre><code>.\INSTALL.cmd -GearVR -ControllerConfig &#x27;C:\XR-Gate-WSL\gearvr.json&#x27;</code></pre>
-<p>Перед запуском XR Gate выполни сопряжение Bluetooth. Для другого USB Bluetooth-донгла повтори шаг 3 с его BUSID.</p>
-<h2>6. Останови XR Gate</h2>
-<ol start="1">
-<li>Закрой SteamVR.</li>
-<li>Нажми Ctrl+C в консоли xr_client и дождись остановки.</li>
-<li>Верни выбранные USB-устройства Windows:</li>
-</ol>
-<pre><code>.\DETACH.cmd</code></pre>
+quit
+</code></pre>
 <ol start="4">
-<li>Чтобы использовать очки как обычный дисплей, переключи их в 2D аппаратной кнопкой.</li>
+<li>Если трекинг запущен, остановите его. Запустите регистрацию:</li>
 </ol>
-<h2>7. Измени настройки или обнови XR Gate</h2>
-<h3>Обновление скриптов установки</h3>
-<ol start="1">
-<li>Закрой SteamVR.</li>
-<li>Распакуй новый архив в ту же папку установки и замени файлы, включая подпапки linux и windows.</li>
-<li>Включи SBS и выбери соответствующие разрешение и частоту в Windows.</li>
-<li>Один раз запусти DISPLAY.cmd и выбери экран очков.</li>
-<li>Запусти RUN.cmd.</li>
-</ol>
-<h3>Обновление XR Gate</h3>
-<ol start="1">
-<li>Закрой SteamVR и останови xr_client.</li>
-<li>Повтори INSTALL.cmd.</li>
-<li>Включи SBS, выбери соответствующую частоту в Windows и запусти RUN.cmd. Сохранённый выбор экрана применится к новому драйверу. Если экран больше не найден, закрой SteamVR и снова запусти DISPLAY.cmd.</li>
-</ol>
-<p>Для установки определённого релиза:</p>
-<pre><code>.\INSTALL.cmd -ReleaseTag v2.8.0</code></pre>
-<h3>Переключение на 90 Hz</h3>
-<ol start="1">
-<li>Закрой SteamVR и останови xr_client.</li>
-<li>Установи соответствующий драйвер:</li>
-</ol>
-<pre><code>.\INSTALL.cmd -FrequencyHz 90 -DisplayMode extended_sbs</code></pre>
-<ol start="3">
-<li>Включи SBS/90 Hz на очках и выбери 90 Hz в параметрах дисплея Windows.</li>
-<li>Запусти DISPLAY.cmd, затем RUN.cmd.</li>
-</ol>
-<h3>Использование расширенного SBS-дисплея</h3>
-<ol start="1">
-<li>Если прямой режим включён, открой настройки разработчика SteamVR и нажми «Выключить прямой режим». Закрой SteamVR; xr_client можно оставить работающим.</li>
-<li>В Windows выбери «Расширить эти экраны», разрешение 3840×1080 и частоту, соответствующую установленному драйверу.</li>
-<li>Выполни:</li>
-</ol>
-<pre><code>.\DISPLAY.cmd</code></pre>
-<ol start="4">
-<li>Выбери экран очков в списке, затем запусти RUN.cmd.</li>
-</ol>
-<h3>Использование прямого режима</h3>
-<ol start="1">
-<li>Закрой SteamVR и останови xr_client.</li>
-<li>Установи пакет для прямого режима:</li>
-</ol>
-<pre><code>.\INSTALL.cmd -FrequencyHz 60 -DisplayMode direct</code></pre>
-<ol start="3">
-<li>Запусти XR Gate и SteamVR, нажми «Включить прямой режим» в настройках разработчика SteamVR и перезапусти SteamVR.</li>
-<li>Если SteamVR показывает ошибку 422 или в очках остаётся рабочий стол Windows, выполни шаги из раздела «Использование расширенного SBS-дисплея» выше.</li>
-</ol>
-<h3>Использование своего профиля xr_client</h3>
-<ol start="1">
-<li>Помести профиль в ~/xr-gate-wsl/config/xr_client.json внутри Ubuntu.</li>
-<li>Останови xr_client и повтори RUN.cmd.</li>
-</ol>
-<h2>8. Устрани проблемы запуска</h2>
-<h3>Ошибка SteamVR 422 или рабочий стол Windows в очках</h3>
-<ol start="1">
-<li>Открой настройки разработчика SteamVR и нажми «Выключить прямой режим». Закрой SteamVR; xr_client оставь открытым.</li>
-<li>Включи SBS. В параметрах дисплея Windows выбери «Расширить эти экраны», разрешение 3840×1080 и частоту, соответствующую установленному драйверу.</li>
-<li>Нажми «Определить», затем выполни:</li>
-</ol>
-<pre><code>.\DISPLAY.cmd
-.\RUN.cmd</code></pre>
-<ol start="4">
-<li>При запросе выбери экран очков. Дождись запуска SteamVR и проверь движение головы в его сцене.</li>
-<li>Если ошибка 422 повторится, закрой SteamVR, повтори DISPLAY.cmd для проверки выбранного экрана и посмотри свежий журнал композитора:</li>
-</ol>
-<pre><code>$vrPaths = Get-Content &quot;$env:LOCALAPPDATA\openvr\openvrpaths.vrpath&quot; -Raw | ConvertFrom-Json
-$steamFolder = Split-Path -Parent $vrPaths.config[0]
-Get-Content (Join-Path $steamFolder &#x27;logs\vrcompositor.txt&#x27;) -Tail 100</code></pre>
-<h3>Просмотр диагностики</h3>
-<ol start="1">
-<li>Выполни:</li>
-</ol>
-<pre><code>.\DOCTOR.cmd</code></pre>
-<ol start="2">
-<li>При работающем xr_client проверь соединение с трекингом:</li>
-</ol>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test -TimeoutSeconds 30</code></pre>
-<h3>Переподключение камер или Bluetooth</h3>
-<ol start="1">
-<li>Закрой SteamVR и останови xr_client.</li>
-<li>Переподключи USB-кабель или донгл.</li>
-<li>Запусти USB.cmd, затем RUN.cmd.</li>
-<li>Если устройство по-прежнему отсутствует, выполни:</li>
-</ol>
-<pre><code>wsl -d Ubuntu-24.04 -- lsusb
-wsl -d Ubuntu-24.04 -- uname -r
-wsl -d Ubuntu-24.04 -u root -- modprobe uvcvideo
-wsl -d Ubuntu-24.04 -u root -- modprobe btusb
-wsl -d Ubuntu-24.04 -- bluetoothctl list
-wsl -d Ubuntu-24.04 -u root -- dmesg</code></pre>
+<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR
+</code></pre>
 <ol start="5">
-<li>Если модуль не найден, обнови WSL:</li>
+<li>Назначьте левый и правый контроллеры по подсказкам, сохраните конфиг и запустите <strong>RUN.cmd</strong>.</li>
 </ol>
-<pre><code>wsl --update --web-download</code></pre>
-<ol start="6">
-<li>Сохрани работу в Ubuntu, перезапусти дистрибутив и подключи устройства:</li>
-</ol>
-<pre><code>wsl --terminate Ubuntu-24.04
-.\USB.cmd
-.\RUN.cmd</code></pre>
-<p>Если в %USERPROFILE%\.wslconfig указано собственное ядро, удали или обнови эту настройку перед повторением шагов.</p>
-<h3>Восстановление соединения из Windows</h3>
+<h2>7. Остановите или измените настройки</h2>
 <ol start="1">
-<li>Оставь xr_client работающим и выполни:</li>
+<li>Закройте SteamVR.</li>
+<li>Нажмите <strong>Ctrl+C</strong> в консоли трекинга и дождитесь остановки.</li>
+<li>Для возврата USB-устройств Windows выполните:</li>
 </ol>
-<pre><code>Test-NetConnection 127.0.0.1 -Port 45810
-wsl -d Ubuntu-24.04 -- ss -ltnp</code></pre>
-<ol start="2">
-<li>Для сети WSL NAT включи localhost forwarding в %USERPROFILE%\.wslconfig, сохранив остальные настройки:</li>
-</ol>
-<pre><code>[wsl2]
-localhostForwarding=true</code></pre>
-<ol start="3">
-<li>Сохрани работу во всех дистрибутивах WSL и выполни:</li>
-</ol>
-<pre><code>wsl --shutdown
-.\RUN.cmd</code></pre>
-<ol start="4">
-<li>Если соединения по-прежнему нет, проверь настройки VPN/брандмауэра и закрой другие процессы, использующие порт 45810.</li>
-</ol>
-<h3>Создание обычного пользователя Ubuntu</h3>
-<p>Если Ubuntu запускается от root:</p>
-<ol start="1">
-<li>Открой Ubuntu и создай пользователя. Вместо xruser укажи желаемое имя Linux-пользователя:</li>
-</ol>
-<pre><code>adduser xruser
-usermod -aG sudo xruser</code></pre>
-<ol start="2">
-<li>Укажи пользователя в /etc/wsl.conf, сохранив остальные секции:</li>
-</ol>
-<pre><code>[user]
-default=xruser</code></pre>
-<ol start="3">
-<li>Сохрани работу в Ubuntu, затем выполни из Windows:</li>
-</ol>
-<pre><code>wsl --terminate Ubuntu-24.04
-.\INSTALL.cmd</code></pre>
-<h3>Установка недостающего компонента Windows</h3>
-<ol start="1">
-<li>Если нет winget, установи или обнови Microsoft App Installer и повтори INSTALL.cmd.</li>
-<li>Если Windows сообщает об отключённой виртуализации, включи SVM/AMD-V или VT-x в BIOS/UEFI, перезагрузи компьютер и повтори INSTALL.cmd.</li>
-</ol>
+<pre><code>.\DETACH.cmd
+</code></pre>
+<p>После изменения аппаратных настроек подключите устройства и запустите снова. После смены релиза, частоты драйвера или режима дисплея в <code>.env</code> повторите <strong>INSTALL.cmd</strong> и настройку дисплея.</p>
+<h2>8. Если не запускается</h2>
+<p>Выполните:</p>
+<pre><code>.\DOCTOR.cmd
+</code></pre>
+<p>Не закрывая консоль трекинга, проверьте его:</p>
+<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
+</code></pre>
+<p>Если SteamVR сообщает о неверном дисплее рабочего стола, закройте SteamVR, проверьте расширение экранов, разрешение и частоту в Windows, затем повторите <strong>DISPLAY.cmd</strong> и <strong>RUN.cmd</strong>.</p>
 </article></body></html>

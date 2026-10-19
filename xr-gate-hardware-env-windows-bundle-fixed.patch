@@ -1,0 +1,3666 @@
+diff --git a/.github/workflows/launcher-tests.yml b/.github/workflows/launcher-tests.yml
+index 7565d38..88ceaab 100644
+--- a/.github/workflows/launcher-tests.yml
++++ b/.github/workflows/launcher-tests.yml
+@@ -2,10 +2,10 @@ name: Launcher configuration tests
+ 
+ "on":
+   pull_request:
+-    paths: ['xr_client/**', 'docker/**', '.github/workflows/launcher-tests.yml']
++    paths: ['xr_client/**', 'docker/**', 'win/**', '.github/workflows/launcher-tests.yml']
+   push:
+     branches: [main, master]
+-    paths: ['xr_client/**', 'docker/**', '.github/workflows/launcher-tests.yml']
++    paths: ['xr_client/**', 'docker/**', 'win/**', '.github/workflows/launcher-tests.yml']
+ 
+ jobs:
+   startup-rules:
+@@ -19,6 +19,7 @@ jobs:
+       - run: python -m unittest discover -s xr_client/tests -p 'test_startup_rules.py'
+       - run: python -m unittest discover -s xr_client/tests -p 'test_prestart_confirmation.py'
+       - run: python -m unittest discover -s docker/tests -p 'test*.py'
++      - run: python -m unittest discover -s win/tests -p 'test*.py'
+   windows-launcher:
+     runs-on: windows-2022
+     steps:
+@@ -26,3 +27,6 @@ jobs:
+       - name: Windows PowerShell 5.1 launcher compatibility
+         shell: powershell
+         run: '& ./xr_client/tests/test_windows_launcher.ps1'
++      - name: Windows installer and hardware env compatibility
++        shell: powershell
++        run: '& ./win/tests/verify-env.ps1'
+diff --git a/.github/workflows/xr-gate-split-build.yml b/.github/workflows/xr-gate-split-build.yml
+index 2aca3a1..1812985 100644
+--- a/.github/workflows/xr-gate-split-build.yml
++++ b/.github/workflows/xr-gate-split-build.yml
+@@ -771,7 +771,8 @@ jobs:
+           xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
+ 
+   build-steamvr-windows:
+-    name: SteamVR driver / Windows x64 / TCP
++    name: Windows installer and SteamVR drivers
++    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_windows_driver }}
+     runs-on: windows-2022
+     timeout-minutes: 30
+     defaults:
+@@ -818,6 +819,8 @@ jobs:
+         with:
+           arch: x64
+       - name: Build, test TCP client, and package Windows drivers
++        env:
++          WINDOWS_BUNDLE_RELEASE: ${{ inputs.publish_release && inputs.release_tag || 'latest' }}
+         run: |
+           $ErrorActionPreference = 'Stop'
+           $root = $env:GITHUB_WORKSPACE
+@@ -825,13 +828,14 @@ jobs:
+           $json = Join-Path $root '.build-deps/json/single_include'
+           $builder = Join-Path $root 'drivers/openvr_driver/scripts/windows/build_driver.ps1'
+           $build = Join-Path $root 'build/drivers/openvr_driver/windows_Release'
+-          $dist = Join-Path $root 'dist-windows-steamvr'
++          $dist = Join-Path $root 'dist-windows'
++          $drivers = Join-Path $dist 'drivers'
+           New-Item -ItemType Directory -Force $dist | Out-Null
+           $tested = $false
+           foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
+             foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
+               & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
+-                -Generator Ninja -BuildType Release -Device xreal_ultra `
++                -Generator Ninja -BuildType Release -Device generic `
+                 -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
+               if (!$tested) {
+                 ctest --test-dir $build -C Release --output-on-failure
+@@ -846,17 +850,23 @@ jobs:
+               $settings = Join-Path $package 'resources/settings/default.vrsettings'
+               python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8"))["xr_tracking"]; assert all(d[k]=="tcp" for k in ("runtimePoseTransport","runtimeHandTransport","runtimeControllerStateTransport")); assert d["runtimeTcpHost"]=="127.0.0.1" and d["runtimeTcpPort"]==45810' $settings
+               if ($LASTEXITCODE -ne 0) { throw 'Windows package has unexpected transport defaults' }
+-              $archive = Join-Path $dist "xr-gate-steamvr-windows-x64-${frequency}Hz-${mode}.zip"
+-              Compress-Archive -Path $package -DestinationPath $archive -Force
+-              $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+-              "$hash  $(Split-Path -Leaf $archive)" | Set-Content -Encoding ascii ($archive + '.sha256')
++              $variant = Join-Path $drivers "${frequency}Hz-${mode}"
++              New-Item -ItemType Directory -Force $variant | Out-Null
++              Copy-Item -LiteralPath $package -Destination $variant -Recurse -Force
+             }
+           }
+-      - name: Upload standalone Windows SteamVR packages
++          python win/package_windows.py build --drivers-root $drivers `
++            --output (Join-Path $dist 'xr-gate-windows.zip') `
++            --frequencies $env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES `
++            --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE
++          if ($LASTEXITCODE -ne 0) { throw 'Windows bundle packaging failed' }
++      - name: Upload Windows installer and SteamVR drivers
+         uses: actions/upload-artifact@v4
+         with:
+-          name: xr-gate-steamvr-windows-x64
+-          path: dist-windows-steamvr/*
++          name: xr-gate-windows
++          path: |
++            dist-windows/xr-gate-windows.zip
++            dist-windows/xr-gate-windows.zip.sha256
+           if-no-files-found: error
+           retention-days: 14
+ 
+@@ -889,6 +899,8 @@ jobs:
+       actions: read
+ 
+     steps:
++      - uses: actions/checkout@v6
++
+       - name: Download merged runtime package
+         uses: actions/download-artifact@v4
+         with:
+@@ -902,12 +914,12 @@ jobs:
+           name: hand-tracking-models-mercury
+           path: release-assets/models
+ 
+-      - name: Download Windows SteamVR packages
++      - name: Download Windows installer and SteamVR drivers
+         if: ${{ env.XR_RELEASE_WINDOWS_DRIVER == '1' }}
+         uses: actions/download-artifact@v4
+         with:
+-          name: xr-gate-steamvr-windows-x64
+-          path: release-assets/windows-steamvr
++          name: xr-gate-windows
++          path: release-assets/windows
+ 
+       - name: Download unpack helper
+         uses: actions/download-artifact@v4
+@@ -932,16 +944,11 @@ jobs:
+           test -f release-assets/models/hand-tracking-models-mercury.tar.gz
+           test -f release-assets/unpack-helper/unpack_xr_gate.sh
+           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
+-            read -r -a windows_frequencies <<< "$(printf '%s' "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" | tr ',;[:space:]' ' ')"
+-            read -r -a windows_modes <<< "$(printf '%s' "$XR_WINDOWS_OPENVR_BUILD_MODES" | tr ',;[:space:]' ' ')"
+-            for frequency in "${windows_frequencies[@]}"; do
+-              for mode in "${windows_modes[@]}"; do
+-                archive="release-assets/windows-steamvr/xr-gate-steamvr-windows-x64-${frequency}Hz-${mode}.zip"
+-                test -f "$archive"
+-                test -f "$archive.sha256"
+-              done
+-            done
+-            (cd release-assets/windows-steamvr && sha256sum -c ./*.sha256)
++            test -f release-assets/windows/xr-gate-windows.zip
++            test -f release-assets/windows/xr-gate-windows.zip.sha256
++            (cd release-assets/windows && sha256sum -c xr-gate-windows.zip.sha256)
++            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows.zip \
++              --frequencies "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" --modes "$XR_WINDOWS_OPENVR_BUILD_MODES"
+           fi
+ 
+           for ubuntu in 24.04 26.04; do
+@@ -1010,7 +1017,7 @@ jobs:
+             release-assets/unpack-helper/unpack_xr_gate.sh
+           )
+           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
+-            ASSETS+=(release-assets/windows-steamvr/*.zip release-assets/windows-steamvr/*.sha256)
++            ASSETS+=(release-assets/windows/xr-gate-windows.zip release-assets/windows/xr-gate-windows.zip.sha256)
+           fi
+           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
+             for ubuntu in 24.04 26.04; do
+diff --git a/docker/.env.example b/docker/.env.example
+index 270fdfb..6a0e7c9 100644
+--- a/docker/.env.example
++++ b/docker/.env.example
+@@ -2,7 +2,8 @@
+ # Release tag. After changing it, stop XR Gate and run sudo ./xr-gate build again.
+ XR_VERSION=v2.8.0
+ 
+-XR_PROFILE=xreal_ultra
++# Hardware preset; .env and shell values can override individual settings.
++XR_HARDWARE_ENV=./hardware/xreal_ultra.env
+ XR_TCP_PORT=45810
+ XR_TCP_RATE=60
+ XR_TCP_MAX_CLIENTS=8
+@@ -10,24 +11,6 @@ XR_SHM_SIZE=512m
+ XR_CONFIG_DIR=./config
+ XR_LOG_DIR=./logs
+ 
+-# XREAL Air 2 Ultra. Add other USB identities only deliberately, comma-separated.
+-XR_USB_IDS=3318:0426
+-# Empty = first capture node (sysfs index 0) belonging to the USB identity above.
+-# Host camera is mapped to /dev/video0, preserving the release config.
+-XR_CAMERA_DEVICE=
+-# Require a local camera; set 0 for remote/TCP or IMU-only profiles.
+-XR_REQUIRE_CAMERA=1
+-# HID is optional for generic cameras/serial IMUs. Set 1 for HID-based profiles.
+-XR_REQUIRE_HIDRAW=0
+-# USB serial nodes belonging to XR_USB_IDS are discovered automatically.
+-# Explicit additions, e.g. /dev/ttyACM0 or /dev/serial/by-id/<id> (comma-separated).
+-XR_SERIAL_DEVICES=
+-
+-# Gear VR BLE: enable host BlueZ/D-Bus, then configure PROVIDERS in xr_client.json.
+-XR_BLUETOOTH=0
+-# For evdev controllers: explicit event nodes, comma-separated. No automatic keyboard access.
+-XR_INPUT_DEVICES=
+-
+ # Optional separate stereo-video TCP output. Backend still starts via console key 6.
+ XR_VIDEO_TCP=0
+ XR_VIDEO_PORT=45700
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 332b1c0..61a926e 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -33,7 +33,6 @@ RUN chmod +x /usr/local/bin/xr-gate-entrypoint && \
+ ENV XR_ROOT_PROJECT=/opt/xr-gate \
+     XR_VERSION="${XR_VERSION}" \
+     ROOT_PROJECT=/opt/xr-gate \
+-    XR_PROFILE=xreal_ultra \
+     PYTHONUNBUFFERED=1 \
+     AUTO_BUILD=0
+ WORKDIR /opt/xr-gate
+diff --git a/docker/README.en.md b/docker/README.en.md
+index 7b53bcf..32d7966 100644
+--- a/docker/README.en.md
++++ b/docker/README.en.md
+@@ -23,7 +23,9 @@ cp --no-clobber .env.example .env
+ chmod +x xr-gate
+ ```
+ 
+-To choose a release, change `XR_VERSION` in `.env`. Then build the image:
++To choose a release, change `XR_VERSION` in `.env`. Hardware settings are in `hardware/xreal_ultra.env`. For another device, copy `hardware/generic.env.example`, fill in `XR_PROFILE`, `XR_USB_IDS` and device paths, then select the new file with `XR_HARDWARE_ENV` in `.env`. Set `XR_REQUIRE_CAMERA=1` if the profile uses a camera.
++
++Then build the image:
+ 
+ ```bash
+ sudo ./xr-gate build
+@@ -31,9 +33,9 @@ sudo ./xr-gate build
+ 
+ Wait for the build to finish. The first build needs an internet connection.
+ 
+-## 4. Start XR Gate (using XREAL ULTRA glasses as an example)
++## 4. Start XR Gate
+ 
+-Connect the XREAL glasses, then run:
++Connect the selected device, then run:
+ 
+ ```bash
+ sudo ./xr-gate run
+@@ -51,7 +53,7 @@ sudo ./xr-gate stop
+ 
+ For the next session, run `sudo ./xr-gate run` again.
+ 
+-After reconnecting the glasses, stop XR Gate and start it again.
++After reconnecting the device, stop XR Gate and start it again.
+ 
+ ## 6. Optional setup
+ 
+diff --git a/docker/README.md b/docker/README.md
+index 7b53bcf..32d7966 100644
+--- a/docker/README.md
++++ b/docker/README.md
+@@ -23,7 +23,9 @@ cp --no-clobber .env.example .env
+ chmod +x xr-gate
+ ```
+ 
+-To choose a release, change `XR_VERSION` in `.env`. Then build the image:
++To choose a release, change `XR_VERSION` in `.env`. Hardware settings are in `hardware/xreal_ultra.env`. For another device, copy `hardware/generic.env.example`, fill in `XR_PROFILE`, `XR_USB_IDS` and device paths, then select the new file with `XR_HARDWARE_ENV` in `.env`. Set `XR_REQUIRE_CAMERA=1` if the profile uses a camera.
++
++Then build the image:
+ 
+ ```bash
+ sudo ./xr-gate build
+@@ -31,9 +33,9 @@ sudo ./xr-gate build
+ 
+ Wait for the build to finish. The first build needs an internet connection.
+ 
+-## 4. Start XR Gate (using XREAL ULTRA glasses as an example)
++## 4. Start XR Gate
+ 
+-Connect the XREAL glasses, then run:
++Connect the selected device, then run:
+ 
+ ```bash
+ sudo ./xr-gate run
+@@ -51,7 +53,7 @@ sudo ./xr-gate stop
+ 
+ For the next session, run `sudo ./xr-gate run` again.
+ 
+-After reconnecting the glasses, stop XR Gate and start it again.
++After reconnecting the device, stop XR Gate and start it again.
+ 
+ ## 6. Optional setup
+ 
+diff --git a/docker/README.ru.md b/docker/README.ru.md
+index 26fe23c..96dd228 100644
+--- a/docker/README.ru.md
++++ b/docker/README.ru.md
+@@ -23,7 +23,9 @@ cp --no-clobber .env.example .env
+ chmod +x xr-gate
+ ```
+ 
+-Чтобы выбрать релиз, измените `XR_VERSION` в `.env`. Затем соберите образ:
++Чтобы выбрать релиз, измените `XR_VERSION` в `.env`. Параметры оборудования находятся в `hardware/xreal_ultra.env`. Для другого устройства скопируйте `hardware/generic.env.example`, заполните `XR_PROFILE`, `XR_USB_IDS` и пути устройств, затем укажите новый файл в `XR_HARDWARE_ENV` в `.env`. Если профиль использует камеру, включите `XR_REQUIRE_CAMERA=1`.
++
++Затем соберите образ:
+ 
+ ```bash
+ sudo ./xr-gate build
+@@ -31,9 +33,9 @@ sudo ./xr-gate build
+ 
+ Дождитесь завершения сборки. Для первой сборки нужен интернет.
+ 
+-## 4. Запустите XR Gate (на примере очков XREAL ULTRA)
++## 4. Запустите XR Gate
+ 
+-Подключите очки XREAL и выполните:
++Подключите выбранное устройство и выполните:
+ 
+ ```bash
+ sudo ./xr-gate run
+@@ -51,7 +53,7 @@ sudo ./xr-gate stop
+ 
+ Для следующего запуска снова выполните `sudo ./xr-gate run`.
+ 
+-После переподключения очков остановите XR Gate и запустите заново.
++После переподключения устройства остановите XR Gate и запустите заново.
+ 
+ ## 6. Дополнительная настройка
+ 
+diff --git a/docker/START-HERE.html b/docker/START-HERE.html
+index 366f9eb..5f8f8c6 100644
+--- a/docker/START-HERE.html
++++ b/docker/START-HERE.html
+@@ -1,17 +1,8 @@
+ <!doctype html>
+-<html lang="en">
+-<head>
+-<meta charset="utf-8">
+-<meta name="viewport" content="width=device-width,initial-scale=1">
+-<title>XR Gate · Docker on Linux</title>
+-<style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style>
+-</head>
+-<body>
+-<main class="document">
++<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate · Docker on Linux</title><style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style></head><body><main class="document">
+ <nav aria-label="Language"><button type="button" data-language-switch="en" aria-pressed="true">English</button><button type="button" data-language-switch="ru" aria-pressed="false">Русский</button></nav>
+ <section data-language="en" lang="en">
+ <h1>XR Gate with Docker on Linux</h1>
+-<p>English · <a href="README.ru.md">Русский</a> · <a href="START-HERE.html">Offline guide</a></p>
+ <h2>1. Download XR Gate</h2>
+ <p>Use Ubuntu 24.04 (64-bit) and a CPU with AVX2 support.</p>
+ <p>Download the <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, extract it, and open a terminal in the <code>docker</code> folder. Run all commands below from that folder.</p>
+@@ -23,12 +14,13 @@
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
+ chmod +x xr-gate
+ </code></pre></div>
+-<p>To choose a release, change <code>XR_VERSION</code> in <code>.env</code>. Then build the image:</p>
++<p>To choose a release, change <code>XR_VERSION</code> in <code>.env</code>. Hardware settings are in <code>hardware/xreal_ultra.env</code>. For another device, copy <code>hardware/generic.env.example</code>, fill in <code>XR_PROFILE</code>, <code>XR_USB_IDS</code> and device paths, then select the new file with <code>XR_HARDWARE_ENV</code> in <code>.env</code>. Set <code>XR_REQUIRE_CAMERA=1</code> if the profile uses a camera.</p>
++<p>Then build the image:</p>
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
+ </code></pre></div>
+ <p>Wait for the build to finish. The first build needs an internet connection.</p>
+-<h2>4. Start XR Gate (using XREAL ULTRA glasses as an example)</h2>
+-<p>Connect the XREAL glasses, then run:</p>
++<h2>4. Start XR Gate</h2>
++<p>Connect the selected device, then run:</p>
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate run
+ </code></pre></div>
+ <p>Follow the prompts in the console and keep it open. If the glasses are already in SBS mode, choose the current display mode when prompted.</p>
+@@ -37,7 +29,7 @@ chmod +x xr-gate
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate stop
+ </code></pre></div>
+ <p>For the next session, run <code>sudo ./xr-gate run</code> again.</p>
+-<p>After reconnecting the glasses, stop XR Gate and start it again.</p>
++<p>After reconnecting the device, stop XR Gate and start it again.</p>
+ <h2>6. Optional setup</h2>
+ <ul>
+ <li><a href="docs/CONTROLLERS.en.md">Gear VR and VR-PARK controllers</a>.</li>
+@@ -54,7 +46,6 @@ chmod +x xr-gate
+ </section>
+ <section data-language="ru" lang="ru" hidden>
+ <h1>XR Gate в Docker на Linux</h1>
+-<p><a href="README.md">English</a> · Русский · <a href="START-HERE.html?lang=ru">Офлайн-инструкция</a></p>
+ <h2>1. Скачайте XR Gate</h2>
+ <p>Нужны Ubuntu 24.04 (64 бита) и процессор с поддержкой AVX2.</p>
+ <p>Скачайте <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, распакуйте его и откройте терминал в папке <code>docker</code>. Все команды ниже выполняйте из этой папки.</p>
+@@ -66,12 +57,13 @@ chmod +x xr-gate
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
+ chmod +x xr-gate
+ </code></pre></div>
+-<p>Чтобы выбрать релиз, измените <code>XR_VERSION</code> в <code>.env</code>. Затем соберите образ:</p>
++<p>Чтобы выбрать релиз, измените <code>XR_VERSION</code> в <code>.env</code>. Параметры оборудования находятся в <code>hardware/xreal_ultra.env</code>. Для другого устройства скопируйте <code>hardware/generic.env.example</code>, заполните <code>XR_PROFILE</code>, <code>XR_USB_IDS</code> и пути устройств, затем укажите новый файл в <code>XR_HARDWARE_ENV</code> в <code>.env</code>. Если профиль использует камеру, включите <code>XR_REQUIRE_CAMERA=1</code>.</p>
++<p>Затем соберите образ:</p>
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
+ </code></pre></div>
+ <p>Дождитесь завершения сборки. Для первой сборки нужен интернет.</p>
+-<h2>4. Запустите XR Gate (на примере очков XREAL ULTRA)</h2>
+-<p>Подключите очки XREAL и выполните:</p>
++<h2>4. Запустите XR Gate</h2>
++<p>Подключите выбранное устройство и выполните:</p>
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate run
+ </code></pre></div>
+ <p>Следуйте подсказкам в консоли и оставьте её открытой. Если очки уже в режиме SBS, при запросе выберите текущий режим дисплея.</p>
+@@ -80,7 +72,7 @@ chmod +x xr-gate
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate stop
+ </code></pre></div>
+ <p>Для следующего запуска снова выполните <code>sudo ./xr-gate run</code>.</p>
+-<p>После переподключения очков остановите XR Gate и запустите заново.</p>
++<p>После переподключения устройства остановите XR Gate и запустите заново.</p>
+ <h2>6. Дополнительная настройка</h2>
+ <ul>
+ <li><a href="docs/CONTROLLERS.ru.md">Контроллеры Gear VR и VR-PARK</a>.</li>
+@@ -95,8 +87,7 @@ chmod +x xr-gate
+ <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate logs
+ </code></pre></div>
+ </section>
+-</main>
+-<script>
++</main><script>
+ const sections = document.querySelectorAll('[data-language]');
+ const switches = document.querySelectorAll('[data-language-switch]');
+ function selectLanguage(language) {
+@@ -126,6 +117,4 @@ document.querySelectorAll('.copy').forEach(button => button.addEventListener('cl
+   const ru = document.documentElement.lang === 'ru';
+   button.textContent = copied ? (ru ? 'Скопировано' : 'Copied') : (ru ? 'Выделите команду и скопируйте' : 'Select and copy the command');
+ }));
+-</script>
+-</body>
+-</html>
++</script></body></html>
+diff --git a/docker/compose.yaml b/docker/compose.yaml
+index 9469763..d691242 100644
+--- a/docker/compose.yaml
++++ b/docker/compose.yaml
+@@ -17,7 +17,8 @@ services:
+     cap_drop: [ALL]
+     security_opt: [no-new-privileges:true]
+     environment:
+-      XR_PROFILE: ${XR_PROFILE:-xreal_ultra}
++      XR_PROFILE: ${XR_PROFILE:-}
++      XR_TARGET_DEVICE: ${XR_TARGET_DEVICE:-generic}
+       XR_VIDEO_TCP: ${XR_VIDEO_TCP:-0}
+       RUNTIME_APP_TCP_RATE: ${XR_TCP_RATE:-60}
+       RUNTIME_APP_TCP_MAX_CLIENTS: ${XR_TCP_MAX_CLIENTS:-8}
+diff --git a/docker/config/README.md b/docker/config/README.md
+index b758e2f..290e481 100644
+--- a/docker/config/README.md
++++ b/docker/config/README.md
+@@ -6,10 +6,9 @@ English · [Русский](#русский)
+ 
+    ```bash
+    sudo ./xr-gate export-configs
+-   cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+    ```
+ 
+-2. Edit `config/xr_client.json` and save it as UTF-8 JSON. If `exported-configs` already exists, reuse it or rename it before exporting again.
++2. Copy the JSON profile selected by `XR_PROFILE` in your hardware env from `exported-configs/xr_client/` to `config/xr_client.json`. Edit `config/xr_client.json` and save it as UTF-8 JSON. If `exported-configs` already exists, reuse it or rename it before exporting again.
+ 3. Stop XR Gate and start it again to apply changes.
+ 
+ For controller settings, follow the [controller guide](../docs/CONTROLLERS.en.md). Leave this folder unchanged to use the default profile.
+@@ -20,10 +19,9 @@ For controller settings, follow the [controller guide](../docs/CONTROLLERS.en.md
+ 
+    ```bash
+    sudo ./xr-gate export-configs
+-   cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+    ```
+ 
+-2. Отредактируйте `config/xr_client.json` и сохраните JSON в UTF-8. Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
++2. Скопируйте JSON-профиль, указанный в `XR_PROFILE` аппаратного env, из `exported-configs/xr_client/` в `config/xr_client.json`. Отредактируйте `config/xr_client.json` и сохраните JSON в UTF-8. Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
+ 3. Остановите XR Gate и запустите снова, чтобы применить изменения.
+ 
+ Контроллеры настройте по [инструкции](../docs/CONTROLLERS.ru.md). Для работы со стандартным профилем ничего в этой папке менять не нужно.
+diff --git a/docker/docs/CONTROLLERS.en.md b/docker/docs/CONTROLLERS.en.md
+index aef69bb..df8800c 100644
+--- a/docker/docs/CONTROLLERS.en.md
++++ b/docker/docs/CONTROLLERS.en.md
+@@ -40,9 +40,10 @@ Run from `docker/` after building the image:
+ 
+ ```bash
+ sudo ./xr-gate export-configs
+-cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+ ```
+ 
++Copy the JSON profile selected by `XR_PROFILE` in your hardware env from `exported-configs/xr_client/` to `config/xr_client.json`.
++
+ If `exported-configs` already exists, reuse it or rename it before exporting again.
+ 
+ For **Gear VR**, run:
+diff --git a/docker/docs/CONTROLLERS.md b/docker/docs/CONTROLLERS.md
+index aef69bb..df8800c 100644
+--- a/docker/docs/CONTROLLERS.md
++++ b/docker/docs/CONTROLLERS.md
+@@ -40,9 +40,10 @@ Run from `docker/` after building the image:
+ 
+ ```bash
+ sudo ./xr-gate export-configs
+-cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+ ```
+ 
++Copy the JSON profile selected by `XR_PROFILE` in your hardware env from `exported-configs/xr_client/` to `config/xr_client.json`.
++
+ If `exported-configs` already exists, reuse it or rename it before exporting again.
+ 
+ For **Gear VR**, run:
+diff --git a/docker/docs/CONTROLLERS.ru.md b/docker/docs/CONTROLLERS.ru.md
+index 31a219e..0988a75 100644
+--- a/docker/docs/CONTROLLERS.ru.md
++++ b/docker/docs/CONTROLLERS.ru.md
+@@ -40,9 +40,10 @@ USB-джойстик подключите к компьютеру и пропу
+ 
+ ```bash
+ sudo ./xr-gate export-configs
+-cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+ ```
+ 
++Скопируйте из `exported-configs/xr_client/` JSON-профиль, указанный в `XR_PROFILE` аппаратного env, в `config/xr_client.json`.
++
+ Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
+ 
+ Для **Gear VR** выполните:
+diff --git a/docker/hardware/generic.env.example b/docker/hardware/generic.env.example
+new file mode 100644
+index 0000000..7ea3a09
+--- /dev/null
++++ b/docker/hardware/generic.env.example
+@@ -0,0 +1,15 @@
++# Copy to generic.env and fill the settings required by your hardware/profile.
++XR_TARGET_DEVICE=generic
++XR_PROFILE=
++XR_KERNEL_MODULES=
++XR_CAMERA_TARGET=/dev/video0
++XR_HIDRAW_DEVICES=
++
++XR_USB_IDS=
++XR_CAMERA_DEVICE=
++XR_REQUIRE_CAMERA=0
++XR_REQUIRE_HIDRAW=0
++XR_SERIAL_DEVICES=
++
++XR_BLUETOOTH=0
++XR_INPUT_DEVICES=
+diff --git a/docker/hardware/xreal_ultra.env b/docker/hardware/xreal_ultra.env
+new file mode 100644
+index 0000000..be8b27f
+--- /dev/null
++++ b/docker/hardware/xreal_ultra.env
+@@ -0,0 +1,24 @@
++# Hardware preset. Copy this file to configure a different device.
++XR_TARGET_DEVICE=xreal_ultra
++XR_PROFILE=xreal_ultra
++XR_KERNEL_MODULES=uvcvideo,hid_generic,btusb
++XR_CAMERA_TARGET=/dev/video0
++XR_HIDRAW_DEVICES=
++
++# XREAL Air 2 Ultra. Add other USB identities only deliberately, comma-separated.
++XR_USB_IDS=3318:0426
++# Empty = first capture node (sysfs index 0) belonging to the USB identity above.
++# Host camera is mapped to /dev/video0, preserving the release config.
++XR_CAMERA_DEVICE=
++# Require a local camera; set 0 for remote/TCP or IMU-only profiles.
++XR_REQUIRE_CAMERA=1
++# HID is optional for generic cameras/serial IMUs. Set 1 for HID-based profiles.
++XR_REQUIRE_HIDRAW=0
++# USB serial nodes belonging to XR_USB_IDS are discovered automatically.
++# Explicit additions, e.g. /dev/ttyACM0 or /dev/serial/by-id/<id> (comma-separated).
++XR_SERIAL_DEVICES=
++
++# Gear VR BLE: enable host BlueZ/D-Bus, then configure PROVIDERS in xr_client.json.
++XR_BLUETOOTH=0
++# For evdev controllers: explicit event nodes, comma-separated. No automatic keyboard access.
++XR_INPUT_DEVICES=
+diff --git a/docker/image/entrypoint.sh b/docker/image/entrypoint.sh
+index ff1e271..a2e0a8f 100755
+--- a/docker/image/entrypoint.sh
++++ b/docker/image/entrypoint.sh
+@@ -17,9 +17,12 @@ export RUNTIME_APP_TCP_HOST=0.0.0.0
+ export RUNTIME_APP_TCP_PORT=45810
+ 
+ config_root="${XR_CONFIG_ROOT:-/config}"
+-config="${XR_PROFILE:-xreal_ultra}"
++config="${XR_PROFILE:-}"
+ if [[ -f "$config_root/xr_client.json" ]]; then
+   config="$config_root/xr_client.json"
++elif [[ -z "$config" ]]; then
++  echo '[xr-gate] Select XR_PROFILE in your hardware env or provide config/xr_client.json.' >&2
++  exit 1
+ fi
+ if [[ -f "$config_root/override_controller.json" ]]; then
+   # Respect Gear VR's gearvr.json (or the user's explicit CONFIG_PATH).
+diff --git a/docker/scripts/install-engine-ubuntu.sh b/docker/scripts/install-engine-ubuntu.sh
+index 69b67a4..fa2c2ba 100755
+--- a/docker/scripts/install-engine-ubuntu.sh
++++ b/docker/scripts/install-engine-ubuntu.sh
+@@ -46,7 +46,15 @@ apt-get update
+ apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+ systemctl enable --now docker bluetooth
+ 
+-for module in uvcvideo hid_generic btusb; do
++module_names="$(python3 - "$(dirname "$0")" <<'PY'
++import sys
++sys.path.insert(0, sys.argv[1])
++from xr_gate import kernel_modules, settings
++print(' '.join(kernel_modules(settings())))
++PY
++)"
++read -r -a modules <<< "$module_names"
++for module in "${modules[@]}"; do
+   if ! modprobe "$module"; then
+     echo "Module $module unavailable. Install the matching Linux kernel modules, then run sudo ./xr-gate doctor." >&2
+   fi
+diff --git a/docker/scripts/xr_gate.py b/docker/scripts/xr_gate.py
+index ff22329..1299eee 100644
+--- a/docker/scripts/xr_gate.py
++++ b/docker/scripts/xr_gate.py
+@@ -46,9 +46,19 @@ def read_env(path):
+ 
+ 
+ def settings():
+-    # Device-specific defaults belong to the shipped environment profile.
+     values = read_env(ROOT / ".env.example")
+-    values.update(read_env(ROOT / ".env"))
++    overrides = read_env(ROOT / ".env")
++    selector = dict(values, **overrides)
++    selector.update(os.environ)
++    hardware_file = selector.get("XR_HARDWARE_ENV", "")
++    if hardware_file:
++        path = Path(hardware_file).expanduser()
++        if not path.is_absolute():
++            path = ROOT / path
++        if not path.is_file():
++            raise ValueError(f"Hardware env not found: {path}")
++        values.update(read_env(path))
++    values.update(overrides)
+     values.update(os.environ)
+     image(values)
+     for key in ("XR_BLUETOOTH", "XR_VIDEO_TCP", "XR_REQUIRE_CAMERA", "XR_REQUIRE_HIDRAW"):
+@@ -105,6 +115,21 @@ def selected_ids(env):
+     return values
+ 
+ 
++def camera_target(env, index=0):
++    target = env.get("XR_CAMERA_TARGET", "/dev/video0")
++    match = re.fullmatch(r"/dev/video(\d+)", target)
++    if not match:
++        raise ValueError("XR_CAMERA_TARGET must be /dev/videoN")
++    return f"/dev/video{int(match.group(1)) + index}"
++
++
++def kernel_modules(env):
++    modules = [x.strip() for x in env.get("XR_KERNEL_MODULES", "").split(",") if x.strip()]
++    if any(not re.fullmatch(r"[A-Za-z0-9_-]+", name) for name in modules):
++        raise ValueError("XR_KERNEL_MODULES must contain comma-separated module names")
++    return modules
++
++
+ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
+     identities = selected_ids(env)
+     videos = [p for p in (sysroot / "class/video4linux").glob("video*") if usb_identity(p) in identities]
+@@ -122,7 +147,7 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
+             raise RuntimeError(f"XR_CAMERA_DEVICE not found or does not belong to XR_USB_IDS: {requested}")
+     devices = []
+     for index, path in enumerate(videos):
+-        devices.append((str(devroot / path.name), f"/dev/video{index}"))
++        devices.append((str(devroot / path.name), camera_target(env, index)))
+     for path in sorted((sysroot / "class/hidraw").glob("hidraw*")):
+         if usb_identity(path) in identities:
+             devices.append((str(devroot / path.name), f"/dev/{path.name}"))
+@@ -137,6 +162,10 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
+         if not re.fullmatch(r"/dev/input/event\d+", node):
+             raise ValueError(f"Use an explicit /dev/input/eventN in XR_INPUT_DEVICES: {node}")
+         devices.append((node, node))
++    for node in filter(None, (p.strip() for p in env.get("XR_HIDRAW_DEVICES", "").split(","))):
++        if not re.fullmatch(r"/dev/hidraw\d+", node):
++            raise ValueError(f"Use an explicit /dev/hidrawN in XR_HIDRAW_DEVICES: {node}")
++        devices.append((node, node))
+     for node in filter(None, (p.strip() for p in env.get("XR_SERIAL_DEVICES", "").split(","))):
+         if not re.fullmatch(r"/dev/(?:tty(?:ACM|USB)\d+|serial/by-id/[^/:]+)", node) or Path(node).name in (".", ".."):
+             raise ValueError(f"Use /dev/ttyACMN, /dev/ttyUSBN or /dev/serial/by-id/<id> in XR_SERIAL_DEVICES: {node}")
+@@ -146,7 +175,7 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
+ 
+ def hardware_override(env):
+     devices = discover(env)
+-    if env.get("XR_REQUIRE_CAMERA", "1") == "1" and not any(target == "/dev/video0" for _, target in devices):
++    if env.get("XR_REQUIRE_CAMERA", "1") == "1" and not any(target == camera_target(env) for _, target in devices):
+         raise RuntimeError("No selected UVC camera found. Set XR_USB_IDS or XR_CAMERA_DEVICE, or XR_REQUIRE_CAMERA=0 for camera-free profiles")
+     if env.get("XR_REQUIRE_HIDRAW", "0") == "1" and not any("/hidraw" in target for _, target in devices):
+         raise RuntimeError("No selected hidraw node found. Check XR_USB_IDS and USB passthrough, or set XR_REQUIRE_HIDRAW=0")
+@@ -227,14 +256,15 @@ def doctor(env):
+         for source, target in devices:
+             print(f"Device: {source} -> {target}")
+         override = hardware_override(env)
+-        print("OK hardware preflight; USB mappings:", len(override["services"]["runtime"]["devices"]))
++        print("OK hardware preflight; USB mappings:", len(override["services"]["runtime"].get("devices", [])))
+     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+         print(f"FAIL hardware: {error}")
+         failed = True
+     for command in (["lsusb"], ["bluetoothctl", "list"], ["rfkill", "list"], ["systemctl", "is-active", "bluetooth"]):
+         if shutil.which(command[0]):
+             call(command, env, check=False)
+-    print("Kernel modules: sudo modprobe uvcvideo; sudo modprobe hid_generic; sudo modprobe btusb")
++    for module in kernel_modules(env):
++        print(f"Kernel module: sudo modprobe {module}")
+     print("After USB reattach: stop the container and start it again to refresh device mappings.")
+     return int(failed)
+ 
+diff --git a/docker/tests/test_bundle.py b/docker/tests/test_bundle.py
+index bba8531..19d3fc4 100644
+--- a/docker/tests/test_bundle.py
++++ b/docker/tests/test_bundle.py
+@@ -48,6 +48,21 @@ class BundleTest(unittest.TestCase):
+                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                     xr_gate.image({"XR_VERSION": invalid})
+ 
++    def test_hardware_file_and_user_overrides_are_independent_of_vendor(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root = Path(folder)
++            (root / ".env.example").write_text("XR_VERSION=v1.2.3\nXR_HARDWARE_ENV=custom.env\n")
++            (root / "custom.env").write_text("XR_PROFILE=other_camera\nXR_USB_IDS=1234:abcd\nXR_CAMERA_TARGET=/dev/video4\n")
++            (root / ".env").write_text("XR_USB_IDS=5678:abcd\n")
++            with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {}, clear=True):
++                settings = xr_gate.settings()
++                self.assertEqual(settings["XR_PROFILE"], "other_camera")
++                self.assertEqual(xr_gate.selected_ids(settings), {"5678:abcd"})
++                self.assertEqual(xr_gate.camera_target(settings, 1), "/dev/video5")
++            with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {"XR_HARDWARE_ENV": "missing.env"}, clear=True):
++                with self.assertRaisesRegex(ValueError, "Hardware env not found"):
++                    xr_gate.settings()
++
+     def test_camera_mapping_preserves_release_video0_without_exposing_other_usb(self):
+         with tempfile.TemporaryDirectory() as folder:
+             root = Path(folder)
+@@ -170,14 +185,14 @@ class BundleTest(unittest.TestCase):
+                     state = home / f'.config/xr_tracking/override_controller/{override}.json'
+                     state.parent.mkdir(parents=True)
+                     state.write_text('{"previous":"save"}')
+-                env = dict(os.environ, XR_ROOT_PROJECT=str(root), XR_CONFIG_ROOT=str(config), HOME=str(home))
++                env = dict(os.environ, XR_ROOT_PROJECT=str(root), XR_CONFIG_ROOT=str(config), XR_PROFILE="test_camera", HOME=str(home))
+                 output = subprocess.run(["bash", str(ROOT / "image/entrypoint.sh"), "--no-imu"], env=env,
+                                         input="interactive input\n", text=True, capture_output=True, check=True)
+                 result = json.loads(output.stdout.splitlines()[-1])
+                 self.assertEqual(result["input"], "interactive input\n")
+                 self.assertEqual(result["tcp"], "1")
+                 self.assertEqual(result["bind"], "0.0.0.0")
+-                expected = str(config / "xr_client.json") if override else "xreal_ultra"
++                expected = str(config / "xr_client.json") if override else "test_camera"
+                 self.assertEqual(result["args"], ["--config", expected, "--no-imu"])
+                 if override:
+                     self.assertEqual(state.read_bytes(), (config / "override_controller.json").read_bytes())
+diff --git a/docker/tests/verify-compose.py b/docker/tests/verify-compose.py
+index dd7f9a5..6cab785 100644
+--- a/docker/tests/verify-compose.py
++++ b/docker/tests/verify-compose.py
+@@ -21,11 +21,14 @@ for version, video in product(("v1.2.3", "v1.2.4"), (False, True)):
+         args = command + ["--project-directory", str(ROOT), "-f", str(ROOT / "compose.yaml"), "-f", str(override)]
+         if video:
+             args += ["-f", str(ROOT / "compose.video.yaml")]
+-        env = dict(os.environ, XR_VERSION=version, XR_VIDEO_TCP=str(int(video)), XR_TCP_PORT="45910", XR_VIDEO_PORT="45900")
++        env = dict(os.environ, XR_VERSION=version, XR_PROFILE="custom_camera", XR_TARGET_DEVICE="custom_device",
++                   XR_VIDEO_TCP=str(int(video)), XR_TCP_PORT="45910", XR_VIDEO_PORT="45900")
+         rendered = json.loads(subprocess.check_output(args + ["config", "--format", "json"], text=True, env=env))
+         service = rendered["services"]["runtime"]
+         assert service["image"] == f"xr-gate-runtime:{version}", service["image"]
+         assert service["build"]["args"]["XR_VERSION"] == version, service["build"]
++        assert service["environment"]["XR_PROFILE"] == "custom_camera", service["environment"]
++        assert service["environment"]["XR_TARGET_DEVICE"] == "custom_device", service["environment"]
+         ports = service["ports"]
+         assert all(p["host_ip"] == "127.0.0.1" and p["protocol"] == "tcp" for p in ports), ports
+         assert {(p["target"], p["published"]) for p in ports} == ({(45810, "45910"), (45700, "45900")} if video else {(45810, "45910")})
+diff --git a/win/.env.example b/win/.env.example
+new file mode 100644
+index 0000000..22258aa
+--- /dev/null
++++ b/win/.env.example
+@@ -0,0 +1,19 @@
++# Copy to .env to override saved choices. Use literal values, not shell expressions.
++XR_HARDWARE_ENV=hardware/xreal_ultra.env
++XR_RELEASE_TAG=latest
++XR_DISTRIBUTION=Ubuntu-24.04
++XR_LINUX_ROOT=~/xr-gate-wsl
++XR_STEAMVR_PATH=
++XR_CONTROLLER_CONFIG=
++XR_TCP_HOST=127.0.0.1
++XR_TCP_PORT=45810
++XR_START_TIMEOUT=180
++
++# Optional overrides for the selected hardware preset:
++# XR_USB_BUS_IDS=1-2
++# XR_BLUETOOTH_BUS_ID=1-4
++# XR_DISPLAY_NAME=\\.\DISPLAY2
++# XR_DISPLAY_FREQUENCY_HZ=90
++# XR_DISPLAY_MODE=extended_sbs
++# XR_BLUETOOTH=0
++# XR_GEARVR=0
+diff --git a/win/.gitignore b/win/.gitignore
+new file mode 100644
+index 0000000..9156d4b
+--- /dev/null
++++ b/win/.gitignore
+@@ -0,0 +1,3 @@
++.env
++__pycache__/
++tests/__pycache__/
+diff --git a/win/README.md b/win/README.md
+index 71c9591..dae6d92 100644
+--- a/win/README.md
++++ b/win/README.md
+@@ -1,135 +1,122 @@
+-# XR Gate: Windows installation with WSL2
++# XR Gate on Windows
+ 
+ [English](START-HERE.html) · [Русский](START-HERE.ru.html)
+ 
+-## 1. Prepare Windows
++## 1. Download and prepare
+ 
+-1. Use Windows 11 x64 with an AVX2-capable CPU.
++1. Use Windows 11 x64 and an AVX2-capable CPU.
+ 2. Install Steam and SteamVR. Open SteamVR once, then close it.
+-3. Extract the entire archive to a permanent folder, such as C:\XR-Gate-WSL. Keep the linux and windows subfolders next to XrGate-Wsl.ps1.
+-4. Open a regular Windows PowerShell window in that folder. Run the commands below in Windows.
++3. Download **xr-gate-windows.zip** from [Releases](https://github.com/vladoshub/xr-gate/releases), or the **xr-gate-windows** artifact from your CI run.
++4. Extract the ZIP to a permanent folder. Open its `xr-gate-windows` folder. Keep the `drivers`, `hardware`, `linux` and `windows` subfolders together.
++5. Open a regular Windows PowerShell in this folder. Run all commands below there.
+ 
+-## 2. Install XR Gate
++## 2. Configure your hardware
+ 
+-1. Double-click INSTALL.cmd, or run:
++For XREAL Air 2 Ultra, the supplied preset is ready to use. Create your settings file once:
+ 
+ ~~~powershell
+-.\INSTALL.cmd
++if (!(Test-Path .env)) { Copy-Item .env.example .env }
+ ~~~
+ 
+-For Gear VR controllers, use this command instead:
++For another device, copy the generic template:
+ 
+ ~~~powershell
+-.\INSTALL.cmd -GearVR
++Copy-Item hardware\generic.env.example hardware\my-device.env
+ ~~~
+ 
+-2. Approve the Windows administrator prompt.
+-3. If a Windows restart is requested, save your work, restart Windows, and repeat the installation command.
+-4. If an Ubuntu window opens, create a Linux username and password. At the Ubuntu command prompt, type exit. Run the installation command again.
+-5. If the installer asks you to restart Ubuntu after enabling systemd, save any work in Ubuntu and run:
++Edit `hardware/my-device.env`, then set `XR_HARDWARE_ENV=hardware/my-device.env` in `.env`.
+ 
+-~~~powershell
+-wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd
+-~~~
++1. Set `XR_PROFILE` to the runtime profile and `XR_TARGET_DEVICE` to its device name.
++2. Set `XR_USB_IDS` to the camera/IMU VID:PID pairs. For a manual selection, run `usbipd list` and set `XR_USB_BUS_IDS` in `.env`. For multiple devices, separate the IDs with commas. `XR_USB_INSTANCE_IDS` accepts stable Windows USB instance paths instead.
++3. Set Linux camera, HID, serial and input paths when needed: `XR_CAMERA_DEVICE`, `XR_HIDRAW_DEVICES`, `XR_SERIAL_DEVICES`, `XR_INPUT_DEVICES`. Enable `XR_REQUIRE_CAMERA=1` if the profile uses a camera.
++4. Set `XR_DEVICE_ACCESS_SCRIPT` to the matching setup script inside the release, or leave it empty. List the required Linux modules in `XR_KERNEL_MODULES`.
++5. Set `XR_WINDOW_WIDTH`, `XR_WINDOW_HEIGHT`, `XR_RENDER_WIDTH`, `XR_RENDER_HEIGHT`, `XR_DISPLAY_FREQUENCY_HZ` and the optical settings for your display.
+ 
+-Repeat your installation options, such as -GearVR, if used. Exit code 20 means you need to complete the displayed step and repeat installation.
++To override saved choices, put the setting directly in `.env`. Select a frequency and `XR_DISPLAY_MODE` (`direct` or `extended_sbs`) included in the archive. For a dedicated Bluetooth dongle, set `XR_BLUETOOTH_BUS_ID` to its BUSID. Set `XR_BLUETOOTH=0` to disable a saved dongle, or `XR_GEARVR=0` to disable Gear VR. Set `XR_STEAMVR_PATH` if SteamVR is not found automatically.
+ 
+-6. If driver registration was deferred, close SteamVR and run:
++## 3. Install
++
++1. Double-click **INSTALL.cmd**, or run:
+ 
+ ~~~powershell
+-.\DRIVER.cmd
++.\INSTALL.cmd
+ ~~~
+ 
+-If SteamVR is not found, specify its installation folder:
++For Gear VR controllers, use:
+ 
+ ~~~powershell
+-.\DRIVER.cmd -SteamVR 'D:\SteamLibrary\steamapps\common\SteamVR'
++.\INSTALL.cmd -GearVR
+ ~~~
+ 
+-## 3. Prepare the glasses (using XREAL ULTRA glasses as an example)
+-
+-1. Connect the XREAL Air 2 Ultra video input to your Windows GPU using a video-capable USB-C port or a powered DP/HDMI-to-USB-C adapter.
+-2. Put on the glasses or activate their proximity sensor.
+-3. Hold Brightness Up (+) for approximately three seconds until the beep to enable full SBS.
+-4. In Windows Settings → System → Display, select Extend these displays. Select the glasses and set 3840×1080 at 60 Hz.
+-5. Click Identify and note which display number appears in the glasses. If the glasses are missing from Windows, open SteamVR Developer Settings, select Disable Direct Mode, then close SteamVR and repeat step 4.
+-6. With SteamVR closed, double-click DISPLAY.cmd or run:
++2. Approve the administrator prompt. If a restart is requested, restart Windows and run the same command again.
++3. If Ubuntu opens for the first time, create a Linux username and password, enter `exit`, then run the installation command again.
++4. If asked to restart Ubuntu, save your work in it and run:
+ 
+ ~~~powershell
+-.\DISPLAY.cmd
++wsl --terminate Ubuntu-24.04
++.\INSTALL.cmd
+ ~~~
+ 
+-7. Select the list row for the glasses. Match the DISPLAY number to Windows Identify; use the displayed name to distinguish monitors. The command saves the selection and configures extended SBS output.
+-8. If using Gear VR controllers, complete section 5 before continuing.
++Use the distribution name from `XR_DISTRIBUTION` if you changed it. Repeat `-GearVR` if used.
+ 
+-## 4. Start XR Gate and SteamVR
+-
+-1. Connect the glasses and enable SBS. Place IMU controllers on a flat surface and keep them still during initial calibration.
+-2. Double-click RUN.cmd, or run:
++5. If driver registration was deferred, close SteamVR and run:
+ 
+ ~~~powershell
+-.\RUN.cmd
++.\DRIVER.cmd
+ ~~~
+ 
+-3. In the xr_client console, complete the startup prompts and calibration. Keep the cameras uncovered and the room well lit. Move your head slowly for a few seconds when tracking starts.
+-4. Wait for SteamVR to open.
+-5. Keep SteamVR Direct Mode disabled for this setup.
+-6. If XR Gate is blocked, open Settings → Startup/Shutdown → Manage Add-ons and enable it.
+-7. Check that the SteamVR scene appears in the glasses and responds to head movement, then launch your game.
++## 4. Select the display
+ 
+-For later starts, enable SBS and run RUN.cmd. It reapplies the saved display selection using its current desktop coordinates. After changing a cable/port or if the saved display is missing, close SteamVR and run DISPLAY.cmd again.
++For **extended_sbs**:
+ 
+-To start only xr_client, run:
++1. Connect the glasses' video input to the Windows GPU and enable SBS on the glasses.
++2. In Windows display settings, choose **Extend these displays**. Set the glasses' resolution and frequency to the values in your hardware env.
++3. Disable SteamVR Direct Mode, then close SteamVR.
++4. Run:
+ 
+ ~~~powershell
+-.\CONSOLE.cmd
++.\DISPLAY.cmd
+ ~~~
+ 
+-If setup takes longer than 180 seconds, finish the prompts in the open xr_client window and run RUN.cmd again. To allow more time:
++5. Select the glasses' row using Windows **Identify**. To save a fixed output name instead, set `XR_DISPLAY_NAME` in `.env` and run the command again.
+ 
+-~~~powershell
+-.\RUN.cmd -TimeoutSeconds 300
+-~~~
++For **direct**, use `Direct-Mode-Guide.bat` in the selected `drivers/<frequency>Hz-direct/xr_tracking` folder.
++
++## 5. Start
+ 
+-If the glasses need to be selected manually:
++1. Connect the devices. Place IMU controllers on a flat surface and keep them still.
++2. Run:
+ 
+ ~~~powershell
+-usbipd list
+-.\USB.cmd -XrealBusId 1-2
++.\RUN.cmd
+ ~~~
+ 
+-Replace 1-2 with the glasses' BUSID from usbipd list.
++3. Complete the startup prompts and calibration in the opened console. Keep it open and wait for SteamVR.
++4. Enable the XR Gate add-on in SteamVR if prompted. Check the headset, then start your game.
+ 
+-## 5. Set up Gear VR controllers
++For the next session, connect the devices and run **RUN.cmd** again. After changing display ports, close SteamVR and repeat **DISPLAY.cmd**.
+ 
+-1. Connect the glasses and a dedicated USB Bluetooth dongle. If Gear VR was not enabled during installation, run:
++To start the runtime without opening SteamVR:
+ 
+ ~~~powershell
+-.\INSTALL.cmd -GearVR
++.\CONSOLE.cmd
+ ~~~
+ 
+-2. Find the dongle's BUSID:
+-
+-~~~powershell
+-usbipd list
+-~~~
++## 6. Pair Gear VR controllers
+ 
+-3. Attach the dongle:
++1. Set the dongle's `XR_BLUETOOTH_BUS_ID` in `.env`, then attach the devices:
+ 
+ ~~~powershell
+-.\USB.cmd -BluetoothBusId 1-4
++.\USB.cmd
+ ~~~
+ 
+-Replace 1-4 with your dongle's BUSID.
+-
+-4. Open the Bluetooth pairing console:
++2. Open the pairing console:
+ 
+ ~~~powershell
+ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair
+ ~~~
+ 
+-5. Put the controllers into pairing mode and enter the following commands in bluetoothctl. Replace MAC_LEFT and MAC_RIGHT with the actual controller addresses:
++3. Put the controllers into pairing mode. Replace `MAC_LEFT` and `MAC_RIGHT` with their addresses and enter:
+ 
+ ~~~text
+ power on
+@@ -146,218 +133,38 @@ scan off
+ quit
+ ~~~
+ 
+-6. Start the controller registration wizard:
++4. Stop the runtime if it is running. Start registration:
+ 
+ ~~~powershell
+ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR
+ ~~~
+ 
+-7. Follow the prompts to assign the left and right controllers and save the configuration.
+-8. Run RUN.cmd.
++5. Follow the left/right assignment prompts, save the configuration, then run **RUN.cmd**.
+ 
+-If you already have a gearvr.json configuration, import it instead of repeating controller registration:
+-
+-~~~powershell
+-.\INSTALL.cmd -GearVR -ControllerConfig 'C:\XR-Gate-WSL\gearvr.json'
+-~~~
+-
+-Complete Bluetooth pairing before starting XR Gate. To select a different USB Bluetooth dongle later, repeat step 3 with its BUSID.
+-
+-## 6. Stop XR Gate
++## 7. Stop or change settings
+ 
+ 1. Close SteamVR.
+-2. Press Ctrl+C in the xr_client console and wait for it to stop.
+-3. Return the selected USB devices to Windows:
++2. Press **Ctrl+C** in the runtime console and wait for it to stop.
++3. To return USB devices to Windows, run:
+ 
+ ~~~powershell
+ .\DETACH.cmd
+ ~~~
+ 
+-4. To use the glasses as a normal desktop display, switch them back to 2D with their hardware button.
+-
+-## 7. Change settings or update
+-
+-### Update the setup scripts
+-
+-1. Close SteamVR.
+-2. Extract the new archive into the same setup folder and replace its files, including the linux and windows subfolders.
+-3. Enable SBS and select the matching resolution and refresh rate in Windows.
+-4. Run DISPLAY.cmd and select the glasses' screen once.
+-5. Run RUN.cmd.
+-
+-### Update XR Gate
++After changing hardware settings, attach the devices and start again. After changing the release, driver frequency or display mode in `.env`, repeat **INSTALL.cmd** and the display setup.
+ 
+-1. Close SteamVR and stop xr_client.
+-2. Run INSTALL.cmd again.
+-3. Enable SBS, select the matching refresh rate in Windows, then run RUN.cmd. The saved screen selection is applied to the new driver. If the display is no longer found, close SteamVR and run DISPLAY.cmd again.
++## 8. If startup fails
+ 
+-To install a specific release:
+-
+-~~~powershell
+-.\INSTALL.cmd -ReleaseTag v2.8.0
+-~~~
+-
+-### Switch to 90 Hz
+-
+-1. Close SteamVR and stop xr_client.
+-2. Install the matching driver:
+-
+-~~~powershell
+-.\INSTALL.cmd -FrequencyHz 90 -DisplayMode extended_sbs
+-~~~
+-
+-3. Set the glasses to SBS/90 Hz and select 90 Hz in Windows display settings.
+-4. Run DISPLAY.cmd, then RUN.cmd.
+-
+-### Use an extended SBS display
+-
+-1. If Direct Mode was enabled, open SteamVR Developer Settings and select Disable Direct Mode. Close SteamVR; xr_client can stay open.
+-2. Select Extend these displays and 3840×1080 at the installed driver's refresh rate in Windows.
+-3. Run:
+-
+-~~~powershell
+-.\DISPLAY.cmd
+-~~~
+-
+-4. Select the glasses' display from the list, then run RUN.cmd.
+-
+-### Use Direct Mode
+-
+-1. Close SteamVR and stop xr_client.
+-2. Install the Direct Mode package:
+-
+-~~~powershell
+-.\INSTALL.cmd -FrequencyHz 60 -DisplayMode direct
+-~~~
+-
+-3. Start XR Gate and SteamVR, select Enable Direct Mode in SteamVR Developer Settings, and restart SteamVR.
+-4. If SteamVR shows error 422 or continues to show the Windows desktop in the glasses, follow Use an extended SBS display above.
+-
+-### Use a custom xr_client profile
+-
+-1. Place your profile at ~/xr-gate-wsl/config/xr_client.json inside Ubuntu.
+-2. Stop xr_client and run RUN.cmd again.
+-
+-## 8. Resolve startup problems
+-
+-### SteamVR error 422 or Windows desktop in the glasses
+-
+-1. Open SteamVR Developer Settings and select Disable Direct Mode. Close SteamVR; keep xr_client open.
+-2. Enable SBS. In Windows Display settings, select Extend these displays and 3840×1080 at the installed driver's refresh rate.
+-3. Click Identify, then run:
+-
+-~~~powershell
+-.\DISPLAY.cmd
+-.\RUN.cmd
+-~~~
+-
+-4. Choose the glasses' display when prompted. Wait for SteamVR to open and check head movement in its scene.
+-5. If error 422 returns, close SteamVR, repeat DISPLAY.cmd to check the selected screen, and inspect the latest compositor log:
+-
+-~~~powershell
+-$vrPaths = Get-Content "$env:LOCALAPPDATA\openvr\openvrpaths.vrpath" -Raw | ConvertFrom-Json
+-$steamFolder = Split-Path -Parent $vrPaths.config[0]
+-Get-Content (Join-Path $steamFolder 'logs\vrcompositor.txt') -Tail 100
+-~~~
+-
+-### View diagnostics
+-
+-1. Run:
++Run:
+ 
+ ~~~powershell
+ .\DOCTOR.cmd
+ ~~~
+ 
+-2. With xr_client running, check the tracking connection:
+-
+-~~~powershell
+-powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test -TimeoutSeconds 30
+-~~~
+-
+-### Reconnect cameras or Bluetooth
+-
+-1. Close SteamVR and stop xr_client.
+-2. Reconnect the USB cable or dongle.
+-3. Run USB.cmd, then RUN.cmd.
+-4. If the device is still missing, run:
+-
+-~~~powershell
+-wsl -d Ubuntu-24.04 -- lsusb
+-wsl -d Ubuntu-24.04 -- uname -r
+-wsl -d Ubuntu-24.04 -u root -- modprobe uvcvideo
+-wsl -d Ubuntu-24.04 -u root -- modprobe btusb
+-wsl -d Ubuntu-24.04 -- bluetoothctl list
+-wsl -d Ubuntu-24.04 -u root -- dmesg
+-~~~
+-
+-5. If a module is missing, update WSL:
+-
+-~~~powershell
+-wsl --update --web-download
+-~~~
+-
+-6. Save your work in Ubuntu, restart the distribution, and reconnect the devices:
+-
+-~~~powershell
+-wsl --terminate Ubuntu-24.04
+-.\USB.cmd
+-.\RUN.cmd
+-~~~
+-
+-If a custom kernel is configured in %USERPROFILE%\.wslconfig, remove or update that kernel setting before repeating these steps.
+-
+-### Restore the Windows tracking connection
+-
+-1. Keep xr_client running and run:
+-
+-~~~powershell
+-Test-NetConnection 127.0.0.1 -Port 45810
+-wsl -d Ubuntu-24.04 -- ss -ltnp
+-~~~
+-
+-2. For WSL NAT networking, enable localhost forwarding in %USERPROFILE%\.wslconfig. Preserve the file's other settings:
+-
+-~~~ini
+-[wsl2]
+-localhostForwarding=true
+-~~~
+-
+-3. Save work in all WSL distributions, then run:
++With the runtime console still open, test tracking:
+ 
+ ~~~powershell
+-wsl --shutdown
+-.\RUN.cmd
++powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
+ ~~~
+ 
+-4. If connection still fails, check the VPN/firewall settings and close any other process using port 45810.
+-
+-### Create a regular Ubuntu user
+-
+-If Ubuntu starts as root:
+-
+-1. Open Ubuntu and create a user. Replace xruser with your preferred Linux username:
+-
+-~~~bash
+-adduser xruser
+-usermod -aG sudo xruser
+-~~~
+-
+-2. Set the user in /etc/wsl.conf, preserving the file's other sections:
+-
+-~~~ini
+-[user]
+-default=xruser
+-~~~
+-
+-3. Save your Ubuntu work, then run from Windows:
+-
+-~~~powershell
+-wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd
+-~~~
+-
+-### Install a missing Windows prerequisite
+-
+-1. If winget is missing, install or update Microsoft App Installer, then repeat INSTALL.cmd.
+-2. If Windows reports that virtualization is disabled, enable SVM/AMD-V or VT-x in BIOS/UEFI, restart Windows, and repeat INSTALL.cmd.
+-
++If SteamVR reports an invalid desktop display, close SteamVR, check **Extend**, the resolution and frequency in Windows, then repeat **DISPLAY.cmd** and **RUN.cmd**.
+diff --git a/win/README.ru.md b/win/README.ru.md
+index fb9c608..4a45daf 100644
+--- a/win/README.ru.md
++++ b/win/README.ru.md
+@@ -1,136 +1,122 @@
+-# XR Gate: установка в Windows через WSL2
++# XR Gate в Windows
+ 
+ [English](START-HERE.html) · [Русский](START-HERE.ru.html)
+ 
+-## 1. Подготовь Windows
++## 1. Скачайте и подготовьте
+ 
+-1. Используй Windows 11 x64 и процессор с поддержкой AVX2.
+-2. Установи Steam и SteamVR. Один раз открой SteamVR, затем закрой его.
+-3. Распакуй весь архив в постоянную папку, например C:\XR-Gate-WSL. Сохрани подпапки linux и windows рядом с XrGate-Wsl.ps1.
+-4. Открой обычный Windows PowerShell в этой папке. Все команды ниже выполняй в Windows.
++1. Нужны Windows 11 x64 и процессор с поддержкой AVX2.
++2. Установите Steam и SteamVR. Один раз откройте SteamVR, затем закройте его.
++3. Скачайте **xr-gate-windows.zip** из [Releases](https://github.com/vladoshub/xr-gate/releases) или artifact **xr-gate-windows** из своего запуска CI.
++4. Распакуйте ZIP в постоянную папку. Откройте вложенную папку `xr-gate-windows`. Сохраните подпапки `drivers`, `hardware`, `linux` и `windows` вместе.
++5. Откройте в этой папке обычный Windows PowerShell. Все команды ниже выполняйте в нём.
+ 
+-## 2. Установи XR Gate
++## 2. Настройте оборудование
+ 
+-1. Дважды щёлкни INSTALL.cmd или выполни:
++Для XREAL Air 2 Ultra готовый профиль уже настроен. Один раз создайте файл своих настроек:
+ 
+ ~~~powershell
+-.\INSTALL.cmd
++if (!(Test-Path .env)) { Copy-Item .env.example .env }
+ ~~~
+ 
+-Для контроллеров Gear VR используй эту команду:
++Для другого устройства скопируйте универсальный шаблон:
+ 
+ ~~~powershell
+-.\INSTALL.cmd -GearVR
++Copy-Item hardware\generic.env.example hardware\my-device.env
+ ~~~
+ 
+-2. Подтверди запрос прав администратора Windows.
+-3. Если установщик запросит перезагрузку Windows, сохрани работу, перезагрузи компьютер и повтори команду установки.
+-4. Если откроется окно Ubuntu, создай имя Linux-пользователя и пароль. В командной строке Ubuntu введи exit, затем повтори команду установки.
+-5. Если установщик попросит перезапустить Ubuntu после включения systemd, сохрани работу в Ubuntu и выполни:
++Отредактируйте `hardware/my-device.env`, затем укажите `XR_HARDWARE_ENV=hardware/my-device.env` в `.env`.
+ 
+-~~~powershell
+-wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd
+-~~~
++1. Укажите профиль запуска в `XR_PROFILE` и имя устройства в `XR_TARGET_DEVICE`.
++2. Укажите VID:PID камер и IMU в `XR_USB_IDS`. Для ручного выбора выполните `usbipd list` и задайте `XR_USB_BUS_IDS` в `.env`. Для нескольких устройств разделите BUSID запятыми. Вместо них можно задать постоянные пути Windows USB instance в `XR_USB_INSTANCE_IDS`.
++3. При необходимости задайте Linux-пути камеры, HID, serial и устройств ввода: `XR_CAMERA_DEVICE`, `XR_HIDRAW_DEVICES`, `XR_SERIAL_DEVICES`, `XR_INPUT_DEVICES`. Если профиль использует камеру, включите `XR_REQUIRE_CAMERA=1`.
++4. Укажите подходящий скрипт настройки из релиза в `XR_DEVICE_ACCESS_SCRIPT` или оставьте поле пустым. Перечислите нужные модули Linux в `XR_KERNEL_MODULES`.
++5. Задайте `XR_WINDOW_WIDTH`, `XR_WINDOW_HEIGHT`, `XR_RENDER_WIDTH`, `XR_RENDER_HEIGHT`, `XR_DISPLAY_FREQUENCY_HZ` и оптические параметры своего дисплея.
+ 
+-Повтори свои параметры установки, например -GearVR. Код завершения 20 означает, что нужно выполнить указанное действие и повторить установку.
++Чтобы переопределить сохранённый выбор, укажите настройку прямо в `.env`. Выбирайте частоту и `XR_DISPLAY_MODE` (`direct` или `extended_sbs`), которые есть в архиве. Для отдельного Bluetooth-донгла укажите его BUSID в `XR_BLUETOOTH_BUS_ID`. Для отключения сохранённого донгла укажите `XR_BLUETOOTH=0`; для отключения Gear VR — `XR_GEARVR=0`. Если SteamVR не найден автоматически, задайте `XR_STEAMVR_PATH`.
+ 
+-6. Если регистрация драйвера была отложена, закрой SteamVR и выполни:
++## 3. Установите
++
++1. Дважды щёлкните **INSTALL.cmd** или выполните:
+ 
+ ~~~powershell
+-.\DRIVER.cmd
++.\INSTALL.cmd
+ ~~~
+ 
+-Если SteamVR не найден, укажи папку его установки:
++Для контроллеров Gear VR используйте:
+ 
+ ~~~powershell
+-.\DRIVER.cmd -SteamVR 'D:\SteamLibrary\steamapps\common\SteamVR'
++.\INSTALL.cmd -GearVR
+ ~~~
+ 
+-## 3. Подготовь очки (на примере очков XREAL ULTRA)
+-
+-
+-1. Подключи видеоканал XREAL Air 2 Ultra к видеокарте Windows через USB-C с видеовыходом или питаемый адаптер DP/HDMI → USB-C.
+-2. Надень очки или активируй их датчик присутствия.
+-3. Удерживай Brightness Up (+) примерно три секунды до сигнала, чтобы включить полный SBS.
+-4. В Windows открой Параметры → Система → Дисплей и выбери «Расширить эти экраны». Выбери очки и установи 3840×1080 и 60 Hz.
+-5. Нажми «Определить» и запомни номер, который появится в очках. Если очков нет среди экранов Windows, открой настройки разработчика SteamVR, нажми «Выключить прямой режим», затем закрой SteamVR и повтори шаг 4.
+-6. При закрытом SteamVR дважды щёлкни DISPLAY.cmd или выполни:
++2. Подтвердите запрос прав администратора. Если запрошена перезагрузка, перезапустите Windows и повторите ту же команду.
++3. Если Ubuntu открылась впервые, создайте имя Linux-пользователя и пароль, введите `exit` и повторите команду установки.
++4. Если запрошен перезапуск Ubuntu, сохраните в ней работу и выполните:
+ 
+ ~~~powershell
+-.\DISPLAY.cmd
++wsl --terminate Ubuntu-24.04
++.\INSTALL.cmd
+ ~~~
+ 
+-7. Выбери строку списка с экраном очков. Сопоставь номер DISPLAY с кнопкой «Определить» в Windows; для различения экранов используй также название. Команда сохранит выбор и настроит вывод в расширенном SBS.
+-8. Если используешь Gear VR, выполни раздел 5 перед запуском.
+-
+-## 4. Запусти XR Gate и SteamVR
++Если меняли `XR_DISTRIBUTION`, используйте указанное там имя дистрибутива. Повторите `-GearVR`, если использовали его.
+ 
+-1. Подключи очки и включи SBS. Контроллеры с IMU положи на ровную поверхность и держи неподвижно во время начальной калибровки.
+-2. Дважды щёлкни RUN.cmd или выполни:
++5. Если регистрация драйвера отложена, закройте SteamVR и выполните:
+ 
+ ~~~powershell
+-.\RUN.cmd
++.\DRIVER.cmd
+ ~~~
+ 
+-3. В консоли xr_client пройди стартовые подсказки и калибровку. Не закрывай камеры; обеспечь хорошее освещение. При запуске трекинга несколько секунд плавно двигай головой.
+-4. Дождись открытия SteamVR.
+-5. Для этой настройки оставь прямой режим SteamVR выключенным.
+-6. Если XR Gate заблокирован, открой Settings → Startup/Shutdown → Manage Add-ons и включи его.
+-7. Проверь, что в очках появилась сцена SteamVR и она реагирует на движение головы, затем запускай игру.
++## 4. Выберите дисплей
+ 
+-Для следующих запусков включи SBS и запусти RUN.cmd. Команда повторно применит сохранённый выбор экрана с его текущими координатами рабочего стола. После смены кабеля/порта или если сохранённый экран не найден, закрой SteamVR и снова запусти DISPLAY.cmd.
++Для **extended_sbs**:
+ 
+-Чтобы запустить только xr_client:
++1. Подключите видеовход очков к видеокарте Windows и включите SBS на очках.
++2. В настройках дисплея Windows выберите **Расширить эти экраны**. Установите для очков разрешение и частоту из аппаратного env.
++3. Отключите прямой режим SteamVR и закройте SteamVR.
++4. Выполните:
+ 
+ ~~~powershell
+-.\CONSOLE.cmd
++.\DISPLAY.cmd
+ ~~~
+ 
+-Если настройка занимает больше 180 секунд, закончи действия в открытом окне xr_client и снова запусти RUN.cmd. Чтобы увеличить ожидание:
++5. Выберите строку очков по кнопке **Определить** в Windows. Чтобы закрепить имя выхода, укажите `XR_DISPLAY_NAME` в `.env` и повторите команду.
+ 
+-~~~powershell
+-.\RUN.cmd -TimeoutSeconds 300
+-~~~
++Для **direct** используйте `Direct-Mode-Guide.bat` в выбранной папке `drivers/<частота>Hz-direct/xr_tracking`.
+ 
+-Если очки нужно выбрать вручную:
++## 5. Запустите
++
++1. Подключите устройства. Положите IMU-контроллеры на ровную поверхность и не двигайте их.
++2. Выполните:
+ 
+ ~~~powershell
+-usbipd list
+-.\USB.cmd -XrealBusId 1-2
++.\RUN.cmd
+ ~~~
+ 
+-Замени 1-2 на BUSID очков из usbipd list.
++3. Пройдите стартовые подсказки и калибровку в открывшейся консоли. Оставьте её открытой и дождитесь SteamVR.
++4. При запросе включите дополнение XR Gate в SteamVR. Проверьте гарнитуру и запустите игру.
+ 
+-## 5. Настрой контроллеры Gear VR
++Для следующего сеанса подключите устройства и снова запустите **RUN.cmd**. После смены порта дисплея закройте SteamVR и повторите **DISPLAY.cmd**.
+ 
+-1. Подключи очки и выделенный USB Bluetooth-донгл. Если при установке Gear VR не был включён, выполни:
++Для запуска трекинга без открытия SteamVR:
+ 
+ ~~~powershell
+-.\INSTALL.cmd -GearVR
++.\CONSOLE.cmd
+ ~~~
+ 
+-2. Найди BUSID донгла:
+-
+-~~~powershell
+-usbipd list
+-~~~
++## 6. Подключите контроллеры Gear VR
+ 
+-3. Подключи донгл к WSL:
++1. Укажите BUSID донгла в `XR_BLUETOOTH_BUS_ID` в `.env`, затем подключите устройства:
+ 
+ ~~~powershell
+-.\USB.cmd -BluetoothBusId 1-4
++.\USB.cmd
+ ~~~
+ 
+-Замени 1-4 на BUSID своего донгла.
+-
+-4. Открой консоль сопряжения Bluetooth:
++2. Откройте консоль сопряжения:
+ 
+ ~~~powershell
+ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair
+ ~~~
+ 
+-5. Переведи контроллеры в режим сопряжения и введи команды в bluetoothctl. Вместо MAC_LEFT и MAC_RIGHT укажи реальные адреса контроллеров:
++3. Включите режим сопряжения на контроллерах. Подставьте их адреса вместо `MAC_LEFT` и `MAC_RIGHT` и введите:
+ 
+ ~~~text
+ power on
+@@ -147,218 +133,38 @@ scan off
+ quit
+ ~~~
+ 
+-6. Запусти мастер регистрации контроллеров:
++4. Если трекинг запущен, остановите его. Запустите регистрацию:
+ 
+ ~~~powershell
+ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR
+ ~~~
+ 
+-7. По подсказкам назначь левый и правый контроллеры и сохрани конфигурацию.
+-8. Запусти RUN.cmd.
++5. Назначьте левый и правый контроллеры по подсказкам, сохраните конфиг и запустите **RUN.cmd**.
+ 
+-Если уже есть конфигурация gearvr.json, импортируй её вместо повторной регистрации:
++## 7. Остановите или измените настройки
+ 
+-~~~powershell
+-.\INSTALL.cmd -GearVR -ControllerConfig 'C:\XR-Gate-WSL\gearvr.json'
+-~~~
+-
+-Перед запуском XR Gate выполни сопряжение Bluetooth. Для другого USB Bluetooth-донгла повтори шаг 3 с его BUSID.
+-
+-## 6. Останови XR Gate
+-
+-1. Закрой SteamVR.
+-2. Нажми Ctrl+C в консоли xr_client и дождись остановки.
+-3. Верни выбранные USB-устройства Windows:
++1. Закройте SteamVR.
++2. Нажмите **Ctrl+C** в консоли трекинга и дождитесь остановки.
++3. Для возврата USB-устройств Windows выполните:
+ 
+ ~~~powershell
+ .\DETACH.cmd
+ ~~~
+ 
+-4. Чтобы использовать очки как обычный дисплей, переключи их в 2D аппаратной кнопкой.
+-
+-## 7. Измени настройки или обнови XR Gate
+-
+-### Обновление скриптов установки
+-
+-1. Закрой SteamVR.
+-2. Распакуй новый архив в ту же папку установки и замени файлы, включая подпапки linux и windows.
+-3. Включи SBS и выбери соответствующие разрешение и частоту в Windows.
+-4. Один раз запусти DISPLAY.cmd и выбери экран очков.
+-5. Запусти RUN.cmd.
+-
+-### Обновление XR Gate
++После изменения аппаратных настроек подключите устройства и запустите снова. После смены релиза, частоты драйвера или режима дисплея в `.env` повторите **INSTALL.cmd** и настройку дисплея.
+ 
+-1. Закрой SteamVR и останови xr_client.
+-2. Повтори INSTALL.cmd.
+-3. Включи SBS, выбери соответствующую частоту в Windows и запусти RUN.cmd. Сохранённый выбор экрана применится к новому драйверу. Если экран больше не найден, закрой SteamVR и снова запусти DISPLAY.cmd.
++## 8. Если не запускается
+ 
+-Для установки определённого релиза:
+-
+-~~~powershell
+-.\INSTALL.cmd -ReleaseTag v2.8.0
+-~~~
+-
+-### Переключение на 90 Hz
+-
+-1. Закрой SteamVR и останови xr_client.
+-2. Установи соответствующий драйвер:
+-
+-~~~powershell
+-.\INSTALL.cmd -FrequencyHz 90 -DisplayMode extended_sbs
+-~~~
+-
+-3. Включи SBS/90 Hz на очках и выбери 90 Hz в параметрах дисплея Windows.
+-4. Запусти DISPLAY.cmd, затем RUN.cmd.
+-
+-### Использование расширенного SBS-дисплея
+-
+-1. Если прямой режим включён, открой настройки разработчика SteamVR и нажми «Выключить прямой режим». Закрой SteamVR; xr_client можно оставить работающим.
+-2. В Windows выбери «Расширить эти экраны», разрешение 3840×1080 и частоту, соответствующую установленному драйверу.
+-3. Выполни:
+-
+-~~~powershell
+-.\DISPLAY.cmd
+-~~~
+-
+-4. Выбери экран очков в списке, затем запусти RUN.cmd.
+-
+-### Использование прямого режима
+-
+-1. Закрой SteamVR и останови xr_client.
+-2. Установи пакет для прямого режима:
+-
+-~~~powershell
+-.\INSTALL.cmd -FrequencyHz 60 -DisplayMode direct
+-~~~
+-
+-3. Запусти XR Gate и SteamVR, нажми «Включить прямой режим» в настройках разработчика SteamVR и перезапусти SteamVR.
+-4. Если SteamVR показывает ошибку 422 или в очках остаётся рабочий стол Windows, выполни шаги из раздела «Использование расширенного SBS-дисплея» выше.
+-
+-### Использование своего профиля xr_client
+-
+-1. Помести профиль в ~/xr-gate-wsl/config/xr_client.json внутри Ubuntu.
+-2. Останови xr_client и повтори RUN.cmd.
+-
+-## 8. Устрани проблемы запуска
+-
+-### Ошибка SteamVR 422 или рабочий стол Windows в очках
+-
+-1. Открой настройки разработчика SteamVR и нажми «Выключить прямой режим». Закрой SteamVR; xr_client оставь открытым.
+-2. Включи SBS. В параметрах дисплея Windows выбери «Расширить эти экраны», разрешение 3840×1080 и частоту, соответствующую установленному драйверу.
+-3. Нажми «Определить», затем выполни:
+-
+-~~~powershell
+-.\DISPLAY.cmd
+-.\RUN.cmd
+-~~~
+-
+-4. При запросе выбери экран очков. Дождись запуска SteamVR и проверь движение головы в его сцене.
+-5. Если ошибка 422 повторится, закрой SteamVR, повтори DISPLAY.cmd для проверки выбранного экрана и посмотри свежий журнал композитора:
+-
+-~~~powershell
+-$vrPaths = Get-Content "$env:LOCALAPPDATA\openvr\openvrpaths.vrpath" -Raw | ConvertFrom-Json
+-$steamFolder = Split-Path -Parent $vrPaths.config[0]
+-Get-Content (Join-Path $steamFolder 'logs\vrcompositor.txt') -Tail 100
+-~~~
+-
+-### Просмотр диагностики
+-
+-1. Выполни:
++Выполните:
+ 
+ ~~~powershell
+ .\DOCTOR.cmd
+ ~~~
+ 
+-2. При работающем xr_client проверь соединение с трекингом:
+-
+-~~~powershell
+-powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test -TimeoutSeconds 30
+-~~~
+-
+-### Переподключение камер или Bluetooth
+-
+-1. Закрой SteamVR и останови xr_client.
+-2. Переподключи USB-кабель или донгл.
+-3. Запусти USB.cmd, затем RUN.cmd.
+-4. Если устройство по-прежнему отсутствует, выполни:
+-
+-~~~powershell
+-wsl -d Ubuntu-24.04 -- lsusb
+-wsl -d Ubuntu-24.04 -- uname -r
+-wsl -d Ubuntu-24.04 -u root -- modprobe uvcvideo
+-wsl -d Ubuntu-24.04 -u root -- modprobe btusb
+-wsl -d Ubuntu-24.04 -- bluetoothctl list
+-wsl -d Ubuntu-24.04 -u root -- dmesg
+-~~~
+-
+-5. Если модуль не найден, обнови WSL:
+-
+-~~~powershell
+-wsl --update --web-download
+-~~~
+-
+-6. Сохрани работу в Ubuntu, перезапусти дистрибутив и подключи устройства:
+-
+-~~~powershell
+-wsl --terminate Ubuntu-24.04
+-.\USB.cmd
+-.\RUN.cmd
+-~~~
+-
+-Если в %USERPROFILE%\.wslconfig указано собственное ядро, удали или обнови эту настройку перед повторением шагов.
+-
+-### Восстановление соединения из Windows
+-
+-1. Оставь xr_client работающим и выполни:
+-
+-~~~powershell
+-Test-NetConnection 127.0.0.1 -Port 45810
+-wsl -d Ubuntu-24.04 -- ss -ltnp
+-~~~
+-
+-2. Для сети WSL NAT включи localhost forwarding в %USERPROFILE%\.wslconfig, сохранив остальные настройки:
+-
+-~~~ini
+-[wsl2]
+-localhostForwarding=true
+-~~~
+-
+-3. Сохрани работу во всех дистрибутивах WSL и выполни:
++Не закрывая консоль трекинга, проверьте его:
+ 
+ ~~~powershell
+-wsl --shutdown
+-.\RUN.cmd
++powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
+ ~~~
+ 
+-4. Если соединения по-прежнему нет, проверь настройки VPN/брандмауэра и закрой другие процессы, использующие порт 45810.
+-
+-### Создание обычного пользователя Ubuntu
+-
+-Если Ubuntu запускается от root:
+-
+-1. Открой Ubuntu и создай пользователя. Вместо xruser укажи желаемое имя Linux-пользователя:
+-
+-~~~bash
+-adduser xruser
+-usermod -aG sudo xruser
+-~~~
+-
+-2. Укажи пользователя в /etc/wsl.conf, сохранив остальные секции:
+-
+-~~~ini
+-[user]
+-default=xruser
+-~~~
+-
+-3. Сохрани работу в Ubuntu, затем выполни из Windows:
+-
+-~~~powershell
+-wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd
+-~~~
+-
+-### Установка недостающего компонента Windows
+-
+-1. Если нет winget, установи или обнови Microsoft App Installer и повтори INSTALL.cmd.
+-2. Если Windows сообщает об отключённой виртуализации, включи SVM/AMD-V или VT-x в BIOS/UEFI, перезагрузи компьютер и повтори INSTALL.cmd.
+-
++Если SteamVR сообщает о неверном дисплее рабочего стола, закройте SteamVR, проверьте расширение экранов, разрешение и частоту в Windows, затем повторите **DISPLAY.cmd** и **RUN.cmd**.
+diff --git a/win/START-HERE.html b/win/START-HERE.html
+index 9c803df..ce6002a 100644
+--- a/win/START-HERE.html
++++ b/win/START-HERE.html
+@@ -1,92 +1,96 @@
+ <!doctype html>
+-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows + WSL2</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
++<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
+ <nav class="languages" aria-label="Language"><a href="START-HERE.html" lang="en" aria-current="page">English</a><a href="START-HERE.ru.html" lang="ru">Русский</a></nav>
+-<h1>XR Gate: Windows installation with WSL2</h1>
+-<h2>1. Prepare Windows</h2>
++<h1>XR Gate on Windows</h1>
++<h2>1. Download and prepare</h2>
+ <ol start="1">
+-<li>Use Windows 11 x64 with an AVX2-capable CPU.</li>
++<li>Use Windows 11 x64 and an AVX2-capable CPU.</li>
+ <li>Install Steam and SteamVR. Open SteamVR once, then close it.</li>
+-<li>Extract the entire archive to a permanent folder, such as C:\XR-Gate-WSL. Keep the linux and windows subfolders next to XrGate-Wsl.ps1.</li>
+-<li>Open a regular Windows PowerShell window in that folder. Run the commands below in Windows.</li>
+-</ol>
+-<h2>2. Install XR Gate</h2>
+-<ol start="1">
+-<li>Double-click INSTALL.cmd, or run:</li>
+-</ol>
+-<pre><code>.\INSTALL.cmd</code></pre>
+-<p>For Gear VR controllers, use this command instead:</p>
+-<pre><code>.\INSTALL.cmd -GearVR</code></pre>
++<li>Download <strong>xr-gate-windows.zip</strong> from <a href="https://github.com/vladoshub/xr-gate/releases">Releases</a>, or the <strong>xr-gate-windows</strong> artifact from your CI run.</li>
++<li>Extract the ZIP to a permanent folder. Open its <code>xr-gate-windows</code> folder. Keep the <code>drivers</code>, <code>hardware</code>, <code>linux</code> and <code>windows</code> subfolders together.</li>
++<li>Open a regular Windows PowerShell in this folder. Run all commands below there.</li>
++</ol>
++<h2>2. Configure your hardware</h2>
++<p>For XREAL Air 2 Ultra, the supplied preset is ready to use. Create your settings file once:</p>
++<pre><code>if (!(Test-Path .env)) { Copy-Item .env.example .env }
++</code></pre>
++<p>For another device, copy the generic template:</p>
++<pre><code>Copy-Item hardware\generic.env.example hardware\my-device.env
++</code></pre>
++<p>Edit <code>hardware/my-device.env</code>, then set <code>XR_HARDWARE_ENV=hardware/my-device.env</code> in <code>.env</code>.</p>
++<ol start="1">
++<li>Set <code>XR_PROFILE</code> to the runtime profile and <code>XR_TARGET_DEVICE</code> to its device name.</li>
++<li>Set <code>XR_USB_IDS</code> to the camera/IMU VID:PID pairs. For a manual selection, run <code>usbipd list</code> and set <code>XR_USB_BUS_IDS</code> in <code>.env</code>. For multiple devices, separate the IDs with commas. <code>XR_USB_INSTANCE_IDS</code> accepts stable Windows USB instance paths instead.</li>
++<li>Set Linux camera, HID, serial and input paths when needed: <code>XR_CAMERA_DEVICE</code>, <code>XR_HIDRAW_DEVICES</code>, <code>XR_SERIAL_DEVICES</code>, <code>XR_INPUT_DEVICES</code>. Enable <code>XR_REQUIRE_CAMERA=1</code> if the profile uses a camera.</li>
++<li>Set <code>XR_DEVICE_ACCESS_SCRIPT</code> to the matching setup script inside the release, or leave it empty. List the required Linux modules in <code>XR_KERNEL_MODULES</code>.</li>
++<li>Set <code>XR_WINDOW_WIDTH</code>, <code>XR_WINDOW_HEIGHT</code>, <code>XR_RENDER_WIDTH</code>, <code>XR_RENDER_HEIGHT</code>, <code>XR_DISPLAY_FREQUENCY_HZ</code> and the optical settings for your display.</li>
++</ol>
++<p>To override saved choices, put the setting directly in <code>.env</code>. Select a frequency and <code>XR_DISPLAY_MODE</code> (<code>direct</code> or <code>extended_sbs</code>) included in the archive. For a dedicated Bluetooth dongle, set <code>XR_BLUETOOTH_BUS_ID</code> to its BUSID. Set <code>XR_BLUETOOTH=0</code> to disable a saved dongle, or <code>XR_GEARVR=0</code> to disable Gear VR. Set <code>XR_STEAMVR_PATH</code> if SteamVR is not found automatically.</p>
++<h2>3. Install</h2>
++<ol start="1">
++<li>Double-click <strong>INSTALL.cmd</strong>, or run:</li>
++</ol>
++<pre><code>.\INSTALL.cmd
++</code></pre>
++<p>For Gear VR controllers, use:</p>
++<pre><code>.\INSTALL.cmd -GearVR
++</code></pre>
+ <ol start="2">
+-<li>Approve the Windows administrator prompt.</li>
+-<li>If a Windows restart is requested, save your work, restart Windows, and repeat the installation command.</li>
+-<li>If an Ubuntu window opens, create a Linux username and password. At the Ubuntu command prompt, type exit. Run the installation command again.</li>
+-<li>If the installer asks you to restart Ubuntu after enabling systemd, save any work in Ubuntu and run:</li>
++<li>Approve the administrator prompt. If a restart is requested, restart Windows and run the same command again.</li>
++<li>If Ubuntu opens for the first time, create a Linux username and password, enter <code>exit</code>, then run the installation command again.</li>
++<li>If asked to restart Ubuntu, save your work in it and run:</li>
+ </ol>
+ <pre><code>wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd</code></pre>
+-<p>Repeat your installation options, such as -GearVR, if used. Exit code 20 means you need to complete the displayed step and repeat installation.</p>
+-<ol start="6">
++.\INSTALL.cmd
++</code></pre>
++<p>Use the distribution name from <code>XR_DISTRIBUTION</code> if you changed it. Repeat <code>-GearVR</code> if used.</p>
++<ol start="5">
+ <li>If driver registration was deferred, close SteamVR and run:</li>
+ </ol>
+-<pre><code>.\DRIVER.cmd</code></pre>
+-<p>If SteamVR is not found, specify its installation folder:</p>
+-<pre><code>.\DRIVER.cmd -SteamVR &#x27;D:\SteamLibrary\steamapps\common\SteamVR&#x27;</code></pre>
+-<h2>3. Prepare the glasses (using XREAL ULTRA glasses as an example)</h2>
++<pre><code>.\DRIVER.cmd
++</code></pre>
++<h2>4. Select the display</h2>
++<p>For <strong>extended_sbs</strong>:</p>
+ <ol start="1">
+-<li>Connect the XREAL Air 2 Ultra video input to your Windows GPU using a video-capable USB-C port or a powered DP/HDMI-to-USB-C adapter.</li>
+-<li>Put on the glasses or activate their proximity sensor.</li>
+-<li>Hold Brightness Up (+) for approximately three seconds until the beep to enable full SBS.</li>
+-<li>In Windows Settings → System → Display, select Extend these displays. Select the glasses and set 3840×1080 at 60 Hz.</li>
+-<li>Click Identify and note which display number appears in the glasses. If the glasses are missing from Windows, open SteamVR Developer Settings, select Disable Direct Mode, then close SteamVR and repeat step 4.</li>
+-<li>With SteamVR closed, double-click DISPLAY.cmd or run:</li>
++<li>Connect the glasses&#x27; video input to the Windows GPU and enable SBS on the glasses.</li>
++<li>In Windows display settings, choose <strong>Extend these displays</strong>. Set the glasses&#x27; resolution and frequency to the values in your hardware env.</li>
++<li>Disable SteamVR Direct Mode, then close SteamVR.</li>
++<li>Run:</li>
+ </ol>
+-<pre><code>.\DISPLAY.cmd</code></pre>
+-<ol start="7">
+-<li>Select the list row for the glasses. Match the DISPLAY number to Windows Identify; use the displayed name to distinguish monitors. The command saves the selection and configures extended SBS output.</li>
+-<li>If using Gear VR controllers, complete section 5 before continuing.</li>
++<pre><code>.\DISPLAY.cmd
++</code></pre>
++<ol start="5">
++<li>Select the glasses&#x27; row using Windows <strong>Identify</strong>. To save a fixed output name instead, set <code>XR_DISPLAY_NAME</code> in <code>.env</code> and run the command again.</li>
+ </ol>
+-<h2>4. Start XR Gate and SteamVR</h2>
++<p>For <strong>direct</strong>, use <code>Direct-Mode-Guide.bat</code> in the selected <code>drivers/&lt;frequency&gt;Hz-direct/xr_tracking</code> folder.</p>
++<h2>5. Start</h2>
+ <ol start="1">
+-<li>Connect the glasses and enable SBS. Place IMU controllers on a flat surface and keep them still during initial calibration.</li>
+-<li>Double-click RUN.cmd, or run:</li>
++<li>Connect the devices. Place IMU controllers on a flat surface and keep them still.</li>
++<li>Run:</li>
+ </ol>
+-<pre><code>.\RUN.cmd</code></pre>
++<pre><code>.\RUN.cmd
++</code></pre>
+ <ol start="3">
+-<li>In the xr_client console, complete the startup prompts and calibration. Keep the cameras uncovered and the room well lit. Move your head slowly for a few seconds when tracking starts.</li>
+-<li>Wait for SteamVR to open.</li>
+-<li>Keep SteamVR Direct Mode disabled for this setup.</li>
+-<li>If XR Gate is blocked, open Settings → Startup/Shutdown → Manage Add-ons and enable it.</li>
+-<li>Check that the SteamVR scene appears in the glasses and responds to head movement, then launch your game.</li>
++<li>Complete the startup prompts and calibration in the opened console. Keep it open and wait for SteamVR.</li>
++<li>Enable the XR Gate add-on in SteamVR if prompted. Check the headset, then start your game.</li>
+ </ol>
+-<p>For later starts, enable SBS and run RUN.cmd. It reapplies the saved display selection using its current desktop coordinates. After changing a cable/port or if the saved display is missing, close SteamVR and run DISPLAY.cmd again.</p>
+-<p>To start only xr_client, run:</p>
+-<pre><code>.\CONSOLE.cmd</code></pre>
+-<p>If setup takes longer than 180 seconds, finish the prompts in the open xr_client window and run RUN.cmd again. To allow more time:</p>
+-<pre><code>.\RUN.cmd -TimeoutSeconds 300</code></pre>
+-<p>If the glasses need to be selected manually:</p>
+-<pre><code>usbipd list
+-.\USB.cmd -XrealBusId 1-2</code></pre>
+-<p>Replace 1-2 with the glasses&#x27; BUSID from usbipd list.</p>
+-<h2>5. Set up Gear VR controllers</h2>
++<p>For the next session, connect the devices and run <strong>RUN.cmd</strong> again. After changing display ports, close SteamVR and repeat <strong>DISPLAY.cmd</strong>.</p>
++<p>To start the runtime without opening SteamVR:</p>
++<pre><code>.\CONSOLE.cmd
++</code></pre>
++<h2>6. Pair Gear VR controllers</h2>
+ <ol start="1">
+-<li>Connect the glasses and a dedicated USB Bluetooth dongle. If Gear VR was not enabled during installation, run:</li>
++<li>Set the dongle&#x27;s <code>XR_BLUETOOTH_BUS_ID</code> in <code>.env</code>, then attach the devices:</li>
+ </ol>
+-<pre><code>.\INSTALL.cmd -GearVR</code></pre>
++<pre><code>.\USB.cmd
++</code></pre>
+ <ol start="2">
+-<li>Find the dongle&#x27;s BUSID:</li>
++<li>Open the pairing console:</li>
+ </ol>
+-<pre><code>usbipd list</code></pre>
++<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair
++</code></pre>
+ <ol start="3">
+-<li>Attach the dongle:</li>
+-</ol>
+-<pre><code>.\USB.cmd -BluetoothBusId 1-4</code></pre>
+-<p>Replace 1-4 with your dongle&#x27;s BUSID.</p>
+-<ol start="4">
+-<li>Open the Bluetooth pairing console:</li>
+-</ol>
+-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair</code></pre>
+-<ol start="5">
+-<li>Put the controllers into pairing mode and enter the following commands in bluetoothctl. Replace MAC_LEFT and MAC_RIGHT with the actual controller addresses:</li>
++<li>Put the controllers into pairing mode. Replace <code>MAC_LEFT</code> and <code>MAC_RIGHT</code> with their addresses and enter:</li>
+ </ol>
+ <pre><code>power on
+ agent on
+@@ -99,168 +103,31 @@ pair MAC_RIGHT
+ trust MAC_RIGHT
+ connect MAC_RIGHT
+ scan off
+-quit</code></pre>
+-<ol start="6">
+-<li>Start the controller registration wizard:</li>
+-</ol>
+-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR</code></pre>
+-<ol start="7">
+-<li>Follow the prompts to assign the left and right controllers and save the configuration.</li>
+-<li>Run RUN.cmd.</li>
+-</ol>
+-<p>If you already have a gearvr.json configuration, import it instead of repeating controller registration:</p>
+-<pre><code>.\INSTALL.cmd -GearVR -ControllerConfig &#x27;C:\XR-Gate-WSL\gearvr.json&#x27;</code></pre>
+-<p>Complete Bluetooth pairing before starting XR Gate. To select a different USB Bluetooth dongle later, repeat step 3 with its BUSID.</p>
+-<h2>6. Stop XR Gate</h2>
+-<ol start="1">
+-<li>Close SteamVR.</li>
+-<li>Press Ctrl+C in the xr_client console and wait for it to stop.</li>
+-<li>Return the selected USB devices to Windows:</li>
+-</ol>
+-<pre><code>.\DETACH.cmd</code></pre>
+-<ol start="4">
+-<li>To use the glasses as a normal desktop display, switch them back to 2D with their hardware button.</li>
+-</ol>
+-<h2>7. Change settings or update</h2>
+-<h3>Update the setup scripts</h3>
+-<ol start="1">
+-<li>Close SteamVR.</li>
+-<li>Extract the new archive into the same setup folder and replace its files, including the linux and windows subfolders.</li>
+-<li>Enable SBS and select the matching resolution and refresh rate in Windows.</li>
+-<li>Run DISPLAY.cmd and select the glasses&#x27; screen once.</li>
+-<li>Run RUN.cmd.</li>
+-</ol>
+-<h3>Update XR Gate</h3>
+-<ol start="1">
+-<li>Close SteamVR and stop xr_client.</li>
+-<li>Run INSTALL.cmd again.</li>
+-<li>Enable SBS, select the matching refresh rate in Windows, then run RUN.cmd. The saved screen selection is applied to the new driver. If the display is no longer found, close SteamVR and run DISPLAY.cmd again.</li>
+-</ol>
+-<p>To install a specific release:</p>
+-<pre><code>.\INSTALL.cmd -ReleaseTag v2.8.0</code></pre>
+-<h3>Switch to 90 Hz</h3>
+-<ol start="1">
+-<li>Close SteamVR and stop xr_client.</li>
+-<li>Install the matching driver:</li>
+-</ol>
+-<pre><code>.\INSTALL.cmd -FrequencyHz 90 -DisplayMode extended_sbs</code></pre>
+-<ol start="3">
+-<li>Set the glasses to SBS/90 Hz and select 90 Hz in Windows display settings.</li>
+-<li>Run DISPLAY.cmd, then RUN.cmd.</li>
+-</ol>
+-<h3>Use an extended SBS display</h3>
+-<ol start="1">
+-<li>If Direct Mode was enabled, open SteamVR Developer Settings and select Disable Direct Mode. Close SteamVR; xr_client can stay open.</li>
+-<li>Select Extend these displays and 3840×1080 at the installed driver&#x27;s refresh rate in Windows.</li>
+-<li>Run:</li>
+-</ol>
+-<pre><code>.\DISPLAY.cmd</code></pre>
+-<ol start="4">
+-<li>Select the glasses&#x27; display from the list, then run RUN.cmd.</li>
+-</ol>
+-<h3>Use Direct Mode</h3>
+-<ol start="1">
+-<li>Close SteamVR and stop xr_client.</li>
+-<li>Install the Direct Mode package:</li>
+-</ol>
+-<pre><code>.\INSTALL.cmd -FrequencyHz 60 -DisplayMode direct</code></pre>
+-<ol start="3">
+-<li>Start XR Gate and SteamVR, select Enable Direct Mode in SteamVR Developer Settings, and restart SteamVR.</li>
+-<li>If SteamVR shows error 422 or continues to show the Windows desktop in the glasses, follow Use an extended SBS display above.</li>
+-</ol>
+-<h3>Use a custom xr_client profile</h3>
+-<ol start="1">
+-<li>Place your profile at ~/xr-gate-wsl/config/xr_client.json inside Ubuntu.</li>
+-<li>Stop xr_client and run RUN.cmd again.</li>
+-</ol>
+-<h2>8. Resolve startup problems</h2>
+-<h3>SteamVR error 422 or Windows desktop in the glasses</h3>
+-<ol start="1">
+-<li>Open SteamVR Developer Settings and select Disable Direct Mode. Close SteamVR; keep xr_client open.</li>
+-<li>Enable SBS. In Windows Display settings, select Extend these displays and 3840×1080 at the installed driver&#x27;s refresh rate.</li>
+-<li>Click Identify, then run:</li>
+-</ol>
+-<pre><code>.\DISPLAY.cmd
+-.\RUN.cmd</code></pre>
++quit
++</code></pre>
+ <ol start="4">
+-<li>Choose the glasses&#x27; display when prompted. Wait for SteamVR to open and check head movement in its scene.</li>
+-<li>If error 422 returns, close SteamVR, repeat DISPLAY.cmd to check the selected screen, and inspect the latest compositor log:</li>
++<li>Stop the runtime if it is running. Start registration:</li>
+ </ol>
+-<pre><code>$vrPaths = Get-Content &quot;$env:LOCALAPPDATA\openvr\openvrpaths.vrpath&quot; -Raw | ConvertFrom-Json
+-$steamFolder = Split-Path -Parent $vrPaths.config[0]
+-Get-Content (Join-Path $steamFolder &#x27;logs\vrcompositor.txt&#x27;) -Tail 100</code></pre>
+-<h3>View diagnostics</h3>
+-<ol start="1">
+-<li>Run:</li>
+-</ol>
+-<pre><code>.\DOCTOR.cmd</code></pre>
+-<ol start="2">
+-<li>With xr_client running, check the tracking connection:</li>
+-</ol>
+-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test -TimeoutSeconds 30</code></pre>
+-<h3>Reconnect cameras or Bluetooth</h3>
+-<ol start="1">
+-<li>Close SteamVR and stop xr_client.</li>
+-<li>Reconnect the USB cable or dongle.</li>
+-<li>Run USB.cmd, then RUN.cmd.</li>
+-<li>If the device is still missing, run:</li>
+-</ol>
+-<pre><code>wsl -d Ubuntu-24.04 -- lsusb
+-wsl -d Ubuntu-24.04 -- uname -r
+-wsl -d Ubuntu-24.04 -u root -- modprobe uvcvideo
+-wsl -d Ubuntu-24.04 -u root -- modprobe btusb
+-wsl -d Ubuntu-24.04 -- bluetoothctl list
+-wsl -d Ubuntu-24.04 -u root -- dmesg</code></pre>
++<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR
++</code></pre>
+ <ol start="5">
+-<li>If a module is missing, update WSL:</li>
+-</ol>
+-<pre><code>wsl --update --web-download</code></pre>
+-<ol start="6">
+-<li>Save your work in Ubuntu, restart the distribution, and reconnect the devices:</li>
+-</ol>
+-<pre><code>wsl --terminate Ubuntu-24.04
+-.\USB.cmd
+-.\RUN.cmd</code></pre>
+-<p>If a custom kernel is configured in %USERPROFILE%\.wslconfig, remove or update that kernel setting before repeating these steps.</p>
+-<h3>Restore the Windows tracking connection</h3>
+-<ol start="1">
+-<li>Keep xr_client running and run:</li>
++<li>Follow the left/right assignment prompts, save the configuration, then run <strong>RUN.cmd</strong>.</li>
+ </ol>
+-<pre><code>Test-NetConnection 127.0.0.1 -Port 45810
+-wsl -d Ubuntu-24.04 -- ss -ltnp</code></pre>
+-<ol start="2">
+-<li>For WSL NAT networking, enable localhost forwarding in %USERPROFILE%\.wslconfig. Preserve the file&#x27;s other settings:</li>
+-</ol>
+-<pre><code>[wsl2]
+-localhostForwarding=true</code></pre>
+-<ol start="3">
+-<li>Save work in all WSL distributions, then run:</li>
+-</ol>
+-<pre><code>wsl --shutdown
+-.\RUN.cmd</code></pre>
+-<ol start="4">
+-<li>If connection still fails, check the VPN/firewall settings and close any other process using port 45810.</li>
+-</ol>
+-<h3>Create a regular Ubuntu user</h3>
+-<p>If Ubuntu starts as root:</p>
++<h2>7. Stop or change settings</h2>
+ <ol start="1">
+-<li>Open Ubuntu and create a user. Replace xruser with your preferred Linux username:</li>
+-</ol>
+-<pre><code>adduser xruser
+-usermod -aG sudo xruser</code></pre>
+-<ol start="2">
+-<li>Set the user in /etc/wsl.conf, preserving the file&#x27;s other sections:</li>
+-</ol>
+-<pre><code>[user]
+-default=xruser</code></pre>
+-<ol start="3">
+-<li>Save your Ubuntu work, then run from Windows:</li>
+-</ol>
+-<pre><code>wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd</code></pre>
+-<h3>Install a missing Windows prerequisite</h3>
+-<ol start="1">
+-<li>If winget is missing, install or update Microsoft App Installer, then repeat INSTALL.cmd.</li>
+-<li>If Windows reports that virtualization is disabled, enable SVM/AMD-V or VT-x in BIOS/UEFI, restart Windows, and repeat INSTALL.cmd.</li>
+-</ol>
++<li>Close SteamVR.</li>
++<li>Press <strong>Ctrl+C</strong> in the runtime console and wait for it to stop.</li>
++<li>To return USB devices to Windows, run:</li>
++</ol>
++<pre><code>.\DETACH.cmd
++</code></pre>
++<p>After changing hardware settings, attach the devices and start again. After changing the release, driver frequency or display mode in <code>.env</code>, repeat <strong>INSTALL.cmd</strong> and the display setup.</p>
++<h2>8. If startup fails</h2>
++<p>Run:</p>
++<pre><code>.\DOCTOR.cmd
++</code></pre>
++<p>With the runtime console still open, test tracking:</p>
++<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
++</code></pre>
++<p>If SteamVR reports an invalid desktop display, close SteamVR, check <strong>Extend</strong>, the resolution and frequency in Windows, then repeat <strong>DISPLAY.cmd</strong> and <strong>RUN.cmd</strong>.</p>
+ </article></body></html>
+diff --git a/win/START-HERE.ru.html b/win/START-HERE.ru.html
+index 4d013ff..104d402 100644
+--- a/win/START-HERE.ru.html
++++ b/win/START-HERE.ru.html
+@@ -1,92 +1,96 @@
+ <!doctype html>
+-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows + WSL2</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
++<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
+ <nav class="languages" aria-label="Language"><a href="START-HERE.html" lang="en">English</a><a href="START-HERE.ru.html" lang="ru" aria-current="page">Русский</a></nav>
+-<h1>XR Gate: установка в Windows через WSL2</h1>
+-<h2>1. Подготовь Windows</h2>
+-<ol start="1">
+-<li>Используй Windows 11 x64 и процессор с поддержкой AVX2.</li>
+-<li>Установи Steam и SteamVR. Один раз открой SteamVR, затем закрой его.</li>
+-<li>Распакуй весь архив в постоянную папку, например C:\XR-Gate-WSL. Сохрани подпапки linux и windows рядом с XrGate-Wsl.ps1.</li>
+-<li>Открой обычный Windows PowerShell в этой папке. Все команды ниже выполняй в Windows.</li>
+-</ol>
+-<h2>2. Установи XR Gate</h2>
+-<ol start="1">
+-<li>Дважды щёлкни INSTALL.cmd или выполни:</li>
+-</ol>
+-<pre><code>.\INSTALL.cmd</code></pre>
+-<p>Для контроллеров Gear VR используй эту команду:</p>
+-<pre><code>.\INSTALL.cmd -GearVR</code></pre>
++<h1>XR Gate в Windows</h1>
++<h2>1. Скачайте и подготовьте</h2>
++<ol start="1">
++<li>Нужны Windows 11 x64 и процессор с поддержкой AVX2.</li>
++<li>Установите Steam и SteamVR. Один раз откройте SteamVR, затем закройте его.</li>
++<li>Скачайте <strong>xr-gate-windows.zip</strong> из <a href="https://github.com/vladoshub/xr-gate/releases">Releases</a> или artifact <strong>xr-gate-windows</strong> из своего запуска CI.</li>
++<li>Распакуйте ZIP в постоянную папку. Откройте вложенную папку <code>xr-gate-windows</code>. Сохраните подпапки <code>drivers</code>, <code>hardware</code>, <code>linux</code> и <code>windows</code> вместе.</li>
++<li>Откройте в этой папке обычный Windows PowerShell. Все команды ниже выполняйте в нём.</li>
++</ol>
++<h2>2. Настройте оборудование</h2>
++<p>Для XREAL Air 2 Ultra готовый профиль уже настроен. Один раз создайте файл своих настроек:</p>
++<pre><code>if (!(Test-Path .env)) { Copy-Item .env.example .env }
++</code></pre>
++<p>Для другого устройства скопируйте универсальный шаблон:</p>
++<pre><code>Copy-Item hardware\generic.env.example hardware\my-device.env
++</code></pre>
++<p>Отредактируйте <code>hardware/my-device.env</code>, затем укажите <code>XR_HARDWARE_ENV=hardware/my-device.env</code> в <code>.env</code>.</p>
++<ol start="1">
++<li>Укажите профиль запуска в <code>XR_PROFILE</code> и имя устройства в <code>XR_TARGET_DEVICE</code>.</li>
++<li>Укажите VID:PID камер и IMU в <code>XR_USB_IDS</code>. Для ручного выбора выполните <code>usbipd list</code> и задайте <code>XR_USB_BUS_IDS</code> в <code>.env</code>. Для нескольких устройств разделите BUSID запятыми. Вместо них можно задать постоянные пути Windows USB instance в <code>XR_USB_INSTANCE_IDS</code>.</li>
++<li>При необходимости задайте Linux-пути камеры, HID, serial и устройств ввода: <code>XR_CAMERA_DEVICE</code>, <code>XR_HIDRAW_DEVICES</code>, <code>XR_SERIAL_DEVICES</code>, <code>XR_INPUT_DEVICES</code>. Если профиль использует камеру, включите <code>XR_REQUIRE_CAMERA=1</code>.</li>
++<li>Укажите подходящий скрипт настройки из релиза в <code>XR_DEVICE_ACCESS_SCRIPT</code> или оставьте поле пустым. Перечислите нужные модули Linux в <code>XR_KERNEL_MODULES</code>.</li>
++<li>Задайте <code>XR_WINDOW_WIDTH</code>, <code>XR_WINDOW_HEIGHT</code>, <code>XR_RENDER_WIDTH</code>, <code>XR_RENDER_HEIGHT</code>, <code>XR_DISPLAY_FREQUENCY_HZ</code> и оптические параметры своего дисплея.</li>
++</ol>
++<p>Чтобы переопределить сохранённый выбор, укажите настройку прямо в <code>.env</code>. Выбирайте частоту и <code>XR_DISPLAY_MODE</code> (<code>direct</code> или <code>extended_sbs</code>), которые есть в архиве. Для отдельного Bluetooth-донгла укажите его BUSID в <code>XR_BLUETOOTH_BUS_ID</code>. Для отключения сохранённого донгла укажите <code>XR_BLUETOOTH=0</code>; для отключения Gear VR — <code>XR_GEARVR=0</code>. Если SteamVR не найден автоматически, задайте <code>XR_STEAMVR_PATH</code>.</p>
++<h2>3. Установите</h2>
++<ol start="1">
++<li>Дважды щёлкните <strong>INSTALL.cmd</strong> или выполните:</li>
++</ol>
++<pre><code>.\INSTALL.cmd
++</code></pre>
++<p>Для контроллеров Gear VR используйте:</p>
++<pre><code>.\INSTALL.cmd -GearVR
++</code></pre>
+ <ol start="2">
+-<li>Подтверди запрос прав администратора Windows.</li>
+-<li>Если установщик запросит перезагрузку Windows, сохрани работу, перезагрузи компьютер и повтори команду установки.</li>
+-<li>Если откроется окно Ubuntu, создай имя Linux-пользователя и пароль. В командной строке Ubuntu введи exit, затем повтори команду установки.</li>
+-<li>Если установщик попросит перезапустить Ubuntu после включения systemd, сохрани работу в Ubuntu и выполни:</li>
++<li>Подтвердите запрос прав администратора. Если запрошена перезагрузка, перезапустите Windows и повторите ту же команду.</li>
++<li>Если Ubuntu открылась впервые, создайте имя Linux-пользователя и пароль, введите <code>exit</code> и повторите команду установки.</li>
++<li>Если запрошен перезапуск Ubuntu, сохраните в ней работу и выполните:</li>
+ </ol>
+ <pre><code>wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd</code></pre>
+-<p>Повтори свои параметры установки, например -GearVR. Код завершения 20 означает, что нужно выполнить указанное действие и повторить установку.</p>
+-<ol start="6">
+-<li>Если регистрация драйвера была отложена, закрой SteamVR и выполни:</li>
++.\INSTALL.cmd
++</code></pre>
++<p>Если меняли <code>XR_DISTRIBUTION</code>, используйте указанное там имя дистрибутива. Повторите <code>-GearVR</code>, если использовали его.</p>
++<ol start="5">
++<li>Если регистрация драйвера отложена, закройте SteamVR и выполните:</li>
+ </ol>
+-<pre><code>.\DRIVER.cmd</code></pre>
+-<p>Если SteamVR не найден, укажи папку его установки:</p>
+-<pre><code>.\DRIVER.cmd -SteamVR &#x27;D:\SteamLibrary\steamapps\common\SteamVR&#x27;</code></pre>
+-<h2>3. Подготовь очки (на примере очков XREAL ULTRA)</h2>
++<pre><code>.\DRIVER.cmd
++</code></pre>
++<h2>4. Выберите дисплей</h2>
++<p>Для <strong>extended_sbs</strong>:</p>
+ <ol start="1">
+-<li>Подключи видеоканал XREAL Air 2 Ultra к видеокарте Windows через USB-C с видеовыходом или питаемый адаптер DP/HDMI → USB-C.</li>
+-<li>Надень очки или активируй их датчик присутствия.</li>
+-<li>Удерживай Brightness Up (+) примерно три секунды до сигнала, чтобы включить полный SBS.</li>
+-<li>В Windows открой Параметры → Система → Дисплей и выбери «Расширить эти экраны». Выбери очки и установи 3840×1080 и 60 Hz.</li>
+-<li>Нажми «Определить» и запомни номер, который появится в очках. Если очков нет среди экранов Windows, открой настройки разработчика SteamVR, нажми «Выключить прямой режим», затем закрой SteamVR и повтори шаг 4.</li>
+-<li>При закрытом SteamVR дважды щёлкни DISPLAY.cmd или выполни:</li>
++<li>Подключите видеовход очков к видеокарте Windows и включите SBS на очках.</li>
++<li>В настройках дисплея Windows выберите <strong>Расширить эти экраны</strong>. Установите для очков разрешение и частоту из аппаратного env.</li>
++<li>Отключите прямой режим SteamVR и закройте SteamVR.</li>
++<li>Выполните:</li>
+ </ol>
+-<pre><code>.\DISPLAY.cmd</code></pre>
+-<ol start="7">
+-<li>Выбери строку списка с экраном очков. Сопоставь номер DISPLAY с кнопкой «Определить» в Windows; для различения экранов используй также название. Команда сохранит выбор и настроит вывод в расширенном SBS.</li>
+-<li>Если используешь Gear VR, выполни раздел 5 перед запуском.</li>
++<pre><code>.\DISPLAY.cmd
++</code></pre>
++<ol start="5">
++<li>Выберите строку очков по кнопке <strong>Определить</strong> в Windows. Чтобы закрепить имя выхода, укажите <code>XR_DISPLAY_NAME</code> в <code>.env</code> и повторите команду.</li>
+ </ol>
+-<h2>4. Запусти XR Gate и SteamVR</h2>
++<p>Для <strong>direct</strong> используйте <code>Direct-Mode-Guide.bat</code> в выбранной папке <code>drivers/&lt;частота&gt;Hz-direct/xr_tracking</code>.</p>
++<h2>5. Запустите</h2>
+ <ol start="1">
+-<li>Подключи очки и включи SBS. Контроллеры с IMU положи на ровную поверхность и держи неподвижно во время начальной калибровки.</li>
+-<li>Дважды щёлкни RUN.cmd или выполни:</li>
++<li>Подключите устройства. Положите IMU-контроллеры на ровную поверхность и не двигайте их.</li>
++<li>Выполните:</li>
+ </ol>
+-<pre><code>.\RUN.cmd</code></pre>
++<pre><code>.\RUN.cmd
++</code></pre>
+ <ol start="3">
+-<li>В консоли xr_client пройди стартовые подсказки и калибровку. Не закрывай камеры; обеспечь хорошее освещение. При запуске трекинга несколько секунд плавно двигай головой.</li>
+-<li>Дождись открытия SteamVR.</li>
+-<li>Для этой настройки оставь прямой режим SteamVR выключенным.</li>
+-<li>Если XR Gate заблокирован, открой Settings → Startup/Shutdown → Manage Add-ons и включи его.</li>
+-<li>Проверь, что в очках появилась сцена SteamVR и она реагирует на движение головы, затем запускай игру.</li>
++<li>Пройдите стартовые подсказки и калибровку в открывшейся консоли. Оставьте её открытой и дождитесь SteamVR.</li>
++<li>При запросе включите дополнение XR Gate в SteamVR. Проверьте гарнитуру и запустите игру.</li>
+ </ol>
+-<p>Для следующих запусков включи SBS и запусти RUN.cmd. Команда повторно применит сохранённый выбор экрана с его текущими координатами рабочего стола. После смены кабеля/порта или если сохранённый экран не найден, закрой SteamVR и снова запусти DISPLAY.cmd.</p>
+-<p>Чтобы запустить только xr_client:</p>
+-<pre><code>.\CONSOLE.cmd</code></pre>
+-<p>Если настройка занимает больше 180 секунд, закончи действия в открытом окне xr_client и снова запусти RUN.cmd. Чтобы увеличить ожидание:</p>
+-<pre><code>.\RUN.cmd -TimeoutSeconds 300</code></pre>
+-<p>Если очки нужно выбрать вручную:</p>
+-<pre><code>usbipd list
+-.\USB.cmd -XrealBusId 1-2</code></pre>
+-<p>Замени 1-2 на BUSID очков из usbipd list.</p>
+-<h2>5. Настрой контроллеры Gear VR</h2>
++<p>Для следующего сеанса подключите устройства и снова запустите <strong>RUN.cmd</strong>. После смены порта дисплея закройте SteamVR и повторите <strong>DISPLAY.cmd</strong>.</p>
++<p>Для запуска трекинга без открытия SteamVR:</p>
++<pre><code>.\CONSOLE.cmd
++</code></pre>
++<h2>6. Подключите контроллеры Gear VR</h2>
+ <ol start="1">
+-<li>Подключи очки и выделенный USB Bluetooth-донгл. Если при установке Gear VR не был включён, выполни:</li>
++<li>Укажите BUSID донгла в <code>XR_BLUETOOTH_BUS_ID</code> в <code>.env</code>, затем подключите устройства:</li>
+ </ol>
+-<pre><code>.\INSTALL.cmd -GearVR</code></pre>
++<pre><code>.\USB.cmd
++</code></pre>
+ <ol start="2">
+-<li>Найди BUSID донгла:</li>
++<li>Откройте консоль сопряжения:</li>
+ </ol>
+-<pre><code>usbipd list</code></pre>
++<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair
++</code></pre>
+ <ol start="3">
+-<li>Подключи донгл к WSL:</li>
+-</ol>
+-<pre><code>.\USB.cmd -BluetoothBusId 1-4</code></pre>
+-<p>Замени 1-4 на BUSID своего донгла.</p>
+-<ol start="4">
+-<li>Открой консоль сопряжения Bluetooth:</li>
+-</ol>
+-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair</code></pre>
+-<ol start="5">
+-<li>Переведи контроллеры в режим сопряжения и введи команды в bluetoothctl. Вместо MAC_LEFT и MAC_RIGHT укажи реальные адреса контроллеров:</li>
++<li>Включите режим сопряжения на контроллерах. Подставьте их адреса вместо <code>MAC_LEFT</code> и <code>MAC_RIGHT</code> и введите:</li>
+ </ol>
+ <pre><code>power on
+ agent on
+@@ -99,168 +103,31 @@ pair MAC_RIGHT
+ trust MAC_RIGHT
+ connect MAC_RIGHT
+ scan off
+-quit</code></pre>
+-<ol start="6">
+-<li>Запусти мастер регистрации контроллеров:</li>
+-</ol>
+-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR</code></pre>
+-<ol start="7">
+-<li>По подсказкам назначь левый и правый контроллеры и сохрани конфигурацию.</li>
+-<li>Запусти RUN.cmd.</li>
+-</ol>
+-<p>Если уже есть конфигурация gearvr.json, импортируй её вместо повторной регистрации:</p>
+-<pre><code>.\INSTALL.cmd -GearVR -ControllerConfig &#x27;C:\XR-Gate-WSL\gearvr.json&#x27;</code></pre>
+-<p>Перед запуском XR Gate выполни сопряжение Bluetooth. Для другого USB Bluetooth-донгла повтори шаг 3 с его BUSID.</p>
+-<h2>6. Останови XR Gate</h2>
+-<ol start="1">
+-<li>Закрой SteamVR.</li>
+-<li>Нажми Ctrl+C в консоли xr_client и дождись остановки.</li>
+-<li>Верни выбранные USB-устройства Windows:</li>
+-</ol>
+-<pre><code>.\DETACH.cmd</code></pre>
+-<ol start="4">
+-<li>Чтобы использовать очки как обычный дисплей, переключи их в 2D аппаратной кнопкой.</li>
+-</ol>
+-<h2>7. Измени настройки или обнови XR Gate</h2>
+-<h3>Обновление скриптов установки</h3>
+-<ol start="1">
+-<li>Закрой SteamVR.</li>
+-<li>Распакуй новый архив в ту же папку установки и замени файлы, включая подпапки linux и windows.</li>
+-<li>Включи SBS и выбери соответствующие разрешение и частоту в Windows.</li>
+-<li>Один раз запусти DISPLAY.cmd и выбери экран очков.</li>
+-<li>Запусти RUN.cmd.</li>
+-</ol>
+-<h3>Обновление XR Gate</h3>
+-<ol start="1">
+-<li>Закрой SteamVR и останови xr_client.</li>
+-<li>Повтори INSTALL.cmd.</li>
+-<li>Включи SBS, выбери соответствующую частоту в Windows и запусти RUN.cmd. Сохранённый выбор экрана применится к новому драйверу. Если экран больше не найден, закрой SteamVR и снова запусти DISPLAY.cmd.</li>
+-</ol>
+-<p>Для установки определённого релиза:</p>
+-<pre><code>.\INSTALL.cmd -ReleaseTag v2.8.0</code></pre>
+-<h3>Переключение на 90 Hz</h3>
+-<ol start="1">
+-<li>Закрой SteamVR и останови xr_client.</li>
+-<li>Установи соответствующий драйвер:</li>
+-</ol>
+-<pre><code>.\INSTALL.cmd -FrequencyHz 90 -DisplayMode extended_sbs</code></pre>
+-<ol start="3">
+-<li>Включи SBS/90 Hz на очках и выбери 90 Hz в параметрах дисплея Windows.</li>
+-<li>Запусти DISPLAY.cmd, затем RUN.cmd.</li>
+-</ol>
+-<h3>Использование расширенного SBS-дисплея</h3>
+-<ol start="1">
+-<li>Если прямой режим включён, открой настройки разработчика SteamVR и нажми «Выключить прямой режим». Закрой SteamVR; xr_client можно оставить работающим.</li>
+-<li>В Windows выбери «Расширить эти экраны», разрешение 3840×1080 и частоту, соответствующую установленному драйверу.</li>
+-<li>Выполни:</li>
+-</ol>
+-<pre><code>.\DISPLAY.cmd</code></pre>
+-<ol start="4">
+-<li>Выбери экран очков в списке, затем запусти RUN.cmd.</li>
+-</ol>
+-<h3>Использование прямого режима</h3>
+-<ol start="1">
+-<li>Закрой SteamVR и останови xr_client.</li>
+-<li>Установи пакет для прямого режима:</li>
+-</ol>
+-<pre><code>.\INSTALL.cmd -FrequencyHz 60 -DisplayMode direct</code></pre>
+-<ol start="3">
+-<li>Запусти XR Gate и SteamVR, нажми «Включить прямой режим» в настройках разработчика SteamVR и перезапусти SteamVR.</li>
+-<li>Если SteamVR показывает ошибку 422 или в очках остаётся рабочий стол Windows, выполни шаги из раздела «Использование расширенного SBS-дисплея» выше.</li>
+-</ol>
+-<h3>Использование своего профиля xr_client</h3>
+-<ol start="1">
+-<li>Помести профиль в ~/xr-gate-wsl/config/xr_client.json внутри Ubuntu.</li>
+-<li>Останови xr_client и повтори RUN.cmd.</li>
+-</ol>
+-<h2>8. Устрани проблемы запуска</h2>
+-<h3>Ошибка SteamVR 422 или рабочий стол Windows в очках</h3>
+-<ol start="1">
+-<li>Открой настройки разработчика SteamVR и нажми «Выключить прямой режим». Закрой SteamVR; xr_client оставь открытым.</li>
+-<li>Включи SBS. В параметрах дисплея Windows выбери «Расширить эти экраны», разрешение 3840×1080 и частоту, соответствующую установленному драйверу.</li>
+-<li>Нажми «Определить», затем выполни:</li>
+-</ol>
+-<pre><code>.\DISPLAY.cmd
+-.\RUN.cmd</code></pre>
++quit
++</code></pre>
+ <ol start="4">
+-<li>При запросе выбери экран очков. Дождись запуска SteamVR и проверь движение головы в его сцене.</li>
+-<li>Если ошибка 422 повторится, закрой SteamVR, повтори DISPLAY.cmd для проверки выбранного экрана и посмотри свежий журнал композитора:</li>
+-</ol>
+-<pre><code>$vrPaths = Get-Content &quot;$env:LOCALAPPDATA\openvr\openvrpaths.vrpath&quot; -Raw | ConvertFrom-Json
+-$steamFolder = Split-Path -Parent $vrPaths.config[0]
+-Get-Content (Join-Path $steamFolder &#x27;logs\vrcompositor.txt&#x27;) -Tail 100</code></pre>
+-<h3>Просмотр диагностики</h3>
+-<ol start="1">
+-<li>Выполни:</li>
++<li>Если трекинг запущен, остановите его. Запустите регистрацию:</li>
+ </ol>
+-<pre><code>.\DOCTOR.cmd</code></pre>
+-<ol start="2">
+-<li>При работающем xr_client проверь соединение с трекингом:</li>
+-</ol>
+-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test -TimeoutSeconds 30</code></pre>
+-<h3>Переподключение камер или Bluetooth</h3>
+-<ol start="1">
+-<li>Закрой SteamVR и останови xr_client.</li>
+-<li>Переподключи USB-кабель или донгл.</li>
+-<li>Запусти USB.cmd, затем RUN.cmd.</li>
+-<li>Если устройство по-прежнему отсутствует, выполни:</li>
+-</ol>
+-<pre><code>wsl -d Ubuntu-24.04 -- lsusb
+-wsl -d Ubuntu-24.04 -- uname -r
+-wsl -d Ubuntu-24.04 -u root -- modprobe uvcvideo
+-wsl -d Ubuntu-24.04 -u root -- modprobe btusb
+-wsl -d Ubuntu-24.04 -- bluetoothctl list
+-wsl -d Ubuntu-24.04 -u root -- dmesg</code></pre>
++<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR
++</code></pre>
+ <ol start="5">
+-<li>Если модуль не найден, обнови WSL:</li>
+-</ol>
+-<pre><code>wsl --update --web-download</code></pre>
+-<ol start="6">
+-<li>Сохрани работу в Ubuntu, перезапусти дистрибутив и подключи устройства:</li>
+-</ol>
+-<pre><code>wsl --terminate Ubuntu-24.04
+-.\USB.cmd
+-.\RUN.cmd</code></pre>
+-<p>Если в %USERPROFILE%\.wslconfig указано собственное ядро, удали или обнови эту настройку перед повторением шагов.</p>
+-<h3>Восстановление соединения из Windows</h3>
+-<ol start="1">
+-<li>Оставь xr_client работающим и выполни:</li>
+-</ol>
+-<pre><code>Test-NetConnection 127.0.0.1 -Port 45810
+-wsl -d Ubuntu-24.04 -- ss -ltnp</code></pre>
+-<ol start="2">
+-<li>Для сети WSL NAT включи localhost forwarding в %USERPROFILE%\.wslconfig, сохранив остальные настройки:</li>
+-</ol>
+-<pre><code>[wsl2]
+-localhostForwarding=true</code></pre>
+-<ol start="3">
+-<li>Сохрани работу во всех дистрибутивах WSL и выполни:</li>
+-</ol>
+-<pre><code>wsl --shutdown
+-.\RUN.cmd</code></pre>
+-<ol start="4">
+-<li>Если соединения по-прежнему нет, проверь настройки VPN/брандмауэра и закрой другие процессы, использующие порт 45810.</li>
+-</ol>
+-<h3>Создание обычного пользователя Ubuntu</h3>
+-<p>Если Ubuntu запускается от root:</p>
+-<ol start="1">
+-<li>Открой Ubuntu и создай пользователя. Вместо xruser укажи желаемое имя Linux-пользователя:</li>
+-</ol>
+-<pre><code>adduser xruser
+-usermod -aG sudo xruser</code></pre>
+-<ol start="2">
+-<li>Укажи пользователя в /etc/wsl.conf, сохранив остальные секции:</li>
+-</ol>
+-<pre><code>[user]
+-default=xruser</code></pre>
+-<ol start="3">
+-<li>Сохрани работу в Ubuntu, затем выполни из Windows:</li>
+-</ol>
+-<pre><code>wsl --terminate Ubuntu-24.04
+-.\INSTALL.cmd</code></pre>
+-<h3>Установка недостающего компонента Windows</h3>
+-<ol start="1">
+-<li>Если нет winget, установи или обнови Microsoft App Installer и повтори INSTALL.cmd.</li>
+-<li>Если Windows сообщает об отключённой виртуализации, включи SVM/AMD-V или VT-x в BIOS/UEFI, перезагрузи компьютер и повтори INSTALL.cmd.</li>
+-</ol>
++<li>Назначьте левый и правый контроллеры по подсказкам, сохраните конфиг и запустите <strong>RUN.cmd</strong>.</li>
++</ol>
++<h2>7. Остановите или измените настройки</h2>
++<ol start="1">
++<li>Закройте SteamVR.</li>
++<li>Нажмите <strong>Ctrl+C</strong> в консоли трекинга и дождитесь остановки.</li>
++<li>Для возврата USB-устройств Windows выполните:</li>
++</ol>
++<pre><code>.\DETACH.cmd
++</code></pre>
++<p>После изменения аппаратных настроек подключите устройства и запустите снова. После смены релиза, частоты драйвера или режима дисплея в <code>.env</code> повторите <strong>INSTALL.cmd</strong> и настройку дисплея.</p>
++<h2>8. Если не запускается</h2>
++<p>Выполните:</p>
++<pre><code>.\DOCTOR.cmd
++</code></pre>
++<p>Не закрывая консоль трекинга, проверьте его:</p>
++<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
++</code></pre>
++<p>Если SteamVR сообщает о неверном дисплее рабочего стола, закройте SteamVR, проверьте расширение экранов, разрешение и частоту в Windows, затем повторите <strong>DISPLAY.cmd</strong> и <strong>RUN.cmd</strong>.</p>
+ </article></body></html>
+diff --git a/win/XrGate-Wsl.ps1 b/win/XrGate-Wsl.ps1
+index 6ec9a22..7aac20c 100644
+--- a/win/XrGate-Wsl.ps1
++++ b/win/XrGate-Wsl.ps1
+@@ -12,19 +12,19 @@ param(
+     [ValidateSet('Install','Run','Runtime','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
+     [string]$Action = 'Help',
+     [string]$Distribution = '',
+-    [string]$ReleaseTag = 'latest',
+-    [string]$XrealBusId = '',
++    [string]$ReleaseTag = '',
++    [Alias('XrealBusId')][string[]]$UsbBusId = @(),
+     [string]$BluetoothBusId = '',
+     [switch]$WithoutBluetooth,
+     [switch]$GearVR,
+     [string]$ControllerConfig = '',
+-    [ValidateSet(0,60,90)][int]$FrequencyHz = 0,
++    [ValidateRange(0,1000)][int]$FrequencyHz = 0,
+     [ValidateSet('','direct','extended_sbs')][string]$DisplayMode = '',
+     [ValidateSet('','current','60hz','90hz','prompt')][string]$DisplayOption = '',
+     [string]$DisplayName = '',
+     [string]$SteamVR = '',
+     [switch]$StartSteamVR,
+-    [ValidateRange(5,600)][int]$TimeoutSeconds = 180,
++    [ValidateRange(0,600)][int]$TimeoutSeconds = 0,
+     [ValidateSet('Prerequisites','Bind')][string]$AdminTask = 'Prerequisites',
+     [string[]]$BindBusId = @()
+ )
+@@ -32,12 +32,25 @@ Set-StrictMode -Version Latest
+ $ErrorActionPreference = 'Stop'
+ $script:Repo = 'vladoshub/xr-gate'
+ $script:Self = $PSCommandPath
++. (Join-Path $PSScriptRoot 'windows\Environment.ps1')
++Initialize-XrSettings $PSScriptRoot
++if (!$ReleaseTag) { $ReleaseTag = Get-XrSetting 'XR_RELEASE_TAG' 'latest' }
++if (!$TimeoutSeconds) { $TimeoutSeconds = Get-XrInteger 'XR_START_TIMEOUT' 5 600 }
++if (!$SteamVR) { $SteamVR = Get-XrSetting 'XR_STEAMVR_PATH' }
++if (!$ControllerConfig) { $ControllerConfig = Get-XrSetting 'XR_CONTROLLER_CONFIG' }
++if (!$DisplayName) { $DisplayName = Get-XrSetting 'XR_DISPLAY_NAME' }
++if (!$UsbBusId.Count) { $UsbBusId = @(Get-XrList 'XR_USB_BUS_IDS') }
++if (!$BluetoothBusId) { $BluetoothBusId = Get-XrSetting 'XR_BLUETOOTH_BUS_ID' }
++$script:TcpHost = Get-XrSetting 'XR_TCP_HOST' '127.0.0.1'
++$script:TcpPort = Get-XrInteger 'XR_TCP_PORT'
++
+ $script:StateDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'XR-Gate-WSL'
+ $script:StateFile = Join-Path $script:StateDir 'state.json'
+ $script:State = [ordered]@{
+-    Distribution = 'Ubuntu-24.04'; LinuxUser = ''; ReleaseTag = ''
+-    XrealInstanceId = ''; BluetoothInstanceId = ''
+-    FrequencyHz = 60; DisplayMode = 'extended_sbs'; DisplayOption = 'current'
++    Distribution = (Get-XrSetting 'XR_DISTRIBUTION'); LinuxUser = ''; ReleaseTag = ''
++    UsbInstanceIds = @(); BluetoothInstanceId = ''
++    FrequencyHz = (Get-XrInteger 'XR_DISPLAY_FREQUENCY_HZ' 1 1000)
++    DisplayMode = (Get-XrSetting 'XR_DISPLAY_MODE'); DisplayOption = (Get-XrSetting 'XR_DISPLAY_OPTION')
+     GearVR = $false; DriverPath = ''; RegisteredDriver = ''
+     DisplayDeviceId = ''; DisplayDeviceName = ''
+ }
+@@ -63,12 +76,33 @@ function Load-State {
+             if ($script:State.Contains($p.Name)) { $script:State[$p.Name] = $p.Value }
+         }
+     }
++    # Migrate the selection saved by earlier XREAL-only launchers.
++    if ((Test-Path -LiteralPath $script:StateFile) -and !$script:State.UsbInstanceIds.Count -and
++        $saved.PSObject.Properties['XrealInstanceId'] -and $saved.XrealInstanceId) {
++        $script:State.UsbInstanceIds = @([string]$saved.XrealInstanceId)
++    }
++    # A user's .env (and process environment) overrides saved interactive choices.
++    $mapping = @{XR_DISTRIBUTION='Distribution'; XR_DISPLAY_FREQUENCY_HZ='FrequencyHz';
++                 XR_DISPLAY_MODE='DisplayMode'; XR_DISPLAY_OPTION='DisplayOption'}
++    foreach ($key in $mapping.Keys) {
++        if ($script:SettingOverrides.ContainsKey($key) -and $script:SettingOverrides[$key] -ne '') {
++            $script:State[$mapping[$key]] = $script:SettingOverrides[$key]
++        }
++    }
+     if ($Distribution) { $script:State.Distribution = $Distribution }
+     if ($FrequencyHz) { $script:State.FrequencyHz = $FrequencyHz }
+     if ($DisplayMode) { $script:State.DisplayMode = $DisplayMode }
+     if ($DisplayOption) { $script:State.DisplayOption = $DisplayOption }
++    $gearVrSetting = Get-XrSetting 'XR_GEARVR'
++    if ($gearVrSetting -ne '') { $script:State.GearVR = ($gearVrSetting -eq '1') }
++    if ((Get-XrSetting 'XR_BLUETOOTH') -eq '0') { $script:WithoutBluetooth = $true }
++    $bluetoothInstance = Get-XrSetting 'XR_BLUETOOTH_INSTANCE_ID'
++    if ($bluetoothInstance -and !$BluetoothBusId) { $script:State.BluetoothInstanceId = $bluetoothInstance }
+     if ($GearVR) { $script:State.GearVR = $true }
+     if ($WithoutBluetooth) { $script:State.BluetoothInstanceId = '' }
++    if ([int]$script:State.FrequencyHz -lt 1 -or [int]$script:State.FrequencyHz -gt 1000) { throw 'Invalid display frequency.' }
++    if ($script:State.DisplayMode -notin @('direct','extended_sbs')) { throw 'Invalid XR_DISPLAY_MODE.' }
++    if ($script:State.DisplayOption -notin @('current','60hz','90hz','prompt')) { throw 'Invalid XR_DISPLAY_OPTION.' }
+     if ($script:State.Distribution -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+         throw 'Distribution name contains unsupported characters.'
+     }
+@@ -118,6 +152,7 @@ function New-LinuxRequest {
+         user = [string]$script:State.LinuxUser; gearvr = [bool]$script:State.GearVR
+         bluetooth = [bool]$script:State.BluetoothInstanceId
+         display_option = [string]$script:State.DisplayOption
++        settings = $script:Settings
+     }
+ }
+ function Invoke-Elevated([string]$Task, [string[]]$BusIds = @()) {
+@@ -215,7 +250,7 @@ function Get-ReleaseInfo([string]$Tag) {
+ }
+ function Select-ReleaseAsset($Release, [string]$Name) {
+     $matches = @($Release.assets | Where-Object { $_.name -ceq $Name })
+-    if ($matches.Count -ne 1) { throw "Release $($Release.tag_name) has no unique asset $Name. Use v2.8.0 or a newer complete release." }
++    if ($matches.Count -ne 1) { throw "Release $($Release.tag_name) has no unique asset $Name. Select a release that includes the requested package." }
+     $asset = $matches[0]
+     if (!$asset.PSObject.Properties['digest'] -or [string]$asset.digest -notmatch '^sha256:[0-9a-fA-F]{64}$') {
+         throw "GitHub did not provide a SHA-256 digest for $Name."
+@@ -246,39 +281,113 @@ function Save-ReleaseAsset($Asset, [string]$Directory) {
+     Move-Item -LiteralPath $partial -Destination $path -Force
+     return $path
+ }
++function Find-BundledDriver([string]$Root) {
++    $manifestPath = Join-Path $Root 'bundle.json'
++    if (!(Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return '' }
++    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
++    if ($manifest.schema -ne 1) { throw 'Unsupported Windows bundle format.' }
++    $variant = @($manifest.variants | Where-Object {
++        [int]$_.frequency_hz -eq [int]$script:State.FrequencyHz -and $_.display_mode -eq $script:State.DisplayMode
++    })
++    if ($variant.Count -ne 1) {
++        $choices = @($manifest.variants | ForEach-Object { "$($_.frequency_hz) Hz / $($_.display_mode)" }) -join ', '
++        throw "The bundle contains: $choices. Set XR_DISPLAY_FREQUENCY_HZ and XR_DISPLAY_MODE in .env."
++    }
++    $relative = 'drivers/' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '/xr_tracking'
++    $package = Join-Path $Root $relative
++    foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
++        if (!(Test-Path -LiteralPath (Join-Path $package $name) -PathType Leaf)) { throw "Windows bundle file missing: $relative/$name" }
++    }
++    return $package
++}
++function Get-DriverPackage($Release, [string]$Cache) {
++    $localManifest = Join-Path $PSScriptRoot 'bundle.json'
++    if (Test-Path -LiteralPath $localManifest -PathType Leaf) {
++        $manifest = Get-Content -Raw -LiteralPath $localManifest | ConvertFrom-Json
++        if ($manifest.release_tag -eq 'latest' -or $manifest.release_tag -eq $Release.tag_name) {
++            return Find-BundledDriver $PSScriptRoot
++        }
++    }
++    $bundles = @($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows.zip' })
++    if ($bundles.Count) {
++        $asset = Select-ReleaseAsset $Release 'xr-gate-windows.zip'
++        $archive = Save-ReleaseAsset $asset $Cache
++        $directory = Join-Path $Cache ('windows-' + ([string]$asset.digest).Substring(7,12))
++        if (!(Test-Path -LiteralPath (Join-Path $directory 'xr-gate-windows/bundle.json'))) {
++            Expand-Archive -LiteralPath $archive -DestinationPath $directory -Force
++        }
++        return Find-BundledDriver (Join-Path $directory 'xr-gate-windows')
++    }
++    # Older releases published each variant separately.
++    $name = 'xr-gate-steamvr-windows-x64-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '.zip'
++    $asset = Select-ReleaseAsset $Release $name
++    $archive = Save-ReleaseAsset $asset $Cache
++    $directory = Join-Path $Cache ('driver-' + ([string]$asset.digest).Substring(7,12))
++    if (!(Test-Path -LiteralPath (Join-Path $directory 'xr_tracking/driver.vrdrivermanifest'))) {
++        Expand-Archive -LiteralPath $archive -DestinationPath $directory -Force
++    }
++    return Join-Path $directory 'xr_tracking'
++}
+ function Get-UsbDevices {
+     $lines = @(& (Get-Tool 'usbipd.exe') state)
+     if ($LASTEXITCODE -ne 0) { throw 'usbipd state failed; install a current usbipd-win.' }
+     $data = ($lines -join [Environment]::NewLine) | ConvertFrom-Json
+     return @($data.Devices | Where-Object { $_.BusId })
+ }
+-function Select-XrealDevice([object[]]$Devices, [string]$ExplicitBusId = '', [string]$SavedInstanceId = '') {
+-    $matches = @($Devices | Where-Object { $_.InstanceId -match '^USB\\VID_3318&PID_0426\\' })
+-    if ($ExplicitBusId) { $matches = @($matches | Where-Object { $_.BusId -eq $ExplicitBusId }) }
+-    elseif ($SavedInstanceId) {
+-        $saved = @($matches | Where-Object { $_.InstanceId -eq $SavedInstanceId })
+-        if ($saved.Count) { $matches = $saved }
+-    }
+-    if (!$matches.Count) { throw 'XREAL Air 2 Ultra USB (3318:0426) was not found. Connect it and run -Action Usb.' }
+-    if ($matches.Count -gt 1) {
+-        $matches | Format-Table BusId,Description,InstanceId | Out-Host
+-        throw 'More than one XREAL is connected. Specify -XrealBusId BUSID.'
+-    }
+-    return $matches[0]
++function Select-RuntimeDevices([object[]]$Devices, [string[]]$ExplicitBusIds = @(), [string[]]$SavedInstanceIds = @()) {
++    $selected = @()
++    $instances = @(Get-XrList 'XR_USB_INSTANCE_IDS')
++    if ($ExplicitBusIds.Count -or $instances.Count) {
++        if ($ExplicitBusIds.Count) {
++            foreach ($id in $ExplicitBusIds) {
++                if ($id -notmatch '^\d+-\d+$') { throw "Invalid USB BUSID: $id" }
++                $matches = @($Devices | Where-Object { $_.BusId -eq $id })
++                if ($matches.Count -ne 1) { throw "USB BUSID $id was not found. Check usbipd list and XR_USB_BUS_IDS." }
++                $selected += $matches[0]
++            }
++        } else {
++            foreach ($id in $instances) {
++                $matches = @($Devices | Where-Object { $_.InstanceId -eq $id })
++                if ($matches.Count -ne 1) { throw "USB instance was not found: $id" }
++                $selected += $matches[0]
++            }
++        }
++    } else {
++        foreach ($identity in @(Get-XrList 'XR_USB_IDS')) {
++            if ($identity -notmatch '^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$') { throw 'XR_USB_IDS must contain VID:PID pairs.' }
++            $pattern = '^USB\\VID_' + $Matches[1] + '&PID_' + $Matches[2] + '\\'
++            $matches = @($Devices | Where-Object { $_.InstanceId -match $pattern })
++            $saved = @($matches | Where-Object { $_.InstanceId -in $SavedInstanceIds })
++            if ($saved.Count) { $matches = $saved }
++            if (!$matches.Count) { throw "USB device $identity was not found. Check the hardware env and usbipd list." }
++            if ($matches.Count -gt 1 -and !$saved.Count) {
++                $matches | Format-Table BusId,Description,InstanceId | Out-Host
++                throw 'Multiple matching USB devices. Set XR_USB_BUS_IDS in .env.'
++            }
++            $selected += $matches
++        }
++    }
++    if (!$selected.Count -and (Get-XrSetting 'XR_REQUIRE_CAMERA') -eq '1') {
++        throw 'Set XR_USB_IDS, XR_USB_BUS_IDS or XR_USB_INSTANCE_IDS in the hardware env.'
++    }
++    return @($selected | Sort-Object InstanceId -Unique)
+ }
+ function Get-SelectedUsb([object[]]$Devices) {
+-    $x = Select-XrealDevice -Devices $Devices -ExplicitBusId $XrealBusId -SavedInstanceId ([string]$script:State.XrealInstanceId)
+-    $script:State.XrealInstanceId = [string]$x.InstanceId; $selected = @($x)
+-    if ($BluetoothBusId) {
++    $selected = @(Select-RuntimeDevices -Devices $Devices -ExplicitBusIds $UsbBusId -SavedInstanceIds @($script:State.UsbInstanceIds))
++    $script:State.UsbInstanceIds = @($selected | ForEach-Object { [string]$_.InstanceId })
++    if ($BluetoothBusId -and !$WithoutBluetooth) {
+         $bt = @($Devices | Where-Object { $_.BusId -eq $BluetoothBusId })
+-        if ($bt.Count -ne 1 -or $bt[0].InstanceId -eq $x.InstanceId) { throw 'Select the dedicated USB Bluetooth dongle BUSID from usbipd list.' }
++        if ($bt.Count -ne 1 -or $bt[0].InstanceId -in $script:State.UsbInstanceIds) { throw 'Select a separate Bluetooth dongle BUSID from usbipd list.' }
+         $script:State.BluetoothInstanceId = [string]$bt[0].InstanceId
+     }
+     if ($script:State.BluetoothInstanceId) {
+         $bt = @($Devices | Where-Object { $_.InstanceId -eq $script:State.BluetoothInstanceId })
+-        if ($bt.Count -ne 1) { throw 'Saved Bluetooth dongle not found. Use -BluetoothBusId NEW_BUSID or -WithoutBluetooth.' }
++        if ($bt.Count -ne 1) { throw 'Saved Bluetooth dongle not found. Set XR_BLUETOOTH_BUS_ID or use -WithoutBluetooth.' }
+         $selected += $bt[0]
+     }
++    if ((Get-XrSetting 'XR_BLUETOOTH') -eq '1' -and !$script:State.BluetoothInstanceId -and !$WithoutBluetooth) {
++        throw 'Set XR_BLUETOOTH_BUS_ID or XR_BLUETOOTH_INSTANCE_ID for the Bluetooth dongle.'
++    }
+     Save-State; return $selected
+ }
+ function Connect-SelectedUsb {
+@@ -356,14 +465,14 @@ function Wait-XrStream([int]$Seconds) {
+     while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
+         $client = New-Object Net.Sockets.TcpClient; $reader = $null
+         try {
+-            $pending = $client.BeginConnect('127.0.0.1',45810,$null,$null)
++            $pending = $client.BeginConnect($script:TcpHost,$script:TcpPort,$null,$null)
+             if (!$pending.AsyncWaitHandle.WaitOne(1500)) { throw 'Connection timeout.' }
+             $client.EndConnect($pending); $client.GetStream().ReadTimeout = 2000
+             $reader = New-Object IO.StreamReader($client.GetStream())
+             $helloLine = $reader.ReadLine()
+             if (!$helloLine) { throw 'No XR Gate hello.' }
+             $hello = $helloLine | ConvertFrom-Json
+-            if ($hello.protocol -ne 'xr_gate_app_v1') { throw 'Port 45810 is serving a different protocol.' }
++            if ($hello.protocol -ne 'xr_gate_app_v1') { throw 'The configured TCP endpoint is serving a different protocol.' }
+             $lastSequence = ''; $lastPoseSource = ''; $valid = 0
+             while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
+                 $line = $reader.ReadLine(); if (!$line) { throw 'TCP stream closed.' }
+@@ -399,7 +508,7 @@ function Show-Help {
+ XR Gate / WSL2 / no Docker
+   -Action Install                 Install Ubuntu runtime and Windows driver.
+   -Action Run [-StartSteamVR]      Attach USB, open xr_client; optionally start SteamVR.
+-  -Action Usb                     Detect/attach XREAL and save the selection.
++  -Action Usb                     Attach devices selected in the hardware env.
+   -Action Usb -BluetoothBusId 1-4  Also attach your dedicated USB Bluetooth dongle.
+   -Action Detach                  Return the selected USB devices to Windows.
+   -Action Doctor                  Show Windows/WSL/USB/runtime diagnostics.
+@@ -409,7 +518,7 @@ XR Gate / WSL2 / no Docker
+   -Action Pair                    Open bluetoothctl in WSL as root.
+   -Action Controllers             Register Gear VR / train another layout.
+ Options:
+-  -ReleaseTag v2.8.0               Pin a release (Install defaults to latest).
++  -ReleaseTag vX.Y.Z               Pin a release (Install defaults to latest).
+   -GearVR                         Configure the Gear VR provider/template.
+   -ControllerConfig C:\gearvr.json Import existing controller JSON with backup.
+   -WithoutBluetooth               Forget the saved Bluetooth dongle.
+@@ -434,7 +543,7 @@ try {
+         $rc = Invoke-Elevated -Task Prerequisites
+         if ($rc -eq 20) { Write-Host 'Save work, restart Windows, and run Install again.' -ForegroundColor Yellow; exit 20 }
+         if (!(Ensure-Distribution)) { exit 20 }
+-        if ($BluetoothBusId) {
++        if ($BluetoothBusId -and !$WithoutBluetooth) {
+             $bt = @(Get-UsbDevices | Where-Object { $_.BusId -eq $BluetoothBusId })
+             if ($bt.Count -ne 1) { throw 'The specified USB Bluetooth BUSID was not found.' }
+             $script:State.BluetoothInstanceId = [string]$bt[0].InstanceId
+@@ -447,12 +556,10 @@ try {
+         $release = Get-ReleaseInfo $ReleaseTag; Write-Step ("Selected release: " + $release.tag_name)
+         $runtimeAsset = Select-ReleaseAsset $release 'xr-gate-ubuntu-24.04-linux-x64.tar.gz'
+         $modelsAsset = Select-ReleaseAsset $release 'hand-tracking-models-mercury.tar.gz'
+-        $driverName = 'xr-gate-steamvr-windows-x64-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '.zip'
+-        $driverAsset = Select-ReleaseAsset $release $driverName
+         $cache = Join-Path $script:StateDir ('cache\' + $release.tag_name)
+         $runtimeArchive = Save-ReleaseAsset $runtimeAsset $cache
+         $modelsArchive = Save-ReleaseAsset $modelsAsset $cache
+-        $driverArchive = Save-ReleaseAsset $driverAsset $cache
++        $driverPackage = Get-DriverPackage $release $cache
+         $request = New-LinuxRequest
+         $request.tag = [string]$release.tag_name
+         $request.runtime_archive = ConvertTo-WslPath $runtimeArchive
+@@ -465,8 +572,13 @@ try {
+             Write-Host ("Save work in this Ubuntu, run: wsl --terminate " + $script:State.Distribution) -ForegroundColor Yellow
+             Write-Host 'Then run Install again. Other distributions do not need to be stopped.'; exit 20
+         }
+-        $driverDir = Join-Path $script:StateDir ('drivers\' + $release.tag_name + '-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '-' + ([string]$driverAsset.digest).Substring(7,12))
+-        if (!(Test-Path -LiteralPath (Join-Path $driverDir 'xr_tracking\driver.vrdrivermanifest'))) { Expand-Archive -LiteralPath $driverArchive -DestinationPath $driverDir -Force }
++        $driverHash = (Get-FileHash -LiteralPath (Join-Path $driverPackage 'bin/win64/driver_xr_tracking.dll') -Algorithm SHA256).Hash.Substring(0,12)
++        $settingsHash = (Get-FileHash -LiteralPath (Join-Path $driverPackage 'resources/settings/default.vrsettings') -Algorithm SHA256).Hash.Substring(0,12)
++        $driverDir = Join-Path $script:StateDir ('drivers\' + $release.tag_name + '-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '-' + $driverHash + $settingsHash)
++        if (!(Test-Path -LiteralPath (Join-Path $driverDir 'xr_tracking\driver.vrdrivermanifest'))) {
++            New-Item -ItemType Directory -Force $driverDir | Out-Null
++            Copy-Item -LiteralPath $driverPackage -Destination $driverDir -Recurse
++        }
+         $script:State.ReleaseTag = [string]$release.tag_name
+         $script:State.DriverPath = Join-Path $driverDir 'xr_tracking'
+         Save-State; Register-XrDriver -AllowDeferred
+@@ -498,7 +610,7 @@ try {
+             $status = (Invoke-Linux -Operation status -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
+             if ($status.running) { throw 'Stop xr_client with Ctrl+C before detaching USB.' }
+             foreach ($d in @(Get-UsbDevices)) {
+-                if ($d.InstanceId -in @($script:State.XrealInstanceId,$script:State.BluetoothInstanceId) -and $d.ClientIPAddress) {
++                if ($d.InstanceId -in (@($script:State.UsbInstanceIds) + @($script:State.BluetoothInstanceId)) -and $d.ClientIPAddress) {
+                     Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$d.BusId)
+                 }
+             }
+diff --git a/win/hardware/generic.env.example b/win/hardware/generic.env.example
+new file mode 100644
+index 0000000..4f9b4a1
+--- /dev/null
++++ b/win/hardware/generic.env.example
+@@ -0,0 +1,44 @@
++# Copy to generic.env and fill the settings required by your hardware/profile.
++XR_TARGET_DEVICE=generic
++XR_PROFILE=
++XR_USB_IDS=
++XR_USB_BUS_IDS=
++XR_USB_INSTANCE_IDS=
++# Empty flags keep saved choices; use 0 to disable or 1 to enable.
++XR_BLUETOOTH=
++XR_GEARVR=
++XR_BLUETOOTH_BUS_ID=
++XR_BLUETOOTH_INSTANCE_ID=
++XR_CAMERA_DEVICE=
++XR_HIDRAW_DEVICES=
++XR_SERIAL_DEVICES=
++XR_INPUT_DEVICES=
++XR_REQUIRE_CAMERA=0
++XR_REQUIRE_HIDRAW=0
++XR_KERNEL_MODULES=
++XR_DEVICE_ACCESS_SCRIPT=
++
++XR_DISPLAY_FREQUENCY_HZ=
++XR_DISPLAY_MODE=extended_sbs
++XR_DISPLAY_OPTION=current
++XR_DISPLAY_NAME=
++XR_WINDOW_WIDTH=
++XR_WINDOW_HEIGHT=
++XR_RENDER_WIDTH=
++XR_RENDER_HEIGHT=
++
++XR_CONTROLLER_PROVIDERS=evdev
++XR_GEARVR_TEMPLATE=empty_gearvr.json
++XR_GEARVR_PROVIDERS=evdev,gearvr_ble
++XR_GEARVR_CONNECT_PROVIDERS=gearvr_ble
++
++XR_IPD_METERS=
++XR_PROJECTION_LEFT=
++XR_PROJECTION_RIGHT=
++XR_PROJECTION_TOP=
++XR_PROJECTION_BOTTOM=
++
++# SteamVR identities; keep these when updating an existing device.
++XR_HMD_SERIAL=xr-tracking-hmd-001
++XR_LEFT_HAND_SERIAL=xr-tracking-left-hand-001
++XR_RIGHT_HAND_SERIAL=xr-tracking-right-hand-001
+diff --git a/win/hardware/xreal_ultra.env b/win/hardware/xreal_ultra.env
+new file mode 100644
+index 0000000..e0fe571
+--- /dev/null
++++ b/win/hardware/xreal_ultra.env
+@@ -0,0 +1,44 @@
++# Copy this preset and select the copy with XR_HARDWARE_ENV in .env.
++XR_TARGET_DEVICE=xreal_ultra
++XR_PROFILE=xreal_ultra
++XR_USB_IDS=3318:0426
++XR_USB_BUS_IDS=
++XR_USB_INSTANCE_IDS=
++# Empty flags keep saved choices; use 0 to disable or 1 to enable.
++XR_BLUETOOTH=
++XR_GEARVR=
++XR_BLUETOOTH_BUS_ID=
++XR_BLUETOOTH_INSTANCE_ID=
++XR_CAMERA_DEVICE=
++XR_HIDRAW_DEVICES=
++XR_SERIAL_DEVICES=
++XR_INPUT_DEVICES=
++XR_REQUIRE_CAMERA=1
++XR_REQUIRE_HIDRAW=0
++XR_KERNEL_MODULES=uvcvideo,hid_generic,btusb
++XR_DEVICE_ACCESS_SCRIPT=devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
++
++XR_DISPLAY_FREQUENCY_HZ=60
++XR_DISPLAY_MODE=extended_sbs
++XR_DISPLAY_OPTION=current
++XR_DISPLAY_NAME=
++XR_WINDOW_WIDTH=3840
++XR_WINDOW_HEIGHT=1080
++XR_RENDER_WIDTH=1920
++XR_RENDER_HEIGHT=1080
++
++XR_CONTROLLER_PROVIDERS=evdev
++XR_GEARVR_TEMPLATE=empty_gearvr.json
++XR_GEARVR_PROVIDERS=evdev,gearvr_ble
++XR_GEARVR_CONNECT_PROVIDERS=gearvr_ble
++
++XR_IPD_METERS=0.064
++XR_PROJECTION_LEFT=-1.0
++XR_PROJECTION_RIGHT=1.0
++XR_PROJECTION_TOP=-1.0
++XR_PROJECTION_BOTTOM=1.0
++
++# SteamVR identities; keep these when updating an existing device.
++XR_HMD_SERIAL=xreal-ultra-hmd-001
++XR_LEFT_HAND_SERIAL=xreal-ultra-left-hand-001
++XR_RIGHT_HAND_SERIAL=xreal-ultra-right-hand-001
+diff --git a/win/linux/xr_gate_wsl.py b/win/linux/xr_gate_wsl.py
+index d025464..9abadf0 100644
+--- a/win/linux/xr_gate_wsl.py
++++ b/win/linux/xr_gate_wsl.py
+@@ -21,7 +21,29 @@ import time
+ from datetime import datetime
+ from pathlib import Path, PurePosixPath
+ 
+-VID, PID = "3318", "0426"
++def request_settings(request):
++    values = request.get("settings", {})
++    if not isinstance(values, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()):
++        raise ValueError("Settings must contain literal string values.")
++    return values
++
++
++def integer_setting(settings, key, minimum=1, maximum=65535):
++    value = int(settings.get(key, ""))
++    if not minimum <= value <= maximum:
++        raise ValueError(f"{key} must be from {minimum} to {maximum}.")
++    return value
++
++
++def csv_setting(settings, key):
++    return [part.strip() for part in settings.get(key, "").split(",") if part.strip()]
++
++
++def package_path(package, relative):
++    path = (package / relative).resolve()
++    if not relative or path == package.resolve() or package.resolve() not in path.parents:
++        raise ValueError("Expected a path inside the runtime package: " + relative)
++    return path
+ 
+ 
+ def log(message):
+@@ -45,8 +67,8 @@ def decode_request(value):
+ def configure_windows_display(request):
+     """Update driver defaults and SteamVR overrides without folding JSON keys."""
+     x, y, hz = (request.get(key) for key in ("window_x", "window_y", "frequency_hz"))
+-    if any(type(value) is not int for value in (x, y, hz)) or hz not in (60, 90):
+-        raise ValueError("Display coordinates must be integers; frequency must be 60 or 90.")
++    if any(type(value) is not int for value in (x, y, hz)) or not 1 <= hz <= 1000:
++        raise ValueError("Display coordinates must be integers; frequency must be from 1 to 1000 Hz.")
+     mode = request.get("display_mode", "extended_sbs")
+     if mode not in ("extended_sbs", "direct"):
+         raise ValueError("Invalid display mode.")
+@@ -56,12 +78,29 @@ def configure_windows_display(request):
+         raise ValueError("Two distinct absolute display-settings paths are required.")
+     if not driver.is_file():
+         raise FileNotFoundError("Install the Windows driver before selecting its display.")
+-    geometry = {"windowX": x, "windowY": y, "windowWidth": 3840, "windowHeight": 1080,
+-                "renderWidth": 1920, "renderHeight": 1080, "displayFrequency": hz}
+-    xr_values = dict(geometry, isDisplayOnDesktop=(mode == "extended_sbs"), isDisplayRealDisplay=True,
++    settings = request_settings(request)
++    geometry = {"windowX": x, "windowY": y, "displayFrequency": hz}
++    for field, key in (("windowWidth", "XR_WINDOW_WIDTH"), ("windowHeight", "XR_WINDOW_HEIGHT"),
++                       ("renderWidth", "XR_RENDER_WIDTH"), ("renderHeight", "XR_RENDER_HEIGHT")):
++        geometry[field] = integer_setting(settings, key)
++
++    xr_values = dict(geometry, runtimeTcpHost=settings.get("XR_TCP_HOST", "127.0.0.1"),
++                     runtimeTcpPort=integer_setting(settings, "XR_TCP_PORT"), isDisplayOnDesktop=(mode == "extended_sbs"), isDisplayRealDisplay=True,
+                      displayDebugMode=False)
+     steam_values = dict(geometry, directMode=(mode == "direct"), displayDebugMode=False,
+                         debugMode=False, DebugMode=False)
++    for field, key in (("ipdMeters", "XR_IPD_METERS"), ("projectionLeft", "XR_PROJECTION_LEFT"),
++                       ("projectionRight", "XR_PROJECTION_RIGHT"), ("projectionTop", "XR_PROJECTION_TOP"),
++                       ("projectionBottom", "XR_PROJECTION_BOTTOM")):
++        if settings.get(key):
++            value = float(settings[key])
++            if not (-100 < value < 100) or (field == "ipdMeters" and not 0.01 <= value <= 0.2):
++                raise ValueError("Invalid optical setting: " + key)
++            xr_values[field] = value
++    for field, key in (("serialNumber", "XR_HMD_SERIAL"), ("leftHandSerial", "XR_LEFT_HAND_SERIAL"),
++                       ("rightHandSerial", "XR_RIGHT_HAND_SERIAL")):
++        if settings.get(key):
++            xr_values[field] = settings[key]
+     changes = []
+     # Parse and validate both files before writing either one. json preserves
+     # distinct keys such as debugMode/DebugMode, unlike PowerShell 5.1 objects.
+@@ -110,17 +149,23 @@ def configure_windows_display(request):
+             else:
+                 replace_bytes(path, original)
+         raise
+-    log(f"Display configured: {mode}, 3840x1080 @ {hz} Hz, X={x}, Y={y}.")
++    log(f"Display configured: {mode}, {geometry['windowWidth']}x{geometry['windowHeight']} @ {hz} Hz, X={x}, Y={y}.")
+ 
+ 
+ class Runtime:
+     def __init__(self, request):
+         self.cfg = request
++        self.settings = request_settings(request)
+         self.account = pwd.getpwnam(request["user"])
+         if self.account.pw_uid == 0:
+             raise ValueError("Refusing to run XR Gate as root.")
+         self.user = self.account.pw_name
+-        self.base = Path(self.account.pw_dir) / "xr-gate-wsl"
++        folder = self.settings.get("XR_LINUX_ROOT", "~/xr-gate-wsl")
++        if folder.startswith("~/"):
++            folder = str(Path(self.account.pw_dir) / folder[2:])
++        self.base = Path(folder)
++        if not self.base.is_absolute() or self.base == Path("/"):
++            raise ValueError("XR_LINUX_ROOT must be an absolute path or start with ~/.")
+         self.current = self.base / "current"
+         self.config = self.base / "config"
+         self.lock = self.base / "runtime.lock"
+@@ -266,12 +311,20 @@ class Runtime:
+                     shutil.rmtree(stage, ignore_errors=True)
+                     raise
+             installer = package / "devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh"
+-            hook = package / "devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh"
++            hook_name = self.settings.get("XR_DEVICE_ACCESS_SCRIPT", "")
+             if not installer.is_file() or not (package / "run_xr_client.sh").is_file():
+                 raise RuntimeError("The downloaded runtime has an unsupported package layout.")
+             env.update(XR_PACKAGE_ROOT=str(package), SUDO_USER=self.user,
+-                       XR_RUNTIME_DEVICE_ACCESS_SCRIPT=str(hook), XR_TARGET_DEVICE="xreal_ultra")
+-            run(["bash", installer], env=env)
++                       XR_TARGET_DEVICE=self.settings.get("XR_TARGET_DEVICE", "generic"))
++            installer_args = ["bash", installer]
++            if hook_name:
++                hook = package_path(package, hook_name)
++                if not hook.is_file():
++                    raise FileNotFoundError("Device access script not found: " + str(hook))
++                env["XR_RUNTIME_DEVICE_ACCESS_SCRIPT"] = str(hook)
++            else:
++                installer_args.append("--no-device-access")
++            run(installer_args, env=env)
+             for group in ("video", "input", "plugdev", "bluetooth"):
+                 run(["groupadd", "-f", group])
+                 run(["usermod", "-aG", group, self.user])
+@@ -295,7 +348,7 @@ class Runtime:
+                 self.write(destination, payload)
+                 self.write(self.config / "controllers-ready", "imported\n")
+             elif self.cfg.get("gearvr") and not destination.exists():
+-                template = package / "bin/override_controller/configs/empty_gearvr.json"
++                template = self.controller_template(package)
+                 self.write(destination, template.read_text())
+             self.write(version / "installed.json", json.dumps({
+                 "release": release, "runtime_sha256": runtime_hash, "models_sha256": models_hash
+@@ -310,63 +363,99 @@ class Runtime:
+             log("Shared controller settings: " + str(self.config))
+         return 0
+ 
+-    @staticmethod
+-    def is_xreal(path):
++    def usb_ids(self):
++        identities = {value.lower() for value in csv_setting(self.settings, "XR_USB_IDS")}
++        if any(not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", value) for value in identities):
++            raise ValueError("XR_USB_IDS must contain comma-separated VID:PID pairs.")
++        return identities
++
++    def selected_usb(self, path):
+         resolved = path.resolve()
+         for parent in (resolved, *resolved.parents):
+             try:
+-                if (parent / "idVendor").read_text().strip().lower() == VID and (
+-                    parent / "idProduct").read_text().strip().lower() == PID:
++                identity = (parent / "idVendor").read_text().strip() + ":" + (parent / "idProduct").read_text().strip()
++                if identity.lower() in self.usb_ids():
+                     return True
+-            except (FileNotFoundError, OSError):
++            except OSError:
+                 pass
+         return False
+ 
++    def device_nodes(self, sysroot=Path("/sys"), devroot=Path("/dev")):
++        nodes, cameras, hids = [], [], []
++        requested = self.settings.get("XR_CAMERA_DEVICE", "")
++        for node in (sysroot / "class/video4linux").glob("*"):
++            path = devroot / node.name
++            if (self.selected_usb(node) and not requested) or (requested and path.resolve() == Path(requested).resolve()):
++                cameras.append(path)
++        for node in (sysroot / "class/hidraw").glob("*"):
++            if self.selected_usb(node):
++                hids.append(devroot / node.name)
++        for key, pattern in (("XR_HIDRAW_DEVICES", r"/dev/hidraw[0-9]+"),
++                             ("XR_SERIAL_DEVICES", r"/dev/(?:tty(?:ACM|USB)[0-9]+|serial/by-id/[^/]+)"),
++                             ("XR_INPUT_DEVICES", r"/dev/input/event[0-9]+")):
++            for value in csv_setting(self.settings, key):
++                if not re.fullmatch(pattern, value) or Path(value).name in (".", ".."):
++                    raise ValueError("Invalid device path in " + key + ": " + value)
++                (hids if key == "XR_HIDRAW_DEVICES" else nodes).append(Path(value))
++        for node in (sysroot / "class/tty").glob("*"):
++            if re.fullmatch(r"tty(?:ACM|USB)[0-9]+", node.name) and self.selected_usb(node):
++                nodes.append(devroot / node.name)
++        for device in (sysroot / "bus/usb/devices").glob("*"):
++            if self.selected_usb(device):
++                try:
++                    bus = int((device / "busnum").read_text())
++                    number = int((device / "devnum").read_text())
++                    nodes.append(devroot / f"bus/usb/{bus:03d}/{number:03d}")
++                except (OSError, ValueError):
++                    pass
++        return list(dict.fromkeys(cameras + hids + nodes)), cameras, hids
++
+     def prepare(self):
+         self.root_required()
+-        # A built-in driver can work even when modprobe cannot find a module file.
+-        run(["modprobe", "uvcvideo"], check=False)
++        for module in csv_setting(self.settings, "XR_KERNEL_MODULES"):
++            if not re.fullmatch(r"[A-Za-z0-9_-]+", module):
++                raise ValueError("Invalid kernel module: " + module)
++            run(["modprobe", module], check=False)
+         if self.cfg.get("bluetooth"):
+-            run(["modprobe", "btusb"], check=False)
+             run(["systemctl", "start", "bluetooth"])
+             run(["rfkill", "unblock", "bluetooth"], check=False)
+         run(["udevadm", "control", "--reload-rules"], check=False)
+-        run(["udevadm", "trigger", "--subsystem-match=video4linux"], check=False)
+-        run(["udevadm", "trigger", "--subsystem-match=hidraw"], check=False)
++        for subsystem in ("video4linux", "hidraw", "tty", "input"):
++            run(["udevadm", "trigger", "--subsystem-match=" + subsystem], check=False)
+         deadline = time.monotonic() + 8
+-        nodes = []
+-        while time.monotonic() < deadline:
+-            nodes = [Path("/dev") / node.name for node in Path("/sys/class/video4linux").glob("*")
+-                     if self.is_xreal(node / "device")]
+-            if nodes:
++        while True:
++            nodes, cameras, hids = self.device_nodes()
++            missing_camera = self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras
++            missing_hid = self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids
++            if not (missing_camera or missing_hid):
+                 break
++            if time.monotonic() >= deadline:
++                raise RuntimeError("Selected camera/HID was not found. Check the hardware env, USB attach and -Action Doctor.")
+             time.sleep(0.25)
+-        if not nodes:
+-            raise RuntimeError("No XREAL /dev/video node. Check USB attach and uvcvideo in -Action Doctor.")
+-        nodes += [Path("/dev") / node.name for node in Path("/sys/class/hidraw").glob("*")
+-                  if self.is_xreal(node / "device")]
+-        for device in Path("/sys/bus/usb/devices").glob("*"):
+-            try:
+-                if (device / "idVendor").read_text().strip() == VID and (
+-                    device / "idProduct").read_text().strip() == PID:
+-                    bus = int((device / "busnum").read_text())
+-                    number = int((device / "devnum").read_text())
+-                    nodes.append(Path(f"/dev/bus/usb/{bus:03d}/{number:03d}"))
+-            except (FileNotFoundError, ValueError):
+-                pass
+         for node in nodes:
+-            if node.exists():
+-                run(["setfacl", "-m", f"u:{self.user}:rw", node])
+-        log("USB ready; XREAL camera/HID access granted to " + self.user)
++            if not node.is_char_device():
++                raise RuntimeError("Device is missing or is not a character device: " + str(node))
++            run(["setfacl", "-m", f"u:{self.user}:rw", node])
++        log("Selected USB/input device access granted to " + self.user)
+         if self.cfg.get("bluetooth"):
+             run(["bluetoothctl", "list"])
+ 
++    def controller_template(self, package):
++        name = self.settings.get("XR_GEARVR_TEMPLATE", "")
++        if not name or Path(name).name != name:
++            raise ValueError("Set XR_GEARVR_TEMPLATE to a controller template filename.")
++        return package_path(package, "bin/override_controller/configs/" + name)
++
+     def generate_profile(self):
+         custom = self.config / "xr_client.json"
+         if custom.is_file():
+             return custom
+         package = self.current.resolve()
+-        data = json.loads((package / "bin/python/xr_client/configs/xreal_ultra.json").read_text())
++        profile = self.settings.get("XR_PROFILE", "")
++        if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in (".", ".."):
++            raise ValueError("Select XR_PROFILE in the hardware env or provide config/xr_client.json.")
++        filename = profile if profile.endswith(".json") else profile + ".json"
++        data = json.loads(package_path(package, "bin/python/xr_client/configs/" + filename).read_text())
+         data["root_project"] = str(package)
+         data["log_dir"] = str(self.base / "logs")
+         controllers = self.config / "override_controller.json"
+@@ -375,9 +464,9 @@ class Runtime:
+                 service["start_on_launch"] = (self.config / "controllers-ready").is_file()
+                 service.setdefault("env", {}).update({
+                     "CONFIG_PATH": str(controllers),
+-                    "PROVIDERS": "evdev,gearvr_ble" if self.cfg.get("gearvr") else "evdev",
++                    "PROVIDERS": self.settings.get("XR_GEARVR_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
+                 })
+-        path = self.base / "generated/xreal_ultra.json"
++        path = self.base / "generated/profile.json"
+         self.write(path, json.dumps(data, indent=2) + "\n")
+         return path
+ 
+@@ -387,10 +476,12 @@ class Runtime:
+             raise RuntimeError("Run -Action Install first.")
+         handle = self.acquire_lock()
+         try:
++            host = self.settings.get("XR_TCP_HOST", "127.0.0.1")
++            port = integer_setting(self.settings, "XR_TCP_PORT")
+             with socket.socket() as probe:
+-                probe.bind(("127.0.0.1", 45810))
++                probe.bind((host, port))
+         except OSError as exc:
+-            raise RuntimeError("Port 45810 is occupied. Stop the other runtime before starting this one.") from exc
++            raise RuntimeError("The configured TCP port is occupied. Stop the other runtime before starting this one.") from exc
+         os.set_inheritable(handle.fileno(), True)
+         # Keep the lock alive when Python replaces itself with the shell launcher.
+         self._session_lock = handle
+@@ -400,12 +491,12 @@ class Runtime:
+             raise ValueError("Invalid display option.")
+         profile = self.generate_profile()
+         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
+-                   RUNTIME_APP_TCP_HOST="127.0.0.1", RUNTIME_APP_TCP_PORT="45810",
++                   RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
+                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+         args = ["bash", str(package / "run_xr_client.sh"), "--config", str(profile),
+                 "--root", str(package), "--prestart-option", option]
+         os.chdir(package)
+-        log("Application TCP: 127.0.0.1:45810")
++        log(f"Application TCP: {host}:{port}")
+         log("Stop with Ctrl+C in this console. Startup gate and calibration stay enabled.")
+         os.execvpe(args[0], args, env)
+ 
+@@ -416,12 +507,12 @@ class Runtime:
+         destination = self.config / "override_controller.json"
+         package = self.current.resolve()
+         if self.cfg.get("gearvr") and not destination.exists():
+-            self.write(destination, (package / "bin/override_controller/configs/empty_gearvr.json").read_text())
++            self.write(destination, (self.controller_template(package)).read_text())
+         args = [str(package / "devices/common/linux/scripts/override_controller/start_override_controller.sh")]
+         if self.cfg.get("gearvr"):
+             args.append("--connect-devices")
+         env = dict(os.environ, ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package),
+-                   CONFIG_PATH=str(destination), PROVIDERS="gearvr_ble" if self.cfg.get("gearvr") else "evdev",
++                   CONFIG_PATH=str(destination), PROVIDERS=self.settings.get("XR_GEARVR_CONNECT_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
+                    GEARVR_INITIAL_SCAN_MS="10000")
+         run(args, env=env)
+         if not destination.is_file():
+diff --git a/win/package_windows.py b/win/package_windows.py
+new file mode 100644
+index 0000000..8ec3e1e
+--- /dev/null
++++ b/win/package_windows.py
+@@ -0,0 +1,158 @@
++#!/usr/bin/env python3
++"""Assemble or validate the Windows installer and selected SteamVR variants."""
++import argparse
++import hashlib
++import json
++from pathlib import Path, PurePosixPath
++import re
++import shutil
++import tempfile
++from zipfile import ZipFile, ZIP_DEFLATED
++
++ROOT_NAME = "xr-gate-windows"
++REQUIRED = ("INSTALL.cmd", "RUN.cmd", "DISPLAY.cmd", "USB.cmd", "XrGate-Wsl.ps1",
++            ".env.example", "windows/Environment.ps1",
++            "windows/Display.ps1", "windows/DisplayNative.cs", "linux/xr_gate_wsl.py",
++            "README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html")
++
++
++def selections(frequencies, modes):
++    frequencies = list(dict.fromkeys(filter(None, re.split(r"[\s,;]+", frequencies))))
++    modes = list(dict.fromkeys(filter(None, re.split(r"[\s,;]+", modes))))
++    if not frequencies or not modes:
++        raise ValueError("Select at least one frequency and display mode.")
++    if any(not re.fullmatch(r"[1-9][0-9]{0,3}", value) or int(value) > 1000 for value in frequencies):
++        raise ValueError("Frequencies must be integer Hz values from 1 to 1000.")
++    if any(value not in ("direct", "extended_sbs") for value in modes):
++        raise ValueError("Modes must be direct or extended_sbs.")
++    return [(int(hz), mode) for hz in frequencies for mode in modes]
++
++
++def variant_path(hz, mode):
++    return f"drivers/{hz}Hz-{mode}/xr_tracking"
++
++
++def hardware_preset(env):
++    match = re.search(r"(?m)^XR_HARDWARE_ENV=(.+)$", env)
++    relative = PurePosixPath(match.group(1).strip().strip("\"'")) if match else None
++    if not relative or relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
++        raise ValueError("XR_HARDWARE_ENV must select a preset inside the Windows bundle.")
++    return relative.as_posix()
++
++
++def verify(path, frequencies, modes):
++    expected = selections(frequencies, modes)
++    with ZipFile(path) as package:
++        names = package.namelist()
++        if len(names) != len(set(names)):
++            raise ValueError("Duplicate ZIP entries.")
++        for name in names:
++            parts = PurePosixPath(name).parts
++            if not parts or parts[0] != ROOT_NAME or ".." in parts or "\\" in name:
++                raise ValueError("Unexpected ZIP entry: " + name)
++        for name in (*REQUIRED, "bundle.json"):
++            if f"{ROOT_NAME}/{name}" not in names:
++                raise ValueError("Bundle file missing: " + name)
++        env = package.read(f"{ROOT_NAME}/.env.example").decode("utf-8-sig")
++        preset = hardware_preset(env)
++        if f"{ROOT_NAME}/{preset}" not in names:
++            raise ValueError("Hardware preset missing from bundle: " + preset)
++        manifest = json.loads(package.read(f"{ROOT_NAME}/bundle.json"))
++        actual = {(entry["frequency_hz"], entry["display_mode"]) for entry in manifest["variants"]}
++        if manifest.get("schema") != 1 or actual != set(expected):
++            raise ValueError("Bundle variants do not match the requested CI selection.")
++        for hz, mode in expected:
++            prefix = f"{ROOT_NAME}/{variant_path(hz, mode)}"
++            for name in ("driver.vrdrivermanifest", "bin/win64/driver_xr_tracking.dll", "bin/win64/openvr_api.dll",
++                         "resources/settings/default.vrsettings", "LICENSE", "THIRD_PARTY_NOTICES.md"):
++                if f"{prefix}/{name}" not in names:
++                    raise ValueError("Driver file missing: " + prefix + "/" + name)
++            settings = json.loads(package.read(prefix + "/resources/settings/default.vrsettings"))["xr_tracking"]
++            if settings.get("displayFrequency") != hz:
++                raise ValueError("Unexpected driver frequency: " + prefix)
++            for key in ("runtimePoseTransport", "runtimeHandTransport", "runtimeControllerStateTransport"):
++                if settings.get(key) != "tcp":
++                    raise ValueError("Windows driver must use TCP: " + prefix)
++            if settings.get("isDisplayOnDesktop") != (mode == "extended_sbs"):
++                raise ValueError("Unexpected display mode: " + prefix)
++    return manifest
++
++
++def build(source, drivers, output, frequencies, modes, release_tag="latest"):
++    variants = selections(frequencies, modes)
++    if not re.fullmatch(r"[A-Za-z0-9_.-]+", release_tag):
++        raise ValueError("Invalid release tag.")
++    with tempfile.TemporaryDirectory() as temporary:
++        bundle = Path(temporary) / ROOT_NAME
++        bundle.mkdir()
++        for path in sorted(source.rglob("*")):
++            relative = path.relative_to(source)
++            if not path.is_file() or any(part.startswith(".") or part in ("tests", "__pycache__") for part in relative.parts):
++                continue
++            if relative.name == "package_windows.py":
++                continue
++            target = bundle / relative
++            target.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copy2(path, target)
++        shutil.copy2(source / ".env.example", bundle / ".env.example")
++        env = (bundle / ".env.example").read_text(encoding="utf-8")
++        env = re.sub(r"(?m)^XR_RELEASE_TAG=.*$", "XR_RELEASE_TAG=" + release_tag, env)
++        (bundle / ".env.example").write_text(env, encoding="utf-8", newline="\n")
++        # Make the first install select a variant included in this CI run.
++        preset = bundle / hardware_preset(env)
++        content = preset.read_text(encoding="utf-8")
++        values = dict(re.findall(r"(?m)^(XR_[A-Z_]+)=(.*)$", content))
++        hz = values.get("XR_DISPLAY_FREQUENCY_HZ", "")
++        preferred = (int(hz), values.get("XR_DISPLAY_MODE", "")) if hz.isdigit() else None
++        if preferred not in variants:
++            preferred = variants[0]
++        for key, value in (("XR_DISPLAY_FREQUENCY_HZ", str(preferred[0])), ("XR_DISPLAY_MODE", preferred[1])):
++            content = re.sub(r"(?m)^" + key + "=.*$", key + "=" + value, content)
++        preset.write_text(content, encoding="utf-8", newline="\n")
++        entries = []
++        for hz, mode in variants:
++            relative = variant_path(hz, mode)
++            package = drivers / f"{hz}Hz-{mode}" / "xr_tracking"
++            if not package.is_dir():
++                raise FileNotFoundError("Selected Windows driver was not built: " + str(package))
++            target = bundle / relative
++            target.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copytree(package, target)
++            entries.append({"frequency_hz": hz, "display_mode": mode, "path": relative})
++        (bundle / "bundle.json").write_text(json.dumps({
++            "schema": 1, "release_tag": release_tag, "variants": entries,
++        }, indent=2) + "\n", encoding="utf-8", newline="\n")
++        output.parent.mkdir(parents=True, exist_ok=True)
++        with ZipFile(output, "w", ZIP_DEFLATED) as package:
++            for path in sorted(bundle.rglob("*")):
++                if path.is_file():
++                    package.write(path, path.relative_to(bundle.parent).as_posix())
++    verify(output, frequencies, modes)
++    with output.open("rb") as stream:
++        digest = hashlib.file_digest(stream, "sha256").hexdigest()
++    output.with_name(output.name + ".sha256").write_text(digest + "  " + output.name + "\n", encoding="ascii", newline="\n")
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    commands = parser.add_subparsers(dest="command", required=True)
++    create = commands.add_parser("build")
++    create.add_argument("--source", type=Path, default=Path(__file__).resolve().parent)
++    create.add_argument("--drivers-root", type=Path, required=True)
++    create.add_argument("--output", type=Path, required=True)
++    create.add_argument("--release-tag", default="latest")
++    check = commands.add_parser("verify")
++    check.add_argument("archive", type=Path)
++    for command in (create, check):
++        command.add_argument("--frequencies", required=True)
++        command.add_argument("--modes", required=True)
++    args = parser.parse_args()
++    if args.command == "build":
++        build(args.source, args.drivers_root, args.output, args.frequencies, args.modes, args.release_tag)
++    else:
++        verify(args.archive, args.frequencies, args.modes)
++    print("OK Windows bundle: " + str(args.output if args.command == "build" else args.archive))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/win/tests/test_bundle.py b/win/tests/test_bundle.py
+new file mode 100644
+index 0000000..94d36e2
+--- /dev/null
++++ b/win/tests/test_bundle.py
+@@ -0,0 +1,163 @@
++import importlib.util
++import json
++from pathlib import Path
++import shutil
++import tempfile
++import unittest
++from zipfile import ZipFile
++
++WIN = Path(__file__).resolve().parents[1]
++
++
++def module(name, path):
++    spec = importlib.util.spec_from_file_location(name, path)
++    result = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(result)
++    return result
++
++
++packager = module("windows_packager", WIN / "package_windows.py")
++linux = module("windows_linux_helper", WIN / "linux/xr_gate_wsl.py")
++
++
++class HardwareTest(unittest.TestCase):
++    def runtime(self, root, settings):
++        runtime = linux.Runtime.__new__(linux.Runtime)
++        runtime.cfg = {"settings": settings}
++        runtime.settings = settings
++        runtime.base = root
++        runtime.current = root / "current"
++        runtime.config = root / "config"
++        runtime.current.mkdir()
++        runtime.config.mkdir()
++        def write(path, text):
++            path.parent.mkdir(parents=True, exist_ok=True)
++            path.write_text(text)
++        runtime.write = write
++        return runtime
++
++    def test_generic_usb_selection_excludes_unrelated_camera_and_hid(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root = Path(folder)
++            runtime = self.runtime(root, {"XR_USB_IDS": "1234:abcd"})
++            sysroot, devroot = root / "sys", root / "dev"
++            for name, vendor, number in (("selected", "1234", "11"), ("other", "3318", "12")):
++                usb = sysroot / "devices" / name
++                usb.mkdir(parents=True)
++                (usb / "idVendor").write_text(vendor)
++                (usb / "idProduct").write_text("abcd")
++                for category, prefix in (("video4linux", "video"), ("hidraw", "hidraw"), ("tty", "ttyACM")):
++                    actual = usb / category / (prefix + number)
++                    actual.mkdir(parents=True)
++                    link = sysroot / "class" / category / actual.name
++                    link.parent.mkdir(parents=True, exist_ok=True)
++                    link.symlink_to(actual)
++            nodes, cameras, hids = runtime.device_nodes(sysroot, devroot)
++            self.assertEqual(cameras, [devroot / "video11"])
++            self.assertEqual(hids, [devroot / "hidraw11"])
++            self.assertIn(devroot / "ttyACM11", nodes)
++            self.assertFalse(any("12" in str(node) for node in nodes))
++            runtime.settings = {"XR_USB_IDS": "", "XR_CAMERA_DEVICE": str(devroot / "video12")}
++            self.assertEqual(runtime.device_nodes(sysroot, devroot)[1], [devroot / "video12"])
++
++    def test_profile_and_controller_provider_come_from_settings(self):
++        with tempfile.TemporaryDirectory() as folder:
++            runtime = self.runtime(Path(folder), {"XR_PROFILE": "custom_camera", "XR_CONTROLLER_PROVIDERS": "custom_input"})
++            profile = runtime.current / "bin/python/xr_client/configs/custom_camera.json"
++            profile.parent.mkdir(parents=True)
++            profile.write_text(json.dumps({"post_gate_services": [{"name": "override_controller", "env": {}}]}))
++            generated = runtime.generate_profile()
++            data = json.loads(generated.read_text())
++            self.assertEqual(generated.name, "profile.json")
++            self.assertEqual(data["post_gate_services"][0]["env"]["PROVIDERS"], "custom_input")
++            custom = runtime.config / "xr_client.json"
++            custom.write_text('{"custom":true}')
++            self.assertEqual(runtime.generate_profile(), custom)
++
++    def test_custom_display_geometry_and_tcp_are_applied_to_both_settings_files(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root = Path(folder)
++            driver, steam = root / "driver.json", root / "steam.json"
++            driver.write_text('{"keep":true,"xr_tracking":{"modelNumber":"XREAL Air 2 Ultra"}}')
++            steam.write_text('{"steamvr":{"debugMode":true,"DebugMode":true}}')
++            request = {"window_x": -2520, "window_y": 120, "frequency_hz": 72,
++                       "display_mode": "extended_sbs", "driver_settings": str(driver), "steamvr_settings": str(steam),
++                       "settings": {"XR_WINDOW_WIDTH": "2520", "XR_WINDOW_HEIGHT": "1440", "XR_RENDER_WIDTH": "1260",
++                                    "XR_RENDER_HEIGHT": "1440", "XR_TCP_PORT": "45910", "XR_TCP_HOST": "127.0.0.1"}}
++            linux.configure_windows_display(request)
++            for file in (driver, steam):
++                data = json.loads(file.read_text())
++                self.assertEqual(data["xr_tracking"]["windowWidth"], 2520)
++                self.assertEqual(data["xr_tracking"]["renderWidth"], 1260)
++                self.assertEqual(data["xr_tracking"]["displayFrequency"], 72)
++                if file == driver:
++                    self.assertEqual(data["xr_tracking"]["modelNumber"], "XREAL Air 2 Ultra")
++                else:
++                    self.assertNotIn("modelNumber", data["xr_tracking"])
++                self.assertEqual(data["xr_tracking"]["runtimeTcpPort"], 45910)
++                self.assertFalse(data["steamvr"]["directMode"])
++            self.assertTrue(json.loads(driver.read_text())["keep"])
++            before = driver.read_bytes(), steam.read_bytes()
++            request["settings"]["XR_WINDOW_WIDTH"] = "0"
++            with self.assertRaises(ValueError):
++                linux.configure_windows_display(request)
++            self.assertEqual(before, (driver.read_bytes(), steam.read_bytes()))
++
++
++class PackageTest(unittest.TestCase):
++    def drivers(self, root, frequencies="60 90", modes="direct extended_sbs"):
++        for hz, mode in packager.selections(frequencies, modes):
++            package = root / f"{hz}Hz-{mode}" / "xr_tracking"
++            for name in ("driver.vrdrivermanifest", "bin/win64/driver_xr_tracking.dll", "bin/win64/openvr_api.dll",
++                         "LICENSE", "THIRD_PARTY_NOTICES.md"):
++                path = package / name
++                path.parent.mkdir(parents=True, exist_ok=True)
++                path.write_text("fixture")
++            settings = package / "resources/settings/default.vrsettings"
++            settings.parent.mkdir(parents=True)
++            settings.write_text(json.dumps({"xr_tracking": {"modelNumber": "XREAL Air 2 Ultra", "displayFrequency": hz,
++                "isDisplayOnDesktop": mode == "extended_sbs", "runtimePoseTransport": "tcp", "runtimeHandTransport": "tcp",
++                "runtimeControllerStateTransport": "tcp"}}))
++
++    def test_one_archive_contains_all_variants_and_complete_installer_without_user_env(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root = Path(folder)
++            source = root / "win"
++            shutil.copytree(WIN, source, ignore=shutil.ignore_patterns("__pycache__", "tests"))
++            (source / ".env").write_text("PRIVATE=value")
++            self.drivers(root / "drivers")
++            archive = root / "xr-gate-windows.zip"
++            packager.build(source, root / "drivers", archive, "60 90", "direct extended_sbs", "v9.9.9")
++            manifest = packager.verify(archive, "60 90", "direct extended_sbs")
++            self.assertEqual(len(manifest["variants"]), 4)
++            with ZipFile(archive) as package:
++                self.assertNotIn("xr-gate-windows/.env", package.namelist())
++                self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows/.env.example"))
++                for hz, mode in packager.selections("60 90", "direct extended_sbs"):
++                    relative = packager.variant_path(hz, mode)
++                    original = root / "drivers" / f"{hz}Hz-{mode}" / "xr_tracking"
++                    for source_file in original.rglob("*"):
++                        if source_file.is_file():
++                            entry = f"{packager.ROOT_NAME}/{relative}/{source_file.relative_to(original).as_posix()}"
++                            self.assertEqual(package.read(entry), source_file.read_bytes())
++            self.assertTrue(archive.with_suffix(".zip.sha256").is_file())
++
++    def test_single_selected_variant_sets_installable_defaults_and_missing_driver_fails(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root = Path(folder)
++            self.drivers(root / "drivers", "90", "direct")
++            archive = root / "xr-gate-windows.zip"
++            packager.build(WIN, root / "drivers", archive, "90", "direct")
++            with ZipFile(archive) as package:
++                env = package.read("xr-gate-windows/.env.example").decode()
++                preset = package.read("xr-gate-windows/" + packager.hardware_preset(env)).decode()
++                self.assertIn("XR_DISPLAY_FREQUENCY_HZ=90", preset)
++                self.assertIn("XR_DISPLAY_MODE=direct", preset)
++            with self.assertRaises(ValueError):
++                packager.verify(archive, "60 90", "direct")
++            with self.assertRaises(FileNotFoundError):
++                packager.build(WIN, root / "drivers", archive, "60 90", "direct")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/win/tests/verify-env.ps1 b/win/tests/verify-env.ps1
+new file mode 100644
+index 0000000..d35e981
+--- /dev/null
++++ b/win/tests/verify-env.ps1
+@@ -0,0 +1,101 @@
++#Requires -Version 5.1
++$ErrorActionPreference = 'Stop'
++Set-StrictMode -Version Latest
++$root = Split-Path -Parent $PSScriptRoot
++. (Join-Path $root 'XrGate-Wsl.ps1') -Action Help *> $null
++function Assert($Condition, [string]$Message) { if (!$Condition) { throw $Message } }
++$temporary = Join-Path ([IO.Path]::GetTempPath()) ('xr-gate-test-' + [Guid]::NewGuid())
++New-Item -ItemType Directory -Path $temporary | Out-Null
++try {
++    @'
++XR_HARDWARE_ENV=hardware.env
++XR_DISTRIBUTION=Ubuntu-24.04
++XR_DISPLAY_MODE=extended_sbs
++XR_DISPLAY_OPTION=current
++'@ | Set-Content -LiteralPath (Join-Path $temporary '.env.example') -Encoding UTF8
++    @'
++XR_USB_IDS=1234:abcd
++XR_DISPLAY_FREQUENCY_HZ=72
++XR_WINDOW_WIDTH=2520
++XR_WINDOW_HEIGHT=1440
++XR_RENDER_WIDTH=1260
++XR_RENDER_HEIGHT=1440
++XR_REQUIRE_CAMERA=1
++'@ | Set-Content -LiteralPath (Join-Path $temporary 'hardware.env') -Encoding UTF8
++    @'
++XR_USB_BUS_IDS=2-3
++XR_STEAMVR_PATH="D:\A folder\SteamVR"
++'@ | Set-Content -LiteralPath (Join-Path $temporary '.env') -Encoding UTF8
++    Initialize-XrSettings $temporary
++    Assert ((Get-XrSetting 'XR_USB_IDS') -eq '1234:abcd') 'Hardware preset was ignored.'
++    Assert ((Get-XrSetting 'XR_STEAMVR_PATH') -eq 'D:\A folder\SteamVR') 'Quoted Windows path was altered.'
++    Assert ((Get-XrInteger 'XR_WINDOW_WIDTH') -eq 2520) 'Custom geometry was ignored.'
++    $env:XR_USB_IDS = '5678:abcd'
++    Initialize-XrSettings $temporary
++    Assert ((Get-XrSetting 'XR_USB_IDS') -eq '5678:abcd') 'Process environment must override .env.'
++    Remove-Item Env:XR_USB_IDS
++    Initialize-XrSettings $temporary
++    $devices = @(
++        [pscustomobject]@{BusId='2-3'; InstanceId='USB\VID_1234&PID_ABCD\camera'; Description='Custom camera'},
++        [pscustomobject]@{BusId='2-4'; InstanceId='USB\VID_3318&PID_0426\other'; Description='Other camera'}
++    )
++    $selected = @(Select-RuntimeDevices -Devices $devices)
++    Assert ($selected.Count -eq 1 -and $selected[0].BusId -eq '2-3') 'A non-XREAL VID/PID was not selected.'
++    $selected = @(Select-RuntimeDevices -Devices $devices -ExplicitBusIds @('2-4'))
++    Assert ($selected.Count -eq 1 -and $selected[0].BusId -eq '2-4') 'Explicit USB BUSID was ignored.'
++    $devices += [pscustomobject]@{BusId='2-5'; InstanceId='USB\VID_5678&PID_DEF0\imu'; Description='Serial IMU'}
++    $script:Settings['XR_USB_IDS'] = '1234:abcd,5678:def0'
++    $selected = @(Select-RuntimeDevices -Devices $devices)
++    Assert ($selected.Count -eq 2 -and !($selected | Where-Object { $_.BusId -eq '2-4' })) 'Multiple device identities were not respected.'
++    $script:State.FrequencyHz = 72
++    $script:Settings['XR_BLUETOOTH'] = '0'
++    $script:State.BluetoothInstanceId = 'saved-dongle'
++    Assert-SbsDisplay ([pscustomobject]@{Width=2520; Height=1440; Frequency=72})
++    $bad = $false
++    try { Assert-SbsDisplay ([pscustomobject]@{Width=3840; Height=1080; Frequency=72}) } catch { $bad = $true }
++    Assert $bad 'Display check accepted a different hardware resolution.'
++
++    $script:StateFile = Join-Path $temporary 'state.json'
++    '{"FrequencyHz":90,"XrealInstanceId":"legacy-instance"}' | Set-Content -LiteralPath $script:StateFile
++    $script:State.UsbInstanceIds = @()
++    $FrequencyHz = 0; $Distribution = ''; $DisplayMode = ''; $DisplayOption = ''
++    Load-State
++    Assert (!$script:State.BluetoothInstanceId) 'XR_BLUETOOTH=0 did not disable the saved dongle.'
++    Assert ($script:State.FrequencyHz -eq 90) 'Saved interactive selection was lost.'
++    Assert ($script:State.UsbInstanceIds[0] -eq 'legacy-instance') 'Old USB selection was not migrated.'
++    $script:StateDir = $temporary
++    $UsbBusId = @('2-3'); $BluetoothBusId = '2-4'
++    Assert (@(Get-SelectedUsb $devices).Count -eq 1) 'XR_BLUETOOTH=0 still attached the configured dongle.'
++    $script:SettingOverrides['XR_DISPLAY_FREQUENCY_HZ'] = '72'
++    Load-State
++    Assert ([int]$script:State.FrequencyHz -eq 72) '.env did not override the saved selection.'
++
++    $bundleRoot = Join-Path $temporary 'archive/xr-gate-windows'
++    $package = Join-Path $bundleRoot 'drivers/72Hz-extended_sbs/xr_tracking'
++    foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
++        $target = Join-Path $package $name
++        New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
++        'fixture' | Set-Content -LiteralPath $target
++    }
++    '{"schema":1,"release_tag":"v9.9.9","variants":[{"frequency_hz":72,"display_mode":"extended_sbs"}]}' |
++        Set-Content -LiteralPath (Join-Path $bundleRoot 'bundle.json')
++    Assert ((Find-BundledDriver $bundleRoot) -eq $package) 'Bundled driver selection failed.'
++    Add-Type -AssemblyName System.IO.Compression.FileSystem
++    $script:TestArchive = Join-Path $temporary 'xr-gate-windows.zip'
++    [IO.Compression.ZipFile]::CreateFromDirectory((Split-Path -Parent $bundleRoot), $script:TestArchive)
++    function Save-ReleaseAsset($Asset, [string]$Directory) {
++        Assert ($Asset.name -eq 'xr-gate-windows.zip') 'Installer requested an old standalone variant.'
++        return $script:TestArchive
++    }
++    $release = [pscustomobject]@{tag_name='v9.9.9'; assets=@([pscustomobject]@{
++        name='xr-gate-windows.zip'; digest=('sha256:' + ('f' * 64));
++        browser_download_url='https://github.com/vladoshub/xr-gate/releases/download/v9.9.9/xr-gate-windows.zip'
++    })}
++    $cache = Join-Path $temporary 'cache'
++    New-Item -ItemType Directory $cache | Out-Null
++    $downloaded = Get-DriverPackage $release $cache
++    Assert (Test-Path -LiteralPath (Join-Path $downloaded 'bin/win64/driver_xr_tracking.dll')) 'Combined release bundle was not installed.'
++    'OK Windows env precedence, generic USB, display geometry, state migration and combined archive installation'
++} finally {
++    Remove-Item -LiteralPath $temporary -Recurse -Force
++}
+diff --git a/win/windows/Display.ps1 b/win/windows/Display.ps1
+index 062ae5d..9557249 100644
+--- a/win/windows/Display.ps1
++++ b/win/windows/Display.ps1
+@@ -20,8 +20,8 @@ function Select-DesktopDisplay([object[]]$Displays, [string]$Name = '', [string]
+     return $matches[0]
+ }
+ function Assert-SbsDisplay($Display) {
+-    if ($Display.Width -ne 3840 -or $Display.Height -ne 1080) {
+-        throw ('Select 3840x1080 for the glasses in Windows Display settings, then run DISPLAY.cmd. Current: ' + $Display.Width + 'x' + $Display.Height)
++    if ($Display.Width -ne (Get-XrInteger 'XR_WINDOW_WIDTH') -or $Display.Height -ne (Get-XrInteger 'XR_WINDOW_HEIGHT')) {
++        throw ('Select the resolution from your hardware env in Windows Display settings, then run DISPLAY.cmd. Current: ' + $Display.Width + 'x' + $Display.Height)
+     }
+     if ([Math]::Abs($Display.Frequency - [int]$script:State.FrequencyHz) -gt 1) {
+         throw ('Select ' + $script:State.FrequencyHz + ' Hz for the glasses in Windows, or install the matching -FrequencyHz driver.')
+@@ -64,7 +64,7 @@ function Set-SbsDisplay($Display) {
+     $script:State.DisplayDeviceName = [string]$Display.DeviceName
+     $script:State.DisplayMode = 'extended_sbs'
+     Save-State
+-    Write-Step ('SBS output: ' + $Display.DeviceName + ', 3840x1080 @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
++    Write-Step ('SBS output: ' + $Display.DeviceName + ', ' + $Display.Width + 'x' + $Display.Height + ' @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
+ }
+ function Choose-SbsDisplay {
+     Assert-SteamVrStopped
+@@ -86,6 +86,10 @@ function Choose-SbsDisplay {
+     Set-SbsDisplay $selected
+ }
+ function Update-SavedSbsDisplay {
++    if ($DisplayName) {
++        Set-SbsDisplay (Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -Name $DisplayName)
++        return
++    }
+     if (!$script:State.DisplayDeviceId) { Choose-SbsDisplay; return }
+     $display = Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -SavedId ([string]$script:State.DisplayDeviceId)
+     Set-SbsDisplay $display
+diff --git a/win/windows/Environment.ps1 b/win/windows/Environment.ps1
+new file mode 100644
+index 0000000..dc1b047
+--- /dev/null
++++ b/win/windows/Environment.ps1
+@@ -0,0 +1,64 @@
++# Literal env files shared by the Windows launcher and its Linux helper.
++function Read-XrEnv([string]$Path, [switch]$Required) {
++    $values = @{}
++    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
++        if ($Required) { throw "Environment file not found: $Path" }
++        return $values
++    }
++    $number = 0
++    foreach ($raw in [IO.File]::ReadAllLines($Path, [Text.Encoding]::UTF8)) {
++        $number++; $line = $raw.Trim()
++        if (!$line -or $line.StartsWith('#')) { continue }
++        if ($line -notmatch '^(XR_[A-Za-z0-9_]+)=(.*)$') { throw "${Path}:${number}: expected XR_KEY=value" }
++        $key = $Matches[1]; $value = $Matches[2].Trim()
++        if ($value.StartsWith('"') -or $value.StartsWith("'")) {
++            if ($value.Length -lt 2 -or $value[$value.Length - 1] -ne $value[0]) { throw "${Path}:${number}: unclosed quote" }
++            $value = $value.Substring(1, $value.Length - 2)
++        }
++        if ($value.Contains('$') -or $value.Contains('`')) { throw "${Path}:${number}: use literal values" }
++        $values[$key] = $value
++    }
++    return $values
++}
++function Initialize-XrSettings([string]$Root) {
++    $defaults = Read-XrEnv (Join-Path $Root '.env.example') -Required
++    $overrides = Read-XrEnv (Join-Path $Root '.env')
++    foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
++        if ([string]$entry.Key -cmatch '^XR_') { $overrides[[string]$entry.Key] = [string]$entry.Value }
++    }
++    $hardware = [string]$defaults['XR_HARDWARE_ENV']
++    if ($overrides.ContainsKey('XR_HARDWARE_ENV')) { $hardware = [string]$overrides['XR_HARDWARE_ENV'] }
++    if ($hardware) {
++        if (![IO.Path]::IsPathRooted($hardware)) { $hardware = Join-Path $Root $hardware }
++        $preset = Read-XrEnv $hardware -Required
++        foreach ($key in $preset.Keys) { $defaults[$key] = $preset[$key] }
++    }
++    $script:Settings = @{}
++    foreach ($key in $defaults.Keys) { $script:Settings[$key] = $defaults[$key] }
++    foreach ($key in $overrides.Keys) { $script:Settings[$key] = $overrides[$key] }
++    foreach ($key in @('XR_REQUIRE_CAMERA','XR_REQUIRE_HIDRAW')) {
++        if ($script:Settings.ContainsKey($key) -and $script:Settings[$key] -notin @('0','1')) {
++            throw "$key must be 0 or 1."
++        }
++    }
++    foreach ($key in @('XR_BLUETOOTH','XR_GEARVR')) {
++        if ($script:Settings.ContainsKey($key) -and $script:Settings[$key] -notin @('','0','1')) {
++            throw "$key must be empty, 0 or 1."
++        }
++    }
++    $script:SettingOverrides = $overrides
++}
++function Get-XrSetting([string]$Key, [string]$Fallback = '') {
++    if ($script:Settings.ContainsKey($Key)) { return [string]$script:Settings[$Key] }
++    return $Fallback
++}
++function Get-XrList([string]$Key) {
++    return @((Get-XrSetting $Key) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
++}
++function Get-XrInteger([string]$Key, [int]$Minimum = 1, [int]$Maximum = 65535) {
++    $value = 0
++    if (![int]::TryParse((Get-XrSetting $Key), [ref]$value) -or $value -lt $Minimum -or $value -gt $Maximum) {
++        throw "$Key must be an integer from $Minimum to $Maximum in the env file."
++    }
++    return $value
++}

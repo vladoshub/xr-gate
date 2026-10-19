@@ -1,17 +1,8 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>XR Gate · Docker on Linux</title>
-<style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style>
-</head>
-<body>
-<main class="document">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate · Docker on Linux</title><style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style></head><body><main class="document">
 <nav aria-label="Language"><button type="button" data-language-switch="en" aria-pressed="true">English</button><button type="button" data-language-switch="ru" aria-pressed="false">Русский</button></nav>
 <section data-language="en" lang="en">
 <h1>XR Gate with Docker on Linux</h1>
-<p>English · <a href="README.ru.md">Русский</a> · <a href="START-HERE.html">Offline guide</a></p>
 <h2>1. Download XR Gate</h2>
 <p>Use Ubuntu 24.04 (64-bit) and a CPU with AVX2 support.</p>
 <p>Download the <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, extract it, and open a terminal in the <code>docker</code> folder. Run all commands below from that folder.</p>
@@ -23,12 +14,13 @@
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
 chmod +x xr-gate
 </code></pre></div>
-<p>To choose a release, change <code>XR_VERSION</code> in <code>.env</code>. Then build the image:</p>
+<p>To choose a release, change <code>XR_VERSION</code> in <code>.env</code>. Hardware settings are in <code>hardware/xreal_ultra.env</code>. For another device, copy <code>hardware/generic.env.example</code>, fill in <code>XR_PROFILE</code>, <code>XR_USB_IDS</code> and device paths, then select the new file with <code>XR_HARDWARE_ENV</code> in <code>.env</code>. Set <code>XR_REQUIRE_CAMERA=1</code> if the profile uses a camera.</p>
+<p>Then build the image:</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
 </code></pre></div>
 <p>Wait for the build to finish. The first build needs an internet connection.</p>
-<h2>4. Start XR Gate (using XREAL ULTRA glasses as an example)</h2>
-<p>Connect the XREAL glasses, then run:</p>
+<h2>4. Start XR Gate</h2>
+<p>Connect the selected device, then run:</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate run
 </code></pre></div>
 <p>Follow the prompts in the console and keep it open. If the glasses are already in SBS mode, choose the current display mode when prompted.</p>
@@ -37,7 +29,7 @@ chmod +x xr-gate
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate stop
 </code></pre></div>
 <p>For the next session, run <code>sudo ./xr-gate run</code> again.</p>
-<p>After reconnecting the glasses, stop XR Gate and start it again.</p>
+<p>After reconnecting the device, stop XR Gate and start it again.</p>
 <h2>6. Optional setup</h2>
 <ul>
 <li><a href="docs/CONTROLLERS.en.md">Gear VR and VR-PARK controllers</a>.</li>
@@ -54,7 +46,6 @@ chmod +x xr-gate
 </section>
 <section data-language="ru" lang="ru" hidden>
 <h1>XR Gate в Docker на Linux</h1>
-<p><a href="README.md">English</a> · Русский · <a href="START-HERE.html?lang=ru">Офлайн-инструкция</a></p>
 <h2>1. Скачайте XR Gate</h2>
 <p>Нужны Ubuntu 24.04 (64 бита) и процессор с поддержкой AVX2.</p>
 <p>Скачайте <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, распакуйте его и откройте терминал в папке <code>docker</code>. Все команды ниже выполняйте из этой папки.</p>
@@ -66,12 +57,13 @@ chmod +x xr-gate
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
 chmod +x xr-gate
 </code></pre></div>
-<p>Чтобы выбрать релиз, измените <code>XR_VERSION</code> в <code>.env</code>. Затем соберите образ:</p>
+<p>Чтобы выбрать релиз, измените <code>XR_VERSION</code> в <code>.env</code>. Параметры оборудования находятся в <code>hardware/xreal_ultra.env</code>. Для другого устройства скопируйте <code>hardware/generic.env.example</code>, заполните <code>XR_PROFILE</code>, <code>XR_USB_IDS</code> и пути устройств, затем укажите новый файл в <code>XR_HARDWARE_ENV</code> в <code>.env</code>. Если профиль использует камеру, включите <code>XR_REQUIRE_CAMERA=1</code>.</p>
+<p>Затем соберите образ:</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
 </code></pre></div>
 <p>Дождитесь завершения сборки. Для первой сборки нужен интернет.</p>
-<h2>4. Запустите XR Gate (на примере очков XREAL ULTRA)</h2>
-<p>Подключите очки XREAL и выполните:</p>
+<h2>4. Запустите XR Gate</h2>
+<p>Подключите выбранное устройство и выполните:</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate run
 </code></pre></div>
 <p>Следуйте подсказкам в консоли и оставьте её открытой. Если очки уже в режиме SBS, при запросе выберите текущий режим дисплея.</p>
@@ -80,7 +72,7 @@ chmod +x xr-gate
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate stop
 </code></pre></div>
 <p>Для следующего запуска снова выполните <code>sudo ./xr-gate run</code>.</p>
-<p>После переподключения очков остановите XR Gate и запустите заново.</p>
+<p>После переподключения устройства остановите XR Gate и запустите заново.</p>
 <h2>6. Дополнительная настройка</h2>
 <ul>
 <li><a href="docs/CONTROLLERS.ru.md">Контроллеры Gear VR и VR-PARK</a>.</li>
@@ -95,8 +87,7 @@ chmod +x xr-gate
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate logs
 </code></pre></div>
 </section>
-</main>
-<script>
+</main><script>
 const sections = document.querySelectorAll('[data-language]');
 const switches = document.querySelectorAll('[data-language-switch]');
 function selectLanguage(language) {
@@ -126,6 +117,4 @@ document.querySelectorAll('.copy').forEach(button => button.addEventListener('cl
   const ru = document.documentElement.lang === 'ru';
   button.textContent = copied ? (ru ? 'Скопировано' : 'Copied') : (ru ? 'Выделите команду и скопируйте' : 'Select and copy the command');
 }));
-</script>
-</body>
-</html>
+</script></body></html>

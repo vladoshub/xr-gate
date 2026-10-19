@@ -48,6 +48,21 @@ class BundleTest(unittest.TestCase):
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     xr_gate.image({"XR_VERSION": invalid})
 
+    def test_hardware_file_and_user_overrides_are_independent_of_vendor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / ".env.example").write_text("XR_VERSION=v1.2.3\nXR_HARDWARE_ENV=custom.env\n")
+            (root / "custom.env").write_text("XR_PROFILE=other_camera\nXR_USB_IDS=1234:abcd\nXR_CAMERA_TARGET=/dev/video4\n")
+            (root / ".env").write_text("XR_USB_IDS=5678:abcd\n")
+            with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {}, clear=True):
+                settings = xr_gate.settings()
+                self.assertEqual(settings["XR_PROFILE"], "other_camera")
+                self.assertEqual(xr_gate.selected_ids(settings), {"5678:abcd"})
+                self.assertEqual(xr_gate.camera_target(settings, 1), "/dev/video5")
+            with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {"XR_HARDWARE_ENV": "missing.env"}, clear=True):
+                with self.assertRaisesRegex(ValueError, "Hardware env not found"):
+                    xr_gate.settings()
+
     def test_camera_mapping_preserves_release_video0_without_exposing_other_usb(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -170,14 +185,14 @@ class BundleTest(unittest.TestCase):
                     state = home / f'.config/xr_tracking/override_controller/{override}.json'
                     state.parent.mkdir(parents=True)
                     state.write_text('{"previous":"save"}')
-                env = dict(os.environ, XR_ROOT_PROJECT=str(root), XR_CONFIG_ROOT=str(config), HOME=str(home))
+                env = dict(os.environ, XR_ROOT_PROJECT=str(root), XR_CONFIG_ROOT=str(config), XR_PROFILE="test_camera", HOME=str(home))
                 output = subprocess.run(["bash", str(ROOT / "image/entrypoint.sh"), "--no-imu"], env=env,
                                         input="interactive input\n", text=True, capture_output=True, check=True)
                 result = json.loads(output.stdout.splitlines()[-1])
                 self.assertEqual(result["input"], "interactive input\n")
                 self.assertEqual(result["tcp"], "1")
                 self.assertEqual(result["bind"], "0.0.0.0")
-                expected = str(config / "xr_client.json") if override else "xreal_ultra"
+                expected = str(config / "xr_client.json") if override else "test_camera"
                 self.assertEqual(result["args"], ["--config", expected, "--no-imu"])
                 if override:
                     self.assertEqual(state.read_bytes(), (config / "override_controller.json").read_bytes())

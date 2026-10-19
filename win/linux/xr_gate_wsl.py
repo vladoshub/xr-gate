@@ -21,7 +21,29 @@ import time
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-VID, PID = "3318", "0426"
+def request_settings(request):
+    values = request.get("settings", {})
+    if not isinstance(values, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()):
+        raise ValueError("Settings must contain literal string values.")
+    return values
+
+
+def integer_setting(settings, key, minimum=1, maximum=65535):
+    value = int(settings.get(key, ""))
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{key} must be from {minimum} to {maximum}.")
+    return value
+
+
+def csv_setting(settings, key):
+    return [part.strip() for part in settings.get(key, "").split(",") if part.strip()]
+
+
+def package_path(package, relative):
+    path = (package / relative).resolve()
+    if not relative or path == package.resolve() or package.resolve() not in path.parents:
+        raise ValueError("Expected a path inside the runtime package: " + relative)
+    return path
 
 
 def log(message):
@@ -45,8 +67,8 @@ def decode_request(value):
 def configure_windows_display(request):
     """Update driver defaults and SteamVR overrides without folding JSON keys."""
     x, y, hz = (request.get(key) for key in ("window_x", "window_y", "frequency_hz"))
-    if any(type(value) is not int for value in (x, y, hz)) or hz not in (60, 90):
-        raise ValueError("Display coordinates must be integers; frequency must be 60 or 90.")
+    if any(type(value) is not int for value in (x, y, hz)) or not 1 <= hz <= 1000:
+        raise ValueError("Display coordinates must be integers; frequency must be from 1 to 1000 Hz.")
     mode = request.get("display_mode", "extended_sbs")
     if mode not in ("extended_sbs", "direct"):
         raise ValueError("Invalid display mode.")
@@ -56,12 +78,29 @@ def configure_windows_display(request):
         raise ValueError("Two distinct absolute display-settings paths are required.")
     if not driver.is_file():
         raise FileNotFoundError("Install the Windows driver before selecting its display.")
-    geometry = {"windowX": x, "windowY": y, "windowWidth": 3840, "windowHeight": 1080,
-                "renderWidth": 1920, "renderHeight": 1080, "displayFrequency": hz}
-    xr_values = dict(geometry, isDisplayOnDesktop=(mode == "extended_sbs"), isDisplayRealDisplay=True,
+    settings = request_settings(request)
+    geometry = {"windowX": x, "windowY": y, "displayFrequency": hz}
+    for field, key in (("windowWidth", "XR_WINDOW_WIDTH"), ("windowHeight", "XR_WINDOW_HEIGHT"),
+                       ("renderWidth", "XR_RENDER_WIDTH"), ("renderHeight", "XR_RENDER_HEIGHT")):
+        geometry[field] = integer_setting(settings, key)
+
+    xr_values = dict(geometry, runtimeTcpHost=settings.get("XR_TCP_HOST", "127.0.0.1"),
+                     runtimeTcpPort=integer_setting(settings, "XR_TCP_PORT"), isDisplayOnDesktop=(mode == "extended_sbs"), isDisplayRealDisplay=True,
                      displayDebugMode=False)
     steam_values = dict(geometry, directMode=(mode == "direct"), displayDebugMode=False,
                         debugMode=False, DebugMode=False)
+    for field, key in (("ipdMeters", "XR_IPD_METERS"), ("projectionLeft", "XR_PROJECTION_LEFT"),
+                       ("projectionRight", "XR_PROJECTION_RIGHT"), ("projectionTop", "XR_PROJECTION_TOP"),
+                       ("projectionBottom", "XR_PROJECTION_BOTTOM")):
+        if settings.get(key):
+            value = float(settings[key])
+            if not (-100 < value < 100) or (field == "ipdMeters" and not 0.01 <= value <= 0.2):
+                raise ValueError("Invalid optical setting: " + key)
+            xr_values[field] = value
+    for field, key in (("serialNumber", "XR_HMD_SERIAL"), ("leftHandSerial", "XR_LEFT_HAND_SERIAL"),
+                       ("rightHandSerial", "XR_RIGHT_HAND_SERIAL")):
+        if settings.get(key):
+            xr_values[field] = settings[key]
     changes = []
     # Parse and validate both files before writing either one. json preserves
     # distinct keys such as debugMode/DebugMode, unlike PowerShell 5.1 objects.
@@ -110,17 +149,23 @@ def configure_windows_display(request):
             else:
                 replace_bytes(path, original)
         raise
-    log(f"Display configured: {mode}, 3840x1080 @ {hz} Hz, X={x}, Y={y}.")
+    log(f"Display configured: {mode}, {geometry['windowWidth']}x{geometry['windowHeight']} @ {hz} Hz, X={x}, Y={y}.")
 
 
 class Runtime:
     def __init__(self, request):
         self.cfg = request
+        self.settings = request_settings(request)
         self.account = pwd.getpwnam(request["user"])
         if self.account.pw_uid == 0:
             raise ValueError("Refusing to run XR Gate as root.")
         self.user = self.account.pw_name
-        self.base = Path(self.account.pw_dir) / "xr-gate-wsl"
+        folder = self.settings.get("XR_LINUX_ROOT", "~/xr-gate-wsl")
+        if folder.startswith("~/"):
+            folder = str(Path(self.account.pw_dir) / folder[2:])
+        self.base = Path(folder)
+        if not self.base.is_absolute() or self.base == Path("/"):
+            raise ValueError("XR_LINUX_ROOT must be an absolute path or start with ~/.")
         self.current = self.base / "current"
         self.config = self.base / "config"
         self.lock = self.base / "runtime.lock"
@@ -266,12 +311,20 @@ class Runtime:
                     shutil.rmtree(stage, ignore_errors=True)
                     raise
             installer = package / "devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh"
-            hook = package / "devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh"
+            hook_name = self.settings.get("XR_DEVICE_ACCESS_SCRIPT", "")
             if not installer.is_file() or not (package / "run_xr_client.sh").is_file():
                 raise RuntimeError("The downloaded runtime has an unsupported package layout.")
             env.update(XR_PACKAGE_ROOT=str(package), SUDO_USER=self.user,
-                       XR_RUNTIME_DEVICE_ACCESS_SCRIPT=str(hook), XR_TARGET_DEVICE="xreal_ultra")
-            run(["bash", installer], env=env)
+                       XR_TARGET_DEVICE=self.settings.get("XR_TARGET_DEVICE", "generic"))
+            installer_args = ["bash", installer]
+            if hook_name:
+                hook = package_path(package, hook_name)
+                if not hook.is_file():
+                    raise FileNotFoundError("Device access script not found: " + str(hook))
+                env["XR_RUNTIME_DEVICE_ACCESS_SCRIPT"] = str(hook)
+            else:
+                installer_args.append("--no-device-access")
+            run(installer_args, env=env)
             for group in ("video", "input", "plugdev", "bluetooth"):
                 run(["groupadd", "-f", group])
                 run(["usermod", "-aG", group, self.user])
@@ -295,7 +348,7 @@ class Runtime:
                 self.write(destination, payload)
                 self.write(self.config / "controllers-ready", "imported\n")
             elif self.cfg.get("gearvr") and not destination.exists():
-                template = package / "bin/override_controller/configs/empty_gearvr.json"
+                template = self.controller_template(package)
                 self.write(destination, template.read_text())
             self.write(version / "installed.json", json.dumps({
                 "release": release, "runtime_sha256": runtime_hash, "models_sha256": models_hash
@@ -310,63 +363,99 @@ class Runtime:
             log("Shared controller settings: " + str(self.config))
         return 0
 
-    @staticmethod
-    def is_xreal(path):
+    def usb_ids(self):
+        identities = {value.lower() for value in csv_setting(self.settings, "XR_USB_IDS")}
+        if any(not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", value) for value in identities):
+            raise ValueError("XR_USB_IDS must contain comma-separated VID:PID pairs.")
+        return identities
+
+    def selected_usb(self, path):
         resolved = path.resolve()
         for parent in (resolved, *resolved.parents):
             try:
-                if (parent / "idVendor").read_text().strip().lower() == VID and (
-                    parent / "idProduct").read_text().strip().lower() == PID:
+                identity = (parent / "idVendor").read_text().strip() + ":" + (parent / "idProduct").read_text().strip()
+                if identity.lower() in self.usb_ids():
                     return True
-            except (FileNotFoundError, OSError):
+            except OSError:
                 pass
         return False
 
+    def device_nodes(self, sysroot=Path("/sys"), devroot=Path("/dev")):
+        nodes, cameras, hids = [], [], []
+        requested = self.settings.get("XR_CAMERA_DEVICE", "")
+        for node in (sysroot / "class/video4linux").glob("*"):
+            path = devroot / node.name
+            if (self.selected_usb(node) and not requested) or (requested and path.resolve() == Path(requested).resolve()):
+                cameras.append(path)
+        for node in (sysroot / "class/hidraw").glob("*"):
+            if self.selected_usb(node):
+                hids.append(devroot / node.name)
+        for key, pattern in (("XR_HIDRAW_DEVICES", r"/dev/hidraw[0-9]+"),
+                             ("XR_SERIAL_DEVICES", r"/dev/(?:tty(?:ACM|USB)[0-9]+|serial/by-id/[^/]+)"),
+                             ("XR_INPUT_DEVICES", r"/dev/input/event[0-9]+")):
+            for value in csv_setting(self.settings, key):
+                if not re.fullmatch(pattern, value) or Path(value).name in (".", ".."):
+                    raise ValueError("Invalid device path in " + key + ": " + value)
+                (hids if key == "XR_HIDRAW_DEVICES" else nodes).append(Path(value))
+        for node in (sysroot / "class/tty").glob("*"):
+            if re.fullmatch(r"tty(?:ACM|USB)[0-9]+", node.name) and self.selected_usb(node):
+                nodes.append(devroot / node.name)
+        for device in (sysroot / "bus/usb/devices").glob("*"):
+            if self.selected_usb(device):
+                try:
+                    bus = int((device / "busnum").read_text())
+                    number = int((device / "devnum").read_text())
+                    nodes.append(devroot / f"bus/usb/{bus:03d}/{number:03d}")
+                except (OSError, ValueError):
+                    pass
+        return list(dict.fromkeys(cameras + hids + nodes)), cameras, hids
+
     def prepare(self):
         self.root_required()
-        # A built-in driver can work even when modprobe cannot find a module file.
-        run(["modprobe", "uvcvideo"], check=False)
+        for module in csv_setting(self.settings, "XR_KERNEL_MODULES"):
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", module):
+                raise ValueError("Invalid kernel module: " + module)
+            run(["modprobe", module], check=False)
         if self.cfg.get("bluetooth"):
-            run(["modprobe", "btusb"], check=False)
             run(["systemctl", "start", "bluetooth"])
             run(["rfkill", "unblock", "bluetooth"], check=False)
         run(["udevadm", "control", "--reload-rules"], check=False)
-        run(["udevadm", "trigger", "--subsystem-match=video4linux"], check=False)
-        run(["udevadm", "trigger", "--subsystem-match=hidraw"], check=False)
+        for subsystem in ("video4linux", "hidraw", "tty", "input"):
+            run(["udevadm", "trigger", "--subsystem-match=" + subsystem], check=False)
         deadline = time.monotonic() + 8
-        nodes = []
-        while time.monotonic() < deadline:
-            nodes = [Path("/dev") / node.name for node in Path("/sys/class/video4linux").glob("*")
-                     if self.is_xreal(node / "device")]
-            if nodes:
+        while True:
+            nodes, cameras, hids = self.device_nodes()
+            missing_camera = self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras
+            missing_hid = self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids
+            if not (missing_camera or missing_hid):
                 break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Selected camera/HID was not found. Check the hardware env, USB attach and -Action Doctor.")
             time.sleep(0.25)
-        if not nodes:
-            raise RuntimeError("No XREAL /dev/video node. Check USB attach and uvcvideo in -Action Doctor.")
-        nodes += [Path("/dev") / node.name for node in Path("/sys/class/hidraw").glob("*")
-                  if self.is_xreal(node / "device")]
-        for device in Path("/sys/bus/usb/devices").glob("*"):
-            try:
-                if (device / "idVendor").read_text().strip() == VID and (
-                    device / "idProduct").read_text().strip() == PID:
-                    bus = int((device / "busnum").read_text())
-                    number = int((device / "devnum").read_text())
-                    nodes.append(Path(f"/dev/bus/usb/{bus:03d}/{number:03d}"))
-            except (FileNotFoundError, ValueError):
-                pass
         for node in nodes:
-            if node.exists():
-                run(["setfacl", "-m", f"u:{self.user}:rw", node])
-        log("USB ready; XREAL camera/HID access granted to " + self.user)
+            if not node.is_char_device():
+                raise RuntimeError("Device is missing or is not a character device: " + str(node))
+            run(["setfacl", "-m", f"u:{self.user}:rw", node])
+        log("Selected USB/input device access granted to " + self.user)
         if self.cfg.get("bluetooth"):
             run(["bluetoothctl", "list"])
+
+    def controller_template(self, package):
+        name = self.settings.get("XR_GEARVR_TEMPLATE", "")
+        if not name or Path(name).name != name:
+            raise ValueError("Set XR_GEARVR_TEMPLATE to a controller template filename.")
+        return package_path(package, "bin/override_controller/configs/" + name)
 
     def generate_profile(self):
         custom = self.config / "xr_client.json"
         if custom.is_file():
             return custom
         package = self.current.resolve()
-        data = json.loads((package / "bin/python/xr_client/configs/xreal_ultra.json").read_text())
+        profile = self.settings.get("XR_PROFILE", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in (".", ".."):
+            raise ValueError("Select XR_PROFILE in the hardware env or provide config/xr_client.json.")
+        filename = profile if profile.endswith(".json") else profile + ".json"
+        data = json.loads(package_path(package, "bin/python/xr_client/configs/" + filename).read_text())
         data["root_project"] = str(package)
         data["log_dir"] = str(self.base / "logs")
         controllers = self.config / "override_controller.json"
@@ -375,9 +464,9 @@ class Runtime:
                 service["start_on_launch"] = (self.config / "controllers-ready").is_file()
                 service.setdefault("env", {}).update({
                     "CONFIG_PATH": str(controllers),
-                    "PROVIDERS": "evdev,gearvr_ble" if self.cfg.get("gearvr") else "evdev",
+                    "PROVIDERS": self.settings.get("XR_GEARVR_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
                 })
-        path = self.base / "generated/xreal_ultra.json"
+        path = self.base / "generated/profile.json"
         self.write(path, json.dumps(data, indent=2) + "\n")
         return path
 
@@ -387,10 +476,12 @@ class Runtime:
             raise RuntimeError("Run -Action Install first.")
         handle = self.acquire_lock()
         try:
+            host = self.settings.get("XR_TCP_HOST", "127.0.0.1")
+            port = integer_setting(self.settings, "XR_TCP_PORT")
             with socket.socket() as probe:
-                probe.bind(("127.0.0.1", 45810))
+                probe.bind((host, port))
         except OSError as exc:
-            raise RuntimeError("Port 45810 is occupied. Stop the other runtime before starting this one.") from exc
+            raise RuntimeError("The configured TCP port is occupied. Stop the other runtime before starting this one.") from exc
         os.set_inheritable(handle.fileno(), True)
         # Keep the lock alive when Python replaces itself with the shell launcher.
         self._session_lock = handle
@@ -400,12 +491,12 @@ class Runtime:
             raise ValueError("Invalid display option.")
         profile = self.generate_profile()
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
-                   RUNTIME_APP_TCP_HOST="127.0.0.1", RUNTIME_APP_TCP_PORT="45810",
+                   RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
         args = ["bash", str(package / "run_xr_client.sh"), "--config", str(profile),
                 "--root", str(package), "--prestart-option", option]
         os.chdir(package)
-        log("Application TCP: 127.0.0.1:45810")
+        log(f"Application TCP: {host}:{port}")
         log("Stop with Ctrl+C in this console. Startup gate and calibration stay enabled.")
         os.execvpe(args[0], args, env)
 
@@ -416,12 +507,12 @@ class Runtime:
         destination = self.config / "override_controller.json"
         package = self.current.resolve()
         if self.cfg.get("gearvr") and not destination.exists():
-            self.write(destination, (package / "bin/override_controller/configs/empty_gearvr.json").read_text())
+            self.write(destination, (self.controller_template(package)).read_text())
         args = [str(package / "devices/common/linux/scripts/override_controller/start_override_controller.sh")]
         if self.cfg.get("gearvr"):
             args.append("--connect-devices")
         env = dict(os.environ, ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package),
-                   CONFIG_PATH=str(destination), PROVIDERS="gearvr_ble" if self.cfg.get("gearvr") else "evdev",
+                   CONFIG_PATH=str(destination), PROVIDERS=self.settings.get("XR_GEARVR_CONNECT_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
                    GEARVR_INITIAL_SCAN_MS="10000")
         run(args, env=env)
         if not destination.is_file():

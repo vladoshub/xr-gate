@@ -40,8 +40,9 @@ USB-джойстик подключите к компьютеру и пропу�
 
 ```bash
 sudo ./xr-gate export-configs
-cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
 ```
+
+Скопируйте из `exported-configs/xr_client/` JSON-профиль, указанный в `XR_PROFILE` аппаратного env, в `config/xr_client.json`.
 
 Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
 

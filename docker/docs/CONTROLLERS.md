@@ -40,8 +40,9 @@ Run from `docker/` after building the image:
 
 ```bash
 sudo ./xr-gate export-configs
-cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
 ```
+
+Copy the JSON profile selected by `XR_PROFILE` in your hardware env from `exported-configs/xr_client/` to `config/xr_client.json`.
 
 If `exported-configs` already exists, reuse it or rename it before exporting again.
 

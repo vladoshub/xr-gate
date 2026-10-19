@@ -17,7 +17,8 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:
-      XR_PROFILE: ${XR_PROFILE:-xreal_ultra}
+      XR_PROFILE: ${XR_PROFILE:-}
+      XR_TARGET_DEVICE: ${XR_TARGET_DEVICE:-generic}
       XR_VIDEO_TCP: ${XR_VIDEO_TCP:-0}
       RUNTIME_APP_TCP_RATE: ${XR_TCP_RATE:-60}
       RUNTIME_APP_TCP_MAX_CLIENTS: ${XR_TCP_MAX_CLIENTS:-8}

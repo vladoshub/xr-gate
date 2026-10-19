@@ -20,8 +20,8 @@ function Select-DesktopDisplay([object[]]$Displays, [string]$Name = '', [string]
     return $matches[0]
 }
 function Assert-SbsDisplay($Display) {
-    if ($Display.Width -ne 3840 -or $Display.Height -ne 1080) {
-        throw ('Select 3840x1080 for the glasses in Windows Display settings, then run DISPLAY.cmd. Current: ' + $Display.Width + 'x' + $Display.Height)
+    if ($Display.Width -ne (Get-XrInteger 'XR_WINDOW_WIDTH') -or $Display.Height -ne (Get-XrInteger 'XR_WINDOW_HEIGHT')) {
+        throw ('Select the resolution from your hardware env in Windows Display settings, then run DISPLAY.cmd. Current: ' + $Display.Width + 'x' + $Display.Height)
     }
     if ([Math]::Abs($Display.Frequency - [int]$script:State.FrequencyHz) -gt 1) {
         throw ('Select ' + $script:State.FrequencyHz + ' Hz for the glasses in Windows, or install the matching -FrequencyHz driver.')
@@ -64,7 +64,7 @@ function Set-SbsDisplay($Display) {
     $script:State.DisplayDeviceName = [string]$Display.DeviceName
     $script:State.DisplayMode = 'extended_sbs'
     Save-State
-    Write-Step ('SBS output: ' + $Display.DeviceName + ', 3840x1080 @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
+    Write-Step ('SBS output: ' + $Display.DeviceName + ', ' + $Display.Width + 'x' + $Display.Height + ' @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
 }
 function Choose-SbsDisplay {
     Assert-SteamVrStopped
@@ -86,6 +86,10 @@ function Choose-SbsDisplay {
     Set-SbsDisplay $selected
 }
 function Update-SavedSbsDisplay {
+    if ($DisplayName) {
+        Set-SbsDisplay (Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -Name $DisplayName)
+        return
+    }
     if (!$script:State.DisplayDeviceId) { Choose-SbsDisplay; return }
     $display = Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -SavedId ([string]$script:State.DisplayDeviceId)
     Set-SbsDisplay $display

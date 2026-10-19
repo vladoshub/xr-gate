@@ -23,7 +23,9 @@ cp --no-clobber .env.example .env
 chmod +x xr-gate
 ```
 
-To choose a release, change `XR_VERSION` in `.env`. Then build the image:
+To choose a release, change `XR_VERSION` in `.env`. Hardware settings are in `hardware/xreal_ultra.env`. For another device, copy `hardware/generic.env.example`, fill in `XR_PROFILE`, `XR_USB_IDS` and device paths, then select the new file with `XR_HARDWARE_ENV` in `.env`. Set `XR_REQUIRE_CAMERA=1` if the profile uses a camera.
+
+Then build the image:
 
 ```bash
 sudo ./xr-gate build
@@ -31,9 +33,9 @@ sudo ./xr-gate build
 
 Wait for the build to finish. The first build needs an internet connection.
 
-## 4. Start XR Gate (using XREAL ULTRA glasses as an example)
+## 4. Start XR Gate
 
-Connect the XREAL glasses, then run:
+Connect the selected device, then run:
 
 ```bash
 sudo ./xr-gate run
@@ -51,7 +53,7 @@ sudo ./xr-gate stop
 
 For the next session, run `sudo ./xr-gate run` again.
 
-After reconnecting the glasses, stop XR Gate and start it again.
+After reconnecting the device, stop XR Gate and start it again.
 
 ## 6. Optional setup
 

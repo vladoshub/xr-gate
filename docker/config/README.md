@@ -6,10 +6,9 @@ English · [Русский](#русский)
 
    ```bash
    sudo ./xr-gate export-configs
-   cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
    ```
 
-2. Edit `config/xr_client.json` and save it as UTF-8 JSON. If `exported-configs` already exists, reuse it or rename it before exporting again.
+2. Copy the JSON profile selected by `XR_PROFILE` in your hardware env from `exported-configs/xr_client/` to `config/xr_client.json`. Edit `config/xr_client.json` and save it as UTF-8 JSON. If `exported-configs` already exists, reuse it or rename it before exporting again.
 3. Stop XR Gate and start it again to apply changes.
 
 For controller settings, follow the [controller guide](../docs/CONTROLLERS.en.md). Leave this folder unchanged to use the default profile.
@@ -20,10 +19,9 @@ For controller settings, follow the [controller guide](../docs/CONTROLLERS.en.md
 
    ```bash
    sudo ./xr-gate export-configs
-   cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
    ```
 
-2. Отредактируйте `config/xr_client.json` и сохраните JSON в UTF-8. Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
+2. Скопируйте JSON-профиль, указанный в `XR_PROFILE` аппаратного env, из `exported-configs/xr_client/` в `config/xr_client.json`. Отредактируйте `config/xr_client.json` и сохраните JSON в UTF-8. Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
 3. Остановите XR Gate и запустите снова, чтобы применить изменения.
 
 Контроллеры настройте по [инструкции](../docs/CONTROLLERS.ru.md). Для работы со стандартным профилем ничего в этой папке менять не нужно.

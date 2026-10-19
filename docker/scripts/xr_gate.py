@@ -46,9 +46,19 @@ def read_env(path):
 
 
 def settings():
-    # Device-specific defaults belong to the shipped environment profile.
     values = read_env(ROOT / ".env.example")
-    values.update(read_env(ROOT / ".env"))
+    overrides = read_env(ROOT / ".env")
+    selector = dict(values, **overrides)
+    selector.update(os.environ)
+    hardware_file = selector.get("XR_HARDWARE_ENV", "")
+    if hardware_file:
+        path = Path(hardware_file).expanduser()
+        if not path.is_absolute():
+            path = ROOT / path
+        if not path.is_file():
+            raise ValueError(f"Hardware env not found: {path}")
+        values.update(read_env(path))
+    values.update(overrides)
     values.update(os.environ)
     image(values)
     for key in ("XR_BLUETOOTH", "XR_VIDEO_TCP", "XR_REQUIRE_CAMERA", "XR_REQUIRE_HIDRAW"):
@@ -105,6 +115,21 @@ def selected_ids(env):
     return values
 
 
+def camera_target(env, index=0):
+    target = env.get("XR_CAMERA_TARGET", "/dev/video0")
+    match = re.fullmatch(r"/dev/video(\d+)", target)
+    if not match:
+        raise ValueError("XR_CAMERA_TARGET must be /dev/videoN")
+    return f"/dev/video{int(match.group(1)) + index}"
+
+
+def kernel_modules(env):
+    modules = [x.strip() for x in env.get("XR_KERNEL_MODULES", "").split(",") if x.strip()]
+    if any(not re.fullmatch(r"[A-Za-z0-9_-]+", name) for name in modules):
+        raise ValueError("XR_KERNEL_MODULES must contain comma-separated module names")
+    return modules
+
+
 def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
     identities = selected_ids(env)
     videos = [p for p in (sysroot / "class/video4linux").glob("video*") if usb_identity(p) in identities]
@@ -122,7 +147,7 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
             raise RuntimeError(f"XR_CAMERA_DEVICE not found or does not belong to XR_USB_IDS: {requested}")
     devices = []
     for index, path in enumerate(videos):
-        devices.append((str(devroot / path.name), f"/dev/video{index}"))
+        devices.append((str(devroot / path.name), camera_target(env, index)))
     for path in sorted((sysroot / "class/hidraw").glob("hidraw*")):
         if usb_identity(path) in identities:
             devices.append((str(devroot / path.name), f"/dev/{path.name}"))
@@ -137,6 +162,10 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
         if not re.fullmatch(r"/dev/input/event\d+", node):
             raise ValueError(f"Use an explicit /dev/input/eventN in XR_INPUT_DEVICES: {node}")
         devices.append((node, node))
+    for node in filter(None, (p.strip() for p in env.get("XR_HIDRAW_DEVICES", "").split(","))):
+        if not re.fullmatch(r"/dev/hidraw\d+", node):
+            raise ValueError(f"Use an explicit /dev/hidrawN in XR_HIDRAW_DEVICES: {node}")
+        devices.append((node, node))
     for node in filter(None, (p.strip() for p in env.get("XR_SERIAL_DEVICES", "").split(","))):
         if not re.fullmatch(r"/dev/(?:tty(?:ACM|USB)\d+|serial/by-id/[^/:]+)", node) or Path(node).name in (".", ".."):
             raise ValueError(f"Use /dev/ttyACMN, /dev/ttyUSBN or /dev/serial/by-id/<id> in XR_SERIAL_DEVICES: {node}")
@@ -146,7 +175,7 @@ def discover(env, sysroot=Path("/sys"), devroot=Path("/dev")):
 
 def hardware_override(env):
     devices = discover(env)
-    if env.get("XR_REQUIRE_CAMERA", "1") == "1" and not any(target == "/dev/video0" for _, target in devices):
+    if env.get("XR_REQUIRE_CAMERA", "1") == "1" and not any(target == camera_target(env) for _, target in devices):
         raise RuntimeError("No selected UVC camera found. Set XR_USB_IDS or XR_CAMERA_DEVICE, or XR_REQUIRE_CAMERA=0 for camera-free profiles")
     if env.get("XR_REQUIRE_HIDRAW", "0") == "1" and not any("/hidraw" in target for _, target in devices):
         raise RuntimeError("No selected hidraw node found. Check XR_USB_IDS and USB passthrough, or set XR_REQUIRE_HIDRAW=0")
@@ -227,14 +256,15 @@ def doctor(env):
         for source, target in devices:
             print(f"Device: {source} -> {target}")
         override = hardware_override(env)
-        print("OK hardware preflight; USB mappings:", len(override["services"]["runtime"]["devices"]))
+        print("OK hardware preflight; USB mappings:", len(override["services"]["runtime"].get("devices", [])))
     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"FAIL hardware: {error}")
         failed = True
     for command in (["lsusb"], ["bluetoothctl", "list"], ["rfkill", "list"], ["systemctl", "is-active", "bluetooth"]):
         if shutil.which(command[0]):
             call(command, env, check=False)
-    print("Kernel modules: sudo modprobe uvcvideo; sudo modprobe hid_generic; sudo modprobe btusb")
+    for module in kernel_modules(env):
+        print(f"Kernel module: sudo modprobe {module}")
     print("After USB reattach: stop the container and start it again to refresh device mappings.")
     return int(failed)
 

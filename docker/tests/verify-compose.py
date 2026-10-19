@@ -21,11 +21,14 @@ for version, video in product(("v1.2.3", "v1.2.4"), (False, True)):
         args = command + ["--project-directory", str(ROOT), "-f", str(ROOT / "compose.yaml"), "-f", str(override)]
         if video:
             args += ["-f", str(ROOT / "compose.video.yaml")]
-        env = dict(os.environ, XR_VERSION=version, XR_VIDEO_TCP=str(int(video)), XR_TCP_PORT="45910", XR_VIDEO_PORT="45900")
+        env = dict(os.environ, XR_VERSION=version, XR_PROFILE="custom_camera", XR_TARGET_DEVICE="custom_device",
+                   XR_VIDEO_TCP=str(int(video)), XR_TCP_PORT="45910", XR_VIDEO_PORT="45900")
         rendered = json.loads(subprocess.check_output(args + ["config", "--format", "json"], text=True, env=env))
         service = rendered["services"]["runtime"]
         assert service["image"] == f"xr-gate-runtime:{version}", service["image"]
         assert service["build"]["args"]["XR_VERSION"] == version, service["build"]
+        assert service["environment"]["XR_PROFILE"] == "custom_camera", service["environment"]
+        assert service["environment"]["XR_TARGET_DEVICE"] == "custom_device", service["environment"]
         ports = service["ports"]
         assert all(p["host_ip"] == "127.0.0.1" and p["protocol"] == "tcp" for p in ports), ports
         assert {(p["target"], p["published"]) for p in ports} == ({(45810, "45910"), (45700, "45900")} if video else {(45810, "45910")})

@@ -771,7 +771,8 @@ jobs:
           xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
 
   build-steamvr-windows:
-    name: SteamVR driver / Windows x64 / TCP
+    name: Windows installer and SteamVR drivers
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_windows_driver }}
     runs-on: windows-2022
     timeout-minutes: 30
     defaults:
@@ -818,6 +819,8 @@ jobs:
         with:
           arch: x64
       - name: Build, test TCP client, and package Windows drivers
+        env:
+          WINDOWS_BUNDLE_RELEASE: ${{ inputs.publish_release && inputs.release_tag || 'latest' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $root = $env:GITHUB_WORKSPACE
@@ -825,13 +828,14 @@ jobs:
           $json = Join-Path $root '.build-deps/json/single_include'
           $builder = Join-Path $root 'drivers/openvr_driver/scripts/windows/build_driver.ps1'
           $build = Join-Path $root 'build/drivers/openvr_driver/windows_Release'
-          $dist = Join-Path $root 'dist-windows-steamvr'
+          $dist = Join-Path $root 'dist-windows'
+          $drivers = Join-Path $dist 'drivers'
           New-Item -ItemType Directory -Force $dist | Out-Null
           $tested = $false
           foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
             foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
               & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
-                -Generator Ninja -BuildType Release -Device xreal_ultra `
+                -Generator Ninja -BuildType Release -Device generic `
                 -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
               if (!$tested) {
                 ctest --test-dir $build -C Release --output-on-failure
@@ -846,17 +850,23 @@ jobs:
               $settings = Join-Path $package 'resources/settings/default.vrsettings'
               python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8"))["xr_tracking"]; assert all(d[k]=="tcp" for k in ("runtimePoseTransport","runtimeHandTransport","runtimeControllerStateTransport")); assert d["runtimeTcpHost"]=="127.0.0.1" and d["runtimeTcpPort"]==45810' $settings
               if ($LASTEXITCODE -ne 0) { throw 'Windows package has unexpected transport defaults' }
-              $archive = Join-Path $dist "xr-gate-steamvr-windows-x64-${frequency}Hz-${mode}.zip"
-              Compress-Archive -Path $package -DestinationPath $archive -Force
-              $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-              "$hash  $(Split-Path -Leaf $archive)" | Set-Content -Encoding ascii ($archive + '.sha256')
+              $variant = Join-Path $drivers "${frequency}Hz-${mode}"
+              New-Item -ItemType Directory -Force $variant | Out-Null
+              Copy-Item -LiteralPath $package -Destination $variant -Recurse -Force
             }
           }
-      - name: Upload standalone Windows SteamVR packages
+          python win/package_windows.py build --drivers-root $drivers `
+            --output (Join-Path $dist 'xr-gate-windows.zip') `
+            --frequencies $env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES `
+            --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bundle packaging failed' }
+      - name: Upload Windows installer and SteamVR drivers
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-steamvr-windows-x64
-          path: dist-windows-steamvr/*
+          name: xr-gate-windows
+          path: |
+            dist-windows/xr-gate-windows.zip
+            dist-windows/xr-gate-windows.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -889,6 +899,8 @@ jobs:
       actions: read
 
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download merged runtime package
         uses: actions/download-artifact@v4
         with:
@@ -902,12 +914,12 @@ jobs:
           name: hand-tracking-models-mercury
           path: release-assets/models
 
-      - name: Download Windows SteamVR packages
+      - name: Download Windows installer and SteamVR drivers
         if: ${{ env.XR_RELEASE_WINDOWS_DRIVER == '1' }}
         uses: actions/download-artifact@v4
         with:
-          name: xr-gate-steamvr-windows-x64
-          path: release-assets/windows-steamvr
+          name: xr-gate-windows
+          path: release-assets/windows
 
       - name: Download unpack helper
         uses: actions/download-artifact@v4
@@ -932,16 +944,11 @@ jobs:
           test -f release-assets/models/hand-tracking-models-mercury.tar.gz
           test -f release-assets/unpack-helper/unpack_xr_gate.sh
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            read -r -a windows_frequencies <<< "$(printf '%s' "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" | tr ',;[:space:]' ' ')"
-            read -r -a windows_modes <<< "$(printf '%s' "$XR_WINDOWS_OPENVR_BUILD_MODES" | tr ',;[:space:]' ' ')"
-            for frequency in "${windows_frequencies[@]}"; do
-              for mode in "${windows_modes[@]}"; do
-                archive="release-assets/windows-steamvr/xr-gate-steamvr-windows-x64-${frequency}Hz-${mode}.zip"
-                test -f "$archive"
-                test -f "$archive.sha256"
-              done
-            done
-            (cd release-assets/windows-steamvr && sha256sum -c ./*.sha256)
+            test -f release-assets/windows/xr-gate-windows.zip
+            test -f release-assets/windows/xr-gate-windows.zip.sha256
+            (cd release-assets/windows && sha256sum -c xr-gate-windows.zip.sha256)
+            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows.zip \
+              --frequencies "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" --modes "$XR_WINDOWS_OPENVR_BUILD_MODES"
           fi
 
           for ubuntu in 24.04 26.04; do
@@ -1010,7 +1017,7 @@ jobs:
             release-assets/unpack-helper/unpack_xr_gate.sh
           )
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            ASSETS+=(release-assets/windows-steamvr/*.zip release-assets/windows-steamvr/*.sha256)
+            ASSETS+=(release-assets/windows/xr-gate-windows.zip release-assets/windows/xr-gate-windows.zip.sha256)
           fi
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             for ubuntu in 24.04 26.04; do

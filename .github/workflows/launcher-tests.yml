@@ -2,10 +2,10 @@ name: Launcher configuration tests
 
 "on":
   pull_request:
-    paths: ['xr_client/**', 'docker/**', '.github/workflows/launcher-tests.yml']
+    paths: ['xr_client/**', 'docker/**', 'win/**', '.github/workflows/launcher-tests.yml']
   push:
     branches: [main, master]
-    paths: ['xr_client/**', 'docker/**', '.github/workflows/launcher-tests.yml']
+    paths: ['xr_client/**', 'docker/**', 'win/**', '.github/workflows/launcher-tests.yml']
 
 jobs:
   startup-rules:
@@ -19,6 +19,7 @@ jobs:
       - run: python -m unittest discover -s xr_client/tests -p 'test_startup_rules.py'
       - run: python -m unittest discover -s xr_client/tests -p 'test_prestart_confirmation.py'
       - run: python -m unittest discover -s docker/tests -p 'test*.py'
+      - run: python -m unittest discover -s win/tests -p 'test*.py'
   windows-launcher:
     runs-on: windows-2022
     steps:
@@ -26,3 +27,6 @@ jobs:
       - name: Windows PowerShell 5.1 launcher compatibility
         shell: powershell
         run: '& ./xr_client/tests/test_windows_launcher.ps1'
+      - name: Windows installer and hardware env compatibility
+        shell: powershell
+        run: '& ./win/tests/verify-env.ps1'

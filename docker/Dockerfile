@@ -33,7 +33,6 @@ RUN chmod +x /usr/local/bin/xr-gate-entrypoint && \
 ENV XR_ROOT_PROJECT=/opt/xr-gate \
     XR_VERSION="${XR_VERSION}" \
     ROOT_PROJECT=/opt/xr-gate \
-    XR_PROFILE=xreal_ultra \
     PYTHONUNBUFFERED=1 \
     AUTO_BUILD=0
 WORKDIR /opt/xr-gate
