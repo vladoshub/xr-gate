@@ -1,6 +1,6 @@
 # XR Gate on Windows
 
-[English](START-HERE.html) · [Русский](START-HERE.ru.html)
+[English](README.md) · [Русский](README.ru.md)
 
 ## 1. Download and prepare
 
