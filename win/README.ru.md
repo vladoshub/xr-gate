@@ -1,4 +1,4 @@
-# XR Gate в Windows
+# XR Gate в Windows (installation via WSL2)
 
 [English](README.md) · [Русский](README.ru.md)
 
