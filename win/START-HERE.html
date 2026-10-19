@@ -10,7 +10,7 @@
 <li>Extract the ZIP to a permanent folder. Open its <code>xr-gate-windows</code> folder. Keep the <code>drivers</code>, <code>hardware</code>, <code>linux</code> and <code>windows</code> subfolders together.</li>
 <li>Open a regular Windows PowerShell in this folder. Run all commands below there.</li>
 </ol>
-<h2>2. Configure your hardware</h2>
+<h2>2. Configure your hardware (skip for XREAL Ultra)</h2>
 <p>For XREAL Air 2 Ultra, the supplied preset is ready to use. Create your settings file once:</p>
 <pre><code>if (!(Test-Path .env)) { Copy-Item .env.example .env }
 </code></pre>
@@ -36,7 +36,7 @@
 <pre><code>.\INSTALL.cmd -GearVR
 </code></pre>
 <ol start="2">
-<li>Approve the administrator prompt. If a restart is requested, restart Windows and run the same command again.</li>
+<li>Approve the administrator prompt. Restart Windows and run the same command again.</li>
 <li>If Ubuntu opens for the first time, create a Linux username and password, enter <code>exit</code>, then run the installation command again.</li>
 <li>If asked to restart Ubuntu, save your work in it and run:</li>
 </ol>
