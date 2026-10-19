@@ -165,7 +165,7 @@ cd ~/xr-gate-release/xr-gate
 ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
 ```
 
-**For XR-controller (UltraLeapUVC + nRF54L15) - add the user to `dialout` and reboot**
+**For XR-controller (UltraLeapUVC + nRF54L15) - also add the user to `dialout` and reboot**
 
 ```bash
 sudo usermod -aG dialout "$USER"
