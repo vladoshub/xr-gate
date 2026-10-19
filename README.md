@@ -12,7 +12,9 @@ Supported:
 
 **For installation and usage instructions, see:**
 
-[Quick Start](#quick-start)
+[Quick Start Linux](#quick-start-linux)
+[Quick Start Windows](win/WINDOWS.md)
+
 
 ## Half-Life Alyx on HX370 with XREAL Ultra 
 
@@ -100,13 +102,8 @@ Do not use this project in unsafe environments. Make sure you have enough free s
 XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
 
 
-# Quick start
+# Quick start Linux
 Tested on Ubuntu 24.04 and Ubuntu 26.04
-
-Windows SteamVR over TCP: [English](drivers/openvr_driver/docs/WINDOWS.en.md) /
-[Русский](drivers/openvr_driver/docs/WINDOWS.ru.md).
-Docker runtime, prebuilt GitHub assets: [English](docker/README.en.md) /
-[Русский](docker/README.ru.md).
 
 ## 1. Install (once)
 
