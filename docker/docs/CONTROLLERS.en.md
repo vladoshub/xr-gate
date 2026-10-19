@@ -1,23 +1,18 @@
-# Physical controllers with Docker
+# Controllers with Docker
 
-[Русский](CONTROLLERS.ru.md) · English
+English · [Русский](CONTROLLERS.ru.md) · [Back to setup](../README.md)
 
-The default release profile does not auto-start physical controller input.
-Use the root README's supplied templates and **--connect-devices** for Gear VR
-or VR-PARK; full training is for other layouts. Config overrides remain on the
-host; BlueZ runs on the Linux/WSL host.
+## 1. Connect the controllers
 
-## Gear VR: host pairing
-
-Stop XR Gate. Forward a dedicated Bluetooth dongle into Ubuntu when using WSL.
-On the Linux host:
+Stop XR Gate. For Bluetooth controllers, run on the computer:
 
 ```bash
+sudo apt-get install -y bluez
 sudo systemctl enable --now bluetooth
 bluetoothctl
 ```
 
-Turn on only the first Gear VR initially. Inside bluetoothctl:
+For Gear VR, turn on one controller at a time and enter:
 
 ```text
 power on
@@ -26,95 +21,113 @@ default-agent
 scan le
 ```
 
-Find its actual MAC. Run `pair <MAC>`, `trust <MAC>`, `info <MAC>`. Turn on the
-second controller and repeat for its MAC, then `scan off`, `exit`. If several
-adapters exist, select the correct one with `list` and `select <adapter MAC>`.
-Set **XR_BLUETOOTH=1** in the Linux copy of `.env`.
+For a VR-PARK Bluetooth joystick, use `agent on` and `scan on` instead.
 
-## Prepare the supplied config
+Find the controller's address in the scan results. Replace `AA:BB:CC:DD:EE:FF` below with that address:
 
-From the repository's `docker/` folder, after building the image:
+```text
+pair AA:BB:CC:DD:EE:FF
+trust AA:BB:CC:DD:EE:FF
+```
+
+For VR-PARK, also enter `connect AA:BB:CC:DD:EE:FF`. Repeat for the second controller if needed, then enter `scan off` and `exit`.
+
+For a USB joystick, plug it into the computer and skip Bluetooth pairing.
+
+## 2. Prepare the settings
+
+Run from `docker/` after building the image:
 
 ```bash
 sudo ./xr-gate export-configs
 cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+```
+
+If `exported-configs` already exists, reuse it or rename it before exporting again.
+
+For **Gear VR**, run:
+
+```bash
 cp --no-clobber exported-configs/override_controller/empty_gearvr.json config/override_controller.json
 ```
 
-An existing export/config is deliberately not overwritten; use it or back it
-up/rename it before starting from another template. In the **existing**
-`override_controller` service in `config/xr_client.json`, keep all unrelated
-fields and set:
+Set `XR_BLUETOOTH=1` in `.env`.
 
-- `enabled`: true.
-- `start_on_launch`: **false during registration**, then true after completion.
-- `env.CONFIG_PATH`: `~/.config/xr_tracking/override_controller/gearvr.json`.
-- `env.PROVIDERS`: `evdev,gearvr_ble`.
-- `env.NON_INTERACTIVE`: `1` for ordinary runtime use.
+For **VR-PARK**, run:
 
-## Register devices without retraining buttons
+```bash
+cp --no-clobber exported-configs/override_controller/empty_vrpark.json config/override_controller.json
+cat /proc/bus/input/devices
+```
 
-Start `sudo ./xr-gate run` and complete its startup gate. Do not activate the
-override service with console command 5 while registering. If it was already
-running, stop that service first. In another Linux terminal:
+Find the joystick by name and its `eventN` in the `Handlers` line. Set `XR_INPUT_DEVICES=/dev/input/eventN` in `.env`. For two devices, separate their paths with a comma.
+
+In `config/xr_client.json`, find the existing `override_controller` service. Keep its other settings and change:
+
+| Setting | Gear VR | VR-PARK |
+| --- | --- | --- |
+| `enabled` | `true` | `true` |
+| `start_on_launch` | `false` | `false` |
+| `env.CONFIG_PATH` | `~/.config/xr_tracking/override_controller/gearvr.json` | `~/.config/xr_tracking/override_controller/default.json` |
+| `env.PROVIDERS` | `evdev,gearvr_ble` | `evdev` |
+| `env.NON_INTERACTIVE` | `1` | `1` |
+
+## 3. Register the controllers
+
+Start XR Gate and complete the console prompts:
+
+```bash
+sudo ./xr-gate run
+```
+
+Keep the console open. Leave controller input off while registering; console command **5** toggles it.
+
+In another terminal opened in `docker/`, run the command for your controllers.
+
+**Gear VR:**
 
 ```bash
 sudo docker exec -it \
   -e TRAIN=0 -e NON_INTERACTIVE=0 -e PROVIDERS=gearvr_ble \
-  -e GEARVR_INITIAL_SCAN_MS=10000 -e VERBOSE=1 \
+  -e GEARVR_INITIAL_SCAN_MS=10000 \
   -e CONFIG_PATH=/root/.config/xr_tracking/override_controller/gearvr.json \
   xr-gate \
   /opt/xr-gate/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
 ```
 
-Follow the device/left/right prompts. This uses the template's bindings and
-parameters; it does not start a full button-training wizard.
-
-Export the registered result **before the next container start**, because the
-host override is copied into the state volume at startup:
-
-```bash
-sudo docker cp xr-gate:/root/.config/xr_tracking/override_controller/gearvr.json config/override_controller.connected.json
-python3 -m json.tool config/override_controller.connected.json > /dev/null
-cp --no-clobber config/override_controller.json config/override_controller.before-connect.json
-sudo cp config/override_controller.connected.json config/override_controller.json
-```
-
-Check each command succeeds. Now stop XR Gate, set `start_on_launch: true` in the
-client override, and recreate the container. Physical input will auto-start;
-console command **5** toggles it manually. Pairing and registration normally
-need doing only once. XR Gate's ordinary startup IMU alignment still applies.
-
-## VR-PARK / ordinary evdev
-
-Pair the joystick on the Linux host (`agent on`, `scan on`, then pair/trust and
-connect its actual MAC). USB joysticks must be attached to Linux/WSL. Identify
-the required `/dev/input/eventN` nodes and list only those in **XR_INPUT_DEVICES**
-in `.env`; recreate the container when device nodes change.
-
-Use **empty_vrpark.json** instead of the Gear VR template. Set the service's
-`CONFIG_PATH` to `~/.config/xr_tracking/override_controller/default.json` and
-`PROVIDERS` to `evdev`. Keep auto-start off until registration. In the running
-container, with no other override process active:
+**VR-PARK:**
 
 ```bash
 sudo docker exec -it xr-gate /opt/xr-gate/bin/override_controller/override_controller \
   --config /root/.config/xr_tracking/override_controller/default.json --connect-devices
 ```
 
-Export the updated **default.json** back to the host override as above, then
-enable auto-start and restart. The template may suit similar four-button,
-mouse-stick joysticks; compatibility is device-specific.
+Follow the prompts to assign the left and right devices.
 
-## Other devices: full training
+## 4. Save and restart
 
-For a genuinely different evdev layout, the root README's training launcher is
-available inside the running container. Stop the override service first, back
-up existing config, and run the same common script with `TRAIN=1`,
-`NON_INTERACTIVE=0`, `PROVIDERS=evdev` and explicit `CONFIG_PATH` to **default.json**.
-After successful training, export the result to the host override before
-restarting. This replaces bindings, unlike **--connect-devices**.
+Before stopping the container, save the result. For **Gear VR**:
 
-The `controller-state` volume persists controller JSON. Host BlueZ persists
-Bluetooth pairing independently. Do not delete the volume to troubleshoot a
-temporary connection unless you have saved any needed configuration.
+```bash
+sudo docker cp xr-gate:/root/.config/xr_tracking/override_controller/gearvr.json config/override_controller.json
+```
+
+For **VR-PARK**:
+
+```bash
+sudo docker cp xr-gate:/root/.config/xr_tracking/override_controller/default.json config/override_controller.json
+```
+
+After the copy succeeds, stop XR Gate:
+
+```bash
+sudo ./xr-gate stop
+```
+
+Set `start_on_launch` to `true` in the same service in `config/xr_client.json`. Start again:
+
+```bash
+sudo ./xr-gate run
+```
+
+On later starts, turn on the controllers before starting XR Gate. Repeat registration only when replacing or reassigning controllers. If the joystick's `eventN` changes, update `.env` and restart XR Gate.

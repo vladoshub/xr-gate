@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run on the Linux host / in Ubuntu WSL, never inside the application container.
+# Run on the Ubuntu host, never inside the application container.
 set -euo pipefail
 if [[ "$(id -u)" != 0 ]]; then
   exec sudo bash "$0" "$@"
@@ -10,33 +10,11 @@ if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 24.04 ]]; then
   exit 1
 fi
 if [[ "$(uname -m)" != x86_64 ]]; then
-  echo 'Release requires x86-64-v3 / AVX2. Windows on ARM is not supported by this archive.' >&2
+  echo 'This release requires an x86-64 CPU with AVX2 support.' >&2
   exit 1
 fi
 
 if [[ "$(ps -p 1 -o comm=)" != systemd ]]; then
-  if [[ -n "${WSL_INTEROP:-}" ]] || grep -qi microsoft /proc/sys/kernel/osrelease; then
-    python3 - <<'PY'
-import configparser
-from pathlib import Path
-path = Path('/etc/wsl.conf')
-config = configparser.ConfigParser(interpolation=None)
-config.optionxform = str
-if path.exists():
-    config.read(path)
-    backup = path.with_suffix('.conf.before-xr-gate')
-    if not backup.exists():
-        backup.write_bytes(path.read_bytes())
-if not config.has_section('boot'):
-    config.add_section('boot')
-config.set('boot', 'systemd', 'true')
-with path.open('w') as output:
-    config.write(output)
-PY
-    echo 'Enabled systemd in /etc/wsl.conf. In Windows: wsl --terminate Ubuntu-24.04 (use your distro name).' >&2
-    echo 'Then repeat this installer. Termination stops other processes in that distro.' >&2
-    exit 20
-  fi
   echo 'systemd is required by this host installer for Docker and BlueZ.' >&2
   exit 1
 fi
@@ -70,7 +48,7 @@ systemctl enable --now docker bluetooth
 
 for module in uvcvideo hid_generic btusb; do
   if ! modprobe "$module"; then
-    echo "Module $module unavailable. Update WSL/kernel/modules and run ./xr-gate doctor after attaching USB." >&2
+    echo "Module $module unavailable. Install the matching Linux kernel modules, then run sudo ./xr-gate doctor." >&2
   fi
 done
 docker version

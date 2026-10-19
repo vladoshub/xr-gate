@@ -13,7 +13,13 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "xr-gate"
-IMAGE = "xr-gate-runtime:v2.8.0"
+
+
+def image(env):
+    version = env.get("XR_VERSION", "")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
+        raise ValueError("Set XR_VERSION in .env to a release tag, for example v1.2.3")
+    return f"xr-gate-runtime:{version}"
 
 
 def read_env(path):
@@ -44,6 +50,7 @@ def settings():
     values = read_env(ROOT / ".env.example")
     values.update(read_env(ROOT / ".env"))
     values.update(os.environ)
+    image(values)
     for key in ("XR_BLUETOOTH", "XR_VIDEO_TCP", "XR_REQUIRE_CAMERA", "XR_REQUIRE_HIDRAW"):
         if values.get(key, "0") not in ("0", "1"):
             raise ValueError(f"{key} must be 0 or 1")
@@ -73,7 +80,7 @@ def local_engine(env):
         raise RuntimeError("A local Linux Docker Engine with a unix:// socket is required for USB bind mounts")
     info = json.loads(call(["docker", "info", "--format", "{{json .}}"], env, True))
     if info.get("OSType") != "linux" or "docker desktop" in info.get("OperatingSystem", "").lower():
-        raise RuntimeError("Use Docker Engine in the SAME Linux/WSL distro as the USB devices; see docs/WINDOWS.md")
+        raise RuntimeError("Use Docker Engine on the Linux host connected to the devices; see README.md")
     if any("rootless" in x for x in info.get("SecurityOptions", [])):
         raise RuntimeError("USB device access in this bundle requires the regular (rootful) local Docker Engine")
     version = re.match(r"(\d+)", info.get("ServerVersion", ""))
@@ -191,7 +198,7 @@ def export_configs(env, destination):
     destination = Path(destination).resolve()
     if destination.exists():
         raise RuntimeError(f"Export destination already exists; refusing to overwrite: {destination}")
-    container = call(["docker", "create", "--entrypoint", "/bin/true", IMAGE], env, True)
+    container = call(["docker", "create", "--entrypoint", "/bin/true", image(env)], env, True)
     try:
         destination.mkdir(parents=True)
         call(["docker", "cp", f"{container}:/opt/xr-gate/bin/python/xr_client/configs", destination / "xr_client"], env)
@@ -274,7 +281,7 @@ def main():
         export_configs(env, extra[0] if extra else ROOT / "exported-configs")
         return 0
     if args.command == "check-image":
-        return call(["docker", "run", "--rm", "--entrypoint", "python3", IMAGE,
+        return call(["docker", "run", "--rm", "--entrypoint", "python3", image(env),
                      "/usr/local/lib/xr-gate/check-runtime.py"], env)
     if args.command == "shell":
         return call(["docker", "exec", "-it", NAME, "bash"], env)

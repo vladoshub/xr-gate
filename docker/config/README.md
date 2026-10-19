@@ -1,16 +1,29 @@
-Этот каталог можно оставить пустым.
+# Custom configuration
 
-JSON-файлы сохраняй как UTF-8 без BOM.
+English · [Русский](#русский)
 
-- `xr_client.json`: пользовательский конфиг xr_client вместо профиля из релиза.
-- `override_controller.json`: копируется по CONFIG_PATH сервиса при старте: Gear VR — gearvr.json, обычный evdev — default.json. Предыдущий отличающийся файл сохраняется.
+1. Run these commands from `docker/` after building the image:
 
-Сначала выполни `sudo ./xr-gate export-configs`, затем скопируй и отредактируй нужные файлы из `exported-configs/`. Активные конфиги комплект намеренно не создаёт. Они читаются с хоста; сам каталог монтируется read-only.
+   ```bash
+   sudo ./xr-gate export-configs
+   cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+   ```
 
-Для Gear VR BLE также нужен `XR_BLUETOOTH=1` и `PROVIDERS=evdev,gearvr_ble` в env соответствующего сервиса xr_client. См. `../docs/CONTROLLERS.ru.md`.
+2. Edit `config/xr_client.json` and save it as UTF-8 JSON. If `exported-configs` already exists, reuse it or rename it before exporting again.
+3. Stop XR Gate and start it again to apply changes.
 
-English: optional `xr_client.json` selects a custom client profile. Optional
-`override_controller.json` is copied to its override service's `CONFIG_PATH`,
-including `gearvr.json` for Gear VR. Export templates first, keep JSON UTF-8
-without BOM, and configure providers/auto-start explicitly. The host config
-directory is mounted read-only. See [controllers](../docs/CONTROLLERS.en.md).
+For controller settings, follow the [controller guide](../docs/CONTROLLERS.en.md). Leave this folder unchanged to use the default profile.
+
+## Русский
+
+1. После сборки образа выполните из папки `docker`:
+
+   ```bash
+   sudo ./xr-gate export-configs
+   cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+   ```
+
+2. Отредактируйте `config/xr_client.json` и сохраните JSON в UTF-8. Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
+3. Остановите XR Gate и запустите снова, чтобы применить изменения.
+
+Контроллеры настройте по [инструкции](../docs/CONTROLLERS.ru.md). Для работы со стандартным профилем ничего в этой папке менять не нужно.

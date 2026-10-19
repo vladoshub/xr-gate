@@ -1,274 +1,131 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate · Docker</title><style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style></head><body><main class="document"><nav aria-label="Language"><button type="button" data-language-switch="ru" aria-pressed="true">Русский</button><button type="button" data-language-switch="en" aria-pressed="false">English</button><a href="README.ru.md">RU · Markdown</a><a href="README.en.md">EN · Markdown</a><span class="meta">XR Gate · Docker · 16.10.2026</span></nav><section data-language="ru" lang="ru"><details><summary>Оглавление</summary><ol><li><a href="#ru-section-0">Что запускается</a></li><li><a href="#ru-section-1">Быстрый запуск на Linux</a></li><li><a href="#ru-section-2">Консоль и фон</a></li><li><a href="#ru-section-3">Конфиги с хоста</a></li><li><a href="#ru-section-4">USB XREAL</a></li><li><a href="#ru-section-5">Bluetooth</a></li><li><a href="#ru-section-6">Видео</a></li><li><a href="#ru-section-7">Диагностика</a></li><li><a href="#ru-section-8">SteamVR в Windows</a></li></ol></details><h1>XR Gate в Docker: TCP runtime</h1>
-<p>Папка <code>docker/</code> в корне репозитория; все команды ниже выполняются из неё. Комплект для <a href="https://github.com/vladoshub/xr-gate">XR Gate</a>, релиз <strong>v2.3.0</strong>, Ubuntu 24.04, Linux x64 / <strong>x86-64-v3 (AVX2)</strong>. Исходники проекта не меняются. Docker скачивает готовый runtime и Mercury-модели с GitHub, проверяет SHA-256 из <code>release.lock.json</code>, устанавливает зависимости из того же релиза. Компиляции XR Gate нет.</p>
-<p>Русский · <a href="README.en.md">English</a>. Откройте <strong>START-HERE.html</strong> для выбора языка.</p>
-<p><strong>Windows: <a href="docs/WINDOWS.ru.md">инструкция Docker Engine в WSL</a>.</strong></p>
-<h2 id="ru-section-0">Что запускается</h2>
-<p>Один контейнер с обычным <code>xr_client</code>, capture, Basalt, Mercury и <code>runtime_adapter</code>. Между ними сохраняются штатные SHM-каналы. У <code>runtime_adapter</code> включён дополнительный сервер приложений: JSON Lines, протокол <code>xr_gate_app_v1</code>, TCP <strong>45810</strong>.</p>
-<table>
-<thead>
-<tr>
-<th>Соединение</th>
-<th>Адрес</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Приложение Linux/Windows → runtime</td>
-<td><code>127.0.0.1:45810</code></td>
-</tr>
-<tr>
-<td>Прослушивание внутри контейнера</td>
-<td><code>0.0.0.0:45810</code></td>
-</tr>
-<tr>
-<td>Публикация Docker на хосте</td>
-<td>только <code>127.0.0.1:45810</code></td>
-</tr>
-<tr>
-<td>Видео TCP, если явно включить</td>
-<td>только <code>127.0.0.1:45700</code></td>
-</tr>
-</tbody></table>
-<p>Внутренний bind на <code>0.0.0.0</code> нужен для перенаправления Docker. Доступ с LAN не включается. Используется обычная bridge-сеть; <code>--network host</code>, <code>--privileged</code> и публикация UDP не нужны. Для localhost требуется <strong>Docker Engine 28+</strong>: в старых версиях Docker была особенность доступа из того же L2-сегмента.</p>
-<p>SteamVR-драйвер не собирается, не регистрируется и не запускается. Уже находящиеся в upstream-архиве файлы остаются в образе; Windows-драйвер в этот комплект не входит.</p>
-<h2 id="ru-section-1">Быстрый запуск на Linux</h2>
-<p>Нужны локальный Docker Engine 28+, Compose plugin, Python 3 и подключённый XREAL Air 2 Ultra. Целевой хост установочного скрипта — Ubuntu 24.04 x64. Другой Linux-хост с подходящим Docker может использовать тот же образ.</p>
-<p>Распакуй архив, открой каталог <code>xr-gate-docker</code> и выполни:</p>
-<pre><code class="language-bash">chmod +x xr-gate scripts/*.sh image/*.sh
-# Если Docker Engine и зависимости USB/Bluetooth ещё не установлены:
-sudo bash scripts/install-engine-ubuntu.sh
-
-cp .env.example .env
-sudo ./xr-gate build
-sudo ./xr-gate check-image
-sudo ./xr-gate doctor
-sudo ./xr-gate run
-</code></pre>
-<p>Сборке образа нужен интернет: GitHub releases и Ubuntu/Docker package repositories. ZIP не содержит многомегабайтные бинарники; они загружаются при сборке. Для другого релиза нужно осознанно обновить lock-файл, image tag и проверить совместимость.</p>
-<p><code>run</code> запускает контейнер в текущем терминале с stdin и TTY. Видны меню и консоль <code>xr_client</code>; работают его обычные команды. Меню XREAL из релиза сохранено. Для использования текущего режима дисплея выбери соответствующий пункт, либо:</p>
-<pre><code class="language-bash">sudo ./xr-gate run -- --prestart-option current
-</code></pre>
-<p>Не закрывай камеры и выполни подсказки startup gate. TCP-сервер запускается на этапе старта <code>runtime_adapter</code>, после готовности предыдущих сервисов. Проверять порт до этого этапа рано.</p>
-<p>Во втором терминале:</p>
-<pre><code class="language-bash">python3 scripts/tcp_probe.py
-</code></pre>
-<p>Этот тест проверяет <code>hello</code> и получение кадра протокола. Наличие кадра ещё не означает корректный трекинг: приложение должно учитывать <code>pose_valid</code>, tracking status и признаки доступности рук.</p>
-<h2 id="ru-section-2">Консоль и фон</h2>
-<pre><code class="language-bash">sudo ./xr-gate up        # Фоновый запуск; меню ждёт ввода
-sudo ./xr-gate console   # Подключить stdin/stdout существующего xr_client
-sudo ./xr-gate logs      # Только просмотр stdout/stderr
-sudo ./xr-gate stop      # Штатная остановка, затем удаление контейнера
-</code></pre>
-<p>Для отключения терминала без остановки контейнера нажми <strong>Ctrl+P, затем Ctrl+Q</strong>. <code>Ctrl+C</code> в интерактивной консоли предназначен для остановки. Обычный <code>docker compose up</code> не передаёт stdin так, как интерактивный <code>run</code>; для ввода используй <code>console</code>.</p>
-<p>Контейнер называется <code>xr-gate</code>. Можно также подключиться через <code>docker attach --sig-proxy=false xr-gate</code>. Одновременно редактировать консоль из нескольких терминалов не следует.</p>
-<p>Логи сервисов сохраняются в <code>logs/</code>, где релизный конфиг использует стандартный <code>/tmp/xr_backend_client_logs</code>. Пользовательский <code>log_dir</code> в другом месте потребует своего mount. Настройки контроллеров внутри контейнера хранятся в Docker volume <code>xr-gate_controller-state</code>; <code>stop</code> этот volume не удаляет.</p>
-<h2 id="ru-section-3">Конфиги с хоста</h2>
-<p>Без пользовательских файлов запускается <strong>неизменённый <code>xreal_ultra.json</code> из релизного архива</strong>. Capture, calibration, tracking и остальные значения также остаются релизными. Добавляются только переменные включения TCP; при отдельном включении видео — его TCP-output.</p>
-<table>
-<thead>
-<tr>
-<th>Файл на хосте</th>
-<th>Действие</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>config/xr_client.json</code></td>
-<td>Используется вместо выбранного релизного профиля</td>
-</tr>
-<tr>
-<td><code>config/override_controller.json</code></td>
-<td>Копируется в <code>CONFIG_PATH</code> сервиса контейнера при старте: Gear VR — <code>gearvr.json</code>, evdev — <code>default.json</code></td>
-</tr>
-<tr>
-<td><code>.env</code></td>
-<td>Параметры Docker-комплекта: порты, USB, пути, профиль</td>
-</tr>
-</tbody></table>
-<p>Каталог <code>config</code> монтируется read-only. Экспортировать исходные конфиги для редактирования:</p>
-<pre><code class="language-bash">sudo ./xr-gate export-configs
-# Команда создаёт exported-configs/; существующий каталог не перезаписывает.
-cp exported-configs/xr_client/xreal_ultra.json config/xr_client.json
-</code></pre>
-<p>Оба override необязательны и независимы. После изменений перезапусти контейнер. Можно указать другой каталог через <code>XR_CONFIG_DIR</code> в <code>.env</code>, включая абсолютный путь; имена файлов внутри остаются прежними. Простые литеральные <code>KEY=value</code>, без shell-подстановок; пути с пробелами заключай в кавычки.</p>
-<p>Для контроллера по-прежнему требуется подходящая конфигурация сервиса в <code>xr_client.json</code>, включая <code>PROVIDERS</code>. Само наличие <code>override_controller.json</code> не меняет провайдер и не запускает сервис. Примеры BLE, evdev и обучение описаны в <a href="docs/CONTROLLERS.ru.md">docs/CONTROLLERS.ru.md</a>.</p>
-<p>Если override-файл контроллера есть, его содержимое заново копируется при каждом старте. Если его убрать, используется последнее состояние из volume. Для полного сброса контроллера удали нужный <code>default.json</code> или <code>gearvr.json</code> внутри работающего контейнера через <code>shell</code>, предварительно сохранив нужную калибровку.</p>
-<h2 id="ru-section-4">USB XREAL</h2>
-<p>По умолчанию выбирается только VID:PID <strong>3318:0426</strong>. Скрипт ищет связанные <code>/dev/video*</code>, <code>/dev/hidraw*</code> и конкретный узел <code>/dev/bus/usb/BBB/DDD</code>. Весь <code>/dev</code> или все USB-устройства не передаются.</p>
-<p>Первый UVC capture node устройства (sysfs index 0) отображается в <code>/dev/video0</code> контейнера: штатный capture-конфиг продолжает работать, даже если на хосте очки оказались <code>/dev/video8</code>. Можно выбрать конкретную камеру через <code>XR_CAMERA_DEVICE=/dev/video8</code>. Она должна относиться к указанному VID:PID. Результат отображения виден в <code>doctor</code>.</p>
-<p>После переподключения USB, сна Windows или повторного <code>usbipd attach</code> <strong>останови и заново запусти контейнер</strong>. Docker привязывает устройства при создании; скрипт заново определит актуальные номера. <code>docker restart</code> не обновляет эти mappings.</p>
-<h2 id="ru-section-5">Bluetooth</h2>
-<p>USB Bluetooth подключается к Linux-хосту; на Windows он сначала передаётся в Ubuntu WSL через <code>usbipd</code>. BlueZ работает на этом Linux-хосте, а контейнер получает его system D-Bus socket при <code>XR_BLUETOOTH=1</code>. Так Gear VR BLE использует физический адаптер через свой штатный transport.</p>
-<p>Это рабочая архитектура комплекта: отдельный <code>bluetoothd</code> внутри контейнера не запускается. Ядро и драйвер <code>btusb</code> в любом случае принадлежат Linux/WSL. Pairing и trust выполняются в BlueZ хоста, сохраняются там и доступны <code>override_controller</code> через D-Bus. Подробности — в инструкции контроллеров.</p>
-<h2 id="ru-section-6">Видео</h2>
-<p>По умолчанию наружу опубликован только TCP приложений. Стереовидео не входит в JSON-протокол <code>runtime_adapter</code>. Capture-изображения внутри контейнера используются для VIO/hand tracking независимо от внешнего просмотра.</p>
-<p>Если нужен отдельный видеоклиент, выставь <code>XR_VIDEO_TCP=1</code> в <code>.env</code>, затем заново запусти контейнер. Появится <code>127.0.0.1:45700</code>; у <code>xr_video</code> будет <code>VIDEO_OUTPUT=both</code>. Сам backend сохраняет штатное управление: в дефолтном профиле включается/выключается через консольную команду <strong>6</strong>. Для подключения нужен клиент бинарного XR video TCP протокола, например <code>tools/xr_video_tcp_client.py</code> из соответствующего релиза/репозитория. Это не H.264/RTSP и не поток отрисовки SteamVR.</p>
-<h2 id="ru-section-7">Диагностика</h2>
-<pre><code class="language-bash">sudo ./xr-gate doctor
-sudo ./xr-gate config       # Рендер базового Compose без hardware mappings
-sudo ./xr-gate shell        # Bash в уже работающем контейнере
-sudo ./xr-gate logs
-lsusb
-ls -l /dev/video* /dev/hidraw*
-sudo modprobe uvcvideo
-sudo modprobe hid_generic
-sudo modprobe btusb
-</code></pre>
-<p><code>doctor</code> проверяет локальный Engine, версию, устройства и, если включён Bluetooth, BlueZ/D-Bus. Нужен Engine той же Linux-системы, где видны USB-узлы. Remote Docker, rootless Docker и Docker Desktop в этом сценарии скрипт отклоняет.</p>
-<p>Если отсутствуют UVC/HID/HCI, сначала исправь драйвер/USB-проброс на хосте. Если capture работает, но gate не проходит, проверь освещение, стабильность очков и логи. Образ использует калибровку конкретного устройства из релиза; собственную калибровку подключай через свой xr_client/device/tracking профиль и дополнительные mounts при необходимости.</p>
-<p>Фактический объём проверки этого комплекта и ограничения окружения — в <a href="docs/VALIDATION.md">docs/VALIDATION.md</a>. Источники и зафиксированные версии — в <a href="docs/SOURCES.md">docs/SOURCES.md</a>.</p>
-<h2 id="ru-section-8">SteamVR в Windows</h2>
-<p>Windows-драйвер собирается отдельным job CI после применения сопровождающего патча. Скачайте artifact <code>xr-gate-steamvr-windows-x64</code>, распакуйте 60Hz-direct и выполните <code>Install-Driver.bat</code> в его папке <code>xr_tracking</code>. При работающем контейнере проверьте <code>Test-TCP.bat</code>, затем запустите SteamVR. <a href="docs/STEAMVR.ru.md">Полная инструкция, SBS, Direct Mode и удаление</a>. Direct Mode требует проверки с вашим GPU/очками; передача USB в контейнер не передаёт DisplayPort-видео.</p>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XR Gate · Docker on Linux</title>
+<style>:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2838;background:#f2f5f9;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:25px 16px 60px;font-size:16px;line-height:1.7}.document{max-width:1020px;margin:auto;background:white;padding:36px 50px;border:1px solid #dde5ee;border-radius:14px}nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe4ef;padding-bottom:18px;margin-bottom:28px}button{font:inherit;cursor:pointer;border:1px solid #b6c9df;border-radius:6px;background:#f2f7fd;color:#164c80;padding:6px 13px}button[aria-pressed=true]{background:#174e85;color:white}h1{font-size:clamp(27px,4vw,39px);line-height:1.2;color:#123963}h2{font-size:25px;line-height:1.35;margin-top:40px;padding-top:22px;border-top:1px solid #dde5ee;scroll-margin-top:20px;color:#123963}h3{font-size:20px;margin-top:30px}p{margin:14px 0}li{margin:7px 0}a{color:#075aa4;text-underline-offset:3px}code{font: .9em ui-monospace,Consolas,monospace;background:#edf2f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#15293f;color:#f5f8fd;padding:20px;border-radius:8px;overflow:auto;margin:0;line-height:1.6}pre code{background:none;color:inherit;padding:0;font-size:14px;white-space:pre;overflow-wrap:normal}.codeblock{margin:20px 0}.copy{display:block;margin:0 0 5px auto;font-size:12px;padding:4px 10px}table{border-collapse:collapse;width:100%;display:block;overflow:auto;margin:22px 0;font-size:14px}th,td{border:1px solid #d6dfeb;padding:10px 13px;text-align:left;vertical-align:top;min-width:145px}th{background:#eaf1f8}tr:nth-child(even) td{background:#fafbfd}details{padding:12px 18px;background:#f1f6fc;border:1px solid #d6e3f1;border-radius:8px;margin:22px 0}summary{font-weight:600;cursor:pointer}blockquote{margin:18px 0;padding:5px 18px;border-left:4px solid #4384bf;background:#f3f7fc}[hidden]{display:none!important}.meta{font-size:12px;color:#62748b;margin-left:auto}@media(max-width:650px){body{padding:10px}.document{padding:25px 18px}h2{font-size:22px}pre{padding:14px}pre code{font-size:12px}.meta{margin-left:0}}@media print{body{background:white;padding:0}.document{border:0;padding:0}nav,.copy,details{display:none}h2{break-after:avoid}pre code{white-space:pre-wrap}table{display:table}}</style>
+</head>
+<body>
+<main class="document">
+<nav aria-label="Language"><button type="button" data-language-switch="en" aria-pressed="true">English</button><button type="button" data-language-switch="ru" aria-pressed="false">Русский</button></nav>
+<section data-language="en" lang="en">
+<h1>XR Gate with Docker on Linux</h1>
+<p>English · <a href="README.ru.md">Русский</a> · <a href="START-HERE.html">Offline guide</a></p>
+<h2>1. Download XR Gate</h2>
+<p>Use Ubuntu 24.04 (64-bit) and a CPU with AVX2 support.</p>
+<p>Download the <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, extract it, and open a terminal in the <code>docker</code> folder. Run all commands below from that folder.</p>
+<h2>2. Install Docker</h2>
+<p>If Docker Engine 28 or newer and Docker Compose are already installed, skip this step.</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo bash scripts/install-engine-ubuntu.sh
+</code></pre></div>
+<h2>3. Build XR Gate</h2>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
+chmod +x xr-gate
+</code></pre></div>
+<p>To choose a release, change <code>XR_VERSION</code> in <code>.env</code>. Then build the image:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
+</code></pre></div>
+<p>Wait for the build to finish. The first build needs an internet connection.</p>
+<h2>4. Start XR Gate</h2>
+<p>Connect the XREAL glasses, then run:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate run
+</code></pre></div>
+<p>Follow the prompts in the console and keep it open. If the glasses are already in SBS mode, choose the current display mode when prompted.</p>
+<h2>5. Stop and start again</h2>
+<p>Stop XR Gate with <strong>Ctrl+C</strong>, or run this in another terminal:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate stop
+</code></pre></div>
+<p>For the next session, run <code>sudo ./xr-gate run</code> again.</p>
+<p>After reconnecting the glasses, stop XR Gate and start it again.</p>
+<h2>6. Optional setup</h2>
+<ul>
+<li><a href="docs/CONTROLLERS.en.md">Gear VR and VR-PARK controllers</a>.</li>
+<li><a href="config/README.md">Custom configuration</a>.</li>
+<li>To change the release: stop XR Gate, edit <code>XR_VERSION</code> in <code>.env</code>, then repeat the build and start steps.</li>
+</ul>
+<h2>7. If startup fails</h2>
+<p>Check the connected devices:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate doctor
+</code></pre></div>
+<p>To see the running container&#x27;s logs:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate logs
+</code></pre></div>
 </section>
-<section data-language="en" lang="en" hidden><details><summary>Contents</summary><ol><li><a href="#en-section-0">Architecture and localhost ports</a></li><li><a href="#en-section-1">First run on Linux</a></li><li><a href="#en-section-2">Release defaults and host configuration</a></li><li><a href="#en-section-3">XREAL USB</a></li><li><a href="#en-section-4">Bluetooth</a></li><li><a href="#en-section-5">Optional stereo camera video</a></li><li><a href="#en-section-6">Windows SteamVR driver</a></li><li><a href="#en-section-7">Diagnostics and validation</a></li></ol></details><h1>XR Gate in Docker: TCP runtime</h1>
-<p><a href="README.ru.md">Русский</a> · English · <strong><a href="START-HERE.html">Offline guide</a></strong></p>
-<p>This is the repository-root <strong>docker/</strong> directory. Run the commands below from
-this directory. The image downloads pinned <strong>XR Gate v2.3.0 Ubuntu 24.04 x64</strong>
-runtime and separate Mercury models from GitHub, checks SHA-256 and uses the
-release&#39;s dependency installer. It does not compile XR Gate. The release needs
-an <strong>AVX2 / x86-64-v3</strong> CPU.</p>
-<p>Windows setup: <strong><a href="docs/WINDOWS.en.md">Docker Engine inside Ubuntu WSL</a></strong>.
-Controller setup: <strong><a href="docs/CONTROLLERS.en.md">Gear VR / VR-PARK</a></strong>.</p>
-<h2 id="en-section-0">Architecture and localhost ports</h2>
-<p>The container runs the normal <code>xr_client</code> console, capture, Basalt, Mercury and
-runtime adapter. Internal streams retain their normal SHM transport. Application
-TCP is enabled at port <strong>45810</strong>, protocol <strong>xr_gate_app_v1</strong>, JSON Lines.</p>
-<table>
-<thead>
-<tr>
-<th>Connection</th>
-<th>Address</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Windows/Linux host application → runtime</td>
-<td>127.0.0.1:45810</td>
-</tr>
-<tr>
-<td>Container listener</td>
-<td>0.0.0.0:45810 inside its private network namespace</td>
-</tr>
-<tr>
-<td>Optional camera-video client</td>
-<td>127.0.0.1:45700 when explicitly enabled</td>
-</tr>
-</tbody></table>
-<p>Compose publishes on host <strong>127.0.0.1</strong> only. Use regular local <strong>Docker Engine
-28+</strong> in the same Linux/WSL system that owns the USB nodes. Docker Desktop,
-remote/rootless engines are not supported by this USB workflow. The scripts do
-not open LAN ports or use host networking.</p>
-<h2 id="en-section-1">First run on Linux</h2>
-<p>Install Docker Engine and its Compose plugin if needed:</p>
-<pre><code class="language-bash">sudo bash scripts/install-engine-ubuntu.sh
-</code></pre>
-<p>From <code>docker/</code>:</p>
-<pre><code class="language-bash">cp --no-clobber .env.example .env
-sudo ./xr-gate build
-sudo ./xr-gate check-image
-sudo ./xr-gate doctor
-sudo ./xr-gate run
-</code></pre>
-<p>Connect XREAL before the hardware check/run. Keep the resulting <strong>xr_client
-console open</strong>, complete its startup gate and display-mode prompts. On WSL, use
-the current display mode if SBS is already configured in Windows/on the glasses.
-In another terminal:</p>
-<pre><code class="language-bash">./xr-gate check-tcp
-</code></pre>
-<p>For a background container, use <code>sudo ./xr-gate up</code>, then
-<code>sudo ./xr-gate console</code>. Stop with Ctrl+C in the running console or
-<code>sudo ./xr-gate stop</code>. Use <code>sudo ./xr-gate logs</code> or <code>sudo ./xr-gate shell</code> for
-logs/an interactive shell. <code>console</code> uses Docker&#39;s attach mechanism; normal
-Docker detach keys are Ctrl+P then Ctrl+Q.</p>
-<h2 id="en-section-2">Release defaults and host configuration</h2>
-<p>Without overrides, the container uses the release&#39;s <code>xreal_ultra</code> profile.
-The entire <strong>config/</strong> directory is mounted read-only. Optional files:</p>
-<table>
-<thead>
-<tr>
-<th>Host path</th>
-<th>Effect</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>config/xr_client.json</td>
-<td>Replaces the selected client profile</td>
-</tr>
-<tr>
-<td>config/override_controller.json</td>
-<td>Copied to the override service&#39;s CONFIG_PATH inside the container</td>
-</tr>
-<tr>
-<td>.env</td>
-<td>Docker ports, USB IDs, paths, profile and optional features</td>
-</tr>
-</tbody></table>
-<p>For Gear VR, <code>CONFIG_PATH</code> is normally <code>~/.config/xr_tracking/override_controller/gearvr.json</code>;
-ordinary evdev/VR-PARK uses <code>default.json</code>. A differing old destination is backed
-up. Controller state is persisted in a named volume. An active host override is
-copied again on every startup: export registration/training results back to it
-before restarting, as described in the controller guide.</p>
-<p>Export release templates without overwriting an existing export directory:</p>
-<pre><code class="language-bash">sudo ./xr-gate export-configs
-cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
-</code></pre>
-<p>Edit only the needed fields in that copied profile. A controller override alone
-does not select providers or enable the service. Restart the container after
-configuration changes. Set <strong>XR_CONFIG_DIR</strong> in <code>.env</code> for another host config
-directory. Use literal <code>KEY=value</code> entries, quote paths containing spaces, and
-avoid shell expressions.</p>
-<h2 id="en-section-3">XREAL USB</h2>
-<p>The default selector is <strong>3318:0426</strong>. The helper passes only that device&#39;s
-video/HID/raw-USB nodes, not all of <code>/dev</code> or every USB device. Its first UVC
-capture node maps to <strong>/dev/video0 inside the container</strong>, preserving the release
-profile even if the host uses <code>/dev/video8</code>. Set <strong>XR_CAMERA_DEVICE</strong> to select a
-specific capture node of the same USB identity.</p>
-<p>After reconnecting USB, Windows sleep, or <code>usbipd attach</code>, <strong>stop and recreate
-the container</strong> with this helper. <code>docker restart</code> does not refresh device
-mappings. The kernel/drivers belong to the Linux/WSL host; missing UVC/HID nodes
-must be fixed there first.</p>
-<h2 id="en-section-4">Bluetooth</h2>
-<p>BlueZ runs on the Linux host. On Windows, forward a dedicated USB Bluetooth
-dongle into Ubuntu WSL. Pair/trust controllers through the host&#39;s <code>bluetoothctl</code>,
-then set <strong>XR_BLUETOOTH=1</strong> in <code>.env</code>. The container accesses BlueZ through the
-mounted system D-Bus socket. It does not run another <code>bluetoothd</code>.</p>
-<p>For ordinary evdev devices, explicitly list only the required event nodes in
-<strong>XR_INPUT_DEVICES</strong>, for example <code>/dev/input/event12,/dev/input/event13</code>.
-Recreate the container if node names change. Windows XInput/DirectInput access
-alone does not create Linux event nodes.</p>
-<h2 id="en-section-5">Optional stereo camera video</h2>
-<p>By default only application TCP is published. For a separate binary video
-client, set <strong>XR_VIDEO_TCP=1</strong> in <code>.env</code>, then recreate the container. This
-publishes <strong>127.0.0.1:45700</strong> and selects <code>VIDEO_OUTPUT=both</code>. The video backend
-still follows the release profile&#39;s console control, normally command <strong>6</strong>.
-Use XR Gate&#39;s binary stereo-video client; this is not RTSP/H.264 and does not
-carry the SteamVR game&#39;s rendered display.</p>
-<h2 id="en-section-6">Windows SteamVR driver</h2>
-<p>The patched CI separately builds artifact <strong>xr-gate-steamvr-windows-x64</strong>.
-Extract its <strong>60Hz-direct</strong> ZIP, close SteamVR and run <strong>Install-Driver.bat</strong> in
-the inner <code>xr_tracking</code> folder. With this container running, run <strong>Test-TCP.bat</strong>,
-then start SteamVR. See the <a href="docs/STEAMVR.en.md">complete Windows/SBS/Direct Mode guide</a>.
-Actual Direct Mode support depends on the XREAL display/GPU/video connection.</p>
-<p>Do not start direct WSL XR Gate and this container on the same host TCP port at
-the same time. The Windows driver defaults to <code>127.0.0.1:45810</code>.</p>
-<h2 id="en-section-7">Diagnostics and validation</h2>
-<pre><code class="language-bash">sudo ./xr-gate doctor
-sudo ./xr-gate config
-sudo ./xr-gate logs
-lsusb
-ls -l /dev/video* /dev/hidraw*
-bluetoothctl list
-rfkill list
-sudo modprobe uvcvideo
-sudo modprobe hid_generic
-sudo modprobe btusb
-</code></pre>
-<p>The helper checks the local Engine, USB nodes and, when enabled, BlueZ/D-Bus.
-Tracking issues after the startup gate require checking light, calibration and
-release logs. Configurations are from the pinned release, not a new calibration
-for every physical device. Tests/limits are listed in <strong>docs/VALIDATION.md</strong>;
-the actual Docker daemon, Windows/WSL, USB/Bluetooth and GPU path require hardware
-validation. No remote CI run or publication is performed by this patch delivery.</p>
-</section></main><script>function selectLanguage(lang){if(lang!=='ru'&&lang!=='en')lang='en';document.documentElement.lang=lang;for(const block of document.querySelectorAll('[data-language]'))block.hidden=block.dataset.language!==lang;for(const b of document.querySelectorAll('[data-language-switch]'))b.setAttribute('aria-pressed',String(b.dataset.languageSwitch===lang));try{localStorage.setItem('xr-guide-language',lang)}catch{}}
-for(const b of document.querySelectorAll('[data-language-switch]'))b.addEventListener('click',()=>selectLanguage(b.dataset.languageSwitch));
-let preferred=new URLSearchParams(location.search).get('lang');try{preferred=preferred||localStorage.getItem('xr-guide-language')}catch{}selectLanguage(preferred||(navigator.language.toLowerCase().startsWith('ru')?'ru':'en'));
-for(const pre of document.querySelectorAll('pre')){const lang=pre.closest('[data-language]').dataset.language;const label=lang==='ru'?'Копировать':'Copy';const wrapper=document.createElement('div');wrapper.className='codeblock';pre.before(wrapper);wrapper.append(pre);const b=document.createElement('button');b.className='copy';b.type='button';b.textContent=label;wrapper.prepend(b);b.addEventListener('click',async()=>{try{if(navigator.clipboard&&isSecureContext){await navigator.clipboard.writeText(pre.textContent)}else{const area=document.createElement('textarea');area.value=pre.textContent;document.body.append(area);try{area.select();if(!document.execCommand('copy'))throw Error('copy')}finally{area.remove()}}b.textContent=lang==='ru'?'Скопировано':'Copied';setTimeout(()=>b.textContent=label,1600)}catch{const range=document.createRange();range.selectNodeContents(pre);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);b.textContent=lang==='ru'?'Нажмите Ctrl+C':'Press Ctrl+C'}})}
-</script></body></html>
+<section data-language="ru" lang="ru" hidden>
+<h1>XR Gate в Docker на Linux</h1>
+<p><a href="README.md">English</a> · Русский · <a href="START-HERE.html?lang=ru">Офлайн-инструкция</a></p>
+<h2>1. Скачайте XR Gate</h2>
+<p>Нужны Ubuntu 24.04 (64 бита) и процессор с поддержкой AVX2.</p>
+<p>Скачайте <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, распакуйте его и откройте терминал в папке <code>docker</code>. Все команды ниже выполняйте из этой папки.</p>
+<h2>2. Установите Docker</h2>
+<p>Если Docker Engine версии 28 или новее и Docker Compose уже установлены, пропустите этот шаг.</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo bash scripts/install-engine-ubuntu.sh
+</code></pre></div>
+<h2>3. Соберите XR Gate</h2>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
+chmod +x xr-gate
+</code></pre></div>
+<p>Чтобы выбрать релиз, измените <code>XR_VERSION</code> в <code>.env</code>. Затем соберите образ:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
+</code></pre></div>
+<p>Дождитесь завершения сборки. Для первой сборки нужен интернет.</p>
+<h2>4. Запустите XR Gate</h2>
+<p>Подключите очки XREAL и выполните:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate run
+</code></pre></div>
+<p>Следуйте подсказкам в консоли и оставьте её открытой. Если очки уже в режиме SBS, при запросе выберите текущий режим дисплея.</p>
+<h2>5. Остановите и запустите снова</h2>
+<p>Для остановки нажмите <strong>Ctrl+C</strong> или выполните в другом терминале:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate stop
+</code></pre></div>
+<p>Для следующего запуска снова выполните <code>sudo ./xr-gate run</code>.</p>
+<p>После переподключения очков остановите XR Gate и запустите заново.</p>
+<h2>6. Дополнительная настройка</h2>
+<ul>
+<li><a href="docs/CONTROLLERS.ru.md">Контроллеры Gear VR и VR-PARK</a>.</li>
+<li><a href="config/README.md">Свой конфиг</a>.</li>
+<li>Для смены релиза остановите XR Gate, измените <code>XR_VERSION</code> в <code>.env</code>, затем повторите сборку и запуск.</li>
+</ul>
+<h2>7. Если не запускается</h2>
+<p>Проверьте подключённые устройства:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate doctor
+</code></pre></div>
+<p>Логи работающего контейнера:</p>
+<div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate logs
+</code></pre></div>
+</section>
+</main>
+<script>
+const sections = document.querySelectorAll('[data-language]');
+const switches = document.querySelectorAll('[data-language-switch]');
+function selectLanguage(language) {
+  const lang = language === 'ru' ? 'ru' : 'en';
+  document.documentElement.lang = lang;
+  sections.forEach(section => { section.hidden = section.dataset.language !== lang; });
+  switches.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.languageSwitch === lang)));
+  document.querySelectorAll('.copy').forEach(button => { button.textContent = lang === 'ru' ? 'Копировать' : 'Copy'; });
+  try { localStorage.setItem('xr-guide-language', lang); } catch (_) {}
+}
+switches.forEach(button => button.addEventListener('click', () => selectLanguage(button.dataset.languageSwitch)));
+let preferred = new URLSearchParams(location.search).get('lang');
+try { preferred = preferred || localStorage.getItem('xr-guide-language'); } catch (_) {}
+selectLanguage(preferred || 'en');
+document.querySelectorAll('.copy').forEach(button => button.addEventListener('click', async () => {
+  const text = button.nextElementSibling.textContent;
+  let copied = false;
+  try { await navigator.clipboard.writeText(text); copied = true; } catch (_) {
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    field.select();
+    try { copied = document.execCommand('copy'); } finally { field.remove(); }
+  }
+  const ru = document.documentElement.lang === 'ru';
+  button.textContent = copied ? (ru ? 'Скопировано' : 'Copied') : (ru ? 'Выделите команду и скопируйте' : 'Select and copy the command');
+}));
+</script>
+</body>
+</html>

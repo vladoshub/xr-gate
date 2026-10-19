@@ -1,9 +1,11 @@
 name: xr-gate
 services:
   runtime:
-    image: xr-gate-runtime:v2.3.0
+    image: xr-gate-runtime:${XR_VERSION:?Set XR_VERSION in .env}
     build:
       context: .
+      args:
+        XR_VERSION: ${XR_VERSION:?Set XR_VERSION in .env}
     platform: linux/amd64
     container_name: xr-gate
     init: true

@@ -1,23 +1,18 @@
-# Физические контроллеры в Docker
+# Контроллеры в Docker
 
-Русский · [English](CONTROLLERS.en.md)
+[English](CONTROLLERS.md) · Русский · [К установке](../README.ru.md)
 
-По умолчанию релизный профиль не запускает физический ввод автоматически.
-Для Gear VR и VR-PARK используйте готовые шаблоны и **--connect-devices**, как
-в корневом README. Полное обучение предназначено для других раскладок.
-Overrides находятся на хосте; BlueZ работает на Linux/WSL-хосте.
+## 1. Подключите контроллеры
 
-## Gear VR: pairing на хосте
-
-Остановите XR Gate. В Windows передайте отдельный Bluetooth-донгл в Ubuntu.
-В Linux-хосте выполните:
+Остановите XR Gate. Для Bluetooth-контроллеров выполните на компьютере:
 
 ```bash
+sudo apt-get install -y bluez
 sudo systemctl enable --now bluetooth
 bluetoothctl
 ```
 
-Сначала включите только первый Gear VR. Внутри bluetoothctl:
+Для Gear VR включайте контроллеры по одному и введите:
 
 ```text
 power on
@@ -26,93 +21,113 @@ default-agent
 scan le
 ```
 
-Для найденного реального MAC выполните `pair <MAC>`, `trust <MAC>`, `info <MAC>`.
-Включите второй контроллер и повторите для его MAC, затем `scan off`, `exit`.
-При нескольких адаптерах сначала выберите нужный через `list` и
-`select <MAC адаптера>`. В Linux-копии `.env` установите **XR_BLUETOOTH=1**.
+Для Bluetooth-джойстика VR-PARK вместо этого используйте `agent on` и `scan on`.
 
-## Подготовить готовый конфиг
+Найдите адрес контроллера в результатах поиска. Подставьте его вместо `AA:BB:CC:DD:EE:FF`:
 
-После сборки образа, из папки `docker/` репозитория:
+```text
+pair AA:BB:CC:DD:EE:FF
+trust AA:BB:CC:DD:EE:FF
+```
+
+Для VR-PARK также введите `connect AA:BB:CC:DD:EE:FF`. При необходимости повторите для второго контроллера, затем введите `scan off` и `exit`.
+
+USB-джойстик подключите к компьютеру и пропустите Bluetooth-сопряжение.
+
+## 2. Подготовьте настройки
+
+После сборки образа выполните из папки `docker`:
 
 ```bash
 sudo ./xr-gate export-configs
 cp --no-clobber exported-configs/xr_client/xreal_ultra.json config/xr_client.json
+```
+
+Если `exported-configs` уже существует, используйте его или переименуйте перед повторным экспортом.
+
+Для **Gear VR** выполните:
+
+```bash
 cp --no-clobber exported-configs/override_controller/empty_gearvr.json config/override_controller.json
 ```
 
-Существующие export/config не перезаписываются: используйте их либо сохраните
-и переименуйте перед выбором другого шаблона. В **существующем** сервисе
-`override_controller` файла `config/xr_client.json` сохраните остальные поля и задайте:
+Укажите `XR_BLUETOOTH=1` в `.env`.
 
-- `enabled`: true.
-- `start_on_launch`: **false на время регистрации**, после неё true.
-- `env.CONFIG_PATH`: `~/.config/xr_tracking/override_controller/gearvr.json`.
-- `env.PROVIDERS`: `evdev,gearvr_ble`.
-- `env.NON_INTERACTIVE`: `1` для обычного runtime.
+Для **VR-PARK** выполните:
 
-## Зарегистрировать устройства без обучения кнопок
+```bash
+cp --no-clobber exported-configs/override_controller/empty_vrpark.json config/override_controller.json
+cat /proc/bus/input/devices
+```
 
-Запустите `sudo ./xr-gate run`, пройдите startup gate. Во время регистрации не
-включайте override-сервис командой 5. Если он уже работает, сначала остановите
-этот сервис. Во втором терминале Linux:
+Найдите джойстик по имени и его `eventN` в строке `Handlers`. Укажите в `.env`: `XR_INPUT_DEVICES=/dev/input/eventN`. Для двух устройств разделите пути запятой.
+
+В `config/xr_client.json` найдите существующий сервис `override_controller`. Сохраните остальные настройки и измените:
+
+| Настройка | Gear VR | VR-PARK |
+| --- | --- | --- |
+| `enabled` | `true` | `true` |
+| `start_on_launch` | `false` | `false` |
+| `env.CONFIG_PATH` | `~/.config/xr_tracking/override_controller/gearvr.json` | `~/.config/xr_tracking/override_controller/default.json` |
+| `env.PROVIDERS` | `evdev,gearvr_ble` | `evdev` |
+| `env.NON_INTERACTIVE` | `1` | `1` |
+
+## 3. Зарегистрируйте контроллеры
+
+Запустите XR Gate и выполните подсказки в консоли:
+
+```bash
+sudo ./xr-gate run
+```
+
+Оставьте консоль открытой. Во время регистрации ввод с контроллеров должен быть выключен; команда **5** в консоли переключает его.
+
+В другом терминале, открытом в папке `docker`, выполните команду для своих контроллеров.
+
+**Gear VR:**
 
 ```bash
 sudo docker exec -it \
   -e TRAIN=0 -e NON_INTERACTIVE=0 -e PROVIDERS=gearvr_ble \
-  -e GEARVR_INITIAL_SCAN_MS=10000 -e VERBOSE=1 \
+  -e GEARVR_INITIAL_SCAN_MS=10000 \
   -e CONFIG_PATH=/root/.config/xr_tracking/override_controller/gearvr.json \
   xr-gate \
   /opt/xr-gate/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
 ```
 
-Выполните подсказки выбора физических устройств и сторон. Используются
-привязки/параметры шаблона; полного обучения всех кнопок здесь нет.
-
-**До следующего запуска контейнера** сохраните результат в host override:
-при старте он снова копируется в state volume.
-
-```bash
-sudo docker cp xr-gate:/root/.config/xr_tracking/override_controller/gearvr.json config/override_controller.connected.json
-python3 -m json.tool config/override_controller.connected.json > /dev/null
-cp --no-clobber config/override_controller.json config/override_controller.before-connect.json
-sudo cp config/override_controller.connected.json config/override_controller.json
-```
-
-Каждая команда должна завершиться успешно. Остановите XR Gate, задайте
-`start_on_launch: true` в client override и пересоздайте контейнер. Ввод будет
-стартовать автоматически, команда **5** переключает его вручную. Pairing и
-регистрация обычно выполняются один раз; IMU-выравнивание XR Gate при старте сохраняется.
-
-## VR-PARK и обычный evdev
-
-Спарьте джойстик в BlueZ хоста: `agent on`, `scan on`, затем pair/trust/connect
-своего MAC. USB-джойстик должен быть передан в Linux/WSL. Найдите нужные
-`/dev/input/eventN` и явно перечислите их в **XR_INPUT_DEVICES** файла `.env`.
-При смене nodes пересоздайте контейнер.
-
-Используйте **empty_vrpark.json** вместо Gear VR-шаблона. В сервисе задайте
-`CONFIG_PATH: ~/.config/xr_tracking/override_controller/default.json` и
-`PROVIDERS: evdev`. До регистрации оставьте автозапуск выключенным. В работающем
-контейнере без второго override-процесса:
+**VR-PARK:**
 
 ```bash
 sudo docker exec -it xr-gate /opt/xr-gate/bin/override_controller/override_controller \
   --config /root/.config/xr_tracking/override_controller/default.json --connect-devices
 ```
 
-Экспортируйте обновлённый **default.json** в host override аналогично примеру
-выше, затем включите автозапуск и перезапустите контейнер. Шаблон может подойти
-похожим джойстикам с четырьмя кнопками и mouse-stick, но это зависит от модели.
+По подсказкам назначьте левое и правое устройства.
 
-## Другие устройства: полное обучение
+## 4. Сохраните и перезапустите
 
-Для другой раскладки evdev доступен мастер из корневого README. Сначала
-остановите override-сервис и сохраните существующий конфиг. Запустите тот же
-common script внутри контейнера с `TRAIN=1`, `NON_INTERACTIVE=0`,
-`PROVIDERS=evdev` и явным `CONFIG_PATH` к **default.json**. После успешного
-обучения экспортируйте результат в host override до перезапуска. Этот режим
-заменяет привязки, в отличие от **--connect-devices**.
+До остановки контейнера сохраните результат. Для **Gear VR**:
 
-`controller-state` volume хранит JSON контроллеров. Pairing отдельно хранится в
-BlueZ хоста. Временное переподключение не требует удалять state volume.
+```bash
+sudo docker cp xr-gate:/root/.config/xr_tracking/override_controller/gearvr.json config/override_controller.json
+```
+
+Для **VR-PARK**:
+
+```bash
+sudo docker cp xr-gate:/root/.config/xr_tracking/override_controller/default.json config/override_controller.json
+```
+
+После успешного копирования остановите XR Gate:
+
+```bash
+sudo ./xr-gate stop
+```
+
+В том же сервисе в `config/xr_client.json` установите `start_on_launch` в `true`. Запустите снова:
+
+```bash
+sudo ./xr-gate run
+```
+
+При следующих запусках включайте контроллеры до запуска XR Gate. Повторяйте регистрацию только при замене или переназначении контроллеров. Если у джойстика изменился `eventN`, обновите `.env` и перезапустите XR Gate.

@@ -1,17 +1,17 @@
 # syntax=docker/dockerfile:1
 FROM --platform=linux/amd64 ubuntu:24.04
 
+ARG XR_VERSION
 LABEL org.opencontainers.image.title="XR Gate TCP runtime" \
       org.opencontainers.image.source="https://github.com/vladoshub/xr-gate" \
-      org.opencontainers.image.version="v2.3.0"
+      org.opencontainers.image.version="${XR_VERSION}"
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl python3 && rm -rf /var/lib/apt/lists/*
 
-COPY release.lock.json /usr/local/share/xr-gate/release.lock.json
 COPY image/install-release.py /usr/local/lib/xr-gate/install-release.py
-RUN python3 /usr/local/lib/xr-gate/install-release.py
+RUN python3 /usr/local/lib/xr-gate/install-release.py --version "$XR_VERSION"
 
 # Use the dependency list from the SAME release. No build tools or source build.
 # Suppress service starts in the image; BlueZ runs on the Linux host.
@@ -31,6 +31,7 @@ RUN chmod +x /usr/local/bin/xr-gate-entrypoint && \
     mkdir -p /config /root/.config/xr_tracking/override_controller /tmp/xr_backend_client_logs
 
 ENV XR_ROOT_PROJECT=/opt/xr-gate \
+    XR_VERSION="${XR_VERSION}" \
     ROOT_PROJECT=/opt/xr-gate \
     XR_PROFILE=xreal_ultra \
     PYTHONUNBUFFERED=1 \

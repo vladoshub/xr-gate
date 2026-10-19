@@ -18,6 +18,7 @@ class BundleTest(unittest.TestCase):
     def test_config_is_literal_and_shell_environment_takes_precedence(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            (root / ".env.example").write_text('XR_VERSION=v1.2.3\n')
             (root / ".env").write_text('XR_TCP_PORT=45811\nXR_CONFIG_DIR="/tmp/config with spaces"\n')
             with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {"XR_TCP_PORT": "45812"}, clear=True):
                 settings = xr_gate.settings()
@@ -26,6 +27,26 @@ class BundleTest(unittest.TestCase):
             (root / ".env").write_text('XR_CONFIG_DIR=$(touch /tmp/should-never-exist)\n')
             with self.assertRaises(ValueError):
                 xr_gate.read_env(root / ".env")
+
+    def test_release_selection_controls_export_and_image_check(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / ".env.example").write_text('XR_VERSION=v1.2.3\n')
+            (root / ".env").write_text('XR_VERSION=v1.2.4\n')
+            with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {}, clear=True):
+                env = xr_gate.settings()
+            self.assertEqual(xr_gate.image(env), "xr-gate-runtime:v1.2.4")
+            with patch.object(xr_gate, "call", return_value="temporary-container") as run:
+                xr_gate.export_configs(env, root / "exported")
+            self.assertIn("xr-gate-runtime:v1.2.4", run.call_args_list[0].args[0])
+            with patch.object(xr_gate, "ROOT", root), patch.dict(os.environ, {"XR_VERSION": "v1.2.5"}, clear=True), \
+                 patch.object(sys, "argv", ["xr-gate", "check-image"]), \
+                 patch.object(xr_gate, "local_engine"), patch.object(xr_gate, "call", return_value=0) as run:
+                self.assertEqual(xr_gate.main(), 0)
+            self.assertIn("xr-gate-runtime:v1.2.5", run.call_args.args[0])
+            for invalid in ("", "latest/other", "../escape", "v1:tag", "v1 tag"):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    xr_gate.image({"XR_VERSION": invalid})
 
     def test_camera_mapping_preserves_release_video0_without_exposing_other_usb(self):
         with tempfile.TemporaryDirectory() as folder:
