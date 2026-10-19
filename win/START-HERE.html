@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows + WSL2</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
+<nav class="languages" aria-label="Language"><a href="START-HERE.html" lang="en" aria-current="page">English</a><a href="START-HERE.ru.html" lang="ru">Русский</a></nav>
+<h1>XR Gate: Windows installation with WSL2</h1>
+<h2>1. Prepare Windows</h2>
+<ol start="1">
+<li>Use Windows 11 x64 with an AVX2-capable CPU.</li>
+<li>Install Steam and SteamVR. Open SteamVR once, then close it.</li>
+<li>Extract the entire archive to a permanent folder, such as C:\XR-Gate-WSL. Keep the linux and windows subfolders next to XrGate-Wsl.ps1.</li>
+<li>Open a regular Windows PowerShell window in that folder. Run the commands below in Windows.</li>
+</ol>
+<h2>2. Install XR Gate</h2>
+<ol start="1">
+<li>Double-click INSTALL.cmd, or run:</li>
+</ol>
+<pre><code>.\INSTALL.cmd</code></pre>
+<p>For Gear VR controllers, use this command instead:</p>
+<pre><code>.\INSTALL.cmd -GearVR</code></pre>
+<ol start="2">
+<li>Approve the Windows administrator prompt.</li>
+<li>If a Windows restart is requested, save your work, restart Windows, and repeat the installation command.</li>
+<li>If an Ubuntu window opens, create a Linux username and password. At the Ubuntu command prompt, type exit. Run the installation command again.</li>
+<li>If the installer asks you to restart Ubuntu after enabling systemd, save any work in Ubuntu and run:</li>
+</ol>
+<pre><code>wsl --terminate Ubuntu-24.04
+.\INSTALL.cmd</code></pre>
+<p>Repeat your installation options, such as -GearVR, if used. Exit code 20 means you need to complete the displayed step and repeat installation.</p>
+<ol start="6">
+<li>If driver registration was deferred, close SteamVR and run:</li>
+</ol>
+<pre><code>.\DRIVER.cmd</code></pre>
+<p>If SteamVR is not found, specify its installation folder:</p>
+<pre><code>.\DRIVER.cmd -SteamVR &#x27;D:\SteamLibrary\steamapps\common\SteamVR&#x27;</code></pre>
+<h2>3. Prepare the glasses (using XREAL ULTRA glasses as an example)</h2>
+<ol start="1">
+<li>Connect the XREAL Air 2 Ultra video input to your Windows GPU using a video-capable USB-C port or a powered DP/HDMI-to-USB-C adapter.</li>
+<li>Put on the glasses or activate their proximity sensor.</li>
+<li>Hold Brightness Up (+) for approximately three seconds until the beep to enable full SBS.</li>
+<li>In Windows Settings → System → Display, select Extend these displays. Select the glasses and set 3840×1080 at 60 Hz.</li>
+<li>Click Identify and note which display number appears in the glasses. If the glasses are missing from Windows, open SteamVR Developer Settings, select Disable Direct Mode, then close SteamVR and repeat step 4.</li>
+<li>With SteamVR closed, double-click DISPLAY.cmd or run:</li>
+</ol>
+<pre><code>.\DISPLAY.cmd</code></pre>
+<ol start="7">
+<li>Select the list row for the glasses. Match the DISPLAY number to Windows Identify; use the displayed name to distinguish monitors. The command saves the selection and configures extended SBS output.</li>
+<li>If using Gear VR controllers, complete section 5 before continuing.</li>
+</ol>
+<h2>4. Start XR Gate and SteamVR</h2>
+<ol start="1">
+<li>Connect the glasses and enable SBS. Place IMU controllers on a flat surface and keep them still during initial calibration.</li>
+<li>Double-click RUN.cmd, or run:</li>
+</ol>
+<pre><code>.\RUN.cmd</code></pre>
+<ol start="3">
+<li>In the xr_client console, complete the startup prompts and calibration. Keep the cameras uncovered and the room well lit. Move your head slowly for a few seconds when tracking starts.</li>
+<li>Wait for SteamVR to open.</li>
+<li>Keep SteamVR Direct Mode disabled for this setup.</li>
+<li>If XR Gate is blocked, open Settings → Startup/Shutdown → Manage Add-ons and enable it.</li>
+<li>Check that the SteamVR scene appears in the glasses and responds to head movement, then launch your game.</li>
+</ol>
+<p>For later starts, enable SBS and run RUN.cmd. It reapplies the saved display selection using its current desktop coordinates. After changing a cable/port or if the saved display is missing, close SteamVR and run DISPLAY.cmd again.</p>
+<p>To start only xr_client, run:</p>
+<pre><code>.\CONSOLE.cmd</code></pre>
+<p>If setup takes longer than 180 seconds, finish the prompts in the open xr_client window and run RUN.cmd again. To allow more time:</p>
+<pre><code>.\RUN.cmd -TimeoutSeconds 300</code></pre>
+<p>If the glasses need to be selected manually:</p>
+<pre><code>usbipd list
+.\USB.cmd -XrealBusId 1-2</code></pre>
+<p>Replace 1-2 with the glasses&#x27; BUSID from usbipd list.</p>
+<h2>5. Set up Gear VR controllers</h2>
+<ol start="1">
+<li>Connect the glasses and a dedicated USB Bluetooth dongle. If Gear VR was not enabled during installation, run:</li>
+</ol>
+<pre><code>.\INSTALL.cmd -GearVR</code></pre>
+<ol start="2">
+<li>Find the dongle&#x27;s BUSID:</li>
+</ol>
+<pre><code>usbipd list</code></pre>
+<ol start="3">
+<li>Attach the dongle:</li>
+</ol>
+<pre><code>.\USB.cmd -BluetoothBusId 1-4</code></pre>
+<p>Replace 1-4 with your dongle&#x27;s BUSID.</p>
+<ol start="4">
+<li>Open the Bluetooth pairing console:</li>
+</ol>
+<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair</code></pre>
+<ol start="5">
+<li>Put the controllers into pairing mode and enter the following commands in bluetoothctl. Replace MAC_LEFT and MAC_RIGHT with the actual controller addresses:</li>
+</ol>
+<pre><code>power on
+agent on
+default-agent
+scan on
+pair MAC_LEFT
+trust MAC_LEFT
+connect MAC_LEFT
+pair MAC_RIGHT
+trust MAC_RIGHT
+connect MAC_RIGHT
+scan off
+quit</code></pre>
+<ol start="6">
+<li>Start the controller registration wizard:</li>
+</ol>
+<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR</code></pre>
+<ol start="7">
+<li>Follow the prompts to assign the left and right controllers and save the configuration.</li>
+<li>Run RUN.cmd.</li>
+</ol>
+<p>If you already have a gearvr.json configuration, import it instead of repeating controller registration:</p>
+<pre><code>.\INSTALL.cmd -GearVR -ControllerConfig &#x27;C:\XR-Gate-WSL\gearvr.json&#x27;</code></pre>
+<p>Complete Bluetooth pairing before starting XR Gate. To select a different USB Bluetooth dongle later, repeat step 3 with its BUSID.</p>
+<h2>6. Stop XR Gate</h2>
+<ol start="1">
+<li>Close SteamVR.</li>
+<li>Press Ctrl+C in the xr_client console and wait for it to stop.</li>
+<li>Return the selected USB devices to Windows:</li>
+</ol>
+<pre><code>.\DETACH.cmd</code></pre>
+<ol start="4">
+<li>To use the glasses as a normal desktop display, switch them back to 2D with their hardware button.</li>
+</ol>
+<h2>7. Change settings or update</h2>
+<h3>Update the setup scripts</h3>
+<ol start="1">
+<li>Close SteamVR.</li>
+<li>Extract the new archive into the same setup folder and replace its files, including the linux and windows subfolders.</li>
+<li>Enable SBS and select the matching resolution and refresh rate in Windows.</li>
+<li>Run DISPLAY.cmd and select the glasses&#x27; screen once.</li>
+<li>Run RUN.cmd.</li>
+</ol>
+<h3>Update XR Gate</h3>
+<ol start="1">
+<li>Close SteamVR and stop xr_client.</li>
+<li>Run INSTALL.cmd again.</li>
+<li>Enable SBS, select the matching refresh rate in Windows, then run RUN.cmd. The saved screen selection is applied to the new driver. If the display is no longer found, close SteamVR and run DISPLAY.cmd again.</li>
+</ol>
+<p>To install a specific release:</p>
+<pre><code>.\INSTALL.cmd -ReleaseTag v2.8.0</code></pre>
+<h3>Switch to 90 Hz</h3>
+<ol start="1">
+<li>Close SteamVR and stop xr_client.</li>
+<li>Install the matching driver:</li>
+</ol>
+<pre><code>.\INSTALL.cmd -FrequencyHz 90 -DisplayMode extended_sbs</code></pre>
+<ol start="3">
+<li>Set the glasses to SBS/90 Hz and select 90 Hz in Windows display settings.</li>
+<li>Run DISPLAY.cmd, then RUN.cmd.</li>
+</ol>
+<h3>Use an extended SBS display</h3>
+<ol start="1">
+<li>If Direct Mode was enabled, open SteamVR Developer Settings and select Disable Direct Mode. Close SteamVR; xr_client can stay open.</li>
+<li>Select Extend these displays and 3840×1080 at the installed driver&#x27;s refresh rate in Windows.</li>
+<li>Run:</li>
+</ol>
+<pre><code>.\DISPLAY.cmd</code></pre>
+<ol start="4">
+<li>Select the glasses&#x27; display from the list, then run RUN.cmd.</li>
+</ol>
+<h3>Use Direct Mode</h3>
+<ol start="1">
+<li>Close SteamVR and stop xr_client.</li>
+<li>Install the Direct Mode package:</li>
+</ol>
+<pre><code>.\INSTALL.cmd -FrequencyHz 60 -DisplayMode direct</code></pre>
+<ol start="3">
+<li>Start XR Gate and SteamVR, select Enable Direct Mode in SteamVR Developer Settings, and restart SteamVR.</li>
+<li>If SteamVR shows error 422 or continues to show the Windows desktop in the glasses, follow Use an extended SBS display above.</li>
+</ol>
+<h3>Use a custom xr_client profile</h3>
+<ol start="1">
+<li>Place your profile at ~/xr-gate-wsl/config/xr_client.json inside Ubuntu.</li>
+<li>Stop xr_client and run RUN.cmd again.</li>
+</ol>
+<h2>8. Resolve startup problems</h2>
+<h3>SteamVR error 422 or Windows desktop in the glasses</h3>
+<ol start="1">
+<li>Open SteamVR Developer Settings and select Disable Direct Mode. Close SteamVR; keep xr_client open.</li>
+<li>Enable SBS. In Windows Display settings, select Extend these displays and 3840×1080 at the installed driver&#x27;s refresh rate.</li>
+<li>Click Identify, then run:</li>
+</ol>
+<pre><code>.\DISPLAY.cmd
+.\RUN.cmd</code></pre>
+<ol start="4">
+<li>Choose the glasses&#x27; display when prompted. Wait for SteamVR to open and check head movement in its scene.</li>
+<li>If error 422 returns, close SteamVR, repeat DISPLAY.cmd to check the selected screen, and inspect the latest compositor log:</li>
+</ol>
+<pre><code>$vrPaths = Get-Content &quot;$env:LOCALAPPDATA\openvr\openvrpaths.vrpath&quot; -Raw | ConvertFrom-Json
+$steamFolder = Split-Path -Parent $vrPaths.config[0]
+Get-Content (Join-Path $steamFolder &#x27;logs\vrcompositor.txt&#x27;) -Tail 100</code></pre>
+<h3>View diagnostics</h3>
+<ol start="1">
+<li>Run:</li>
+</ol>
+<pre><code>.\DOCTOR.cmd</code></pre>
+<ol start="2">
+<li>With xr_client running, check the tracking connection:</li>
+</ol>
+<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test -TimeoutSeconds 30</code></pre>
+<h3>Reconnect cameras or Bluetooth</h3>
+<ol start="1">
+<li>Close SteamVR and stop xr_client.</li>
+<li>Reconnect the USB cable or dongle.</li>
+<li>Run USB.cmd, then RUN.cmd.</li>
+<li>If the device is still missing, run:</li>
+</ol>
+<pre><code>wsl -d Ubuntu-24.04 -- lsusb
+wsl -d Ubuntu-24.04 -- uname -r
+wsl -d Ubuntu-24.04 -u root -- modprobe uvcvideo
+wsl -d Ubuntu-24.04 -u root -- modprobe btusb
+wsl -d Ubuntu-24.04 -- bluetoothctl list
+wsl -d Ubuntu-24.04 -u root -- dmesg</code></pre>
+<ol start="5">
+<li>If a module is missing, update WSL:</li>
+</ol>
+<pre><code>wsl --update --web-download</code></pre>
+<ol start="6">
+<li>Save your work in Ubuntu, restart the distribution, and reconnect the devices:</li>
+</ol>
+<pre><code>wsl --terminate Ubuntu-24.04
+.\USB.cmd
+.\RUN.cmd</code></pre>
+<p>If a custom kernel is configured in %USERPROFILE%\.wslconfig, remove or update that kernel setting before repeating these steps.</p>
+<h3>Restore the Windows tracking connection</h3>
+<ol start="1">
+<li>Keep xr_client running and run:</li>
+</ol>
+<pre><code>Test-NetConnection 127.0.0.1 -Port 45810
+wsl -d Ubuntu-24.04 -- ss -ltnp</code></pre>
+<ol start="2">
+<li>For WSL NAT networking, enable localhost forwarding in %USERPROFILE%\.wslconfig. Preserve the file&#x27;s other settings:</li>
+</ol>
+<pre><code>[wsl2]
+localhostForwarding=true</code></pre>
+<ol start="3">
+<li>Save work in all WSL distributions, then run:</li>
+</ol>
+<pre><code>wsl --shutdown
+.\RUN.cmd</code></pre>
+<ol start="4">
+<li>If connection still fails, check the VPN/firewall settings and close any other process using port 45810.</li>
+</ol>
+<h3>Create a regular Ubuntu user</h3>
+<p>If Ubuntu starts as root:</p>
+<ol start="1">
+<li>Open Ubuntu and create a user. Replace xruser with your preferred Linux username:</li>
+</ol>
+<pre><code>adduser xruser
+usermod -aG sudo xruser</code></pre>
+<ol start="2">
+<li>Set the user in /etc/wsl.conf, preserving the file&#x27;s other sections:</li>
+</ol>
+<pre><code>[user]
+default=xruser</code></pre>
+<ol start="3">
+<li>Save your Ubuntu work, then run from Windows:</li>
+</ol>
+<pre><code>wsl --terminate Ubuntu-24.04
+.\INSTALL.cmd</code></pre>
+<h3>Install a missing Windows prerequisite</h3>
+<ol start="1">
+<li>If winget is missing, install or update Microsoft App Installer, then repeat INSTALL.cmd.</li>
+<li>If Windows reports that virtualization is disabled, enable SVM/AMD-V or VT-x in BIOS/UEFI, restart Windows, and repeat INSTALL.cmd.</li>
+</ol>
+</article></body></html>
