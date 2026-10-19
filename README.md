@@ -13,7 +13,8 @@ Supported:
 **For installation and usage instructions, see:**
 
 [Quick Start Linux](#quick-start-linux)
-[Quick Start Windows](win/WINDOWS.md)
+
+[Quick Start Windows](win/README.md)
 
 
 ## Half-Life Alyx on HX370 with XREAL Ultra 
