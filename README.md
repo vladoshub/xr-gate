@@ -9,6 +9,23 @@ Supported:
 2. Image analysis-based hand tracking (Mercury hand tracking integration)
 3. Various input devices emulate VR controllers, including those with their own IMUs for precise tracking (Samsung Gear VR support or VR-like Bluetooth controllers)
 
+## Supported devices
+
+### Headsets and tracking hardware
+
+| Device | Purpose | IMU | Status |
+| --- | --- | --- | --- |
+| XREAL Air 2 Ultra | Head and hand tracking, display | Built-in | Recommended |
+| Leap Motion UVC + nRF54L15 | Head and hand tracking | External | Experimental |
+| Leap Motion UVC | Camera-based tracking | No | Experimental |
+
+### Controllers
+
+| Device | Buttons / stick | IMU | Status |
+| --- | --- | --- | --- |
+| Samsung Gear VR controller | Yes | Built-in | Supported |
+| VR-PARK Bluetooth controller | Yes | No | Supported |
+
 
 **For installation and usage instructions, see:**
 
