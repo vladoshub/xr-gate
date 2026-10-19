@@ -16,8 +16,8 @@ Supported:
 | Device | Purpose | IMU | Status | Notes | 
 | --- | --- | --- | --- | --- |
 | XREAL Air 2 Ultra | Head and hand tracking, display | Built-in | Recommended | Main device |
-| Leap Motion UVC + nRF54L15 | Head and hand tracking | External | Experimental | Overall, it works, but the tracking is worse than the Ultra's, and you also need to buy a sensor and print a housing. Soldering is not required |
-| Leap Motion UVC | Camera-based tracking | No | Experimental | Poor head tracking, good hand tracking. Sensitive to background details—the more detail, the better the head tracking. Suitable for launching if you already have an UltraLeap |
+| Leap Motion UVC + nRF54L15 | Head and hand tracking | External | Experimental | Overall, it works, but the tracking is worse than the Ultra's, and you also need to buy a sensor and print a housing. Soldering is not required. See: https://github.com/vladoshub/xr-tracker |
+| Leap Motion UVC | Camera-based tracking | No | Experimental | Poor head tracking, good hand tracking. Sensitive to background details—the more detail, the better the head tracking. Suitable for launching if you already have an UltraLeap. Need to switch to UVC mode - https://github.com/leapmotion/leapuvc |
 
 ### Controllers
 
