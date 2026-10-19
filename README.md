@@ -25,7 +25,7 @@ Supported:
 | --- | --- | --- | --- | --- |
 | Samsung Gear VR controller | Yes | Built-in | Supported | Excellent controllers with a touchpad and buttons. Used ones are available. They are powered by two AAA batteries, so there's no battery degradation. They are also lightweight and compact enough to pair well with AR glasses. Currently, hand tracking is supported using the IMU reading. Partial position prediction is also supported using the accelerometer and the last known velocity before optical tracking was lost. It is recommended to calibrate each time you first launch the controller. Operation also depends on the Bluetooth module; a separate module often works better |
 | VR-PARK Bluetooth controller | Yes | No | Supported | An inexpensive controller. Suitable for applications where fast movements are not required and only button input is required |
-| XR-Controller | ? | Yes | Software support | The code and firmware support buttons with an IMU. However, I've only tested my custom firmware with the nRF54L15 in IMU tracker mode. Theoretically, you could print your own enclosure and connect the buttons to the nRF54L15. Or you could use an existing controller without an IMU with xr-controller. |
+| XR-Controller | ? | Yes | Software support | The code and firmware support buttons with an IMU. However, I've only tested my custom firmware with the nRF54L15 in IMU tracker mode. Theoretically, you could print your own enclosure and connect the buttons to the nRF54L15. Or you could use an existing controller without an IMU with xr-controller. See: https://github.com/vladoshub/xr-controller |
 
 
 **For installation and usage instructions, see:**
