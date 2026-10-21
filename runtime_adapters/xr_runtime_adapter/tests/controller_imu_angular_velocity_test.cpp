@@ -129,6 +129,7 @@ void yaw_correction_and_angular_velocity_stay_aligned_for_six_minutes() {
   Fixture f;
   for (auto* motion : {&f.cfg.left_imu_motion, &f.cfg.right_imu_motion}) {
     motion->yaw_correction_enabled = motion->yaw_correction_smooth = true;
+    motion->yaw_reference_stable_ms = 0;
     motion->yaw_correction_continuous = true;
   }
   for (auto* side : {&f.hand.left, &f.hand.right}) {

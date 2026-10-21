@@ -1997,6 +1997,7 @@ void presentation_yaw_matches_camera_time_with_delayed_delivery() {
       auto& motion = s.cfg.left_imu_motion;
       motion.yaw_correction_enabled = true;
       motion.yaw_correction_smooth = smooth;
+      motion.yaw_reference_stable_ms = 0;
       motion.yaw_correction_continuous = true;
       motion.yaw_correction_trigger_filter = false;
       motion.yaw_correction_interval_ms = 0;
@@ -2048,6 +2049,9 @@ struct SmoothYawScenario {
     auto& m = s.cfg.left_imu_motion;
     m.position_prediction_enabled = m.acceleration_integration_enabled = false;
     m.yaw_correction_enabled = m.yaw_correction_smooth = true;
+    // Most cases isolate post-calibration correction. Production startup
+    // confirmation and its interruption rules are exercised separately.
+    m.yaw_reference_stable_ms = 0;
     if (right) {
       s.cfg.right_orientation_source = s.cfg.left_orientation_source;
       s.cfg.right_imu_motion = m;
@@ -2055,6 +2059,21 @@ struct SmoothYawScenario {
   }
   RuntimeControllerImuSideRuntimeState& state() { return right ? s.state.right : s.state.left; }
   RuntimeControllerImuMotionConfig& config() { return right ? s.cfg.right_imu_motion : s.cfg.left_imu_motion; }
+  RuntimeControllerSideStateV1 pose_tick(int ms, cu::Qd provider, cu::Qd optical) {
+    const auto now = s.prepare(ms);
+    auto& imu = s.input.left.imu;
+    imu.orientation_xyzw[0] = provider.x; imu.orientation_xyzw[1] = provider.y;
+    imu.orientation_xyzw[2] = provider.z; imu.orientation_xyzw[3] = provider.w;
+    s.hand.left.controller_qx = optical.x; s.hand.left.controller_qy = optical.y;
+    s.hand.left.controller_qz = optical.z; s.hand.left.controller_qw = optical.w;
+    if (right) {
+      s.input.right = s.input.left; s.hand.right = s.hand.left;
+      s.hand.right.handedness = 2; s.hand.flags |= HAND_FLAG_RIGHT_VALID;
+    }
+    const auto out = compose_runtime_controller_state(s.sequence, now, s.cfg,
+        s.hand, s.hand, s.input, std::nullopt, 9.81f, &s.state);
+    return right ? out.right : out.left;
+  }
   RuntimeControllerSideStateV1 tick(int ms, float imu_deg, float error_deg,
                                    bool optical = true, float confidence = 1,
                                    bool accepted = true, bool cached = false) {
@@ -2141,13 +2160,19 @@ void smooth_yaw_rejects_bad_optics_and_recovers_without_a_snap() {
           "reacquire spent time lost as an instantaneous correction budget");
   const auto good = x.state().yaw_correction_rad;
   x.tick(10020, 30, 80, true, 0.1f);
+  require(x.state().yaw_optical_reason == "low_confidence",
+          "low-confidence optics did not expose their rejection reason");
   x.tick(10030, 30, 80, true, 1, false);
+  require(x.state().yaw_optical_reason == "not_accepted",
+          "rejected hand-gate pose did not expose its rejection reason");
   near(x.state().yaw_correction_rad, good, "low-confidence or rejected optics changed yaw");
   x.tick(10040, 30, 10);
   const auto last = x.state().yaw_correction_rad;
-  x.tick(10200, 30, 10, true, 1, true, true);
+  x.tick(10300, 30, 10, true, 1, true, true);
   near(x.state().yaw_correction_rad, last, "stale cached optical pose changed yaw");
   require(x.state().yaw_last_action == "smooth_stale", "stale target was not diagnosed");
+  require(x.state().yaw_optical_reason == "pair_too_old",
+          "old matched pair was not distinguished from invalid optics");
 
   SmoothYawScenario jump;
   jump.tick(0, 0, 0);
@@ -2181,6 +2206,301 @@ void smooth_yaw_rejects_bad_optics_and_recovers_without_a_snap() {
           "explicit reacquire request did not start a bounded smooth correction");
 }
 
+void smooth_yaw_accepts_delayed_source_matched_camera_pairs() {
+  // Reproduce a 30 Hz camera with 140 ms delivery latency and an IMU whose
+  // latest orientation is 110 ms old. A matched pair is 140--172 ms old:
+  // still usable by the hand pipeline, but rejected by the former 150 ms cap.
+  for (float age_limit_ms : {150.0f, 250.0f}) {
+  for (bool right : {false, true}) {
+    SmoothYawScenario x(right);
+    x.config().yaw_max_source_age_ms = age_limit_ms;
+    constexpr float anchor = 20 * kPi / 180;
+    for (int ms = 200; ms <= 2200; ms += 10) {
+      const auto now = x.s.prepare(ms);
+      const int imu_ms = ms - 110;
+      const int camera_ms = ((ms - 140) / 33) * 33;
+      const float imu_angle = imu_ms * 0.001f;
+      x.s.input.left.imu.orientation_timestamp_ns =
+          x.s.input.left.imu.latest_sample_timestamp_ns =
+              kStart + uint64_t(imu_ms) * 1'000'000;
+      x.s.input.left.imu.samples[0].timestamp_ns = x.s.input.left.imu.orientation_timestamp_ns;
+      x.s.input.left.imu.orientation_xyzw[1] = std::sin(imu_angle / 2);
+      x.s.input.left.imu.orientation_xyzw[3] = std::cos(imu_angle / 2);
+      x.s.hand.source_timestamp_ns = kStart + uint64_t(camera_ms) * 1'000'000;
+      const float optical_angle = camera_ms * 0.001f + anchor;
+      x.s.hand.left.controller_qy = std::sin(optical_angle / 2);
+      x.s.hand.left.controller_qw = std::cos(optical_angle / 2);
+      if (right) {
+        x.s.input.right = x.s.input.left;
+        x.s.hand.right = x.s.hand.left;
+        x.s.hand.right.handedness = 2;
+        x.s.hand.flags |= HAND_FLAG_RIGHT_VALID;
+      }
+      compose_runtime_controller_state(x.s.sequence, now, x.s.cfg,
+          x.s.hand, x.s.hand, x.s.input, std::nullopt, 9.81f, &x.s.state);
+      if (ms < 500) continue;
+      require(x.state().yaw_correction_valid,
+              "accepted delayed camera/IMU pair never established yaw");
+      const float pair_age_ms = float(now - x.state().yaw_matched_source_timestamp_ns) / 1e6f;
+      require(x.state().yaw_optical_reason ==
+                  (pair_age_ms > age_limit_ms ? "pair_too_old" : "matched"),
+              "matched yaw evidence ignored its configured source-age limit");
+      if (age_limit_ms == 250) {
+        require(x.state().yaw_optical_reason == "matched",
+                "accepted 140--172 ms optical pair was intermittently rejected");
+      }
+      near(x.state().yaw_correction_rad, anchor,
+           "delivery latency became false yaw drift", 1e-4f);
+      require(x.state().yaw_apply_count == 1,
+              "rigid motion produced extra correction for delayed poses");
+    }
+  }
+  }
+}
+
+void smooth_yaw_does_not_treat_rigid_grip_tilt_as_yaw_drift() {
+  for (bool right : {false, true}) {
+    for (float mount_yaw : {0.0f, 35.0f}) {
+      SmoothYawScenario x(right);
+      const auto mount = cu::q_mul(
+          cu::q_from_axis_angle(0, 1, 0, mount_yaw * kPi / 180),
+          cu::q_mul(cu::q_from_axis_angle(1, 0, 0, 40 * kPi / 180),
+                    cu::q_from_axis_angle(0, 0, 1, 25 * kPi / 180)));
+      float retained = 0;
+      for (int ms = 0; ms <= 7000; ms += 10) {
+        const auto now = x.s.prepare(ms);
+        // Palm and sensor have a fixed local mounting. Pitching the rigid
+        // grip can flip only one projected forward vector by 180 degrees.
+        // The true world-yaw reference has not changed at all.
+        const float pitch = std::min(1.0f, ms / 1000.0f) * 70 * kPi / 180;
+        const auto provider = cu::q_from_axis_angle(1, 0, 0, pitch);
+        const auto optical = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, 20 * kPi / 180),
+                                       cu::q_mul(provider, mount));
+        auto& imu = x.s.input.left.imu;
+        imu.orientation_xyzw[0] = provider.x; imu.orientation_xyzw[1] = provider.y;
+        imu.orientation_xyzw[2] = provider.z; imu.orientation_xyzw[3] = provider.w;
+        x.s.hand.left.controller_qx = optical.x; x.s.hand.left.controller_qy = optical.y;
+        x.s.hand.left.controller_qz = optical.z; x.s.hand.left.controller_qw = optical.w;
+        if (right) {
+          x.s.input.right = x.s.input.left; x.s.hand.right = x.s.hand.left;
+          x.s.hand.right.handedness = 2; x.s.hand.flags |= HAND_FLAG_RIGHT_VALID;
+        }
+        compose_runtime_controller_state(x.s.sequence, now, x.s.cfg,
+            x.s.hand, x.s.hand, x.s.input, std::nullopt, 9.81f, &x.s.state);
+        require(x.state().yaw_correction_valid, "initial grip yaw was not established");
+        if (ms == 0) retained = x.state().yaw_correction_rad;
+        near(x.state().yaw_correction_rad, retained,
+             "rigid grip tilt invented yaw drift and moved a correct wrist", 1e-5f);
+      }
+    }
+  }
+}
+
+void smooth_yaw_relative_rotation_covers_full_turns_and_real_drift() {
+  for (bool right : {false, true}) {
+    for (bool roll : {false, true}) {
+      SmoothYawScenario x(right);
+      const auto mount = cu::q_mul(cu::q_from_axis_angle(1, 0, 0, 0.5),
+                                    cu::q_from_axis_angle(0, 0, 1, -0.4));
+      float initial = 0;
+      for (int ms = 0; ms <= 12000; ms += 10) {
+        // Cover the relative 180-degree horizontal swing singularity, two
+        // complete turns, useful world yaw, real slow drift and quaternion
+        // sign changes, with a nontrivial fixed local mounting on both sides.
+        const float a = ms * 4 * kPi / 12000;
+        const auto provider = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, ms * 0.0007),
+            cu::q_from_axis_angle(roll ? 0 : 1, 0, roll ? 1 : 0, a));
+        const float drift = std::min(ms / 1000.0f, 10.0f) * kPi / 180;
+        auto optical = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, 0.3 + drift),
+                                  cu::q_mul(provider, mount));
+        if (ms % 20) {
+          optical.w = -optical.w; optical.x = -optical.x;
+          optical.y = -optical.y; optical.z = -optical.z;
+        }
+        x.pose_tick(ms, provider, optical);
+        if (!ms) initial = x.state().yaw_correction_rad;
+        require(x.state().yaw_smooth_target_valid,
+                "full rigid swing lost its relative yaw reference");
+        near(angle_delta(x.state().yaw_last_desired_rad, initial), drift,
+             "relative reference confused mounting or useful wrist motion with drift", 2e-5f);
+      }
+      require(angle_delta(x.state().yaw_correction_rad, initial) > 8 * kPi / 180,
+              "relative quaternion correction no longer follows real yaw drift");
+      require(x.state().yaw_pose_alternate_reference.valid,
+              "full swing never learned a nonsingular alternate reference");
+    }
+  }
+}
+
+void presentation_startup_rejects_a_bad_first_pose_without_freezing_imu() {
+  for (bool right : {false, true}) {
+    for (int stable_ms : {200, 1000}) {
+    SmoothYawScenario x(right);
+    x.config().yaw_reference_stable_ms = stable_ms;
+    x.tick(0, 0, 105);
+    require(!x.state().yaw_correction_valid,
+            "first optical pose was committed without startup confirmation");
+    for (int ms = 10; ms <= stable_ms + 10; ms += 10) {
+      const auto provider = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, ms * 0.002),
+                                      cu::q_from_axis_angle(1, 0, 0, 0.35 * std::sin((ms - 10) * 0.006)));
+      auto optical = cu::q_mul(cu::q_from_axis_angle(0, 1, 0, 20 * kPi / 180), provider);
+      if (ms % 20) {
+        optical.w = -optical.w; optical.x = -optical.x;
+        optical.y = -optical.y; optical.z = -optical.z;
+      }
+      const auto out = x.pose_tick(ms, provider, optical);
+      require(x.state().yaw_correction_valid == (ms == stable_ms + 10),
+              "startup confirmed early or rejected a stable moving grip");
+      if (ms < stable_ms + 10) {
+        const float dot = out.orientation_xyzw[0] * provider.x +
+            out.orientation_xyzw[1] * provider.y + out.orientation_xyzw[2] * provider.z +
+            out.orientation_xyzw[3] * provider.w;
+        near(std::abs(dot), 1, "startup confirmation froze or averaged useful IMU motion");
+      }
+    }
+    near(x.state().yaw_correction_rad, 20 * kPi / 180,
+         "a bad first optical pose contaminated the confirmed startup reference");
+    }
+  }
+}
+
+void presentation_startup_requires_continuous_distinct_camera_evidence() {
+  for (bool right : {false, true}) {
+    for (int stable_ms : {200, 1000}) {
+    for (int interruption = 0; interruption < 5; ++interruption) {
+      SmoothYawScenario x(right);
+      x.config().yaw_reference_stable_ms = stable_ms;
+      x.tick(0, 0, 20);
+      x.tick(100, 0, 20);
+      if (interruption == 0) x.tick(150, 0, 20, false);
+      if (interruption == 1) x.tick(150, 0, 20, true, 0.1f);
+      if (interruption == 2) x.tick(150, 0, 20, true, 1, false);
+      const int restart = interruption >= 3 ? 300 : 160;
+      if (interruption == 4) {
+        x.tick(200, 0, 20, true, 1, true, true);
+        x.tick(290, 0, 20, true, 1, true, true);
+        require(!x.state().yaw_correction_valid,
+                "cached camera poses spent the startup confirmation time");
+      }
+      for (int ms = restart; ms <= restart + stable_ms; ms += 10) {
+        x.tick(ms, 0, 20);
+        require(x.state().yaw_correction_valid == (ms == restart + stable_ms),
+                "startup retained confirmation across invalid optics or a source-time gap");
+      }
+      near(x.state().yaw_correction_rad, 20 * kPi / 180,
+           "startup interruption changed a correct reference");
+    }
+    }
+  }
+}
+
+void presentation_startup_does_not_keep_a_first_frame_pitch_or_roll_glitch() {
+  for (bool right : {false, true}) {
+    for (bool roll : {false, true}) {
+      SmoothYawScenario x(right);
+      x.config().yaw_reference_stable_ms = 200;
+      const auto world = cu::q_from_axis_angle(0, 1, 0, 0.3);
+      x.pose_tick(0, {}, cu::q_mul(world,
+          cu::q_from_axis_angle(roll ? 0 : 1, 0, roll ? 1 : 0, 0.6)));
+      for (int ms = 10; ms <= 200; ms += 10) x.pose_tick(ms, {}, world);
+      require(x.state().yaw_correction_valid, "quiet corrected startup never completed");
+      for (int ms = 210; ms <= 3000; ms += 10) {
+        const auto p = cu::q_mul(cu::q_from_axis_angle(1, 0, 0, ms * 0.001),
+                                  cu::q_from_axis_angle(0, 0, 1, ms * 0.002));
+        x.pose_tick(ms, p, cu::q_mul(world, p));
+        near(x.state().yaw_last_desired_rad, 0.3f,
+             "startup kept a first-frame tilt glitch in its quaternion reference", 2e-5f);
+      }
+    }
+  }
+}
+
+void presentation_reference_survives_delivery_reset_but_not_an_ahrs_epoch() {
+  for (bool right : {false, true}) {
+    for (int stable_ms : {200, 1000}) {
+    SmoothYawScenario x(right);
+    x.config().yaw_reference_stable_ms = stable_ms;
+    for (int ms = 0; ms <= stable_ms; ms += 10) x.tick(ms, 0, 20);
+    require(x.state().yaw_correction_valid, "startup did not confirm its reference");
+    // Missing transport batches do not change the AHRS frame. A fresh sensor
+    // epoch does and must require a new confirmed presentation frame.
+    x.s.input.left.imu.reserved[CONTROLLER_IMU_DIAG_DROPPED_BATCHES] = 1;
+    x.tick(stable_ms + 10, 10, 20);
+    require(x.state().yaw_pose_reference.valid && x.state().yaw_correction_valid,
+            "delivery reset discarded the confirmed quaternion reference");
+    near(x.state().yaw_correction_rad, 20 * kPi / 180,
+         "delivery reset changed the retained presentation yaw");
+    x.s.input.left.imu.reserved[CONTROLLER_IMU_DIAG_EPOCH] = 2;
+    for (int ms = stable_ms + 20; ms <= stable_ms * 2 + 20; ms += 10) {
+      x.tick(ms, 0, -40);
+      require(x.state().yaw_correction_valid == (ms == stable_ms * 2 + 20),
+              "AHRS reset reused an old reference or skipped startup confirmation");
+    }
+    near(x.state().yaw_correction_rad, -40 * kPi / 180,
+         "new AHRS epoch retained the old quaternion frame");
+    }
+  }
+}
+
+void smooth_yaw_source_age_also_expires_cached_targets() {
+  for (float age_limit_ms : {50.0f, 150.0f, 250.0f}) {
+    for (bool right : {false, true}) {
+      SmoothYawScenario x(right);
+      x.config().yaw_max_source_age_ms = age_limit_ms;
+      x.tick(0, 0, 0);
+      // Repeated camera sequence/source timestamps cannot refresh evidence.
+      x.tick(int(age_limit_ms) - 1, 0, 0, true, 1, true, true);
+      require(x.state().yaw_optical_reason == "matched" &&
+                  x.state().yaw_last_action != "smooth_stale",
+              "usable retained yaw target expired before its configured age");
+      x.tick(int(age_limit_ms) + 1, 0, 0, true, 1, true, true);
+      require(x.state().yaw_optical_reason == "pair_too_old" &&
+                  x.state().yaw_last_action == "smooth_stale",
+              "frozen camera frame kept yaw correction alive beyond its limit");
+      const auto stopped = x.state().yaw_correction_rad;
+      x.tick(int(age_limit_ms) + 101, 20, 0, true, 1, true, true);
+      near(x.state().yaw_correction_rad, stopped,
+           "expired yaw target resumed without a new camera observation");
+    }
+  }
+}
+
+void smooth_yaw_keeps_jump_validation_across_optical_loss() {
+  for (bool right : {false, true}) {
+    for (bool reported_loss : {false, true}) {
+      SmoothYawScenario x(right);
+      x.tick(0, 0, 0);
+      x.tick(10, 0, 0);
+      const float retained = x.state().yaw_correction_rad;
+      if (reported_loss) x.tick(20, 0, 0, false);
+      x.state().yaw_correction_requested = true;
+      // A returning detector can label one wrong palm rotation as tracked.
+      // Neither explicit loss nor a source-time gap may bypass its jump hold.
+      x.tick(1000, 0, 105);
+      near(x.state().yaw_correction_rad, retained,
+           "first reacquired outlier changed a correct wrist yaw", 1e-7f);
+      require(x.state().yaw_last_action == "smooth_jump_pending",
+              "reacquire bypassed optical jump validation");
+      x.tick(1010, 0, 0);
+      near(x.state().yaw_correction_rad, retained,
+           "return to the correct optical heading kept an outlier target", 1e-7f);
+
+      x.tick(1020, 0, 0, false);
+      for (int ms = 1030; ms < 1230; ms += 10) {
+        x.tick(ms, 0, 40);
+        near(x.state().yaw_correction_rad, retained,
+             "unconfirmed reacquire spent correction budget", 1e-7f);
+      }
+      x.tick(1230, 0, 40);
+      require(x.state().yaw_correction_rad > retained,
+              "stable returning yaw never resumed drift correction");
+      require(x.state().yaw_correction_rad - retained <=
+                  2 * kPi / 180 * 0.01f + 1e-6f,
+              "confirmed reacquire bypassed the yaw speed limit");
+    }
+  }
+}
+
 void smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses() {
   for (int tick_ms : {5, 10, 25}) {
     SmoothYawScenario x;
@@ -2201,7 +2521,6 @@ void smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses() {
             "missing/future source time established a smooth yaw reference");
   }
   SmoothYawScenario vertical;
-  vertical.tick(0, 0, 0);
   const auto now = vertical.s.prepare(10);
   vertical.s.input.left.imu.orientation_xyzw[0] = std::sin(kPi / 4);
   vertical.s.input.left.imu.orientation_xyzw[3] = std::cos(kPi / 4);
@@ -2211,7 +2530,9 @@ void smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses() {
       vertical.s.hand, vertical.s.hand, vertical.s.input, std::nullopt, 9.81f, &vertical.s.state);
   near(vertical.state().yaw_correction_rad, 0, "vertical pose invented a yaw correction");
   require(vertical.state().yaw_last_action == "smooth_unobservable",
-          "vertical heading was not diagnosed as unobservable");
+          "an initial vertical heading was not diagnosed as unobservable");
+  require(!vertical.state().yaw_correction_valid,
+          "initial vertical pose established an arbitrary yaw frame");
 }
 
 int main() {
@@ -2220,6 +2541,15 @@ int main() {
   opposite_heading_requires_sustained_new_evidence(true);
   smooth_yaw_preserves_aiming_and_bounds_drift_correction();
   smooth_yaw_rejects_bad_optics_and_recovers_without_a_snap();
+  smooth_yaw_keeps_jump_validation_across_optical_loss();
+  smooth_yaw_accepts_delayed_source_matched_camera_pairs();
+  smooth_yaw_source_age_also_expires_cached_targets();
+  smooth_yaw_does_not_treat_rigid_grip_tilt_as_yaw_drift();
+  smooth_yaw_relative_rotation_covers_full_turns_and_real_drift();
+  presentation_startup_rejects_a_bad_first_pose_without_freezing_imu();
+  presentation_startup_requires_continuous_distinct_camera_evidence();
+  presentation_startup_does_not_keep_a_first_frame_pitch_or_roll_glitch();
+  presentation_reference_survives_delivery_reset_but_not_an_ahrs_epoch();
   smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses();
   presentation_yaw_matches_camera_time_with_delayed_delivery();
   startup_yaw_waits_for_stability_without_freezing_real_motion();

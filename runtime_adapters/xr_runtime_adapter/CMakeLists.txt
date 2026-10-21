@@ -69,6 +69,10 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_tcp_server_test.py"
         --adapter $<TARGET_FILE:xr_runtime_adapter>)
     set_tests_properties(app_tcp_server_test PROPERTIES TIMEOUT 30)
+    add_test(NAME controller_yaw_configuration_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/controller_yaw_configuration_test.py"
+        --adapter $<TARGET_FILE:xr_runtime_adapter>)
+    set_tests_properties(controller_yaw_configuration_test PROPERTIES TIMEOUT 15)
   endif()
   add_executable(controller_imu_angular_velocity_test
     tests/controller_imu_angular_velocity_test.cpp

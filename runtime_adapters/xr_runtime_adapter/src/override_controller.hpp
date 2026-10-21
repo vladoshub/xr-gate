@@ -132,6 +132,13 @@ struct RuntimeControllerImuMotionConfig {
   // Smooth mode updates only the retained world-yaw offset, never the gyro
   // response. PERIODIC hold/interval/blend settings remain for legacy mode.
   bool yaw_correction_smooth = false;
+  // Maximum age of source-time-matched optical/IMU evidence and a retained
+  // smooth target. Match the runtime's default 250 ms hand age budget.
+  float yaw_max_source_age_ms = 250.0f;
+  // Confirm a new presentation frame with distinct source-time pairs before
+  // adopting it. This does not stop or average the actual IMU rotation.
+  float yaw_reference_stable_ms = 1000.0f;
+  float yaw_reference_max_range_deg = 3.0f;
   float yaw_smooth_time_constant_ms = 2000.0f;
   float yaw_smooth_max_speed_deg_s = 2.0f;
   float yaw_smooth_deadband_deg = 1.0f;
@@ -166,6 +173,21 @@ enum class RuntimeControllerHmdRelativeBlendMode : uint8_t {
 // Retained optical yaw belongs to the AHRS orientation frame. Losing an IMU
 // packet invalidates position integration, but does not change that frame.
 struct RuntimeControllerImuYawState {
+  struct PoseReference {
+    bool valid = false;
+    float provider_xyzw[4] = {};
+    float optical_xyzw[4] = {};
+    float correction_rad = 0.0f;
+  };
+  // Compare full relative rotations. A fixed local palm/sensor mounting
+  // cancels, unlike subtracting two absolute projected forward headings.
+  PoseReference yaw_pose_reference{};
+  PoseReference yaw_pose_alternate_reference{};
+  uint64_t yaw_reference_start_source_ns = 0;
+  float yaw_reference_elapsed_ms = 0.0f;
+  float yaw_reference_min_delta_rad = 0.0f;
+  float yaw_reference_max_delta_rad = 0.0f;
+  float yaw_relative_condition = 0.0f;
   bool yaw_correction_valid = false;
   bool yaw_correction_requested = false;
   bool yaw_check_active = false;
@@ -190,6 +212,9 @@ struct RuntimeControllerImuYawState {
   uint64_t yaw_apply_count = 0;
   uint64_t yaw_reacquire_apply_count = 0;
   std::string yaw_last_action = "none";
+  // Why the current optical observation can/cannot supply a timed yaw pair.
+  // Independent of yaw_last_action, which can describe a retained target.
+  std::string yaw_optical_reason = "none";
   bool yaw_smooth_target_valid = false;
   bool yaw_smooth_reference_valid = false;
   bool yaw_smooth_jump_pending = false;

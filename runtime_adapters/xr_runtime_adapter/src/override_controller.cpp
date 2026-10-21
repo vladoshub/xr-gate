@@ -1017,10 +1017,62 @@ void update_yaw_correction(
 void suspend_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
                         const char* action) {
   state.yaw_smooth_target_valid = false;
-  state.yaw_smooth_reference_valid = false;
+  // Optical loss does not change the AHRS frame. Retain the last accepted
+  // yaw difference so a bad first reacquired palm cannot bypass jump checking.
+  // Device/epoch/control resets still clear the entire retained yaw state.
   state.yaw_smooth_jump_pending = false;
+  if (!state.yaw_correction_valid) {
+    state.yaw_pose_reference = {};
+    state.yaw_pose_alternate_reference = {};
+    state.yaw_reference_elapsed_ms = 0;
+    state.yaw_reference_start_source_ns = 0;
+  }
   state.yaw_last_step_rad = 0;
   state.yaw_last_action = action;
+}
+
+void set_yaw_pose_reference(RuntimeControllerImuYawState::PoseReference& ref,
+                            Qf provider, Qf optical, float correction) {
+  ref.valid = true;
+  const float p[] = {provider.x, provider.y, provider.z, provider.w};
+  const float o[] = {optical.x, optical.y, optical.z, optical.w};
+  std::copy_n(p, 4, ref.provider_xyzw);
+  std::copy_n(o, 4, ref.optical_xyzw);
+  ref.correction_rad = correction;
+}
+
+float relative_yaw_target(const RuntimeControllerImuYawState::PoseReference& ref,
+                          Qf provider, Qf optical, float& desired) {
+  if (!ref.valid) return 0;
+  const Qf pi = {ref.provider_xyzw[3], -ref.provider_xyzw[0],
+                -ref.provider_xyzw[1], -ref.provider_xyzw[2]};
+  const Qf oi = {ref.optical_xyzw[3], -ref.optical_xyzw[0],
+                -ref.optical_xyzw[1], -ref.optical_xyzw[2]};
+  const Qf dp = q_mul(provider, pi);
+  const Qf delta_optical = q_mul(optical, oi);
+  // If O(t) = Y(t) P(t) M for a fixed local mounting M, then
+  // dO = Y(t) dP inverse(Y(ref)). The world-Y twist difference is exactly
+  // Y(t)-Y(ref), independent of M and of the initial yaw alignment.
+  const float condition = std::min(std::hypot(dp.w, dp.y),
+                                   std::hypot(delta_optical.w, delta_optical.y));
+  if (condition >= 0.25f) {
+    desired = wrap_pi(ref.correction_rad +
+        2 * std::atan2(delta_optical.y, delta_optical.w) -
+        2 * std::atan2(dp.y, dp.w));
+  }
+  return condition;
+}
+
+bool initial_projected_yaw(Qf provider, Qf optical, float& desired) {
+  const float forward[] = {0, 0, -1};
+  float pf[3]{}, of[3]{}, py = 0, oy = 0;
+  q_rotate(provider, forward, pf);
+  q_rotate(optical, forward, of);
+  if (std::hypot(pf[0], pf[2]) < 0.25f ||
+      std::hypot(of[0], of[2]) < 0.25f ||
+      !yaw_rad_from_q(provider, py) || !yaw_rad_from_q(optical, oy)) return false;
+  desired = wrap_pi(oy - py);
+  return true;
 }
 
 void observe_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
@@ -1030,32 +1082,64 @@ void observe_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
   constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
   // Cached, reordered and future camera observations cannot spend filter time.
   if (source_ns == 0 || source_ns <= state.yaw_smooth_last_source_ns ||
-      source_ns > now_ns || now_ns - source_ns > 150'000'000ULL) return;
+      source_ns > now_ns ||
+      now_ns - source_ns > nonnegative_ms_to_ns(cfg.yaw_max_source_age_ms)) return;
   const uint64_t previous_source_ns = state.yaw_smooth_last_source_ns;
   state.yaw_smooth_last_source_ns = source_ns;
   if (previous_source_ns && source_ns - previous_source_ns > 150'000'000ULL) {
-    state.yaw_smooth_reference_valid = false;
+    // A gap breaks candidate support, not the last confirmed reference.
     state.yaw_smooth_jump_pending = false;
+    if (!state.yaw_correction_valid) state.yaw_pose_reference = {};
   }
   const Qf camera = normalize_q({optical.controller_qw, optical.controller_qx,
                                 optical.controller_qy, optical.controller_qz});
-  // A nearly vertical palm has an ill-conditioned horizontal heading. Keep
-  // gyro motion intact and wait for an observable yaw rather than chasing it.
-  const float local_forward[] = {0, 0, -1};
-  float pf[3]{}, of[3]{};
-  q_rotate(provider, local_forward, pf);
-  q_rotate(camera, local_forward, of);
-  float py = 0, oy = 0;
-  if (std::hypot(pf[0], pf[2]) < 0.25f ||
-      std::hypot(of[0], of[2]) < 0.25f ||
-      !yaw_rad_from_q(provider, py) || !yaw_rad_from_q(camera, oy)) {
-    suspend_smooth_yaw(state, "smooth_unobservable");
-    return;
+  float desired = 0;
+  const auto begin_reference = [&]() {
+    if (!initial_projected_yaw(provider, camera, desired)) {
+      suspend_smooth_yaw(state, "smooth_unobservable");
+      return false;
+    }
+    set_yaw_pose_reference(state.yaw_pose_reference, provider, camera, desired);
+    state.yaw_pose_alternate_reference = {};
+    state.yaw_reference_start_source_ns = source_ns;
+    state.yaw_reference_elapsed_ms = 0;
+    state.yaw_reference_min_delta_rad = state.yaw_reference_max_delta_rad = 0;
+    return true;
+  };
+  if (!state.yaw_pose_reference.valid && !begin_reference()) return;
+  const float primary_condition = relative_yaw_target(
+      state.yaw_pose_reference, provider, camera, desired);
+  state.yaw_relative_condition = primary_condition;
+  bool used_primary = primary_condition >= 0.25f;
+  if (!used_primary) {
+    state.yaw_relative_condition = relative_yaw_target(
+        state.yaw_pose_alternate_reference, provider, camera, desired);
+    if (state.yaw_relative_condition < 0.25f) {
+      suspend_smooth_yaw(state, "smooth_unobservable");
+      return;
+    }
   }
-  const float desired = wrap_pi(oy - py);
   state.yaw_last_desired_rad = desired;
   state.yaw_last_error_rad = wrap_pi(desired - state.yaw_correction_rad);
   if (!state.yaw_correction_valid) {
+    const float delta = wrap_pi(desired - state.yaw_pose_reference.correction_rad);
+    state.yaw_reference_min_delta_rad = std::min(state.yaw_reference_min_delta_rad, delta);
+    state.yaw_reference_max_delta_rad = std::max(state.yaw_reference_max_delta_rad, delta);
+    if (state.yaw_reference_max_delta_rad - state.yaw_reference_min_delta_rad >
+        cfg.yaw_reference_max_range_deg * kDegToRad) {
+      if (!begin_reference()) return;
+    }
+    state.yaw_reference_elapsed_ms = float(source_ns - state.yaw_reference_start_source_ns) * 1e-6f;
+    if (state.yaw_reference_elapsed_ms < cfg.yaw_reference_stable_ms) {
+      state.yaw_last_action = "smooth_initial_pending";
+      return;
+    }
+    // Promote the latest confirmed pair, not the very first candidate. A
+    // first-frame pitch/roll glitch can leave yaw unchanged yet contaminate
+    // later relative rotations if its full quaternion remains the anchor.
+    set_yaw_pose_reference(state.yaw_pose_reference, provider, camera, desired);
+    state.yaw_pose_alternate_reference = {};
+    used_primary = false;
     apply_latest_yaw_correction(state, cfg, desired, now_ns);
   }
   if (!cfg.yaw_correction_continuous && !state.yaw_correction_requested &&
@@ -1083,6 +1167,13 @@ void observe_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
   state.yaw_smooth_jump_pending = false;
   state.yaw_smooth_reference_valid = true;
   state.yaw_smooth_reference_rad = desired;
+  // A second, independently anchored pair covers a primary reference's
+  // relative 180-degree horizontal swing singularity. Learn it only from
+  // accepted evidence derived directly from the primary, never by chaining
+  // alternate references or feeding the smoothed presentation back into it.
+  if (used_primary && primary_condition >= 0.7f && primary_condition <= 0.9f) {
+    set_yaw_pose_reference(state.yaw_pose_alternate_reference, provider, camera, desired);
+  }
   state.yaw_smooth_target_valid = true;
   state.yaw_smooth_target_rad = desired;
   state.yaw_smooth_target_source_ns = source_ns;
@@ -1103,7 +1194,8 @@ void advance_smooth_yaw(RuntimeControllerImuSideRuntimeState& state,
   state.yaw_blend_active = false;
   if (!state.yaw_smooth_target_valid || !state.yaw_correction_valid) return;
   if (now_ns < state.yaw_smooth_target_source_ns ||
-      now_ns - state.yaw_smooth_target_source_ns > 150'000'000ULL) {
+      now_ns - state.yaw_smooth_target_source_ns >
+          nonnegative_ms_to_ns(cfg.yaw_max_source_age_ms)) {
     suspend_smooth_yaw(state, "smooth_stale");
     return;
   }
@@ -1160,8 +1252,15 @@ void apply_runtime_yaw_correction(
       (optical_measurement_accepted && optical_hand_side &&
        std::isfinite(optical_hand_side->confidence) &&
        optical_hand_side->confidence >= motion_cfg.yaw_smooth_min_confidence);
+  runtime_state->yaw_optical_reason = "accepted";
   if (!real_optical_hand_pose(optical_hand_side) || !smooth_quality_valid ||
       !finite_q_xyzw(optical_xyzw) || !nonzero_q_xyzw(optical_xyzw)) {
+    runtime_state->yaw_optical_reason = !real_optical_hand_pose(optical_hand_side)
+        ? "no_tracked_pose"
+        : !finite_q_xyzw(optical_xyzw) || !nonzero_q_xyzw(optical_xyzw)
+            ? "invalid_quaternion"
+            : !optical_measurement_accepted ? "not_accepted"
+                : "low_confidence";
     runtime_state->yaw_pose_alignment.clear_optical_motion();
     runtime_state->yaw_matched_source_timestamp_ns = 0;
     runtime_state->yaw_pose_submitted_sequence = optical_frame_sequence;
@@ -1171,6 +1270,7 @@ void apply_runtime_yaw_correction(
                           imu.yaw_reference_orientation,
                           optical_hand_side, optical_frame_sequence, timestamp_ns);
   } else if (optical_source_timestamp_ns == 0) {
+    runtime_state->yaw_optical_reason = "missing_source_time";
     // Compatibility for legacy producers without camera source timestamps.
     if (motion_cfg.yaw_correction_smooth) {
       suspend_smooth_yaw(*runtime_state, "smooth_missing_source_time");
@@ -1188,9 +1288,14 @@ void apply_runtime_yaw_correction(
     alignment.match_pending_optical();
     uint64_t matched_ns = 0;
     float provider[4] = {}, optical[4] = {};
-    if (alignment.latest_matched_pose(matched_ns, provider, optical) &&
-        matched_ns <= timestamp_ns && timestamp_ns - matched_ns <= 150'000'000ULL) {
-      runtime_state->yaw_matched_source_timestamp_ns = matched_ns;
+    const bool have_pair = alignment.latest_matched_pose(matched_ns, provider, optical);
+    const uint64_t max_source_age_ns = nonnegative_ms_to_ns(motion_cfg.yaw_max_source_age_ms);
+    runtime_state->yaw_optical_reason = !have_pair ? "waiting_imu_pair"
+        : matched_ns > timestamp_ns ? "future_pair"
+            : timestamp_ns - matched_ns > max_source_age_ns ? "pair_too_old" : "matched";
+    if (have_pair) runtime_state->yaw_matched_source_timestamp_ns = matched_ns;
+    if (have_pair && matched_ns <= timestamp_ns &&
+        timestamp_ns - matched_ns <= max_source_age_ns) {
       auto matched_hand = *optical_hand_side;
       matched_hand.controller_qx = optical[0];
       matched_hand.controller_qy = optical[1];

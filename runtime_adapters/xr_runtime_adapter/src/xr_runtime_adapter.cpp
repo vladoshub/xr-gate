@@ -2716,7 +2716,21 @@ void write_controller_position_diagnostics(
       << prefix << "_imu_acceleration_dp=(" << state.acceleration_position_delta_m[0] << ","
       << state.acceleration_position_delta_m[1] << "," << state.acceleration_position_delta_m[2] << ")"
       << prefix << "_raw_optical_status=" << (raw_optical ? raw_optical->status : 0u)
-      << prefix << "_accepted_optical_status=" << (accepted_optical ? accepted_optical->status : 0u);
+      << prefix << "_accepted_optical_status=" << (accepted_optical ? accepted_optical->status : 0u)
+      << prefix << "_yaw_optical_reason=" << state.yaw_optical_reason
+      << prefix << "_yaw_ready=" << (state.yaw_correction_valid ? "yes" : "no")
+      << prefix << "_yaw_reference_elapsed_ms=" << state.yaw_reference_elapsed_ms
+      << prefix << "_yaw_relative_condition=" << state.yaw_relative_condition
+      << prefix << "_yaw_desired_deg="
+      << (state.yaw_last_desired_rad * 180.0 / 3.14159265358979323846)
+      << prefix << "_yaw_pair_age_ms="
+      << (state.yaw_matched_source_timestamp_ns != 0 &&
+          timestamp_ns >= state.yaw_matched_source_timestamp_ns
+              ? double(timestamp_ns - state.yaw_matched_source_timestamp_ns) / 1e6 : -1.0)
+      << prefix << "_yaw_target_age_ms="
+      << (state.yaw_smooth_target_source_ns != 0 &&
+          timestamp_ns >= state.yaw_smooth_target_source_ns
+              ? double(timestamp_ns - state.yaw_smooth_target_source_ns) / 1e6 : -1.0);
   if (raw_optical) {
     out << prefix << "_raw_optical_p=(" << raw_optical->controller_px << ","
         << raw_optical->controller_py << "," << raw_optical->controller_pz << ")"
@@ -2724,6 +2738,7 @@ void write_controller_position_diagnostics(
         << raw_optical->controller_qy << "," << raw_optical->controller_qz << ","
         << raw_optical->controller_qw << ")"
         << prefix << "_raw_optical_flags=" << raw_optical->flags
+        << prefix << "_raw_optical_confidence=" << raw_optical->confidence
         << prefix << "_raw_optical_v=(" << raw_optical->vx << ","
         << raw_optical->vy << "," << raw_optical->vz << ")";
   }
@@ -2877,6 +2892,9 @@ int main(int argc, char** argv) {
   bool runtime_controller_imu_yaw_correction_continuous = true;
   bool runtime_controller_imu_yaw_correction_on_reacquire = true;
   bool runtime_controller_imu_yaw_correction_smooth = true;
+  double runtime_controller_imu_yaw_max_source_age_ms = 250.0;
+  double runtime_controller_imu_yaw_reference_stable_ms = 1000.0;
+  double runtime_controller_imu_yaw_reference_max_range_deg = 3.0;
   double runtime_controller_imu_yaw_smooth_time_constant_ms = 2000.0;
   double runtime_controller_imu_yaw_smooth_max_speed_deg_s = 2.0;
   double runtime_controller_imu_yaw_smooth_deadband_deg = 1.0;
@@ -3348,6 +3366,15 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-imu-yaw-correction-smooth", runtime_controller_imu_yaw_correction_smooth,
                  "Use rate-limited complementary yaw correction; false selects legacy periodic correction")
       ->envname("RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_SMOOTH");
+  app.add_option("--runtime-controller-imu-yaw-max-source-age-ms", runtime_controller_imu_yaw_max_source_age_ms,
+                 "Maximum age of source-time-matched yaw evidence and smooth targets in milliseconds")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_MAX_SOURCE_AGE_MS")->check(CLI::Range(1.0, 1000.0));
+  app.add_option("--runtime-controller-imu-yaw-reference-stable-ms", runtime_controller_imu_yaw_reference_stable_ms,
+                 "Source-time confirmation duration for a new presentation yaw frame")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_REFERENCE_STABLE_MS")->check(CLI::Range(0.0, 5000.0));
+  app.add_option("--runtime-controller-imu-yaw-reference-max-range-deg", runtime_controller_imu_yaw_reference_max_range_deg,
+                 "Maximum yaw range while confirming a new presentation frame")
+      ->envname("RUNTIME_CONTROLLER_IMU_YAW_REFERENCE_MAX_RANGE_DEG")->check(CLI::Range(0.1, 45.0));
   app.add_option("--runtime-controller-imu-yaw-smooth-time-constant-ms", runtime_controller_imu_yaw_smooth_time_constant_ms,
                  "Smooth yaw time constant in milliseconds")
       ->envname("RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_TAU_MS")->check(CLI::Range(1.0, 60000.0));
@@ -3954,7 +3981,10 @@ int main(int argc, char** argv) {
        (runtime_controller_right_imu_acceleration_integration ||
         runtime_controller_right_imu_position_prediction ||
         runtime_controller_right_imu_yaw_correction));
-  if (!std::isfinite(runtime_controller_imu_yaw_smooth_time_constant_ms) ||
+  if (!std::isfinite(runtime_controller_imu_yaw_max_source_age_ms) ||
+      !std::isfinite(runtime_controller_imu_yaw_reference_stable_ms) ||
+      !std::isfinite(runtime_controller_imu_yaw_reference_max_range_deg) ||
+      !std::isfinite(runtime_controller_imu_yaw_smooth_time_constant_ms) ||
       !std::isfinite(runtime_controller_imu_yaw_smooth_max_speed_deg_s) ||
       !std::isfinite(runtime_controller_imu_yaw_smooth_deadband_deg) ||
       !std::isfinite(runtime_controller_imu_yaw_smooth_min_confidence) ||
@@ -4345,6 +4375,9 @@ int main(int argc, char** argv) {
     std::cout << "runtime_controller_imu_prediction_timing_source: runtime_hand_gate_imu_profile\n";
     std::cout << "runtime_controller_imu_yaw_correction_mode: "
               << (runtime_controller_imu_yaw_correction_smooth ? "smooth" : "periodic") << "\n";
+    std::cout << "runtime_controller_imu_yaw_max_source_age_ms: " << runtime_controller_imu_yaw_max_source_age_ms << "\n";
+    std::cout << "runtime_controller_imu_yaw_reference_stable_ms: " << runtime_controller_imu_yaw_reference_stable_ms << "\n";
+    std::cout << "runtime_controller_imu_yaw_reference_max_range_deg: " << runtime_controller_imu_yaw_reference_max_range_deg << "\n";
     std::cout << "runtime_controller_imu_yaw_smooth_time_constant_ms: " << runtime_controller_imu_yaw_smooth_time_constant_ms << "\n";
     std::cout << "runtime_controller_imu_yaw_smooth_max_speed_deg_s: " << runtime_controller_imu_yaw_smooth_max_speed_deg_s << "\n";
     std::cout << "runtime_controller_imu_yaw_smooth_deadband_deg: " << runtime_controller_imu_yaw_smooth_deadband_deg << "\n";
@@ -5042,6 +5075,9 @@ int main(int argc, char** argv) {
       dst.reacquire_blend_ms = static_cast<float>(
           std::max(0.0, runtime_hand_gate_reacquire_blend_ms_imu));
       dst.yaw_correction_smooth = runtime_controller_imu_yaw_correction_smooth;
+      dst.yaw_max_source_age_ms = static_cast<float>(runtime_controller_imu_yaw_max_source_age_ms);
+      dst.yaw_reference_stable_ms = static_cast<float>(runtime_controller_imu_yaw_reference_stable_ms);
+      dst.yaw_reference_max_range_deg = static_cast<float>(runtime_controller_imu_yaw_reference_max_range_deg);
       dst.yaw_smooth_time_constant_ms = static_cast<float>(runtime_controller_imu_yaw_smooth_time_constant_ms);
       dst.yaw_smooth_max_speed_deg_s = static_cast<float>(runtime_controller_imu_yaw_smooth_max_speed_deg_s);
       dst.yaw_smooth_deadband_deg = static_cast<float>(runtime_controller_imu_yaw_smooth_deadband_deg);
@@ -5087,7 +5123,24 @@ int main(int argc, char** argv) {
         runtime_controller_right_movement_space_imu_value;
 
     override_controller::RuntimeControllerSynthesisState runtime_controller_synthesis_state{};
+    // This summary is deliberately independent of --verbose/--print-every so
+    // a rotated/truncated runtime log can identify the effective algorithm.
+    std::cout << "[xr_runtime_adapter][yaw-config] algorithm=relative_rotation_v2 mode="
+              << (runtime_controller_imu_yaw_correction_smooth ? "smooth" : "periodic")
+              << " max_source_age_ms=" << runtime_controller_imu_yaw_max_source_age_ms
+              << " reference_stable_ms=" << runtime_controller_imu_yaw_reference_stable_ms
+              << " reference_max_range_deg=" << runtime_controller_imu_yaw_reference_max_range_deg
+              << " tau_ms=" << runtime_controller_imu_yaw_smooth_time_constant_ms
+              << " max_speed_deg_s=" << runtime_controller_imu_yaw_smooth_max_speed_deg_s
+              << " deadband_deg=" << runtime_controller_imu_yaw_smooth_deadband_deg
+              << " min_confidence=" << runtime_controller_imu_yaw_smooth_min_confidence
+              << " left_enabled=" << runtime_controller_synthesis_cfg.left_imu_motion.yaw_correction_enabled
+              << " right_enabled=" << runtime_controller_synthesis_cfg.right_imu_motion.yaw_correction_enabled
+              << std::endl;
     bool controller_imu_alignment_status_printed = false;
+    bool controller_yaw_reference_status_printed = false;
+    bool last_left_yaw_ready = false;
+    bool last_right_yaw_ready = false;
     bool last_left_acceleration_yaw_valid = false;
     bool last_right_acceleration_yaw_valid = false;
     bool last_left_translation_yaw_calibrated = false;
@@ -5098,6 +5151,18 @@ int main(int argc, char** argv) {
       const bool right = runtime_controller_synthesis_state.right.acceleration_world_yaw_valid;
       const bool left_translation = runtime_controller_synthesis_state.left.acceleration_translation_yaw_calibrated;
       const bool right_translation = runtime_controller_synthesis_state.right.acceleration_translation_yaw_calibrated;
+      const bool left_yaw_ready = runtime_controller_synthesis_state.left.yaw_correction_valid;
+      const bool right_yaw_ready = runtime_controller_synthesis_state.right.yaw_correction_valid;
+      if (!controller_yaw_reference_status_printed ||
+          left_yaw_ready != last_left_yaw_ready || right_yaw_ready != last_right_yaw_ready) {
+        std::cout << "[xr_runtime_adapter][yaw-reference] controller_left_yaw_ready="
+                  << (left_yaw_ready ? "yes" : "no")
+                  << " controller_right_yaw_ready=" << (right_yaw_ready ? "yes" : "no")
+                  << std::endl;
+        controller_yaw_reference_status_printed = true;
+        last_left_yaw_ready = left_yaw_ready;
+        last_right_yaw_ready = right_yaw_ready;
+      }
       if (controller_imu_alignment_status_printed &&
           left == last_left_acceleration_yaw_valid &&
           right == last_right_acceleration_yaw_valid &&
@@ -6721,6 +6786,12 @@ int main(int argc, char** argv) {
                     << " video_error=" << video_health.last_error
                     << " controller_optical_source_ns="
                     << (raw_optical_yaw_hand ? raw_optical_yaw_hand->source_timestamp_ns : 0)
+                    << " controller_publish_ns="
+                    << (controller_snapshot_for_frame && controller_snapshot_for_frame->latest
+                            ? controller_snapshot_for_frame->latest->timestamp_ns : 0)
+                    << " controller_receive_ns="
+                    << (controller_snapshot_for_frame
+                            ? controller_snapshot_for_frame->latest_receive_timestamp_ns : 0)
                     << " controller_tick_ns=" << frame.read_timestamp_ns;
           std::cout << " hmd_q=(" << frame.hmd.qx << "," << frame.hmd.qy << ","
                     << frame.hmd.qz << "," << frame.hmd.qw << ")";
