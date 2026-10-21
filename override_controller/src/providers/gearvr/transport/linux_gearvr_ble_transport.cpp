@@ -1,6 +1,7 @@
 #include "../gearvr_ble_transport.hpp"
 
 #include "../gearvr_protocol.hpp"
+#include "../gearvr_sensor_session.hpp"
 
 #include <algorithm>
 #include <array>
@@ -418,8 +419,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     uint64_t notification_count = 0;
     uint64_t short_notification_count = 0;
     uint64_t full_sensor_frame_count = 0;
-    uint64_t notifications_started_ns = 0;
-    uint64_t notification_watchdog_ns = 0;
+    SensorSession sensor_session;
     bool full_sensor_frame_logged = false;
     bool connect_pending = false;
     bool managed = false;
@@ -428,8 +428,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
     uint64_t next_connect_ns = 0;
     uint64_t next_keepalive_ns = 0;
     uint64_t next_notify_attempt_ns = 0;
-    uint64_t next_init_command_ns = 0;
-    size_t init_command_index = 0;
     sd_bus_slot* connect_slot = nullptr;
   };
 
@@ -631,13 +629,11 @@ class LinuxGearVrBleTransport final : public BleTransport {
       session.command_path.clear();
       session.notify_flags.clear();
       session.command_flags.clear();
-      session.init_command_index = 0;
+      session.sensor_session.reset();
       session.notification_count = 0;
       session.short_notification_count = 0;
       session.full_sensor_frame_count = 0;
       session.full_sensor_frame_logged = false;
-      session.notifications_started_ns = 0;
-      session.notification_watchdog_ns = 0;
       session.next_notify_attempt_ns = 0;
       session.next_connect_ns = static_cast<uint64_t>(monotonic_now_ns()) +
                                 static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
@@ -895,16 +891,21 @@ class LinuxGearVrBleTransport final : public BleTransport {
                 << session.address << " source=" << source << " size=" << size << "\n";
     }
 
-    // Mode writes can be echoed as a short notification. They are not input
-    // packets. The actual stream is started by the post-subscribe CMD_SENSOR
-    // initialization command; do not answer this echo with CMD_VR_MODE again,
-    // because that stopped this controller after its first 60-byte frame.
+    // Short notifications acknowledge mode application. They are not IMU
+    // samples. VR mode can finish well after its GATT write returned; SENSOR
+    // must follow that acknowledgement rather than race it by a fixed 20 ms.
+    // Defer the write to advance_sessions(), outside the D-Bus callback.
     if (size < 59) {
       ++session.short_notification_count;
       if (session.short_notification_count == 1) {
         std::cerr << "[override_controller][gearvr_ble] short mode response "
                   << session.address << " source=" << source << " size=" << size
                   << " bytes=[" << bytes_to_hex(bytes, size) << "]\n";
+      }
+      if (session.sensor_session.mode_reply(bytes, size,
+              static_cast<uint64_t>(monotonic_now_ns()))) {
+        std::cerr << "[override_controller][gearvr_ble] VR mode acknowledged "
+                  << session.address << "; SENSOR start scheduled\n";
       }
       return;
     }
@@ -918,6 +919,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
     BlePacket packet;
     packet.stable_id = session.stable_id;
     packet.timestamp_ns = static_cast<uint64_t>(monotonic_now_ns());
+    session.sensor_session.sensor_frame(packet.timestamp_ns);
     packet.bytes.assign(bytes, bytes + size);
     pending_packets_.push_back(std::move(packet));
   }
@@ -975,10 +977,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
     session.notify_mtu = mtu;
     session.notify_uses_fd = true;
     session.notifications_started = true;
-    session.notifications_started_ns = static_cast<uint64_t>(monotonic_now_ns());
-    session.notification_watchdog_ns = session.notifications_started_ns + 2'000'000'000ull;
-    session.init_command_index = 0;
-    session.next_init_command_ns = static_cast<uint64_t>(monotonic_now_ns());
     std::cerr << "[override_controller][gearvr_ble] notifications acquired "
               << session.address << " mtu=" << mtu << "\n";
     return true;
@@ -997,10 +995,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
     }
     session.notify_uses_fd = false;
     session.notifications_started = true;
-    session.notifications_started_ns = static_cast<uint64_t>(monotonic_now_ns());
-    session.notification_watchdog_ns = session.notifications_started_ns + 2'000'000'000ull;
-    session.init_command_index = 0;
-    session.next_init_command_ns = static_cast<uint64_t>(monotonic_now_ns());
     std::cerr << "[override_controller][gearvr_ble] D-Bus notifications started "
               << session.address << "\n";
     return true;
@@ -1084,14 +1078,14 @@ class LinuxGearVrBleTransport final : public BleTransport {
       }
       if (session.services_resolved && !session.notify_path.empty() &&
           !session.command_path.empty()) {
-        // gearVRC's proven connection flow enables sensor/VR mode before it
-        // subscribes. Keep the post-subscribe initialization sequence too, but
-        // send one early VR-mode command so controllers that gate CCCD traffic
-        // until the sensor is running start producing packets reliably.
+        // Prime VR mode before subscribing for firmware compatibility. Wait for
+        // its protocol ack before SENSOR; if an early ack was missed during
+        // subscription, use the bounded no-ack fallback in SensorSession.
         if (!session.pre_notify_mode_sent) {
           if (now_ns < session.next_notify_attempt_ns) continue;
           if (write_command(session, kCommandVrMode)) {
             session.pre_notify_mode_sent = true;
+            session.sensor_session.mode_requested(static_cast<uint64_t>(monotonic_now_ns()));
             session.next_notify_attempt_ns = now_ns + kInitCommandGapNs;
           } else {
             session.next_notify_attempt_ns = now_ns +
@@ -1108,8 +1102,8 @@ class LinuxGearVrBleTransport final : public BleTransport {
           }
         }
 
-        if (session.notifications_started && session.full_sensor_frame_count == 0 &&
-            session.notification_watchdog_ns != 0 && now_ns >= session.notification_watchdog_ns) {
+        const auto sensor_action = session.sensor_session.next_action(now_ns);
+        if (sensor_action == SensorSession::Action::RestartNotifications) {
           const bool was_fd = session.notify_uses_fd;
           if (was_fd) {
             close_notify_channel(session);
@@ -1123,37 +1117,37 @@ class LinuxGearVrBleTransport final : public BleTransport {
             session.force_fd_notify = true;
           }
           session.notifications_started = false;
-          session.notifications_started_ns = 0;
-          session.notification_watchdog_ns = 0;
+          session.sensor_session.reset();
           session.pre_notify_mode_sent = false;
-          session.init_command_index = 0;
           session.notification_count = 0;
           session.short_notification_count = 0;
           session.full_sensor_frame_count = 0;
           session.full_sensor_frame_logged = false;
           session.next_notify_attempt_ns = now_ns + 100'000'000ull;
           std::cerr << "[override_controller][gearvr_ble][WARN] " << session.address
-                    << ": no sensor packets after notification setup; switching from "
+                    << ": sensor stream remains silent after SENSOR retry; switching from "
                     << (was_fd ? "AcquireNotify" : "StartNotify") << " path\n";
           continue;
         }
 
-        const auto& commands = initialization_commands();
-        if (session.init_command_index < commands.size() &&
-            now_ns >= session.next_init_command_ns) {
-          if (write_command(session, commands[session.init_command_index])) {
-            ++session.init_command_index;
-            session.next_init_command_ns = now_ns + kInitCommandGapNs;
-            if (session.init_command_index == commands.size()) {
-              std::cerr << "[override_controller][gearvr_ble] sensor stream initialized "
-                        << session.address << " (VR primed, SENSOR started)\n";
-            }
+        if (sensor_action == SensorSession::Action::StartSensor) {
+          const bool was_started = session.sensor_session.sensor_started();
+          const auto generation = session.sensor_session.request_generation();
+          if (write_command(session, kCommandSensor)) {
+            session.sensor_session.sensor_write_succeeded(
+                static_cast<uint64_t>(monotonic_now_ns()), generation);
+            std::cerr << "[override_controller][gearvr_ble] "
+                      << (was_started ? "sensor stream restart requested " : "sensor stream initialized ")
+                      << session.address
+                      << (session.sensor_session.mode_ack_seen() ? " (VR acked, SENSOR started)\n" :
+                          " (VR ack timeout, SENSOR fallback)\n");
           } else {
-            session.next_init_command_ns = now_ns +
-                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull;
+            session.sensor_session.sensor_write_failed(
+                static_cast<uint64_t>(monotonic_now_ns()),
+                static_cast<uint64_t>(options_.reconnect_ms) * 1'000'000ull);
           }
         }
-        if (session.init_command_index == commands.size() &&
+        if (session.sensor_session.sensor_started() &&
             now_ns >= session.next_keepalive_ns) {
           (void)write_command(session, kCommandKeepAlive);
           session.next_keepalive_ns = now_ns + kKeepAliveNs;
@@ -1174,7 +1168,6 @@ class LinuxGearVrBleTransport final : public BleTransport {
       timeout = std::min(timeout, ms);
     };
     shorten(next_refresh_ns_);
-    const auto &commands = initialization_commands();
     for (const auto &[id, session]: sessions_) {
       if (!session->connected) {
         // An in-flight Connect completes through D-Bus. Its already-expired
@@ -1191,15 +1184,10 @@ class LinuxGearVrBleTransport final : public BleTransport {
       if (!session->pre_notify_mode_sent || !session->notifications_started) {
         shorten(session->next_notify_attempt_ns);
       }
-      if (session->notifications_started &&
-          session->full_sensor_frame_count == 0) {
-        shorten(session->notification_watchdog_ns);
+      if (session->notifications_started) {
+        shorten(session->sensor_session.next_deadline_ns());
       }
-      if (session->notifications_started &&
-          session->init_command_index < commands.size()) {
-        shorten(session->next_init_command_ns);
-      }
-      if (session->init_command_index == commands.size()) {
+      if (session->sensor_session.sensor_started()) {
         shorten(session->next_keepalive_ns);
       }
     }

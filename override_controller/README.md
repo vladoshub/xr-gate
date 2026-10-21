@@ -14,6 +14,15 @@ Supported input providers:
 Gear VR sensor timestamps, buffered IMU delivery and collection settings are
 described in [Gear VR IMU timing](docs/gearvr_imu_timing.md).
 
+Linux Gear VR startup waits for the VR-mode `08 00` notification before sending
+SENSOR, with a three-second fallback for firmware that does not expose the ack.
+GATT write completion alone does not signal mode application. A sensor packet
+refreshes a two-second liveness deadline throughout the connection: a stalled
+stream gets one SENSOR retry, followed by notification-path recovery if it stays
+silent. Short control replies do not refresh IMU liveness or enter pose decoding.
+The protocol/timing and native BlueZ lifecycle tests run in **Controller input tests**;
+that workflow also publishes an Ubuntu 24.04 WSL hotfix with backup/rollback support.
+
 ## Main stream
 
 ```text

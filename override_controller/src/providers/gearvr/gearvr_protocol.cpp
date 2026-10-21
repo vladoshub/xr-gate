@@ -69,9 +69,9 @@ std::optional<DecodedPacket> decode_packet(const uint8_t* data, size_t size) {
 
 const std::array<Command, 1>& initialization_commands() {
   // Linux transport primes VR mode before notification subscription. Once the
-  // CCC descriptor is active, CMD_SENSOR starts the continuous 60-byte stream.
-  // Sending CMD_VR_MODE again after CMD_SENSOR stopped the tested controllers
-  // after one frame, so SENSOR must be the final initialization write.
+  // CCC descriptor is active and VR mode is acknowledged (or its bounded wait
+  // expires), CMD_SENSOR starts the continuous stream. SENSOR must follow mode
+  // application, not only the GATT write response. Never reply to an ack with VR.
   static const std::array<Command, 1> commands{kCommandSensor};
   return commands;
 }

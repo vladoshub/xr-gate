@@ -149,6 +149,7 @@ install(FILES
 option(OVERRIDE_CONTROLLER_BUILD_TESTS "Build override_controller protocol tests" OFF)
 if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   enable_testing()
+  add_executable(gearvr_sensor_session_test tests/gearvr_sensor_session_test.cpp)
   add_executable(serial_imu_clock_test tests/serial_imu_clock_test.cpp)
   target_include_directories(serial_imu_clock_test PRIVATE "${XR_SHARED_INCLUDE_DIR}")
   add_test(NAME serial_imu_clock_test COMMAND serial_imu_clock_test)
@@ -178,6 +179,10 @@ if(OVERRIDE_CONTROLLER_BUILD_TESTS)
   add_test(NAME controller_imu_calibration_test COMMAND controller_imu_calibration_test)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
+    if(UNIX AND NOT APPLE)
+      add_test(NAME controller_hotfix_installer_test
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/hotfix_installer_test.py")
+    endif()
     add_test(NAME calibrate_controller_accelerometer_test
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/calibrate_controller_accelerometer_test.py")
     if(UNIX AND NOT APPLE)
