@@ -1,5 +1,6 @@
 # Windows Launcher 1.1.0
 
+- Keep expected administrator-fixture failures out of the CI shell's LASTEXITCODE, and keep firmware contract tests independent of real WSL distributions.
 - Correct GitHub JSON-array handling in CI and installer runtime selection. Missing release lookup no longer blocks an independent Windows build.
 - Enable Bluetooth label, project link and configurable XR_DEVICE_NAME in the header.
 - Read-only CONNECTED / NOT CONNECTED / SHARED USB status.

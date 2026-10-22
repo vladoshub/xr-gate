@@ -56,6 +56,7 @@ try {
 
     # Execute the real encoded elevated-command body in a child PowerShell,
     # replacing only UAC and the prerequisite script with a harmless fixture.
+    $parentExitCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction SilentlyContinue
     $script:Self = Join-Path $temporary ("admin O'Brien " + $unicode + '.ps1')
     $fixture = @'
 param([string]$Action,[string]$AdminTask,[switch]$Launcher,[string]$ResultPath,[string[]]$BindBusId)
@@ -68,8 +69,13 @@ exit $code
     function Start-Process {
         param([string]$FilePath,[string]$Verb,[switch]$Wait,[switch]$PassThru,[string[]]$ArgumentList)
         Assert ($Verb -eq 'RunAs') 'The fixture no longer exercises the UAC invocation.'
-        & $shell @ArgumentList
-        return [pscustomobject]@{ExitCode=$LASTEXITCODE}
+        # Match the real Start-Process exit-code contract. Calling the child
+        # with & leaks its intentionally nonzero exit into LASTEXITCODE, which
+        # GitHub Actions then treats as the result of the successful test step.
+        $process = Microsoft.PowerShell.Management\Start-Process -FilePath $shell -NoNewWindow -Wait -PassThru `
+            -ArgumentList (@('-OutputFormat','Text') + $ArgumentList)
+        try { return [pscustomobject]@{ExitCode=$process.ExitCode} }
+        finally { $process.Dispose() }
     }
     foreach ($code in @(0,20)) {
         $env:XR_GATE_ADMIN_FIXTURE_CODE = [string]$code
@@ -82,6 +88,7 @@ exit $code
     catch { $rejected = $_.Exception.Message.Contains('fixture administrator detail') }
     Assert $rejected 'The administrator failure lost its structured error detail.'
     Assert (@(Get-ChildItem -LiteralPath $temporary -Filter 'admin-result-*').Count -eq 0) 'Administrator result files were not cleaned up.'
+    Assert ((Get-Variable LASTEXITCODE -ValueOnly -ErrorAction SilentlyContinue) -eq $parentExitCode) 'The administrator fixture leaked its native exit code into the caller.'
     'OK real driver JSON, UTF-8 state, actual OpenVR registration and administrator exit/result contract'
 } finally {
     Remove-Item Function:Start-Process -ErrorAction SilentlyContinue

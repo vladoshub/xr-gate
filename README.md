@@ -771,7 +771,7 @@ Check /readme/xrizer.md
 ---
 
 
-# Build:
+# Linux build:
 
 Clone:
 ```bash
