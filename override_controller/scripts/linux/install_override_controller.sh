@@ -136,6 +136,11 @@ cmake --build "$BUILD_DIR" --target override_controller -j"$BUILD_JOBS"
 
 cp "$BUILD_DIR/override_controller" "$INSTALL_BIN_DIR/override_controller"
 chmod +x "$INSTALL_BIN_DIR/override_controller"
+mkdir -p "$ROOT_PROJECT/bin/scripts/override_controller"
+for helper in bluetooth_controllers.py select_bluetooth_adapter.py; do
+  cp "$BACKEND_DIR/scripts/linux/$helper" "$ROOT_PROJECT/bin/scripts/override_controller/$helper"
+  chmod +x "$ROOT_PROJECT/bin/scripts/override_controller/$helper"
+done
 
 CONFIGS_SRC_DIR="$BACKEND_DIR/configs"
 if [[ -d "$CONFIGS_SRC_DIR" ]]; then

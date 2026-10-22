@@ -545,6 +545,12 @@ copy_runtime_scripts() {
   copy_runtime_file \
     "$XR_ROOT_PROJECT/override_controller/scripts/linux/start_override_controller.sh" \
     "$XR_OUT_BIN_ROOT/scripts/override_controller/start_override_controller.sh"
+  copy_runtime_file \
+    "$XR_ROOT_PROJECT/override_controller/scripts/linux/bluetooth_controllers.py" \
+    "$XR_OUT_BIN_ROOT/scripts/override_controller/bluetooth_controllers.py"
+  copy_runtime_file \
+    "$XR_ROOT_PROJECT/override_controller/scripts/linux/select_bluetooth_adapter.py" \
+    "$XR_OUT_BIN_ROOT/scripts/override_controller/select_bluetooth_adapter.py"
 
   copy_runtime_file \
     "$XR_ROOT_PROJECT/bridges/scripts/linux/start_capture_net_bridge.sh" \
@@ -848,6 +854,19 @@ The generic dependency installer is:
 
 Mercury hand-tracking models remain a separately distributed optional artifact.
 Install them into `bin/hand-tracking-models/mercury`.
+
+To select a Bluetooth adapter by hardware model and MAC without unplugging it,
+stop XR Gate/controller capture and run:
+
+```bash
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py
+```
+
+The selector enables the chosen adapter before disabling the others (disconnecting
+their devices). Enter cancels. Use `--list` for inventory without changes, or
+`--adapter <MAC>` for a known selection. Rerun after reboot/hotplug if needed;
+pairings are not transferred between adapters. If access is denied, rerun with
+`sudo`. Requires Python 3, BlueZ and `busctl`; udev supplies extra model details.
 EOF2
 
 if package_include_xrizer_helpers; then
@@ -900,6 +919,7 @@ required=(
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_service_cpp"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_tcp_probe"
   "$XR_OUT_BIN_ROOT/scripts/capture_service_cpp/start_capture_service_cpp.sh"
+  "$XR_OUT_BIN_ROOT/scripts/override_controller/select_bluetooth_adapter.py"
   "$XR_OUT_BIN_ROOT/python/capture_client/client.py"
   "$XR_OUT_BIN_ROOT/python-runtime/env.sh"
   "$XR_OUT_BIN_ROOT/python-runtime/venv/bin/python"

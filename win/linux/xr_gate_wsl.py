@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import configparser
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -12,12 +13,14 @@ import platform
 import pwd
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -50,8 +53,17 @@ def log(message):
     print("[XR Gate WSL] " + message, flush=True)
 
 
-def run(args, *, env=None, check=True):
-    return subprocess.run([str(x) for x in args], env=env, check=check)
+def run(args, *, env=None, check=True, timeout=None):
+    return subprocess.run([str(x) for x in args], env=env, check=check, timeout=timeout)
+
+
+def run_diagnostic(args):
+    command = " ".join(str(x) for x in args)
+    log("Checking: " + command)
+    try:
+        run(args, check=False, timeout=10)
+    except subprocess.TimeoutExpired:
+        log("WARNING: diagnostic timed out after 10 seconds: " + command)
 
 
 def decode_request(value):
@@ -62,6 +74,118 @@ def decode_request(value):
     if not re.fullmatch(r"[a-z_][a-z0-9_-]*[$]?", user) or user == "root":
         raise ValueError("A regular Linux user is required.")
     return data
+
+
+def process_identity(pid):
+    """Use the boot ID and kernel start time, never just a reusable numeric PID."""
+    validate_proc_namespace()
+    if type(pid) is not int or pid <= 1:
+        raise ValueError("Invalid managed runtime PID.")
+    process = Path("/proc") / str(pid)
+    fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
+    return {"pid": pid, "start_ticks": fields[19],
+            "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            "uid": process.stat().st_uid}
+
+
+def validate_proc_namespace():
+    if int(Path("/proc/self/stat").read_text().split(" ", 1)[0]) != os.getpid():
+        raise RuntimeError("/proc belongs to a different PID namespace; refusing unsafe process management.")
+
+
+def owned_processes(session):
+    """Find this session's descendants, including detached service groups."""
+    validate_proc_namespace()
+    token = session.get("session_id", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", token) or session.get("uid") != os.geteuid():
+        raise ValueError("Invalid managed session ownership metadata.")
+    if session.get("boot_id") != Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        return []
+    marker = ("XR_GATE_SESSION_ID=" + token).encode()
+    result = []
+    for path in Path("/proc").iterdir():
+        if not path.name.isdigit():
+            continue
+        try:
+            if path.stat().st_uid != os.geteuid():
+                continue
+            if marker not in (path / "environ").read_bytes().split(b"\0"):
+                continue
+            fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+            if fields[0] != "Z":
+                result.append(process_identity(int(path.name)))
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+    return result
+
+
+def signal_identity(identity, signum):
+    """Pin the PID before checking start time; never signal a reused PID."""
+    try:
+        descriptor = os.pidfd_open(identity["pid"])
+        try:
+            current = process_identity(identity["pid"])
+            if any(current.get(key) != identity.get(key) for key in current) or current["uid"] != os.geteuid():
+                raise RuntimeError("The recorded PID belongs to a different process; refusing to signal it.")
+            signal.pidfd_send_signal(descriptor, signum)
+        finally:
+            os.close(descriptor)
+    except (ProcessLookupError, FileNotFoundError):
+        return
+
+
+def wait_owned(session, seconds):
+    deadline = time.monotonic() + seconds
+    while owned_processes(session):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
+def supervise_runtime(args, env, session, graceful_seconds=30):
+    """Keep the lock in a supervisor until every owned service has exited."""
+    # Adopt orphaned grandchildren instead of leaving zombies in WSL's PID 1.
+    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "Cannot supervise runtime descendants")
+    stopping = False
+    def request_stop(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+    previous = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    child = None
+    try:
+        child = subprocess.Popen(args, env=dict(env, XR_GATE_SESSION_ID=session["session_id"]), start_new_session=True)
+        child_identity = process_identity(child.pid)
+        while child.poll() is None and not stopping:
+            time.sleep(0.1)
+        if child.poll() is None:
+            signal_identity(child_identity, signal.SIGTERM)
+            try:
+                child.wait(timeout=graceful_seconds)
+            except subprocess.TimeoutExpired:
+                log("Runtime shutdown exceeded its grace period; stopping the remaining owned services.")
+        # xr_client normally cleans its own groups/BLE links. Also handle an
+        # exited launcher with surviving children, and services ignoring TERM.
+        for identity in owned_processes(session):
+            signal_identity(identity, signal.SIGTERM)
+        if not wait_owned(session, 3):
+            for identity in owned_processes(session):
+                signal_identity(identity, signal.SIGKILL)
+        if not wait_owned(session, 3):
+            raise RuntimeError("Owned runtime processes are still alive; USB must remain attached.")
+        if child.poll() is None:
+            child.wait(timeout=3)
+        while True:
+            try:
+                if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                    break
+            except ChildProcessError:
+                break
+        return child.returncode
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def configure_windows_display(request):
@@ -163,9 +287,10 @@ class Runtime:
         folder = self.settings.get("XR_LINUX_ROOT", "~/xr-gate-wsl")
         if folder.startswith("~/"):
             folder = str(Path(self.account.pw_dir) / folder[2:])
-        self.base = Path(folder)
-        if not self.base.is_absolute() or self.base == Path("/"):
+        if not Path(folder).is_absolute():
             raise ValueError("XR_LINUX_ROOT must be an absolute path or start with ~/.")
+        self.base = Path(folder).resolve()
+        self.validate_base()
         self.current = self.base / "current"
         self.config = self.base / "config"
         self.lock = self.base / "runtime.lock"
@@ -173,6 +298,11 @@ class Runtime:
     def root_required(self):
         if os.geteuid() != 0:
             raise RuntimeError("This setup operation requires root inside the selected WSL distro.")
+        self.validate_base()
+
+    def validate_base(self):
+        if not self.base.is_absolute() or self.base.resolve() == Path("/"):
+            raise ValueError("XR_LINUX_ROOT must not resolve to the Linux filesystem root.")
 
     def user_required(self):
         if os.geteuid() != self.account.pw_uid:
@@ -183,6 +313,9 @@ class Runtime:
             os.chown(path, self.account.pw_uid, self.account.pw_gid, follow_symlinks=False)
 
     def directory(self, path):
+        self.validate_base()
+        if path.resolve() == Path("/"):
+            raise ValueError("Refusing to create or change ownership of the filesystem root.")
         path.mkdir(parents=True, exist_ok=True)
         self.own(path)
 
@@ -212,14 +345,24 @@ class Runtime:
 
     def status(self):
         running = False
+        kind = "runtime"
         if self.lock.exists():
             with self.lock.open("a+") as handle:
                 try:
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     running = True
+        session = self.base / "runtime-session.json"
+        try:
+            saved = json.loads(session.read_text())
+            kind = saved.get("session_kind", "runtime")
+            if saved.get("session_id"):
+                running = running or bool(owned_processes(saved))
+        except FileNotFoundError:
+            pass
         return {"installed": (self.current / "run_xr_client.sh").is_file(),
-                "running": running, "root": str(self.current.resolve())}
+                "running": running and kind == "runtime", "busy": running,
+                "session_kind": kind if running else "", "root": str(self.current.resolve())}
 
     @staticmethod
     def ensure_systemd(path=Path("/etc/wsl.conf"), init_name=None):
@@ -285,11 +428,11 @@ class Runtime:
         with self.acquire_lock():
             env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
             run(["apt-get", "update"], env=env)
-            packages = ["ca-certificates", "python3", "python3-venv", "util-linux",
+            packages = ["ca-certificates", "python3", "python3-venv", "util-linux", "kmod",
                         "acl", "usbutils", "v4l-utils", "udev", "bluez", "rfkill"]
-            if self.cfg.get("bluetooth") or self.cfg.get("gearvr"):
-                packages.append("linux-firmware")
             run(["apt-get", "install", "-y", "--no-install-recommends", *packages], env=env)
+            if self.cfg.get("bluetooth") or self.cfg.get("gearvr"):
+                self.firmware("install")
             runtime_archive = Path(self.cfg["runtime_archive"])
             models_archive = Path(self.cfg["models_archive"])
             runtime_hash = self.cfg["runtime_sha256"].lower()
@@ -438,7 +581,47 @@ class Runtime:
             run(["setfacl", "-m", f"u:{self.user}:rw", node])
         log("Selected USB/input device access granted to " + self.user)
         if self.cfg.get("bluetooth"):
-            run(["bluetoothctl", "list"])
+            self.wait_for_bluetooth()
+
+    def firmware(self, operation, *, capture=False, timeout=None):
+        helper = Path(__file__).with_name("wsl_firmware.py")
+        if not helper.is_file():
+            raise FileNotFoundError("Extract the complete updated Windows archive, including linux/wsl_firmware.py.")
+        request = base64.b64encode(json.dumps(self.cfg).encode()).decode("ascii")
+        args = [sys.executable, str(helper), operation, request]
+        if capture:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
+            return json.loads(result.stdout)
+        run(args, timeout=timeout)
+
+    def wait_for_bluetooth(self):
+        seconds = integer_setting(self.settings, "XR_BLUETOOTH_READY_TIMEOUT", 1, 120)
+        deadline = time.monotonic() + seconds
+        last_error = "No HCI controller is available."
+        while time.monotonic() < deadline:
+            try:
+                if self.cfg.get("bluetooth_usb_id"):
+                    state = self.firmware("status", capture=True, timeout=min(3, max(0.05, deadline - time.monotonic())))
+                    if state["ready"]:
+                        log("Selected Bluetooth HCI controller is ready: " + state["address"])
+                        return
+                    last_error = "The selected USB dongle has no ready BlueZ HCI controller."
+                    time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+                    continue
+                result = subprocess.run(["bluetoothctl", "list"], capture_output=True, text=True,
+                                        env=dict(os.environ, LC_ALL="C"), check=False,
+                                        timeout=min(3, max(0.05, deadline - time.monotonic())))
+                if result.returncode == 0 and re.search(r"(?m)^Controller\s+[0-9A-Fa-f:]{17}\s", result.stdout):
+                    print(result.stdout.strip(), flush=True)
+                    log("Bluetooth HCI controller is ready.")
+                    return
+                last_error = result.stderr.strip() or "bluetoothctl list returned no HCI controller."
+            except subprocess.TimeoutExpired:
+                last_error = "bluetoothctl list timed out."
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+        raise RuntimeError(f"Bluetooth is enabled but no controller became ready in {seconds}s. "
+                           f"{last_error} Check the selected USB dongle, kernel module, firmware and bluetooth.service. "
+                           "If Bluetooth is not needed, disable it in Settings (XR_BLUETOOTH=0).")
 
     def controller_template(self, package):
         name = self.settings.get("XR_GEARVR_TEMPLATE", "")
@@ -479,12 +662,12 @@ class Runtime:
             host = self.settings.get("XR_TCP_HOST", "127.0.0.1")
             port = integer_setting(self.settings, "XR_TCP_PORT")
             with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind((host, port))
         except OSError as exc:
             raise RuntimeError("The configured TCP port is occupied. Stop the other runtime before starting this one.") from exc
-        os.set_inheritable(handle.fileno(), True)
-        # Keep the lock alive when Python replaces itself with the shell launcher.
-        self._session_lock = handle
+        # Only the supervisor owns this lock. Child lifetime is checked separately.
+        os.set_inheritable(handle.fileno(), False)
         package = self.current.resolve()
         option = self.cfg.get("display_option", "current")
         if option not in ("current", "60hz", "90hz", "prompt"):
@@ -493,16 +676,127 @@ class Runtime:
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+        if self.settings.get("XR_HMD_MAX_AGE_MS"):
+            age_ms = integer_setting(self.settings, "XR_HMD_MAX_AGE_MS", maximum=5000)
+            env["MAX_HMD_AGE_MS"] = str(age_ms)
+            log(f"HMD source max age: {age_ms} ms (this does not reduce capture latency).")
         args = ["bash", str(package / "run_xr_client.sh"), "--config", str(profile),
                 "--root", str(package), "--prestart-option", option]
         os.chdir(package)
         log(f"Application TCP: {host}:{port}")
         log("Stop with Ctrl+C in this console. Startup gate and calibration stay enabled.")
-        os.execvpe(args[0], args, env)
+        self.run_managed(args, env, handle=handle)
+
+    def run_managed(self, args, env, *, handle=None, kind="runtime"):
+        if handle is None:
+            handle = self.acquire_lock()
+        session = dict(process_identity(os.getpid()), session_id=uuid.uuid4().hex, session_kind=kind)
+        session_path = self.base / "runtime-session.json"
+        self.write(session_path, json.dumps(session) + "\n")
+        try:
+            code = supervise_runtime(args, env, session, graceful_seconds=30 if kind == "runtime" else 2)
+            if code and (kind != "runtime" or code not in (-signal.SIGTERM, -signal.SIGINT, 130, 143)):
+                raise RuntimeError("xr_client exited with code " + str(code))
+            return code
+        finally:
+            # If cleanup failed, keep metadata so Stop can recover the exact
+            # owned descendants even after this supervisor exits.
+            if not owned_processes(session):
+                session_path.unlink(missing_ok=True)
+            handle.close()
+
+    def stop(self):
+        self.user_required()
+        session = self.base / "runtime-session.json"
+        status = self.status()
+        if not status.get("busy", status["running"]):
+            log("The managed XR Gate runtime is already stopped.")
+            return
+        if not session.is_file():
+            raise RuntimeError("This runtime was started by an older launcher. Stop it with Ctrl+C in its console.")
+        saved = json.loads(session.read_text())
+        if saved.get("session_id"):
+            owned_processes(saved)  # Validate ownership before signalling anything.
+            log("Stopping the managed runtime and waiting for all owned services...")
+            try:
+                signal_identity(saved, signal.SIGTERM)
+            except RuntimeError:
+                # A dead supervisor's PID may have been reused. The unique
+                # descendant token remains authoritative for orphan recovery.
+                log("The supervisor has exited; recovering its owned descendants.")
+            if not self._lock_held():
+                for identity in owned_processes(saved):
+                    signal_identity(identity, signal.SIGTERM)
+            deadline = time.monotonic() + 40
+            while self.status().get("busy", False):
+                if time.monotonic() >= deadline:
+                    for identity in owned_processes(saved):
+                        signal_identity(identity, signal.SIGKILL)
+                    if not wait_owned(saved, 3) or self.status().get("busy", False):
+                        raise RuntimeError("Runtime cleanup is incomplete. USB remains attached; retry Stop.")
+                    break
+                time.sleep(0.1)
+            if session.is_file() and json.loads(session.read_text()) == saved:
+                session.unlink()
+            log("All managed runtime services stopped.")
+            return
+        pid = saved.get("pid")
+        try:
+            descriptor = os.pidfd_open(pid)
+        except ProcessLookupError:
+            raise RuntimeError("The recorded runtime exited but its lock is still held. Check the tracking console.") from None
+        try:
+            if saved != process_identity(pid) or saved["uid"] != os.geteuid():
+                raise RuntimeError("The recorded PID belongs to a different process. Refusing to signal it.")
+            log("Stopping the managed runtime and waiting for service/BLE cleanup...")
+            signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+        finally:
+            os.close(descriptor)
+        deadline = time.monotonic() + 30
+        while self.status()["running"]:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Runtime cleanup did not finish in 30 seconds. USB remains attached; check the tracking console.")
+            time.sleep(0.1)
+        # A successful stop releases the lock before Windows returns USB devices.
+        if session.is_file() and json.loads(session.read_text()) == saved:
+            session.unlink()
+        log("Managed runtime stopped.")
+
+    def _lock_held(self):
+        if not self.lock.exists():
+            return False
+        with self.lock.open("a+") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return False
+            except BlockingIOError:
+                return True
+
+    def bluetooth_controllers(self, scan=False):
+        self.user_required()
+        if self.status().get("busy", False):
+            raise RuntimeError("Stop tracking before selecting or pairing controllers.")
+        package = self.current.resolve()
+        helper = package / "bin/scripts/override_controller/bluetooth_controllers.py"
+        if not helper.is_file():
+            helper = Path(__file__).with_name("bluetooth_controllers.py")
+        if not helper.is_file():
+            helper = Path(__file__).resolve().parents[2] / "override_controller/scripts/linux/bluetooth_controllers.py"
+        if not helper.is_file():
+            raise FileNotFoundError("Bluetooth controller helper is missing; extract the complete Windows package.")
+        destination = self.config / "override_controller.json"
+        args = [sys.executable, str(helper), "--config", str(destination), "--template", str(self.controller_template(package))]
+        if scan:
+            args += ["--scan", "--scan-seconds", str(integer_setting(self.settings, "XR_BLUETOOTH_SCAN_SECONDS", maximum=30))]
+        elif "left_controller" in self.cfg or "right_controller" in self.cfg:
+            args += ["--left", self.cfg.get("left_controller") or "none", "--right", self.cfg.get("right_controller") or "none"]
+        self.run_managed(args, dict(os.environ), kind="bluetooth_scan" if scan else "bluetooth_pair")
+        if not scan:
+            self.write(self.config / "controllers-ready", "bluetooth-selected\n")
 
     def controllers(self):
         self.user_required()
-        if self.status()["running"]:
+        if self.status().get("busy", False):
             raise RuntimeError("Stop xr_client before registering controllers.")
         destination = self.config / "override_controller.json"
         package = self.current.resolve()
@@ -513,8 +807,8 @@ class Runtime:
             args.append("--connect-devices")
         env = dict(os.environ, ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package),
                    CONFIG_PATH=str(destination), PROVIDERS=self.settings.get("XR_GEARVR_CONNECT_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
-                   GEARVR_INITIAL_SCAN_MS="10000")
-        run(args, env=env)
+                   GEARVR_INITIAL_SCAN_MS=str(integer_setting(self.settings, "XR_CONTROLLER_INITIAL_SCAN_MS", 1, 600000)))
+        self.run_managed(args, env, kind="controllers")
         if not destination.is_file():
             raise RuntimeError("Controller config was not saved; registration is incomplete.")
         self.write(self.config / "controllers-ready", "registered\n")
@@ -527,13 +821,13 @@ class Runtime:
         for cmd in (["lsusb"], ["bluetoothctl", "list"], ["rfkill", "list"],
                     ["systemctl", "--no-pager", "status", "bluetooth"]):
             if shutil.which(cmd[0]):
-                run(cmd, check=False)
+                run_diagnostic(cmd)
         for pattern in ("video*", "hidraw*"):
             for path in sorted(Path("/dev").glob(pattern)):
                 log(str(path) + " readable=" + str(os.access(path, os.R_OK)))
         if (self.current / "devices/common/linux/scripts/runtime/cpu_target.py").is_file():
-            run(["python3", self.current / "devices/common/linux/scripts/runtime/cpu_target.py",
-                 "check", self.current], check=False)
+            run_diagnostic(["python3", self.current / "devices/common/linux/scripts/runtime/cpu_target.py",
+                            "check", self.current])
 
 
 def main(argv):
@@ -547,13 +841,19 @@ def main(argv):
         return runtime.install()
     elif action == "prepare":
         runtime.prepare()
+    elif action == "firmware":
+        runtime.root_required()
+        runtime.firmware("prepare")
     elif action == "run":
         runtime.start()
+    elif action == "stop":
+        runtime.stop()
     elif action == "controllers":
         runtime.controllers()
+    elif action == "bluetooth_scan":
+        runtime.bluetooth_controllers(scan=True)
     elif action == "pair":
-        runtime.root_required()
-        os.execvp("bluetoothctl", ["bluetoothctl"])
+        runtime.bluetooth_controllers()
     elif action == "doctor":
         runtime.doctor()
     elif action == "display":

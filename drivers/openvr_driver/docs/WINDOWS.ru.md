@@ -2,6 +2,8 @@
 
 Русский · [English](WINDOWS.en.md)
 
+Управление и совместимость игр: [универсальная схема контроллеров](CONTROLLER_INPUT.ru.md).
+
 Это SteamVR-драйвер для Windows x64. Capture и трекинг XR Gate работают в Linux,
 WSL или Docker, SteamVR и игра — в Windows. Драйвер подключается к серверу
 `xr_gate_app_v1` по TCP **127.0.0.1:45810**. Изображение поступает в XREAL через

@@ -9,25 +9,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Run
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Install','Run','Runtime','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
+    [ValidateSet('Install','Run','Runtime','Stop','Status','DeviceStatus','BluetoothScan','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
     [string]$Action = 'Help',
     [string]$Distribution = '',
     [string]$ReleaseTag = '',
     [Alias('XrealBusId')][string[]]$UsbBusId = @(),
     [string]$BluetoothBusId = '',
+    [string]$BluetoothUsbId = '',
     [switch]$WithoutBluetooth,
     [switch]$GearVR,
     [string]$ControllerConfig = '',
+    [string]$LeftControllerMac = '',
+    [string]$RightControllerMac = '',
     [ValidateRange(0,1000)][int]$FrequencyHz = 0,
     [ValidateSet('','direct','extended_sbs')][string]$DisplayMode = '',
     [ValidateSet('','current','60hz','90hz','prompt')][string]$DisplayOption = '',
     [string]$DisplayName = '',
     [string]$SteamVR = '',
     [switch]$StartSteamVR,
+    [switch]$Launcher,
+    [string]$ResultPath = '',
     [ValidateRange(0,600)][int]$TimeoutSeconds = 0,
     [ValidateSet('Prerequisites','Bind')][string]$AdminTask = 'Prerequisites',
     [string[]]$BindBusId = @()
 )
+if ($Launcher) {
+    $OutputEncoding = [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+    $env:PYTHONIOENCODING = 'utf-8'
+    $ProgressPreference = 'SilentlyContinue'
+}
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:Repo = 'vladoshub/xr-gate'
@@ -41,6 +51,8 @@ if (!$ControllerConfig) { $ControllerConfig = Get-XrSetting 'XR_CONTROLLER_CONFI
 if (!$DisplayName) { $DisplayName = Get-XrSetting 'XR_DISPLAY_NAME' }
 if (!$UsbBusId.Count) { $UsbBusId = @(Get-XrList 'XR_USB_BUS_IDS') }
 if (!$BluetoothBusId) { $BluetoothBusId = Get-XrSetting 'XR_BLUETOOTH_BUS_ID' }
+$script:BluetoothUsbIdExplicit = $PSBoundParameters.ContainsKey('BluetoothUsbId') -and [bool]$BluetoothUsbId
+if (!$PSBoundParameters.ContainsKey('BluetoothUsbId')) { $BluetoothUsbId = Get-XrSetting 'XR_BLUETOOTH_USB_ID' }
 $script:TcpHost = Get-XrSetting 'XR_TCP_HOST' '127.0.0.1'
 $script:TcpPort = Get-XrInteger 'XR_TCP_PORT'
 
@@ -48,7 +60,7 @@ $script:StateDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData
 $script:StateFile = Join-Path $script:StateDir 'state.json'
 $script:State = [ordered]@{
     Distribution = (Get-XrSetting 'XR_DISTRIBUTION'); LinuxUser = ''; ReleaseTag = ''
-    UsbInstanceIds = @(); BluetoothInstanceId = ''
+    UsbInstanceIds = @(); BluetoothInstanceId = ''; AttachedUsbInstanceIds = @()
     FrequencyHz = (Get-XrInteger 'XR_DISPLAY_FREQUENCY_HZ' 1 1000)
     DisplayMode = (Get-XrSetting 'XR_DISPLAY_MODE'); DisplayOption = (Get-XrSetting 'XR_DISPLAY_OPTION')
     GearVR = $false; DriverPath = ''; RegisteredDriver = ''
@@ -56,9 +68,30 @@ $script:State = [ordered]@{
 }
 $script:LinuxExitCode = 0
 $script:LinuxHelperPath = ''
+$script:NextStep = ''
+$script:ActionWarnings = New-Object 'System.Collections.Generic.List[string]'
+$script:ActionData = $null
 . (Join-Path $PSScriptRoot 'windows\Display.ps1')
+. (Join-Path $PSScriptRoot 'windows\DeviceStatus.ps1')
+. (Join-Path $PSScriptRoot 'windows\Driver.ps1')
+. (Join-Path $PSScriptRoot 'windows\Usb.ps1')
 
 function Write-Step([string]$Message) { Write-Host ("[XR Gate] " + $Message) -ForegroundColor Cyan }
+function Write-XrWarning([string]$Message) {
+    $script:ActionWarnings.Add($Message)
+    Write-Warning $Message
+}
+function Complete-XrAction([int]$Code, [string]$Message = '') {
+    if ($ResultPath) {
+        if ($null -eq $script:ActionData) { $script:ActionData = @{distribution=[string]$script:State.Distribution} }
+        $payload = @{exit_code=$Code; next_step=$script:NextStep; message=$Message;
+                     warnings=@($script:ActionWarnings.ToArray()); data=$script:ActionData}
+        $temporary = $ResultPath + '.new'
+        [IO.File]::WriteAllText($temporary, ($payload | ConvertTo-Json -Depth 30), (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temporary -Destination $ResultPath -Force
+    }
+    exit $Code
+}
 function Quote-PsLiteral([string]$Value) { return "'" + $Value.Replace("'", "''") + "'" }
 function To-Base64Json($Value) {
     return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Value | ConvertTo-Json -Depth 40 -Compress)))
@@ -71,7 +104,7 @@ function Save-State {
 }
 function Load-State {
     if (Test-Path -LiteralPath $script:StateFile) {
-        $saved = Get-Content -Raw -LiteralPath $script:StateFile | ConvertFrom-Json
+        $saved = Get-Content -Encoding UTF8 -Raw -LiteralPath $script:StateFile | ConvertFrom-Json
         foreach ($p in $saved.PSObject.Properties) {
             if ($script:State.Contains($p.Name)) { $script:State[$p.Name] = $p.Value }
         }
@@ -85,6 +118,7 @@ function Load-State {
     $mapping = @{XR_DISTRIBUTION='Distribution'; XR_DISPLAY_FREQUENCY_HZ='FrequencyHz';
                  XR_DISPLAY_MODE='DisplayMode'; XR_DISPLAY_OPTION='DisplayOption'}
     foreach ($key in $mapping.Keys) {
+        if ($key -eq 'XR_DISPLAY_FREQUENCY_HZ' -and (Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { continue }
         if ($script:SettingOverrides.ContainsKey($key) -and $script:SettingOverrides[$key] -ne '') {
             $script:State[$mapping[$key]] = $script:SettingOverrides[$key]
         }
@@ -117,6 +151,13 @@ function Get-Tool([string]$Name) {
     throw "$Name was not found. Run -Action Install; reopen PowerShell after installing system tools."
 }
 function Invoke-Native([string]$File, [string[]]$Arguments, [int[]]$AllowedCodes = @(0)) {
+    if ([IO.Path]::GetFileNameWithoutExtension($File) -eq 'usbipd') {
+        Write-Step ('usbipd ' + ($Arguments -join ' '))
+        $result = Invoke-UsbipdCommand -File $File -Arguments $Arguments -StreamOutput
+        $script:NativeExitCode = $result.ExitCode
+        if ($AllowedCodes -notcontains $result.ExitCode) { throw "$File failed (exit $($result.ExitCode))." }
+        return
+    }
     & $File @Arguments | Out-Host
     $script:NativeExitCode = $LASTEXITCODE
     if ($AllowedCodes -notcontains $LASTEXITCODE) { throw "$File failed (exit $LASTEXITCODE)." }
@@ -148,25 +189,47 @@ function Invoke-Linux([string]$Operation, $Request, [switch]$AsRoot, [switch]$Ca
     if ($Capture) { return (($output -join [Environment]::NewLine) -replace '\x00', '').Trim() }
 }
 function New-LinuxRequest {
+    $bluetoothId = ''
+    $identity = [regex]::Match([string]$script:State.BluetoothInstanceId, '(?i)^USB\\VID_([0-9a-f]{4})&PID_([0-9a-f]{4})(?:&[^\\]+)?\\')
+    if ($identity.Success) { $bluetoothId = $identity.Groups[1].Value.ToLowerInvariant() + ':' + $identity.Groups[2].Value.ToLowerInvariant() }
     return @{
         user = [string]$script:State.LinuxUser; gearvr = [bool]$script:State.GearVR
         bluetooth = [bool]$script:State.BluetoothInstanceId
+        bluetooth_usb_id = $bluetoothId
         display_option = [string]$script:State.DisplayOption
         settings = $script:Settings
     }
 }
 function Invoke-Elevated([string]$Task, [string[]]$BusIds = @()) {
+    New-Item -ItemType Directory -Force -Path $script:StateDir | Out-Null
+    $resultFile = Join-Path $script:StateDir ('admin-result-' + [Guid]::NewGuid().ToString('N') + '.json')
     $body = '& ' + (Quote-PsLiteral $script:Self) + ' -Action Admin -AdminTask ' + (Quote-PsLiteral $Task)
+    $body += ' -Launcher -ResultPath ' + (Quote-PsLiteral $resultFile)
     if ($BusIds.Count) {
         foreach ($id in $BusIds) { if ($id -notmatch '^\d+-\d+$') { throw 'Invalid USB BUSID.' } }
         $literals = @($BusIds | ForEach-Object { Quote-PsLiteral $_ })
         $body += ' -BindBusId @(' + ($literals -join ',') + ')'
     }
+    $body += '; exit $LASTEXITCODE'
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))
     Write-Step 'Windows requests administrator rights for this setup step.'
-    $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
-    if ($p.ExitCode -notin @(0,20)) { throw "Administrator step failed (exit $($p.ExitCode))." }
-    return $p.ExitCode
+    try {
+        $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+        if (!(Test-Path -LiteralPath $resultFile -PathType Leaf)) {
+            throw "Administrator step returned no details (exit $($p.ExitCode)). Check the setup console."
+        }
+        $result = Get-Content -Encoding UTF8 -Raw -LiteralPath $resultFile | ConvertFrom-Json
+        if (!$result.PSObject.Properties['exit_code'] -or [int]$result.exit_code -ne $p.ExitCode) {
+            throw 'Administrator result does not match its process exit code.'
+        }
+        foreach ($warning in @($result.warnings)) { Write-XrWarning ([string]$warning) }
+        if ($p.ExitCode -notin @(0,20)) { throw ("Administrator step failed (exit $($p.ExitCode)). " + $result.message) }
+        return $p.ExitCode
+    } finally {
+        foreach ($file in @($resultFile, ($resultFile + '.new'))) {
+            if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
+        }
+    }
 }
 function Invoke-AdminTask {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -221,6 +284,12 @@ function Ensure-Distribution {
         Invoke-Native $wsl @('--set-default-version','2')
         Invoke-Native $wsl @('--install','--distribution',[string]$script:State.Distribution,'--web-download','--no-launch') @(0,3010)
         Save-State
+        if ($script:NativeExitCode -eq 3010) {
+            $script:NextStep = 'restart_windows'
+            Write-Host 'Save work, restart Windows, and run Install again.' -ForegroundColor Yellow
+            return $false
+        }
+        $script:NextStep = 'ubuntu_first_login'
         Write-Step 'In the new Ubuntu window create your Linux username/password, then type exit.'
         Write-Host 'After completing the first Ubuntu login, run -Action Install again.' -ForegroundColor Yellow
         Start-Process $wsl -ArgumentList @('--distribution', [string]$script:State.Distribution)
@@ -236,7 +305,10 @@ function Ensure-Distribution {
     }
     $name = Get-WslText @('id','-un')
     if ($name -eq 'root' -or $name -notmatch '^[a-z_][a-z0-9_-]*[$]?$') {
-        throw 'Ubuntu needs a regular default Linux user. Complete the first login; see START-HERE.html.'
+        $script:NextStep = 'ubuntu_first_login'
+        Start-Process $wsl -ArgumentList @('--distribution', [string]$script:State.Distribution)
+        Write-Host 'Complete the first Ubuntu login with a regular Linux user, type exit, then run Install again.'
+        return $false
     }
     $script:State.LinuxUser = $name
     return $true
@@ -245,6 +317,28 @@ function Get-ReleaseInfo([string]$Tag) {
     if ($Tag -ne 'latest' -and $Tag -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid release tag.' }
     $suffix = if ($Tag -eq 'latest') { 'latest' } else { 'tags/' + $Tag }
     $r = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases/$suffix" -Headers @{'User-Agent'='XR-Gate-WSL-Setup'} -TimeoutSec 45
+    if ($Tag -eq 'latest') {
+        $names = @($r.assets | ForEach-Object { $_.name })
+        if ('xr-gate-ubuntu-24.04-linux-x64.tar.gz' -notin $names -or 'hand-tracking-models-mercury.tar.gz' -notin $names) {
+            # A newer Windows-only release can become GitHub's latest. Explicit
+            # tags keep their meaning; only "latest" follows a usable runtime.
+            $found = $null
+            for ($page = 1; $page -le 10 -and !$found; $page++) {
+                # Invoke-RestMethod emits a JSON array as one pipeline object.
+                # Assign it first: @(Invoke-RestMethod ...) nests the array and
+                # turns the draft/prerelease tests into tests of whole lists.
+                $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases?per_page=100&page=$page" -Headers @{'User-Agent'='XR-Gate-WSL-Setup'} -TimeoutSec 45
+                $releases = @($response)
+                if (!$releases.Count) { break }
+                foreach ($release in $releases) {
+                    $names = @($release.assets | ForEach-Object { $_.name })
+                    if (!$release.draft -and !$release.prerelease -and 'xr-gate-ubuntu-24.04-linux-x64.tar.gz' -in $names -and 'hand-tracking-models-mercury.tar.gz' -in $names) { $found = $release; break }
+                }
+            }
+            if (!$found) { throw 'No published Ubuntu runtime/models release was found. Select its explicit release tag in Settings.' }
+            $r = $found
+        }
+    }
     if ($r.tag_name -notmatch '^[A-Za-z0-9._-]+$') { throw 'Unexpected release tag returned by GitHub.' }
     return $r
 }
@@ -284,7 +378,7 @@ function Save-ReleaseAsset($Asset, [string]$Directory) {
 function Find-BundledDriver([string]$Root) {
     $manifestPath = Join-Path $Root 'bundle.json'
     if (!(Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return '' }
-    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $manifest = Get-Content -Encoding UTF8 -Raw -LiteralPath $manifestPath | ConvertFrom-Json
     if ($manifest.schema -ne 1) { throw 'Unsupported Windows bundle format.' }
     $variant = @($manifest.variants | Where-Object {
         [int]$_.frequency_hz -eq [int]$script:State.FrequencyHz -and $_.display_mode -eq $script:State.DisplayMode
@@ -301,22 +395,25 @@ function Find-BundledDriver([string]$Root) {
     return $package
 }
 function Get-DriverPackage($Release, [string]$Cache) {
+    if ($script:ResolvedDriverRoot) { return Find-BundledDriver $script:ResolvedDriverRoot }
     $localManifest = Join-Path $PSScriptRoot 'bundle.json'
     if (Test-Path -LiteralPath $localManifest -PathType Leaf) {
-        $manifest = Get-Content -Raw -LiteralPath $localManifest | ConvertFrom-Json
+        $manifest = Get-Content -Encoding UTF8 -Raw -LiteralPath $localManifest | ConvertFrom-Json
         if ($manifest.release_tag -eq 'latest' -or $manifest.release_tag -eq $Release.tag_name) {
             return Find-BundledDriver $PSScriptRoot
         }
     }
-    $bundles = @($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows.zip' })
+    $bundles = @($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows-wsl-usbip.zip' })
+    if (!$bundles.Count) { $bundles = @($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows.zip' }) }
     if ($bundles.Count) {
-        $asset = Select-ReleaseAsset $Release 'xr-gate-windows.zip'
+        $asset = Select-ReleaseAsset $Release ([string]$bundles[0].name)
         $archive = Save-ReleaseAsset $asset $Cache
         $directory = Join-Path $Cache ('windows-' + ([string]$asset.digest).Substring(7,12))
-        if (!(Test-Path -LiteralPath (Join-Path $directory 'xr-gate-windows/bundle.json'))) {
+        $bundleRoot = if ($asset.name -ceq 'xr-gate-windows.zip') { 'xr-gate-windows' } else { 'xr-gate-windows-wsl-usbip' }
+        if (!(Test-Path -LiteralPath (Join-Path $directory ($bundleRoot + '/bundle.json')))) {
             Expand-Archive -LiteralPath $archive -DestinationPath $directory -Force
         }
-        return Find-BundledDriver (Join-Path $directory 'xr-gate-windows')
+        return Find-BundledDriver (Join-Path $directory $bundleRoot)
     }
     # Older releases published each variant separately.
     $name = 'xr-gate-steamvr-windows-x64-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '.zip'
@@ -329,10 +426,15 @@ function Get-DriverPackage($Release, [string]$Cache) {
     return Join-Path $directory 'xr_tracking'
 }
 function Get-UsbDevices {
-    $lines = @(& (Get-Tool 'usbipd.exe') state)
-    if ($LASTEXITCODE -ne 0) { throw 'usbipd state failed; install a current usbipd-win.' }
-    $data = ($lines -join [Environment]::NewLine) | ConvertFrom-Json
+    $result = Invoke-UsbipdCommand -File (Get-Tool 'usbipd.exe') -Arguments @('state')
+    if ($result.ExitCode -ne 0) { throw 'usbipd state failed; install a current usbipd-win.' }
+    $data = $result.Output | ConvertFrom-Json
     return @($data.Devices | Where-Object { $_.BusId })
+}
+function Get-CurrentUsbDevice([string]$InstanceId) {
+    $current = @(Get-UsbDevices | Where-Object { $_.InstanceId -eq $InstanceId })
+    if ($current.Count -ne 1) { throw 'A selected USB device disconnected. Reconnect it and use List USB devices before retrying.' }
+    return $current[0]
 }
 function Select-RuntimeDevices([object[]]$Devices, [string[]]$ExplicitBusIds = @(), [string[]]$SavedInstanceIds = @()) {
     $selected = @()
@@ -372,84 +474,185 @@ function Select-RuntimeDevices([object[]]$Devices, [string[]]$ExplicitBusIds = @
     }
     return @($selected | Sort-Object InstanceId -Unique)
 }
+function Select-BluetoothDevice([object[]]$Devices, [string]$ExplicitBusId = '', [string]$ExplicitInstanceId = '',
+                                [string]$UsbId = '', [string]$SavedInstanceId = '') {
+    if ($ExplicitBusId) {
+        if ($ExplicitBusId -notmatch '^\d+-\d+$') { throw 'Bluetooth USB BUSID must look like 2-7. Use List USB devices.' }
+        $candidates = @($Devices | Where-Object { $_.BusId -eq $ExplicitBusId })
+        if ($candidates.Count -ne 1) { throw "Bluetooth BUSID $ExplicitBusId was not found. Check List USB devices; automatic VID:PID selection is only used when BUSID is empty." }
+    } elseif ($ExplicitInstanceId) {
+        $candidates = @($Devices | Where-Object { $_.InstanceId -eq $ExplicitInstanceId })
+        if ($candidates.Count -ne 1) { throw 'Configured Bluetooth USB instance was not found. Check XR_BLUETOOTH_INSTANCE_ID.' }
+    } elseif ($UsbId) {
+        if ($UsbId -notmatch '^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$') { throw 'XR_BLUETOOTH_USB_ID must be one VID:PID pair, for example 1234:abcd.' }
+        $pattern = '^USB\\VID_' + $Matches[1] + '&PID_' + $Matches[2] + '(?:&[^\\]+)?\\'
+        $candidates = @($Devices | Where-Object { $_.InstanceId -match $pattern })
+        if (!$candidates.Count) { throw "Bluetooth adapter $UsbId was not found. Connect the configured adapter, change Bluetooth VID:PID / BUSID in Settings, or disable Bluetooth. The system adapter is not selected automatically." }
+        if ($candidates.Count -gt 1) {
+            $saved = @($candidates | Where-Object { $_.InstanceId -eq $SavedInstanceId })
+            if ($saved.Count -eq 1) { $candidates = $saved }
+            else { throw "Multiple Bluetooth adapters match $UsbId. Select one using Bluetooth USB BUSID from List USB devices." }
+        }
+    } elseif ($SavedInstanceId) {
+        $candidates = @($Devices | Where-Object { $_.InstanceId -eq $SavedInstanceId })
+        if ($candidates.Count -ne 1) { throw 'Saved Bluetooth dongle not found. Set Bluetooth VID:PID / BUSID in Settings or disable Bluetooth.' }
+    } else { return $null }
+    return $candidates[0]
+}
+function Test-BluetoothSelectionRequested {
+    if ($WithoutBluetooth -or (Get-XrSetting 'XR_BLUETOOTH') -eq '0') { return $false }
+    return [bool]((Get-XrSetting 'XR_BLUETOOTH') -eq '1' -or $BluetoothBusId -or
+        (Get-XrSetting 'XR_BLUETOOTH_INSTANCE_ID') -or $script:State.BluetoothInstanceId -or $script:BluetoothUsbIdExplicit)
+}
+function Set-SelectedBluetooth([object[]]$Devices, [string[]]$RuntimeInstanceIds = @()) {
+    if ($WithoutBluetooth -or (Get-XrSetting 'XR_BLUETOOTH') -eq '0') {
+        $script:State.BluetoothInstanceId = ''
+        return $null
+    }
+    if (!(Test-BluetoothSelectionRequested)) { return $null }
+    $instance = Get-XrSetting 'XR_BLUETOOTH_INSTANCE_ID'
+    $bt = Select-BluetoothDevice -Devices $Devices -ExplicitBusId $BluetoothBusId -ExplicitInstanceId $instance `
+        -UsbId $BluetoothUsbId -SavedInstanceId ([string]$script:State.BluetoothInstanceId)
+    if (!$bt) { throw 'Set Bluetooth VID:PID / BUSID or XR_BLUETOOTH_INSTANCE_ID for the Bluetooth dongle.' }
+    if ($bt.InstanceId -in $RuntimeInstanceIds) { throw 'Select a separate Bluetooth adapter; its USB device is already selected for camera / IMU access.' }
+    $script:State.BluetoothInstanceId = [string]$bt.InstanceId
+    Write-Step ('Selected Bluetooth adapter: ' + $bt.Description + ' [' + $bt.BusId + ']')
+    return $bt
+}
 function Get-SelectedUsb([object[]]$Devices) {
     $selected = @(Select-RuntimeDevices -Devices $Devices -ExplicitBusIds $UsbBusId -SavedInstanceIds @($script:State.UsbInstanceIds))
     $script:State.UsbInstanceIds = @($selected | ForEach-Object { [string]$_.InstanceId })
-    if ($BluetoothBusId -and !$WithoutBluetooth) {
-        $bt = @($Devices | Where-Object { $_.BusId -eq $BluetoothBusId })
-        if ($bt.Count -ne 1 -or $bt[0].InstanceId -in $script:State.UsbInstanceIds) { throw 'Select a separate Bluetooth dongle BUSID from usbipd list.' }
-        $script:State.BluetoothInstanceId = [string]$bt[0].InstanceId
-    }
-    if ($script:State.BluetoothInstanceId) {
-        $bt = @($Devices | Where-Object { $_.InstanceId -eq $script:State.BluetoothInstanceId })
-        if ($bt.Count -ne 1) { throw 'Saved Bluetooth dongle not found. Set XR_BLUETOOTH_BUS_ID or use -WithoutBluetooth.' }
-        $selected += $bt[0]
-    }
-    if ((Get-XrSetting 'XR_BLUETOOTH') -eq '1' -and !$script:State.BluetoothInstanceId -and !$WithoutBluetooth) {
-        throw 'Set XR_BLUETOOTH_BUS_ID or XR_BLUETOOTH_INSTANCE_ID for the Bluetooth dongle.'
-    }
+    $bt = Set-SelectedBluetooth -Devices $Devices -RuntimeInstanceIds @($script:State.UsbInstanceIds)
+    if ($bt) { $selected += $bt }
     Save-State; return $selected
 }
 function Connect-SelectedUsb {
-    Start-Process -FilePath (Get-Tool 'wsl.exe') -WindowStyle Hidden -ArgumentList @('--distribution',[string]$script:State.Distribution,'--exec','sleep','90') | Out-Null
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = Get-Tool 'wsl.exe'
+    $info.Arguments = '--distribution ' + [string]$script:State.Distribution + ' --user root --exec cat'
+    $info.UseShellExecute = $false; $info.CreateNoWindow = $true; $info.RedirectStandardInput = $true
+    $lease = [Diagnostics.Process]::Start($info)
+    try { Connect-SelectedUsbCore }
+    finally {
+        if ($lease) {
+            $lease.StandardInput.Close()
+            if (!$lease.WaitForExit(2000)) { $lease.Kill() }
+            $lease.Dispose()
+        }
+    }
+}
+function Connect-SelectedUsbCore {
     $selected = @(Get-SelectedUsb @(Get-UsbDevices))
+    # Remember ownership before attach. Cancellation, disabling Bluetooth or a
+    # changed selection must not make Stop forget an already attached device.
+    $script:State.AttachedUsbInstanceIds = @((@($script:State.AttachedUsbInstanceIds) +
+        @($selected | ForEach-Object { [string]$_.InstanceId })) | Where-Object { $_ } | Select-Object -Unique)
+    Save-State
+    $firmware = $null
+    if ($script:State.BluetoothInstanceId) {
+        Write-Step 'Preparing Bluetooth firmware access in WSL...'
+        $firmware = (Invoke-Linux -Operation firmware -Request (New-LinuxRequest) -AsRoot -Capture) | ConvertFrom-Json
+        foreach ($message in @($firmware.messages)) { Write-Step ([string]$message) }
+    }
+    $selected = @($selected | ForEach-Object { Get-CurrentUsbDevice ([string]$_.InstanceId) })
     $unbound = @($selected | Where-Object { !$_.PersistedGuid } | ForEach-Object { [string]$_.BusId })
     if ($unbound.Count) { $null = Invoke-Elevated -Task Bind -BusIds $unbound }
     foreach ($d in $selected) {
-        if (!$d.ClientIPAddress) {
+        $d = Get-CurrentUsbDevice ([string]$d.InstanceId)
+        $reconnect = $firmware -and $firmware.enabled -and !$firmware.ready -and $d.ClientIPAddress -and $d.InstanceId -eq $script:State.BluetoothInstanceId
+        if ($reconnect) {
+            Write-Step ('Reconnecting the selected Bluetooth dongle after firmware setup: ' + $d.BusId)
+            Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$d.BusId)
+        }
+        if (!$d.ClientIPAddress -or $reconnect) {
             Write-Step ("Attaching " + $d.Description + ' [' + $d.BusId + '] to WSL')
             Invoke-Native (Get-Tool 'usbipd.exe') @('attach','--wsl','--busid',[string]$d.BusId)
         } else { Write-Step ("Already attached: " + $d.BusId) }
     }
-    Invoke-Linux -Operation prepare -Request (New-LinuxRequest) -AsRoot
+    try { Invoke-Linux -Operation prepare -Request (New-LinuxRequest) -AsRoot }
+    catch {
+        $prepareError = $_
+        if (!$script:State.BluetoothInstanceId) { throw }
+        # The kernel may reveal a compressed firmware filename only on the first
+        # probe. Materialize that file and retry once, for this dongle alone.
+        $repair = (Invoke-Linux -Operation firmware -Request (New-LinuxRequest) -AsRoot -Capture) | ConvertFrom-Json
+        foreach ($message in @($repair.messages)) { Write-Step ([string]$message) }
+        if (!$repair.enabled -or (!$repair.changed -and !@($repair.repaired_files).Count)) { throw $prepareError }
+        $bluetooth = @($selected | Where-Object { $_.InstanceId -eq $script:State.BluetoothInstanceId })
+        if ($bluetooth.Count -ne 1) { throw $prepareError }
+        $bluetooth = @(Get-CurrentUsbDevice ([string]$bluetooth[0].InstanceId))
+        Write-Step 'Firmware repaired; retrying the selected Bluetooth dongle once...'
+        Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$bluetooth[0].BusId)
+        Invoke-Native (Get-Tool 'usbipd.exe') @('attach','--wsl','--busid',[string]$bluetooth[0].BusId)
+        Invoke-Linux -Operation prepare -Request (New-LinuxRequest) -AsRoot
+    }
 }
 function Get-SteamVrDirectory {
     if ($SteamVR) {
-        $p = (Resolve-Path -LiteralPath $SteamVR).Path
-        if (!(Test-Path -LiteralPath (Join-Path $p 'bin\win64\vrpathreg.exe'))) { throw 'The -SteamVR directory has no vrpathreg.exe.' }
+        try {
+            $p = (Resolve-Path -LiteralPath $SteamVR -ErrorAction Stop).Path
+            $tool = [IO.Path]::Combine($p, 'bin/win64/vrpathreg.exe')
+            if (!(Test-Path -LiteralPath $tool -PathType Leaf -ErrorAction SilentlyContinue)) { throw 'vrpathreg.exe was not found.' }
+        } catch {
+            throw ("Configured SteamVR folder is unavailable: '" + $SteamVR + "'. Correct Settings > SteamVR folder / XR_STEAMVR_PATH, or clear it for automatic detection.")
+        }
         return $p
     }
     $paths = New-Object 'System.Collections.Generic.List[string]'
-    $vpath = Join-Path $env:LOCALAPPDATA 'openvr\openvrpaths.vrpath'
-    if (Test-Path -LiteralPath $vpath) {
-        $vr = Get-Content -Raw -LiteralPath $vpath | ConvertFrom-Json
-        foreach ($p in @($vr.runtime)) { if ($p) { $paths.Add([string]$p) } }
+    $vpath = [IO.Path]::Combine($env:LOCALAPPDATA, 'openvr/openvrpaths.vrpath')
+    if (Test-Path -LiteralPath $vpath -PathType Leaf -ErrorAction SilentlyContinue) {
+        $vr = Get-Content -Encoding UTF8 -Raw -LiteralPath $vpath | ConvertFrom-Json
+        if ($vr.PSObject.Properties['runtime']) {
+            foreach ($p in @($vr.runtime)) { if ($p) { $paths.Add([string]$p) } }
+        }
     }
     $steamRoot = ''
     try { $steamRoot = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath } catch {}
-    if (!$steamRoot) { $steamRoot = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Steam' }
+    if (!$steamRoot) {
+        $programs = [Environment]::GetFolderPath('ProgramFilesX86')
+        if ($programs) { $steamRoot = [IO.Path]::Combine($programs, 'Steam') }
+    }
     if ($steamRoot) {
-        $paths.Add((Join-Path $steamRoot 'steamapps\common\SteamVR'))
-        $libraries = Join-Path $steamRoot 'steamapps\libraryfolders.vdf'
-        if (Test-Path -LiteralPath $libraries) {
-            foreach ($m in [regex]::Matches((Get-Content -Raw -LiteralPath $libraries), '"path"\s+"([^"]+)"')) {
-                $paths.Add((Join-Path ($m.Groups[1].Value.Replace('\\','\')) 'steamapps\common\SteamVR'))
+        $paths.Add([IO.Path]::Combine($steamRoot, 'steamapps/common/SteamVR'))
+        $libraries = [IO.Path]::Combine($steamRoot, 'steamapps/libraryfolders.vdf')
+        if (Test-Path -LiteralPath $libraries -PathType Leaf -ErrorAction SilentlyContinue) {
+            foreach ($m in [regex]::Matches((Get-Content -Encoding UTF8 -Raw -LiteralPath $libraries), '"path"\s+"([^"]+)"')) {
+                $paths.Add([IO.Path]::Combine($m.Groups[1].Value.Replace('\\','\'), 'steamapps/common/SteamVR'))
             }
         }
     }
     foreach ($p in $paths) {
-        if (Test-Path -LiteralPath (Join-Path $p 'bin\win64\vrpathreg.exe')) { return $p }
+        $tool = [IO.Path]::Combine($p, 'bin/win64/vrpathreg.exe')
+        if (Test-Path -LiteralPath $tool -PathType Leaf -ErrorAction SilentlyContinue) { return $p }
+        Write-Step ("Skipping unavailable SteamVR location: " + $p)
     }
     return ''
 }
 function Register-XrDriver([switch]$AllowDeferred) {
     if (!$script:State.DriverPath -or !(Test-Path -LiteralPath $script:State.DriverPath)) { throw 'Download the Windows driver with -Action Install first.' }
-    $svr = Get-SteamVrDirectory
+    try { $svr = Get-SteamVrDirectory }
+    catch {
+        if (!$AllowDeferred) { throw }
+        Write-XrWarning ($_.Exception.Message + ' Linux installation is complete; correct the SteamVR folder and run Register SteamVR driver.')
+        return
+    }
     if (!$svr -or (Get-Process vrserver,vrcompositor -ErrorAction SilentlyContinue)) {
         $message = 'Install SteamVR, run it once, close it, then run -Action Driver. Or pass -SteamVR D:\SteamLibrary\steamapps\common\SteamVR.'
-        if ($AllowDeferred) { Write-Warning $message; return }; throw $message
+        if ($AllowDeferred) { Write-XrWarning $message; return }; throw $message
     }
-    $manifest = Get-Content -Raw -LiteralPath (Join-Path $script:State.DriverPath 'driver.vrdrivermanifest') | ConvertFrom-Json
+    $manifest = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $script:State.DriverPath 'driver.vrdrivermanifest') | ConvertFrom-Json
     $reg = Join-Path $svr 'bin\win64\vrpathreg.exe'
-    $vpath = Join-Path $env:LOCALAPPDATA 'openvr\openvrpaths.vrpath'
+    $vpath = [IO.Path]::Combine($env:LOCALAPPDATA, 'openvr/openvrpaths.vrpath')
     if (Test-Path -LiteralPath $vpath) {
-        $vr = Get-Content -Raw -LiteralPath $vpath | ConvertFrom-Json
+        $vr = Get-Content -Encoding UTF8 -Raw -LiteralPath $vpath | ConvertFrom-Json
         Copy-Item -LiteralPath $vpath -Destination (Join-Path $script:StateDir ('openvrpaths.before-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.json'))
-        foreach ($old in @($vr.external_drivers)) {
+        $external = @()
+        if ($vr.PSObject.Properties['external_drivers']) { $external = @($vr.external_drivers) }
+        foreach ($old in $external) {
             if (!$old -or $old -eq $script:State.DriverPath) { continue }
-            $m = Join-Path $old 'driver.vrdrivermanifest'
-            if (Test-Path -LiteralPath $m) {
-                if ((Get-Content -Raw -LiteralPath $m | ConvertFrom-Json).name -eq $manifest.name) {
+            $m = [IO.Path]::Combine([string]$old, 'driver.vrdrivermanifest')
+            if (Test-Path -LiteralPath $m -PathType Leaf -ErrorAction SilentlyContinue) {
+                if ((Get-Content -Encoding UTF8 -Raw -LiteralPath $m | ConvertFrom-Json).name -eq $manifest.name) {
                     Write-Step ("Unregistering the previous XR Gate package: " + $old)
                     Invoke-Native $reg @('removedriver',[string]$old)
                 }
@@ -461,14 +664,20 @@ function Register-XrDriver([switch]$AllowDeferred) {
     $script:State.RegisteredDriver = $script:State.DriverPath; Save-State
 }
 function Wait-XrStream([int]$Seconds) {
+    if (!('XrGateWsl.DeadlineLineReader' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'windows/DeadlineLineReader.cs')
+    }
     $clock = [Diagnostics.Stopwatch]::StartNew(); $lastError = 'No connection.'; $sawFrames = $false
     while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
-        $client = New-Object Net.Sockets.TcpClient; $reader = $null
+        $client = New-Object Net.Sockets.TcpClient
         try {
             $pending = $client.BeginConnect($script:TcpHost,$script:TcpPort,$null,$null)
-            if (!$pending.AsyncWaitHandle.WaitOne(1500)) { throw 'Connection timeout.' }
-            $client.EndConnect($pending); $client.GetStream().ReadTimeout = 2000
-            $reader = New-Object IO.StreamReader($client.GetStream())
+            try {
+                $remaining = [Math]::Max(1, [Math]::Min(1500, ($Seconds * 1000 - [int]$clock.ElapsedMilliseconds)))
+                if (!$pending.AsyncWaitHandle.WaitOne([int]$remaining)) { throw 'Connection timeout.' }
+                $client.EndConnect($pending)
+            } finally { $pending.AsyncWaitHandle.Close() }
+            $reader = New-Object XrGateWsl.DeadlineLineReader($client.GetStream(), $clock, ($Seconds * 1000))
             $helloLine = $reader.ReadLine()
             if (!$helloLine) { throw 'No XR Gate hello.' }
             $hello = $helloLine | ConvertFrom-Json
@@ -492,8 +701,9 @@ function Wait-XrStream([int]$Seconds) {
                 }
             }
         } catch { $lastError = $_.Exception.Message }
-        finally { if ($reader) { $reader.Dispose() }; $client.Close() }
-        Start-Sleep -Milliseconds 400
+        finally { $client.Close() }
+        $remaining = $Seconds * 1000 - [int]$clock.ElapsedMilliseconds
+        if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(400, $remaining)) }
     }
     if ($sawFrames) { throw 'TCP frames arrived, but fresh valid HMD poses were not observed. Check the xr_client console/startup gate.' }
     throw "XR Gate TCP is not ready: $lastError Check the xr_client console and WSL localhost forwarding."
@@ -501,15 +711,41 @@ function Wait-XrStream([int]$Seconds) {
 function Start-RuntimeWindow {
     $body = '& ' + (Quote-PsLiteral $script:Self) + ' -Action Runtime'
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))
-    Start-Process 'powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-NoExit','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) | Out-Null
+    $arguments = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+    if (!$Launcher) { $arguments = @('-NoExit') + $arguments }
+    Start-Process 'powershell.exe' -ArgumentList $arguments | Out-Null
+}
+function Disconnect-SelectedUsb {
+    $owned = @((@($script:State.AttachedUsbInstanceIds) + @($script:State.UsbInstanceIds) +
+        @($script:State.BluetoothInstanceId)) | Where-Object { $_ } | Select-Object -Unique)
+    if (!$owned.Count) { return }
+    $errors = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($d in @(Get-UsbDevices)) {
+        if ($d.InstanceId -in $owned -and $d.ClientIPAddress) {
+            try { Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$d.BusId) }
+            catch { $errors.Add([string]$_.Exception.Message) }
+        }
+    }
+    $remaining = @(Get-UsbDevices | Where-Object { $_.InstanceId -in $owned -and $_.ClientIPAddress })
+    $script:State.AttachedUsbInstanceIds = @($remaining | ForEach-Object { [string]$_.InstanceId })
+    Save-State
+    if ($remaining.Count) {
+        throw ('Some selected USB devices are still attached: ' + (($remaining | ForEach-Object { $_.BusId }) -join ', ') +
+            '. Retry Stop. ' + ($errors -join ' '))
+    }
+    foreach ($message in $errors) { Write-XrWarning $message }
+    Write-Step 'Selected USB devices returned to Windows.'
 }
 function Show-Help {
     Write-Host @'
 XR Gate / WSL2 / no Docker
   -Action Install                 Install Ubuntu runtime and Windows driver.
   -Action Run [-StartSteamVR]      Attach USB, open xr_client; optionally start SteamVR.
+  -Action Stop                    Stop this managed runtime, then return its USB devices.
+  -Action Status                  Report installed/running state as JSON.
   -Action Usb                     Attach devices selected in the hardware env.
   -Action Usb -BluetoothBusId 1-4  Also attach your dedicated USB Bluetooth dongle.
+  -Action Usb -BluetoothUsbId VID:PID  Select a dongle by USB identity when BUSID is empty.
   -Action Detach                  Return the selected USB devices to Windows.
   -Action Doctor                  Show Windows/WSL/USB/runtime diagnostics.
   -Action Test                    Wait for TCP and valid updating HMD frames.
@@ -536,18 +772,42 @@ try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Run this script in Windows PowerShell, not inside Ubuntu.' }
     if (![Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { throw 'Windows x64 is required.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    if ($Action -eq 'Admin') { $result = Invoke-AdminTask; exit ([int]$result) }
+    if ($Action -eq 'Admin') { $result = Invoke-AdminTask; Complete-XrAction ([int]$result) }
     Load-State
+    if ($Action -eq 'DeviceStatus') {
+        $script:ActionData = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
+        $script:ActionData | ConvertTo-Json -Compress
+        Complete-XrAction 0
+    }
+    if ($Action -eq 'Status') {
+        $status = @{installed=$false; running=$false}
+        if ($script:State.LinuxUser) {
+            $status = (Invoke-Linux -Operation status -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
+        }
+        $script:ActionData = @{installed=[bool]$status.installed; running=[bool]$status.running;
+            distribution=[string]$script:State.Distribution; release=[string]$script:State.ReleaseTag;
+            frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode}
+        $displayObservation = Get-XrDisplayObservation
+        $script:ActionData['display_frequency_hz'] = $displayObservation.frequency_hz
+        $script:ActionData['display_name'] = $displayObservation.display_name
+        $script:ActionData['display_detection_message'] = $displayObservation.message
+        try {
+            $device = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
+            foreach ($key in $device.Keys) { $script:ActionData[$key] = $device[$key] }
+        } catch { Write-XrWarning ('Device status is unavailable: ' + $_.Exception.Message) }
+        $script:ActionData | ConvertTo-Json -Compress
+        Complete-XrAction 0
+    }
     if ($Action -eq 'Install') {
         Save-State
         $rc = Invoke-Elevated -Task Prerequisites
-        if ($rc -eq 20) { Write-Host 'Save work, restart Windows, and run Install again.' -ForegroundColor Yellow; exit 20 }
-        if (!(Ensure-Distribution)) { exit 20 }
-        if ($BluetoothBusId -and !$WithoutBluetooth) {
-            $bt = @(Get-UsbDevices | Where-Object { $_.BusId -eq $BluetoothBusId })
-            if ($bt.Count -ne 1) { throw 'The specified USB Bluetooth BUSID was not found.' }
-            $script:State.BluetoothInstanceId = [string]$bt[0].InstanceId
+        if ($rc -eq 20) {
+            $script:NextStep = 'restart_windows'
+            Write-Host 'Save work, restart Windows, and run Install again.' -ForegroundColor Yellow
+            Complete-XrAction 20
         }
+        if (!(Ensure-Distribution)) { Complete-XrAction 20 }
+        if (Test-BluetoothSelectionRequested) { Set-SelectedBluetooth -Devices @(Get-UsbDevices) | Out-Null }
         Save-State
         Write-Step 'Preparing Python in the selected Ubuntu.'
         $wsl = Get-Tool 'wsl.exe'
@@ -557,6 +817,7 @@ try {
         $runtimeAsset = Select-ReleaseAsset $release 'xr-gate-ubuntu-24.04-linux-x64.tar.gz'
         $modelsAsset = Select-ReleaseAsset $release 'hand-tracking-models-mercury.tar.gz'
         $cache = Join-Path $script:StateDir ('cache\' + $release.tag_name)
+        if ((Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { Select-AutomaticDriverFrequency $release $cache }
         $runtimeArchive = Save-ReleaseAsset $runtimeAsset $cache
         $modelsArchive = Save-ReleaseAsset $modelsAsset $cache
         $driverPackage = Get-DriverPackage $release $cache
@@ -570,36 +831,45 @@ try {
         Invoke-Linux -Operation install -Request $request -AsRoot
         if ($script:LinuxExitCode -eq 20) {
             Write-Host ("Save work in this Ubuntu, run: wsl --terminate " + $script:State.Distribution) -ForegroundColor Yellow
-            Write-Host 'Then run Install again. Other distributions do not need to be stopped.'; exit 20
+            $script:NextStep = 'restart_ubuntu'
+            Write-Host 'Then run Install again. Other distributions do not need to be stopped.'
+            Complete-XrAction 20
         }
-        $driverHash = (Get-FileHash -LiteralPath (Join-Path $driverPackage 'bin/win64/driver_xr_tracking.dll') -Algorithm SHA256).Hash.Substring(0,12)
-        $settingsHash = (Get-FileHash -LiteralPath (Join-Path $driverPackage 'resources/settings/default.vrsettings') -Algorithm SHA256).Hash.Substring(0,12)
-        $driverDir = Join-Path $script:StateDir ('drivers\' + $release.tag_name + '-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '-' + $driverHash + $settingsHash)
-        if (!(Test-Path -LiteralPath (Join-Path $driverDir 'xr_tracking\driver.vrdrivermanifest'))) {
-            New-Item -ItemType Directory -Force $driverDir | Out-Null
-            Copy-Item -LiteralPath $driverPackage -Destination $driverDir -Recurse
-        }
-        $script:State.ReleaseTag = [string]$release.tag_name
-        $script:State.DriverPath = Join-Path $driverDir 'xr_tracking'
-        Save-State; Register-XrDriver -AllowDeferred
+        Install-SelectedWindowsDriver $driverPackage ([string]$release.tag_name)
+        Register-XrDriver -AllowDeferred
         Write-Host 'Installation complete. Next: enable SBS, select the matching Hz in Windows, then DISPLAY.cmd and RUN.cmd. See START-HERE.html.' -ForegroundColor Green
-        exit 0
+        Complete-XrAction 0 'Installation complete. Select the glasses display, then start VR.'
+    }
+    if (!$script:State.LinuxUser -and $Action -eq 'Doctor') {
+        foreach ($tool in @('wsl.exe','usbipd.exe')) {
+            try { Invoke-Native (Get-Tool $tool) @('--version') }
+            catch { Write-XrWarning $_.Exception.Message }
+        }
+        Write-Host 'Linux setup is not complete. Run Install / continue first.'
+        Complete-XrAction 0
+    }
+    if ($Action -eq 'Stop') {
+        if ($script:State.LinuxUser) { Invoke-Linux -Operation stop -Request (New-LinuxRequest) }
+        Disconnect-SelectedUsb
+        Complete-XrAction 0 'All managed runtime services stopped and selected USB devices returned to Windows.'
     }
     if (!$script:State.LinuxUser) { throw 'Run -Action Install first.' }
     switch ($Action) {
         'Run' {
+            if ((Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { Update-AutomaticWindowsDriver }
             if ($StartSteamVR -and !(Get-Process vrserver,vrcompositor -ErrorAction SilentlyContinue)) {
                 if ($script:State.DisplayMode -eq 'extended_sbs') { Update-SavedSbsDisplay }
                 else { Set-XrDisplaySettings -X 0 -Y 0 -Mode direct }
             }
             $status = (Invoke-Linux -Operation status -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
             if (!$status.installed) { throw 'Linux runtime is not installed. Run -Action Install.' }
+            if ($status.PSObject.Properties['busy'] -and $status.busy -and !$status.running) { throw 'Controller setup is still running. Finish it or click Stop before starting VR.' }
             if (!$status.running) {
                 Connect-SelectedUsb; Save-State; Start-RuntimeWindow
                 Write-Step 'xr_client opened in a separate console. Complete its startup prompts there.'
             } else { Write-Step 'The managed xr_client is already running.' }
             if ($StartSteamVR) {
-                if ($script:State.RegisteredDriver -ne $script:State.DriverPath) { Register-XrDriver }
+                Ensure-XrDriverRegistration
                 Write-Step 'Waiting for valid updating HMD poses before starting SteamVR...'
                 Wait-XrStream $TimeoutSeconds; Start-Process 'steam://rungameid/250820'
             }
@@ -608,13 +878,8 @@ try {
         'Usb' { Connect-SelectedUsb }
         'Detach' {
             $status = (Invoke-Linux -Operation status -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
-            if ($status.running) { throw 'Stop xr_client with Ctrl+C before detaching USB.' }
-            foreach ($d in @(Get-UsbDevices)) {
-                if ($d.InstanceId -in (@($script:State.UsbInstanceIds) + @($script:State.BluetoothInstanceId)) -and $d.ClientIPAddress) {
-                    Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$d.BusId)
-                }
-            }
-            Write-Step 'Selected USB devices returned to Windows.'
+            if ($status.running -or ($status.PSObject.Properties['busy'] -and $status.busy)) { throw 'Stop tracking or controller setup before detaching USB.' }
+            Disconnect-SelectedUsb
         }
         'Doctor' {
             Invoke-Native (Get-Tool 'wsl.exe') @('--version')
@@ -629,12 +894,27 @@ try {
         'Test' { Wait-XrStream $TimeoutSeconds }
         'Driver' { Register-XrDriver }
         'Display' { Choose-SbsDisplay }
-        'Pair' { Connect-SelectedUsb; Invoke-Linux -Operation pair -Request (New-LinuxRequest) -AsRoot }
+        'BluetoothScan' {
+            if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Settings first.' }
+            Connect-SelectedUsb
+            $script:ActionData = (Invoke-Linux -Operation bluetooth_scan -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
+        }
+        'Pair' {
+            if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Settings first.' }
+            Connect-SelectedUsb
+            $request = New-LinuxRequest
+            if ($LeftControllerMac -or $RightControllerMac) {
+                $request.left_controller = $LeftControllerMac
+                $request.right_controller = $RightControllerMac
+                $script:ActionData = (Invoke-Linux -Operation pair -Request $request -Capture) | ConvertFrom-Json
+            } else { Invoke-Linux -Operation pair -Request $request }
+        }
         'Controllers' { Connect-SelectedUsb; Invoke-Linux -Operation controllers -Request (New-LinuxRequest) }
     }
-    exit 0
+    Complete-XrAction 0
 } catch {
     Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red
-    Write-Host 'See START-HERE.html. For device/runtime details use -Action Doctor.'; exit 1
+    Write-Host 'See START-HERE.html. For device/runtime details use -Action Doctor.'
+    Complete-XrAction 1 $_.Exception.Message
 }
 

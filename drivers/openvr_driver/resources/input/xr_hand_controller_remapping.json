@@ -1,0 +1,421 @@
+{
+  "to_controller_type": "xr_hand_controller",
+  "layouts": [
+    {
+      "priority": 300,
+      "from_controller_type": "oculus_touch",
+      "simulate_controller_type": true,
+      "simulate_render_model": false,
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "from": "/user/hand/right/input/trigger",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/grip",
+          "to": "/user/hand/right/input/grip"
+        },
+        {
+          "from": "/user/hand/right/input/joystick",
+          "to": "/user/hand/right/input/joystick"
+        },
+        {
+          "from": "/user/hand/left/input/menu",
+          "to": "/user/hand/left/input/application_menu",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/right/input/a",
+          "to": "/user/hand/right/input/a",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/right/input/b",
+          "to": "/user/hand/right/input/b",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/left/input/x",
+          "to": "/user/hand/left/input/x",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/left/input/y",
+          "to": "/user/hand/left/input/y",
+          "mirror": false
+        }
+      ],
+      "remappings": [
+        {
+          "from": {
+            "path": "/user/hand/right/pose/grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/tip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_aim"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/left/pose/openxr_handmodel_l"
+          },
+          "to": {
+            "path": "/user/hand/left/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel_r"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        }
+      ]
+    },
+    {
+      "priority": 200,
+      "from_controller_type": "knuckles",
+      "simulate_controller_type": true,
+      "simulate_render_model": false,
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "from": "/user/hand/right/input/trigger",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/grip",
+          "to": "/user/hand/right/input/grip"
+        },
+        {
+          "from": "/user/hand/right/input/thumbstick",
+          "to": "/user/hand/right/input/joystick"
+        },
+        {
+          "from": "/user/hand/right/input/trackpad",
+          "to": "/user/hand/right/input/trackpad"
+        },
+        {
+          "from": "/user/hand/right/input/pinch",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/a",
+          "to": "/user/hand/right/input/a",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/right/input/b",
+          "to": "/user/hand/right/input/b",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/left/input/a",
+          "to": "/user/hand/left/input/x",
+          "mirror": false
+        },
+        {
+          "from": "/user/hand/left/input/b",
+          "to": "/user/hand/left/input/y",
+          "mirror": false
+        }
+      ],
+      "remappings": [
+        {
+          "from": {
+            "path": "/user/hand/right/pose/grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/tip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_aim"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/left/pose/openxr_handmodel_l"
+          },
+          "to": {
+            "path": "/user/hand/left/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel_r"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        }
+      ]
+    },
+    {
+      "priority": 100,
+      "from_controller_type": "vive_controller",
+      "simulate_controller_type": true,
+      "simulate_render_model": false,
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "from": "/user/hand/right/input/trigger",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/grip",
+          "to": "/user/hand/right/input/grip"
+        },
+        {
+          "from": "/user/hand/right/input/trackpad",
+          "to": "/user/hand/right/input/trackpad"
+        },
+        {
+          "from": "/user/hand/right/input/application_menu",
+          "to": "/user/hand/right/input/application_menu"
+        }
+      ],
+      "remappings": [
+        {
+          "from": {
+            "path": "/user/hand/right/pose/grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/tip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_aim"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/input/trackpad",
+            "mode": "dpad_click"
+          },
+          "to": {
+            "path": "/user/hand/right/input/trackpad",
+            "mode": "dpad_touch",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/left/pose/openxr_handmodel_l"
+          },
+          "to": {
+            "path": "/user/hand/left/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel_r"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        }
+      ]
+    },
+    {
+      "priority": 50,
+      "from_controller_type": "khr_simple_controller",
+      "simulate_controller_type": true,
+      "simulate_render_model": false,
+      "simulate_HMD": false,
+      "autoremappings": [
+        {
+          "from": "/user/hand/right/input/select",
+          "to": "/user/hand/right/input/trigger"
+        },
+        {
+          "from": "/user/hand/right/input/menu",
+          "to": "/user/hand/right/input/application_menu"
+        }
+      ],
+      "remappings": [
+        {
+          "from": {
+            "path": "/user/hand/right/pose/grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/tip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_grip"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_aim"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          }
+        },
+        {
+          "from": {
+            "path": "/user/hand/left/pose/openxr_handmodel_l"
+          },
+          "to": {
+            "path": "/user/hand/left/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        },
+        {
+          "from": {
+            "path": "/user/hand/right/pose/openxr_handmodel_r"
+          },
+          "to": {
+            "path": "/user/hand/right/pose/raw",
+            "parameters_mode": "copy"
+          },
+          "mirror": false
+        }
+      ]
+    }
+  ]
+}

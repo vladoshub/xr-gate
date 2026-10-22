@@ -37,6 +37,7 @@ RUNTIME_APP_TCP_MAX_CLIENTS="${RUNTIME_APP_TCP_MAX_CLIENTS:-8}"
 ORIGIN_MODE="${ORIGIN_MODE:-none}" # runtime origin policy; none keeps upstream origin
 
 HMD_STREAM="${HMD_STREAM:-hmd_pose}" # source HMD pose stream name
+MAX_HMD_AGE_MS="${MAX_HMD_AGE_MS:-500}" # source timestamp age limit; independent of TCP output freshness
 HAND_STREAM="${HAND_STREAM:-hand_tracking}" # source hand-tracking stream name
 HMD_3DOF_PRIORITY="${HMD_3DOF_PRIORITY:-0}" # prefer 3DoF HMD stream when available
 HMD_3DOF_REGISTRY="${HMD_3DOF_REGISTRY:-$TRACKING_REGISTRY}" # 3DoF source registry path
@@ -319,6 +320,7 @@ args=(
   --registry "$TRACKING_REGISTRY"
   --tracking-transform-config "$TRACKING_TRANSFORM_CONFIG"
   --hmd-stream "$HMD_STREAM"
+  --max-hmd-age-ms "$MAX_HMD_AGE_MS"
   --hand-stream "$HAND_STREAM"
   --hmd-3dof-registry "$HMD_3DOF_REGISTRY"
   --hmd-3dof-stream "$HMD_3DOF_STREAM"
@@ -602,6 +604,7 @@ ADAPTER=$ADAPTER # adapter backend mode used by xr_runtime_adapter
 MODE=$MODE # main runtime loop mode
 INPUT=$INPUT # primary HMD/hand input transport
 HMD_STREAM=$HMD_STREAM # source HMD pose stream name
+MAX_HMD_AGE_MS=$MAX_HMD_AGE_MS # source timestamp age limit; increasing it does not reduce capture latency
 HMD_3DOF_PRIORITY=$HMD_3DOF_PRIORITY # prefer 3DoF HMD stream when available
 HMD_3DOF_REGISTRY=$HMD_3DOF_REGISTRY # 3DoF source registry path
 HMD_3DOF_STREAM=$HMD_3DOF_STREAM # 3DoF HMD pose stream name

@@ -3118,7 +3118,8 @@ int main(int argc, char** argv) {
   app.add_option("--max-prediction-ms", max_prediction_ms,
                  "maximum absolute HMD prediction interval in milliseconds");
   app.add_option("--max-hmd-age-ms", max_hmd_age_ms,
-                 "maximum local/source HMD age before treating pose as stale/lost; <=0 disables");
+                 "maximum local/source HMD age before treating pose as stale/lost; <=0 disables")
+      ->envname("MAX_HMD_AGE_MS");
   app.add_option("--max-hand-age-ms", max_hand_age_ms,
                  "maximum local/source hand age before treating hands as stale/lost; <=0 disables");
   app.add_flag("--require-hmd", require_hmd, "SHM input: fail startup if hmd stream is absent");
@@ -5460,6 +5461,7 @@ int main(int argc, char** argv) {
 
       xr_runtime::RuntimeFrame frame;
       frame.read_timestamp_ns = xr_runtime::now_ns();
+      xr_runtime::HmdPoseF64V1 hmd_input_for_log{};
       bool hmd_hold_last_active = false;
       bool hand_hold_last_active = false;
       bool runtime_visual_hand_tracking_fresh = false;
@@ -5496,6 +5498,7 @@ int main(int argc, char** argv) {
             *fresh = false;
             return false;
           }
+          hmd_input_for_log = *hmd;
           const bool stale = is_age_stale(frame.read_timestamp_ns,
                                           static_cast<int64_t>(hmd->timestamp_ns),
                                           max_hmd_age_ms);
@@ -5705,6 +5708,7 @@ int main(int argc, char** argv) {
           if (hmd) {
             frame.raw_hmd = *hmd;
             frame.hmd = *hmd;
+            hmd_input_for_log = *hmd;
             const bool hmd_stale = is_age_stale(frame.read_timestamp_ns,
                                                 udp_input->latest_hmd_receive_timestamp_ns(),
                                                 max_hmd_age_ms);
@@ -6479,9 +6483,10 @@ int main(int argc, char** argv) {
         if (print_every > 0 && consumed % static_cast<uint64_t>(print_every) == 0) {
           const double rate = double(consumed) / std::max(1e-9, elapsed_s);
           const double hmd_source_age_ms =
-              (frame.hmd_valid
+              (hmd_input_for_log.sequence != 0
                    ? xr_runtime::ns_to_ms(frame.read_timestamp_ns -
-                                          static_cast<int64_t>(frame.raw_hmd.timestamp_ns))
+                         static_cast<int64_t>(hmd_input_for_log.source_timestamp_ns != 0
+                             ? hmd_input_for_log.source_timestamp_ns : hmd_input_for_log.timestamp_ns))
                    : 0.0);
           const double hmd_target_delta_ms =
               (frame.hmd_valid && frame.target_timestamp_ns != 0
@@ -6527,6 +6532,7 @@ int main(int argc, char** argv) {
                     << " hmd_status=" << xr_runtime::hmd_status_name(frame.hmd.tracking_status)
                     << " hmd_frame=" << frame.hmd_frame_id
                     << " hmd_source_age_ms=" << hmd_source_age_ms
+                    << " hmd_input_p=(" << hmd_input_for_log.px << "," << hmd_input_for_log.py << "," << hmd_input_for_log.pz << ")"
                     << " hmd_target_delta_ms=" << hmd_target_delta_ms
                     << " hmd_predicted=" << (frame.hmd_predicted ? "yes" : "no")
                     << " hmd_hold_last=" << (hmd_hold_last_active ? "yes" : "no")

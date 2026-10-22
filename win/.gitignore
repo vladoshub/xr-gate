@@ -1,3 +1,5 @@
 .env
 __pycache__/
 tests/__pycache__/
+launcher/**/bin/
+launcher/**/obj/

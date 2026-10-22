@@ -30,7 +30,7 @@ function Assert-SbsDisplay($Display) {
 function Get-SteamVrSettingsPath {
     $vpath = Join-Path $env:LOCALAPPDATA 'openvr\openvrpaths.vrpath'
     if (!(Test-Path -LiteralPath $vpath)) { throw 'Open SteamVR once, close it, then run DISPLAY.cmd.' }
-    $paths = Get-Content -Raw -LiteralPath $vpath | ConvertFrom-Json
+    $paths = Get-Content -Encoding UTF8 -Raw -LiteralPath $vpath | ConvertFrom-Json
     if (!$paths.PSObject.Properties['config']) { throw 'OpenVR has no config path. Open SteamVR once, close it, then run DISPLAY.cmd.' }
     $folders = @($paths.config | Where-Object { $_ })
     if (!$folders.Count -or !(Test-Path -LiteralPath $folders[0] -PathType Container)) {
@@ -90,7 +90,10 @@ function Update-SavedSbsDisplay {
         Set-SbsDisplay (Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -Name $DisplayName)
         return
     }
-    if (!$script:State.DisplayDeviceId) { Choose-SbsDisplay; return }
+    if (!$script:State.DisplayDeviceId) {
+        if ($Launcher) { throw 'Select the glasses with Select glasses display in the launcher before starting VR.' }
+        Choose-SbsDisplay; return
+    }
     $display = Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -SavedId ([string]$script:State.DisplayDeviceId)
     Set-SbsDisplay $display
 }

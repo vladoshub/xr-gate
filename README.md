@@ -15,6 +15,8 @@ Supported:
 
 [Quick Start Windows](win/README.md)
 
+For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones. See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
+
 ## Supported devices
 
 ### Headsets and tracking hardware
@@ -123,7 +125,7 @@ XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, Steam
 # Quick start Linux
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
-## 1. Install (once)
+## 1. Unpack binary (once)
 
 
 Download these artifacts:
@@ -174,7 +176,7 @@ reboot
 ```
 
 
-## 2. Optional: train override controller input (once)
+## 2. Setting up controllerst (once | optional)
 
 
 **1. Without this, input will be limited to gestures (pinch, grab).**
@@ -185,59 +187,41 @@ reboot
 
 **4. I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500. This can help reduce lag and connection loss if you have built-in Bluetooth.**
 
+**Choose your Device:**
 
-### Switch to external Bluetooth (Optional)
-Without external Bluetooth
-
+**XREAL ULTRA**
 ```bash
-bluetoothctl list
+export DEVICE_CONFIG=xreal_ultra
 ```
 
-Remember the MAC address of the built-in adapter. Then connect the USB and repeat the command—the MAC address that appears is its own.
-
+**UltraLeapUVC + nRF54L15**
 ```bash
-bluetoothctl
+export DEVICE_CONFIG=leap_motion_uvc_nrf54l15
 ```
 
-Inside, execute the following, substituting the actual MAC addresses:
-
+**UltraLeapUVC**
 ```bash
-select AA:AA:AA:AA:AA:AA
-power off
-
-select BB:BB:BB:BB:BB:BB
-power on
-show
-quit
+export DEVICE_CONFIG=leap_motion_uvc
 ```
 
-Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output for USB should show "Powered: yes." The select and power commands select the adapter and
 
+### Switch to external Bluetooth (optional | recomended)
 
-### Train new devices (Optional)
-Train your devices.
-Choose this option if you don't have any controllers from the list below or you want to use your own layout (for example, use the keyboard for control)
+Connect the adapters, stop XR Gate/controller capture, then run the selector from the extracted Ubuntu release:
 
 ```bash
-cd ~/xr-gate-release/xr-gate
-devices/common/linux/scripts/override_controller/start_override_controller.sh
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py
 ```
-
-The config will be saved in ~/.config/xr_tracking/override_controller/default.json
-
-If you want to retrain, you can delete default.json for new train
-
-If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
-
-When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
+Choose a number, MAC address or `hci` index; Enter cancels without changes.
 
 
+The selected adapter is powered on and verified **before** the other adapters are powered off. Switching disconnects devices using those other adapters. A failed switch attempts to restore the original power states. This does not change pairing records, firmware or service configuration. Pair controllers with the selected adapter if they were previously paired with another one.
+
+
+
+## Choose supported Bluetooth controllers (recomended)
 
 **If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
-
-
-
-## SUPPORTED BLUETOOTH CONTROLLERS (Recommended)
 
 ### VR-PARK controllers (NO IMU):
 
@@ -263,22 +247,6 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_vrpark.j
 ```
 
 4. Enable auto-start override_controller in client:
-
-**XREAL ULTRA**
-```bash
-DEVICE_CONFIG=xreal_ultra
-```
-
-**UltraLeapUVC + nRF54L15**
-```bash
-DEVICE_CONFIG=leap_motion_uvc_nrf54l15
-```
-
-**UltraLeapUVC**
-```bash
-DEVICE_CONFIG=leap_motion_uvc
-```
-
    
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
@@ -287,70 +255,33 @@ sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/
 
 ### Samsung Gear VR controllers (IMU):
 
-1. Copy config:
+1. Stop XR Gate/controller capture. If you use a separate Bluetooth adapter, select it first:
+**You can skip this step if the desired adapter is already the only powered adapter.**
 
 ```bash
-mkdir -p "$HOME/.config/xr_tracking/override_controller"
-
-cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.json" \
-   "$HOME/.config/xr_tracking/override_controller/gearvr.json"
+cd ~/xr-gate-release/xr-gate
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py
 ```
 
 
-2. Connect controllers to PC
-
-
-**Pair controllers**
-
-Enable controllers and pair (separate commands):
+2. Put the Gear VR controllers in Bluetooth pairing mode and run:
 
 ```bash
-bluetoothctl
-power on
-
-agent on
-default-agent
-scan on
-
-pair CONTROLLER_1
-trust CONTROLLER_1
-connect CONTROLLER_1
-
-pair CONTROLLER_2
-trust CONTROLLER_2
-connect CONTROLLER_2
-scan off
-quit
+python3 bin/scripts/override_controller/bluetooth_controllers.py \
+  --config "$HOME/.config/xr_tracking/override_controller/gearvr.json" \
+  --template bin/override_controller/configs/empty_gearvr.json
 ```
 
-3. Register your controllers:
+Choose the left and right controllers from the list of names and MAC addresses. Enter leaves a side unselected; at least one side is required
 
-```bash
-PROVIDERS=gearvr_ble GEARVR_INITIAL_SCAN_MS=10000 CONFIG_PATH="$HOME/.config/xr_tracking/override_controller/gearvr.json" VERBOSE=1 ~/xr-gate-release/xr-gate/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
-```
 
-4. Enable auto-start override_controller and gearvr in client:
+3. Enable auto-start for override_controller and Gear VR in the client:
 
-**XREAL ULTRA**
-```bash
-DEVICE_CONFIG=xreal_ultra
-```
-
-**UltraLeapUVC + nRF54L15**
-```bash
-DEVICE_CONFIG=leap_motion_uvc_nrf54l15
-```
-
-**UltraLeapUVC**
-```bash
-DEVICE_CONFIG=leap_motion_uvc
-```
 
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
-
 
 ```bash
 sed -i \
@@ -358,6 +289,25 @@ sed -i \
   -e 's|"PROVIDERS": "evdev"|"PROVIDERS": "evdev,gearvr_ble"|' \
   ~/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json
 ```
+
+
+## Train new devices (Optional)
+Train your devices.
+**Choose this option if you don't have any controllers from the list above or you want to use your own layout (for example, use the keyboard for control)**
+
+```bash
+cd ~/xr-gate-release/xr-gate
+devices/common/linux/scripts/override_controller/start_override_controller.sh
+```
+
+The config will be saved in ~/.config/xr_tracking/override_controller/default.json
+
+If you want to retrain, you can delete default.json for new train
+
+If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
+
+When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
+
 
 
 ## 3. Run xr_client
@@ -372,25 +322,25 @@ If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the 
 
 It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
 
-**XREAL ULTRA (recommended)**
+**XREAL ULTRA (recomended, VIO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-**XREAL ULTRA (no IMU)**
+**XREAL ULTRA (no IMU mode, VO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra --no-imu
 ```
 
-**UltraLeapUVC + nRF54L15 (experimental)**
+**UltraLeapUVC + nRF54L15 (experimental, VIO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config leap_motion_uvc_nrf54l15
 ```
 
-**UltraLeapUVC (experimental no IMU)**
+**UltraLeapUVC (experimental, no IMU mod, VO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config leap_motion_uvc
@@ -769,7 +719,7 @@ Check /readme/xrizer.md
 ---
 
 
-# Build:
+# Linux build:
 
 Clone:
 ```bash
@@ -782,7 +732,7 @@ cd xr_tracking
 
 Build the complete multi-profile package (vendor components included by default) and download hand-tracking models:
 ```bash
-XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
 Build the complete multi-profile package (vendor components included by default):
@@ -805,7 +755,13 @@ this command and also writes `out/xr-gate`.
 Or clean build with ACT:
 
 ```bash
-./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --clean-artifacts
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh \
+  --clean-artifacts \
+  --full \
+  --input build_ubuntu_release=true \
+  --input release_windows_driver=false \
+  --input publish_release=false \
+  --input cpu_profile=avx2
 ```
 
 ACT build without pure vendor components:
@@ -813,7 +769,12 @@ ACT build without pure vendor components:
 ```bash
 ./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh \
   --no-vendor-components \
-  --clean-artifacts
+  --clean-artifacts \
+  --full \
+  --input build_ubuntu_release=true \
+  --input release_windows_driver=false \
+  --input publish_release=false \
+  --input cpu_profile=avx2
 ```
 
 

@@ -52,7 +52,11 @@
     "rightHandSerial": "xr-tracking-right-hand-001",
     "coordinateMode": "runtime_ready",
     "debugMode": false,
-    "DebugMode": false
+    "DebugMode": false,
+    "handControllerLeftABXYAlias": true,
+    "handControllerTrackpadClickFromTouch": false,
+    "handControllerInputAxisThreshold": 0.05,
+    "handControllerInputClickThreshold": 0.55
   },
   "steamvr": {
     "directMode": true,

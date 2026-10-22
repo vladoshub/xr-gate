@@ -36,7 +36,7 @@ function Initialize-XrSettings([string]$Root) {
     $script:Settings = @{}
     foreach ($key in $defaults.Keys) { $script:Settings[$key] = $defaults[$key] }
     foreach ($key in $overrides.Keys) { $script:Settings[$key] = $overrides[$key] }
-    foreach ($key in @('XR_REQUIRE_CAMERA','XR_REQUIRE_HIDRAW')) {
+    foreach ($key in @('XR_REQUIRE_CAMERA','XR_REQUIRE_HIDRAW','XR_WSL_FIRMWARE')) {
         if ($script:Settings.ContainsKey($key) -and $script:Settings[$key] -notin @('0','1')) {
             throw "$key must be 0 or 1."
         }

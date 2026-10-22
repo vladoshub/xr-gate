@@ -2,6 +2,10 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import os
+import subprocess
+import sys
+from unittest.mock import patch
 import tempfile
 import unittest
 from zipfile import ZipFile
@@ -105,6 +109,11 @@ class HardwareTest(unittest.TestCase):
 
 
 class PackageTest(unittest.TestCase):
+    def launcher(self, root):
+        path = root / "XR-Gate.exe"
+        path.write_bytes(b"MZ" + b"launcher test fixture" * 8)
+        return path
+
     def drivers(self, root, frequencies="60 90", modes="direct extended_sbs"):
         for hz, mode in packager.selections(frequencies, modes):
             package = root / f"{hz}Hz-{mode}" / "xr_tracking"
@@ -126,13 +135,16 @@ class PackageTest(unittest.TestCase):
             shutil.copytree(WIN, source, ignore=shutil.ignore_patterns("__pycache__", "tests"))
             (source / ".env").write_text("PRIVATE=value")
             self.drivers(root / "drivers")
-            archive = root / "xr-gate-windows.zip"
-            packager.build(source, root / "drivers", archive, "60 90", "direct extended_sbs", "v9.9.9")
+            archive = root / "xr-gate-windows-wsl-usbip.zip"
+            executable = self.launcher(root)
+            packager.build(source, root / "drivers", archive, "60 90", "direct extended_sbs", "v9.9.9", launcher=executable)
             manifest = packager.verify(archive, "60 90", "direct extended_sbs")
             self.assertEqual(len(manifest["variants"]), 4)
             with ZipFile(archive) as package:
-                self.assertNotIn("xr-gate-windows/.env", package.namelist())
-                self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows/.env.example"))
+                self.assertNotIn("xr-gate-windows-wsl-usbip/.env", package.namelist())
+                self.assertFalse(any("/launcher/" in name or "/obj/" in name for name in package.namelist()))
+                self.assertEqual(package.read("xr-gate-windows-wsl-usbip/XR-Gate.exe"), executable.read_bytes())
+                self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows-wsl-usbip/.env.example"))
                 for hz, mode in packager.selections("60 90", "direct extended_sbs"):
                     relative = packager.variant_path(hz, mode)
                     original = root / "drivers" / f"{hz}Hz-{mode}" / "xr_tracking"
@@ -146,17 +158,116 @@ class PackageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             self.drivers(root / "drivers", "90", "direct")
-            archive = root / "xr-gate-windows.zip"
-            packager.build(WIN, root / "drivers", archive, "90", "direct")
+            archive = root / "xr-gate-windows-wsl-usbip.zip"
+            executable = self.launcher(root)
+            packager.build(WIN, root / "drivers", archive, "90", "direct", launcher=executable)
             with ZipFile(archive) as package:
-                env = package.read("xr-gate-windows/.env.example").decode()
-                preset = package.read("xr-gate-windows/" + packager.hardware_preset(env)).decode()
+                env = package.read("xr-gate-windows-wsl-usbip/.env.example").decode()
+                preset = package.read("xr-gate-windows-wsl-usbip/" + packager.hardware_preset(env)).decode()
                 self.assertIn("XR_DISPLAY_FREQUENCY_HZ=90", preset)
                 self.assertIn("XR_DISPLAY_MODE=direct", preset)
             with self.assertRaises(ValueError):
                 packager.verify(archive, "60 90", "direct")
             with self.assertRaises(FileNotFoundError):
-                packager.build(WIN, root / "drivers", archive, "60 90", "direct")
+                packager.build(WIN, root / "drivers", archive, "60 90", "direct", launcher=executable)
+
+    def test_launcher_ci_archive_contains_support_scripts_and_can_download_drivers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            executable = self.launcher(root)
+            archive = root / "launcher.zip"
+            packager.build_launcher(WIN, executable, archive)
+            with ZipFile(archive) as package:
+                self.assertNotIn("xr-gate-windows-wsl-usbip/bundle.json", package.namelist())
+                self.assertIn("xr-gate-windows-wsl-usbip/windows/Driver.ps1", package.namelist())
+                self.assertIn("xr-gate-windows-wsl-usbip/STOP.cmd", package.namelist())
+                self.assertFalse(any("/launcher/" in name for name in package.namelist()))
+                metadata = json.loads(package.read("xr-gate-windows-wsl-usbip/launcher.json"))["launcher"]
+                packager.verify_launcher_metadata(metadata, packager.verify_installer(package))
+            executable.write_bytes(b"not a Windows executable")
+            with self.assertRaises(ValueError):
+                packager.build_launcher(WIN, executable, archive)
+
+
+class ManagedStopTest(unittest.TestCase):
+    def runtime(self, root):
+        runtime = linux.Runtime.__new__(linux.Runtime)
+        runtime.base = root
+        runtime.current = root / "current"
+        runtime.lock = root / "runtime.lock"
+        runtime.user_required = lambda: None
+        return runtime
+
+    def spawn_locked(self, root):
+        script = "import fcntl,sys,time; f=open(sys.argv[1],'w'); fcntl.flock(f,fcntl.LOCK_EX); print('ready',flush=True); time.sleep(60)"
+        child = subprocess.Popen([sys.executable, "-c", script, str(root / "runtime.lock")], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(self.cleanup_child, child)
+        self.assertEqual(child.stdout.readline().strip(), "ready")
+        return child
+
+    @staticmethod
+    def cleanup_child(child):
+        if child.poll() is None:
+            child.terminate()
+        child.wait(timeout=5)
+        if child.stdout:
+            child.stdout.close()
+
+    def test_stop_signals_only_the_verified_managed_process(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            runtime = self.runtime(root)
+            child = self.spawn_locked(root)
+            unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            self.addCleanup(self.cleanup_child, unrelated)
+            session = root / "runtime-session.json"
+            identity = {"pid": child.pid, "uid": os.geteuid(), "start_ticks": "12345", "boot_id": "test-boot"}
+            session.write_text(json.dumps(identity))
+            # Some container runners virtualize /proc independently of PID FDs.
+            # Stub the identity reader, while using a real lock and pidfd signal.
+            with patch.object(linux, "process_identity", return_value=identity):
+                runtime.stop()
+            child.wait(timeout=5)
+            self.assertIsNone(unrelated.poll())
+            self.assertFalse(session.exists())
+            self.assertFalse(runtime.status()["running"])
+
+    def test_reused_or_stale_pid_is_never_signalled(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            child = self.spawn_locked(root)
+            identity = {"pid": child.pid, "uid": os.geteuid(), "start_ticks": "12346", "boot_id": "test-boot"}
+            (root / "runtime-session.json").write_text(json.dumps(identity))
+            current = dict(identity, start_ticks="12345")
+            with patch.object(linux, "process_identity", return_value=current):
+                with self.assertRaisesRegex(RuntimeError, "different process"):
+                    self.runtime(root).stop()
+            self.assertIsNone(child.poll())
+
+    def test_legacy_runtime_requires_console_shutdown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            child = self.spawn_locked(root)
+            with self.assertRaisesRegex(RuntimeError, "older launcher"):
+                self.runtime(root).stop()
+            self.assertIsNone(child.poll())
+
+    def test_identity_reader_handles_process_names_and_records_boot_and_start_time(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            process = root / "proc/42"
+            process.mkdir(parents=True)
+            # proc stat field 22 is starttime; names may themselves contain ')'.
+            fields = ["S"] + ["0"] * 18 + ["987654"] + ["0"] * 8
+            (process / "stat").write_text("42 (name with ) parens) " + " ".join(fields))
+            (root / "proc/self").mkdir()
+            (root / "proc/self/stat").write_text(str(os.getpid()) + " (fixture) " + " ".join(fields))
+            boot = root / "proc/sys/kernel/random/boot_id"
+            boot.parent.mkdir(parents=True)
+            boot.write_text("test-boot\n")
+            with patch.object(linux, "Path", side_effect=lambda value: root / str(value).lstrip("/")):
+                identity = linux.process_identity(42)
+            self.assertEqual(identity, {"pid": 42, "start_ticks": "987654", "boot_id": "test-boot", "uid": os.geteuid()})
 
 
 if __name__ == "__main__":

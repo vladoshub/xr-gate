@@ -3,7 +3,7 @@
 param(
   [ValidateSet('Install', 'Uninstall', 'Guide', 'Test')][string]$Action = 'Install',
   [string]$SteamVR = '',
-  [string]$DriverPackage = $PSScriptRoot
+  [string]$DriverPackage = ''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -34,8 +34,10 @@ function Get-SteamVrDirectory {
 }
 
 try {
+  if ([string]::IsNullOrWhiteSpace($DriverPackage)) { $DriverPackage = $PSScriptRoot }
+  if ([string]::IsNullOrWhiteSpace($DriverPackage)) { throw 'Driver package directory is required; pass -DriverPackage.' }
   if ($Action -in @('Install', 'Uninstall') -and !(Test-Path -LiteralPath (Join-Path $DriverPackage 'driver.vrdrivermanifest'))) {
-    $DriverPackage = (Read-Host 'Full path to the extracted xr_tracking driver folder').Trim().Trim('"')
+    $DriverPackage = ([string](Read-Host 'Full path to the extracted xr_tracking driver folder')).Trim().Trim('"')
     if (!$DriverPackage) { throw 'Driver package directory is required.' }
   }
   $DriverPackage = (Resolve-Path -LiteralPath $DriverPackage).Path

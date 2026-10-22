@@ -24,6 +24,50 @@ missing and the TCP path bypasses the local controller-input hold policy.
 Build C++/Python network tests with `-DXR_OPENVR_BUILD_TESTS=ON`. Linux driver
 builds with this option disabled do not compile or link the TCP client/parser.
 
+## Controller compatibility
+
+The same virtual controller input path is used on Windows and Linux. SteamVR
+and Monado use the shared conversion in
+`shared/include/xr_runtime/input/controller_input_mapping.hpp`. SteamVR
+1.26+ automatic rebinding selects the highest-priority layout for which the
+application supplies bindings: Oculus Touch, Index, Vive, then Simple Controller.
+`resources/input/xr_hand_controller_remapping.json` owns that order and all
+source-path conversions. It contains no game IDs or game action names. The
+driver keeps its own device identity; simulation is configured per binding.
+
+Touch, direction and physical click are separate inputs. Moving or touching a
+pad does not also press its centre. Vive D-pad click bindings become D-pad touch
+bindings, preserving their parameters; ordinary button clicks remain physical.
+The joystick and trackpad expose the same normalized runtime axes. Analog
+trigger/grip values are preserved; a digital-only press supplies a full pull.
+Touch inputs use runtime touch flags, presses, or analog activity. Trackpad force
+is a binary representation of the physical switch, not measured pressure.
+
+Settings in the `xr_tracking` section of `default.vrsettings`:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `handControllerLeftABXYAlias` | `true` | Alias left A/B and X/Y so existing runtime mappings also work with Touch/Index layouts. Disable for four independent left face buttons. |
+| `handControllerTrackpadClickFromTouch` | `false` | Opt in to the old synthetic trackpad click for older custom bindings. Can make direction and general click actions fire together. |
+| `handControllerInputAxisThreshold` | `0.05` | Neutral axis region and threshold for synthesized stick touch. |
+| `handControllerInputClickThreshold` | `0.55` | Analog trigger/grip click threshold. |
+
+The physical-device mapping still belongs in the controller backend config.
+Application actions still belong to the game's bindings. Existing user-saved
+bindings take precedence over automatic rebinding; after upgrading, select the
+game's default bindings if an older generated/custom binding remains active.
+Restart SteamVR after changing a driver resource or setting. A new DLL/.so and
+the matching resources are required; copying JSON onto an old binary does not
+change its input semantics. See [the Russian setup guide](docs/CONTROLLER_INPUT.ru.md).
+
+The functional tests cover normalized input semantics and the binding resource
+contract. To additionally check exported application bindings, run
+`python3 tests/controller_bindings_test.py --bindings-zip /path/to/exports.zip`
+from this directory. This checks destination capabilities, not SteamVR's actual
+rebinding engine or in-game behavior. Games requiring controls absent from the
+physical device still need a backend mapping; skeletal fingers and real pressure
+sensing are not provided by these compatibility layouts.
+
 ## Expected runtime streams
 
 ```text

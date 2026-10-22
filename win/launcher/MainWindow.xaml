@@ -1,0 +1,168 @@
+<Window x:Class="XrGate.Launcher.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="XR Gate" Width="1060" Height="800" MinWidth="900" MinHeight="680"
+ Background="#0C1320" Foreground="#E5EDF8" FontFamily="Segoe UI" FontSize="14"
+ WindowStartupLocation="CenterScreen" Closing="Window_Closing">
+ <Window.Resources>
+  <DataTemplate x:Key="BluetoothControllerLabelTemplate">
+   <!-- Use the presenter's foreground in both the closed field and popup.
+        A local binding overrides the application's light TextBlock style. -->
+   <TextBlock Text="{Binding Label}"
+    Foreground="{Binding Path=(TextElement.Foreground), RelativeSource={RelativeSource TemplatedParent}, FallbackValue=#162438}" />
+  </DataTemplate>
+ </Window.Resources>
+ <Grid Margin="26">
+  <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+  <Grid Margin="0,0,0,20">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+   <StackPanel>
+    <TextBlock Text="XR Gate" FontSize="32" FontWeight="SemiBold" />
+    <TextBlock Text="WINDOWS LAUNCHER" Foreground="#83A3C7" FontSize="11" Margin="2,3,0,0" />
+    <TextBlock FontSize="12" Margin="2,5,0,0"><Hyperlink NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
+   </StackPanel>
+   <StackPanel x:Name="DeviceHeader" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,0" MaxWidth="280">
+    <TextBlock Text="{Binding DeviceName, StringFormat='Device: {0}'}" ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5" />
+    <TextBlock x:Name="DeviceConnectionStatus" Text="—" HorizontalAlignment="Center" Margin="0,6,0,0" FontWeight="SemiBold">
+     <TextBlock.Style>
+      <Style TargetType="TextBlock">
+       <Setter Property="Foreground" Value="#8994A4" />
+       <Style.Triggers>
+        <Trigger Property="Text" Value="CONNECTED"><Setter Property="Foreground" Value="#FFFFFF" /></Trigger>
+        <Trigger Property="Text" Value="TRACKING"><Setter Property="Foreground" Value="#4ADE80" /></Trigger>
+        <Trigger Property="Text" Value="NOT CONNECTED"><Setter Property="Foreground" Value="#8994A4" /></Trigger>
+       </Style.Triggers>
+      </Style>
+     </TextBlock.Style>
+    </TextBlock>
+   </StackPanel>
+   <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+    <Button Content="Open Ubuntu" Click="OpenUbuntu_Click" Margin="0,0,8,0" Background="#18253A" />
+    <Button Content="Guide" Click="Guide_Click" Margin="0" Background="#18253A" />
+   </StackPanel>
+  </Grid>
+  <Border Grid.Row="1" Background="#18283B" CornerRadius="10" Padding="18" Margin="0,0,0,18">
+   <StackPanel>
+    <TextBlock x:Name="StatusTitle" Text="Ready to set up" FontWeight="SemiBold" FontSize="17" />
+    <TextBlock x:Name="StatusDetail" Text="Install XR Gate, connect your glasses, then start VR." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,6,0,0" />
+    <TextBlock x:Name="WarningText" Foreground="#FFD08A" TextWrapping="Wrap" Margin="0,7,0,0" Visibility="Collapsed" />
+    <Button x:Name="NextStepButton" Content="Continue" Click="NextStep_Click" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,12,0,0" />
+    <Button x:Name="CancelDiagnosticsButton" Content="Cancel diagnostics" Click="CancelDiagnostics_Click" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,12,0,0" />
+    <ProgressBar x:Name="Progress" Height="3" Margin="0,12,0,0" IsIndeterminate="True" Visibility="Collapsed" Foreground="{StaticResource Accent}" Background="#25364D" />
+    <StackPanel x:Name="RecoveryPanel" Visibility="Collapsed" Margin="0,12,0,0">
+     <TextBlock x:Name="RecoveryDetail" Foreground="#FFD08A" TextWrapping="Wrap" />
+     <WrapPanel Margin="0,10,0,0">
+      <Button Content="Open problem file" Click="OpenProblem_Click" Margin="0,0,8,0" />
+      <Button Content="Reload settings" Click="ReloadSettings_Click" Margin="0,0,8,0" />
+      <Button x:Name="ResetConfigurationButton" Content="Back up &amp; reset this file" Click="ResetConfiguration_Click" Margin="0" />
+     </WrapPanel>
+    </StackPanel>
+   </StackPanel>
+  </Border>
+  <TabControl x:Name="MainTabs" Grid.Row="2" Background="Transparent" BorderThickness="0">
+   <TabItem Header="Run">
+    <Grid Margin="0,8,0,0">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="330" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+     <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+       <StackPanel x:Name="ActionPanel">
+        <Button x:Name="StartButton" Content="Start VR" Click="Start_Click" Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
+        <Button Content="Install / continue" Click="Install_Click" />
+        <Button Content="Select glasses display" Click="Display_Click" />
+        <Button Content="Refresh status" Click="Refresh_Click" Background="#18253A" />
+       </StackPanel>
+       <Button x:Name="StopButton" Content="Stop tracking &amp; return USB" Click="Stop_Click" Background="#4A2932" Margin="0,4,0,15" />
+       <StackPanel x:Name="ConnectionPanel" Margin="0,0,0,15">
+        <TextBlock Text="Enable Bluetooth in Settings, then put controllers in pairing mode." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,0,0,10" />
+        <Button Content="Attach USB devices" Click="Usb_Click" />
+        <Button Content="Pair Bluetooth controllers" Click="Pair_Click" />
+        <Border x:Name="BluetoothControllersPanel" Visibility="Collapsed" Background="#18283B" CornerRadius="8" Padding="14" Margin="0,8,0,12">
+         <StackPanel>
+          <TextBlock Text="Bluetooth controllers" FontWeight="SemiBold" />
+          <TextBlock Text="Select by name; MAC addresses distinguish controllers with identical names. Not selected disables that side in the saved controller config." TextWrapping="Wrap" Foreground="#ACBED5" Margin="0,8,0,12" />
+          <TextBlock Text="Left controller" />
+          <ComboBox x:Name="LeftBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+          <TextBlock Text="Right controller" />
+          <ComboBox x:Name="RightBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+          <WrapPanel>
+           <Button Content="Connect &amp; save" Click="SaveBluetoothControllers_Click" Margin="0,0,8,0" />
+           <Button Content="Scan again" Click="Pair_Click" Margin="0" />
+          </WrapPanel>
+         </StackPanel>
+        </Border>
+       </StackPanel>
+       <TextBlock Text="STARTUP" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
+       <TextBlock Text="A tracking console opens for calibration and startup prompts. Keep it open during VR." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,16" />
+       <TextBlock Text="REFRESH RATE" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
+       <TextBlock Text="The driver follows the glasses refresh rate. If a matching variant is unavailable, XR Gate selects 60 Hz and shows a warning." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,12" />
+      </StackPanel>
+     </ScrollViewer>
+     <Border Grid.Column="2" Background="#080E18" CornerRadius="8" Padding="14">
+      <Grid><Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+       <TextBlock Text="ACTIVITY LOG" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,9" />
+       <TextBox x:Name="LogBox" Grid.Row="1" IsReadOnly="True" Background="Transparent" BorderThickness="0" FontFamily="Consolas" FontSize="12" Foreground="#C9D8EB" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0" Margin="0" />
+       <Button Grid.Row="2" Content="Save log…" Click="SaveLog_Click" HorizontalAlignment="Right" Background="#1A293E" Margin="0,12,0,0" Padding="12,7" />
+      </Grid>
+     </Border>
+    </Grid>
+   </TabItem>
+   <TabItem x:Name="SettingsTab" Header="Settings">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+     <StackPanel x:Name="SettingsPanel">
+      <Grid x:Name="SettingsFields"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+       <StackPanel>
+        <TextBlock Text="Hardware preset" />
+        <DockPanel><Button Content="Browse…" Click="BrowseHardware_Click" DockPanel.Dock="Right" Margin="8,5,0,13" Padding="10,7" />
+         <TextBox Text="{Binding HardwareEnv, UpdateSourceTrigger=PropertyChanged}" LostKeyboardFocus="HardwarePreset_Changed" />
+        </DockPanel>
+        <TextBlock Text="Ubuntu distribution" /><TextBox Text="{Binding Distribution, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="Release tag" /><TextBox Text="{Binding ReleaseTag, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="Camera / IMU USB BUSIDs (optional, comma-separated)" /><TextBox Text="{Binding UsbBusIds, UpdateSourceTrigger=PropertyChanged}" />
+        <CheckBox Content="Enable Bluetooth" IsChecked="{Binding BluetoothEnabled}" />
+        <TextBlock Text="Bluetooth USB BUSID (optional; overrides VID:PID)" /><TextBox Text="{Binding BluetoothBusId, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="Bluetooth VID:PID (used when BUSID is empty)" /><TextBox x:Name="BluetoothUsbIdBox" Text="{Binding BluetoothUsbId, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="For automatic Bluetooth selection, clear BUSID and set VID:PID. Clear both to keep the saved adapter. Camera / IMU BUSIDs keep their saved selection when empty." Foreground="#8FA6C3" TextWrapping="Wrap" />
+        <CheckBox Content="{Binding ControllerProfileLabel}" IsChecked="{Binding GearVr}" />
+       </StackPanel>
+       <StackPanel Grid.Column="2">
+        <CheckBox Content="Match driver to glasses refresh rate automatically" IsChecked="{Binding AutoDriverFrequency}" Margin="0,0,0,15" />
+        <TextBlock Text="Manual refresh rate, Hz (automatic selection overrides this)" TextWrapping="Wrap" /><TextBox Text="{Binding FrequencyHz, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="Display mode: extended_sbs or direct" /><TextBox Text="{Binding DisplayMode, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="Glasses output name (optional, e.g. \\.\DISPLAY2)" /><TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="SteamVR folder (optional; otherwise detected)" /><TextBox Text="{Binding SteamVrPath, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBlock Text="Import controller JSON (optional)" /><TextBox Text="{Binding ControllerConfig, UpdateSourceTrigger=PropertyChanged}" />
+       </StackPanel>
+      </Grid>
+      <WrapPanel Margin="0,16,0,0">
+       <Button x:Name="SaveSettingsButton" Content="Save settings" Click="SaveSettings_Click" Background="{StaticResource Accent}" Foreground="#082A28" Margin="0,0,10,10" />
+       <Button Content="List USB devices" Click="ListUsb_Click" Margin="0,0,10,10" />
+       <Button x:Name="AdvancedSettingsButton" Content="Open advanced settings" Click="Advanced_Click" Margin="0,0,10,10" />
+      </WrapPanel>
+      <Border x:Name="UsbDevicesPanel" Visibility="Collapsed" Background="#080E18" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+       <StackPanel>
+        <TextBlock Text="USB DEVICES" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
+        <TextBlock x:Name="UsbDevicesStatus" Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,8,0,10" />
+        <TextBox x:Name="UsbDevicesOutput" AutomationProperties.Name="USB device list" IsReadOnly="True" Height="180" Background="Transparent" BorderThickness="0" FontFamily="Consolas" FontSize="12" Foreground="#C9D8EB" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="0" Margin="0" />
+       </StackPanel>
+      </Border>
+      <TextBlock Text="Changing the release, display mode or manual refresh rate requires Install / continue again. Automatic refresh-rate selection also runs before starting VR." Foreground="#8FA6C3" TextWrapping="Wrap" Margin="0,0,0,12" />
+     </StackPanel>
+    </ScrollViewer>
+   </TabItem>
+   <TabItem Header="tools">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+     <StackPanel x:Name="ToolsPanel" MaxWidth="650" HorizontalAlignment="Left">
+      <TextBlock Text="Connect and configure" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" />
+      <Button Content="Diagnostics" Click="Doctor_Click" />
+      <Button Content="Register / train controllers" Click="Controllers_Click" />
+      <Button Content="Register SteamVR driver" Click="Driver_Click" />
+      <Button Content="Start tracking without SteamVR" Click="Tracking_Click" />
+      <Button Content="Check live head tracking" Click="Test_Click" />
+      <TextBlock Text="Close SteamVR before selecting a different display or driver variant. Enable SBS and Extend these displays in Windows for extended_sbs output." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,12,0,0" />
+     </StackPanel>
+    </ScrollViewer>
+   </TabItem>
+  </TabControl>
+  <TextBlock Grid.Row="3" Text="Windows x64  ·  .NET included  ·  WSL stays active while this launcher is open" Foreground="#6F87A5" FontSize="11" Margin="0,18,0,0" />
+ </Grid>
+</Window>

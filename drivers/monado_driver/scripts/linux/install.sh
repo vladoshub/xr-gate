@@ -775,6 +775,9 @@ install_runtime_binaries() {
   if [[ -f "$DRIVER_DIR/scripts/display_optics_config.py" ]]; then
     install -m 0755 "$DRIVER_DIR/scripts/display_optics_config.py" "$BIN_DIR/display_optics_config.py"
   fi
+  if [[ -f "$DRIVER_DIR/docs/CONTROLLER_INPUT.ru.md" ]]; then
+    install -m 0644 "$DRIVER_DIR/docs/CONTROLLER_INPUT.ru.md" "$BIN_DIR/CONTROLLER_INPUT.ru.md"
+  fi
 
   if [[ -d "$DRIVER_DIR/configs" ]]; then
     rm -rf "$BIN_DIR/configs.tmp"

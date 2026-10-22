@@ -102,6 +102,7 @@ if (Test-Path (Join-Path $OpenVrSdkRoot 'LICENSE')) {
 Copy-Item -Recurse -Force (Join-Path $DriverDir 'scripts\windows\package\*') $Package
 Copy-Item -Force (Join-Path $DriverDir 'docs\WINDOWS.ru.md') (Join-Path $Package 'WINDOWS.ru.md')
 Copy-Item -Force (Join-Path $DriverDir 'docs\WINDOWS.en.md') (Join-Path $Package 'WINDOWS.en.md')
+Copy-Item -Force (Join-Path $DriverDir 'docs\CONTROLLER_INPUT.ru.md') (Join-Path $Package 'CONTROLLER_INPUT.ru.md')
 
 Write-Host "[build_openvr_driver] device: $Device"
 Write-Host "[build_openvr_driver] display config: $DisplayConfig"
