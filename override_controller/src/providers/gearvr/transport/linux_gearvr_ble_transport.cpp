@@ -176,6 +176,7 @@ struct ErrorGuard {
 constexpr const char* kBluezService = "org.bluez";
 constexpr const char* kObjectManagerInterface = "org.freedesktop.DBus.ObjectManager";
 constexpr const char* kPropertiesInterface = "org.freedesktop.DBus.Properties";
+constexpr const char* kAdapterInterface = "org.bluez.Adapter1";
 constexpr const char* kDeviceInterface = "org.bluez.Device1";
 constexpr const char* kGattServiceInterface = "org.bluez.GattService1";
 constexpr const char* kGattCharacteristicInterface = "org.bluez.GattCharacteristic1";
@@ -232,6 +233,9 @@ class LinuxGearVrBleTransport final : public BleTransport {
       : options_(std::move(options)), api_(std::make_unique<SdBusApi>()) {
     if (const char* path = std::getenv("OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE")) {
       cleanup_file_ = path;
+    }
+    if (const char* adapter = std::getenv("XR_BLUETOOTH_ADAPTER")) {
+      requested_adapter_ = lower_copy(adapter);
     }
     const int rc = api_->open_system(&bus_);
     if (rc < 0 || !bus_) {
@@ -431,8 +435,15 @@ class LinuxGearVrBleTransport final : public BleTransport {
     sd_bus_slot* connect_slot = nullptr;
   };
 
+  struct ManagedAdapter {
+    std::string address;
+    std::string name;
+    bool powered = false;
+  };
+
   struct ManagedDevice {
     std::string path;
+    std::string adapter_path;
     std::string address;
     std::string name;
     std::set<std::string> uuids;
@@ -540,6 +551,9 @@ class LinuxGearVrBleTransport final : public BleTransport {
                                       "dbus");
           }
         }
+      } else if (std::strcmp(interface, kAdapterInterface) == 0) {
+        if (std::strcmp(property, "Powered") == 0) refresh_requested_ = true;
+        (void)api_->message_skip(message, contents);
       } else if (std::strcmp(interface, kDeviceInterface) == 0) {
         if (Session* session = session_for_device_path(path)) {
           if (std::strcmp(property, "Connected") == 0 && contents[0] == 'b') {
@@ -706,6 +720,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
       return false;
     }
 
+    std::map<std::string, ManagedAdapter> adapters;
     std::map<std::string, ManagedDevice> devices;
     std::map<std::string, ManagedService> services;
     std::map<std::string, ManagedCharacteristic> characteristics;
@@ -732,13 +747,28 @@ class LinuxGearVrBleTransport final : public BleTransport {
           continue;
         }
         const std::string interface = interface_c;
-        if (interface == kDeviceInterface) {
+        if (interface == kAdapterInterface) {
+          ManagedAdapter& adapter = adapters[object_path];
+          parse_property_dict(reply.value, [&](const std::string& name,
+                                               const std::string& type,
+                                               sd_bus_message* value) {
+            if (name == "Address" && type == "s") read_string(value, adapter.address);
+            else if ((name == "Alias" || name == "Name") && type == "s") {
+              std::string parsed;
+              if (read_string(value, parsed) && (adapter.name.empty() || name == "Alias")) {
+                adapter.name = parsed;
+              }
+            } else if (name == "Powered" && type == "b") read_bool(value, adapter.powered);
+            else (void)api_->message_skip(value, type.c_str());
+          });
+        } else if (interface == kDeviceInterface) {
           ManagedDevice& device = devices[object_path];
           device.path = object_path;
           parse_property_dict(reply.value, [&](const std::string& name,
                                                const std::string& type,
                                                sd_bus_message* value) {
             if (name == "Address" && type == "s") read_string(value, device.address);
+            else if (name == "Adapter" && type == "o") read_string(value, device.adapter_path, 'o');
             else if ((name == "Alias" || name == "Name") && type == "s") {
               std::string parsed;
               if (read_string(value, parsed) && (device.name.empty() || name == "Alias")) {
@@ -794,13 +824,42 @@ class LinuxGearVrBleTransport final : public BleTransport {
 
     for (auto& [id, session] : sessions_) session->seen_in_refresh = false;
 
-    for (const auto& [path, managed] : devices) {
+    // A controller can remain paired under several BlueZ adapters, including
+    // an unpowered built-in radio. Choose one Device1 record before applying
+    // any connection state; merging each record by controller MAC fabricates
+    // a disconnect/reconnect on every ObjectManager refresh.
+    std::map<std::string, const ManagedDevice*> selected_devices;
+    for (auto& [path, managed] : devices) {
       if (!managed.paired || managed.address.empty()) continue;
       const bool uuid_match = managed.uuids.count(std::string(kServiceUuid)) != 0;
       if (!is_gearvr_name(managed.name) && !uuid_match) continue;
+      if (managed.adapter_path.empty()) {
+        managed.adapter_path = path.substr(0, path.find_last_of('/'));
+      }
+      const auto adapter_it = adapters.find(managed.adapter_path);
+      if (adapter_it == adapters.end() || !adapter_it->second.powered) continue;
+      const auto& adapter = adapter_it->second;
+      const auto adapter_name = managed.adapter_path.substr(managed.adapter_path.find_last_of('/') + 1);
+      if (!requested_adapter_.empty() &&
+          requested_adapter_ != lower_copy(adapter.address) &&
+          requested_adapter_ != lower_copy(managed.adapter_path) &&
+          requested_adapter_ != lower_copy(adapter_name)) continue;
 
       const std::string address = uppercase_copy(managed.address);
       const std::string stable_id = "gearvr_ble:" + address;
+      const auto existing = sessions_.find(stable_id);
+      if (existing != sessions_.end() && !existing->second->device_path.empty() &&
+          existing->second->device_path != managed.path) continue;
+      auto& selected = selected_devices[stable_id];
+      // Prefer an existing connection when initially choosing among multiple
+      // powered radios. Thereafter the route stays pinned for this transport's
+      // lifetime, even through power loss/removal; a restart selects anew.
+      if (!selected || (!selected->connected && managed.connected)) selected = &managed;
+    }
+
+    for (const auto& [stable_id, selected] : selected_devices) {
+      const ManagedDevice& managed = *selected;
+      const std::string address = uppercase_copy(managed.address);
       auto& session_ptr = sessions_[stable_id];
       if (!session_ptr) {
         session_ptr = std::make_unique<Session>();
@@ -810,6 +869,10 @@ class LinuxGearVrBleTransport final : public BleTransport {
         session_ptr->next_connect_ns = static_cast<uint64_t>(monotonic_now_ns());
         std::cerr << "[override_controller][gearvr_ble] discovered paired controller "
                   << managed.name << " [" << address << "]\n";
+        const auto& adapter = adapters.at(managed.adapter_path);
+        std::cerr << "[override_controller][gearvr_ble] selected adapter "
+                  << adapter.name << " [" << adapter.address << "] "
+                  << managed.adapter_path << " for " << address << "\n";
       }
       Session& session = *session_ptr;
       session.seen_in_refresh = true;
@@ -841,7 +904,18 @@ class LinuxGearVrBleTransport final : public BleTransport {
     }
 
     for (auto& [id, session] : sessions_) {
-      if (!session->seen_in_refresh && session->connected) update_connected(*session, false);
+      if (session->seen_in_refresh) continue;
+      // Do not reconnect using a stale Device1 path after unpairing, radio
+      // power-off/removal, or a selector mismatch. In particular, never take
+      // over the same controller's pairing on another radio during recovery.
+      session->paired = false;
+      session->trusted = false;
+      if (session->connect_slot) {
+        api_->slot_unref(session->connect_slot);
+        session->connect_slot = nullptr;
+      }
+      session->connect_pending = false;
+      update_connected(*session, false);
     }
 
     schedule_next_refresh();
@@ -1219,6 +1293,7 @@ class LinuxGearVrBleTransport final : public BleTransport {
   std::map<std::string, std::unique_ptr<Session>> sessions_;
   std::deque<BlePacket> pending_packets_;
   std::string cleanup_file_;
+  std::string requested_adapter_;
   std::set<std::string> cleanup_paths_;
   bool stopping_ = false;
   bool refresh_requested_ = false;

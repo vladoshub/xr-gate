@@ -44,6 +44,19 @@ struct RawControllerImuSample {
   bool magnetometer_valid = false;
 };
 
+// Transport-neutral startup limits. Providers expose these through their
+// configuration rather than teaching the estimator about a particular device.
+struct GyroBiasCalibrationConfig {
+  float stable_ms = 1500.0f;
+  uint32_t min_samples = 100;
+  float max_gap_ms = 50.0f;
+  float max_sample_speed_rad_s = 0.20f;
+  float max_bias_rad_s = 0.01745329252f;  // 1 degree/s mean, not sample noise.
+  float max_gyro_stddev_rad_s = 0.05f;
+  float max_force_error_m_s2 = 1.0f;
+  float max_force_range_m_s2 = 0.35f;
+};
+
 class Madgwick6Dof {
  public:
   explicit Madgwick6Dof(float beta = 0.04f);
@@ -63,7 +76,8 @@ class Madgwick6Dof {
 
 class ControllerImuProcessor {
  public:
-  explicit ControllerImuProcessor(float madgwick_beta = 0.04f);
+  explicit ControllerImuProcessor(float madgwick_beta = 0.04f,
+      GyroBiasCalibrationConfig gyro_bias_config = {});
 
   void reset();
   QuaternionXyzw process(const RawControllerImuSample& sample);
@@ -75,17 +89,32 @@ class ControllerImuProcessor {
   bool orientation_initialized() const { return filter_.orientation_initialized(); }
   const Vec3f& gyro_bias_rad_s() const { return gyro_bias_rad_s_; }
   uint32_t gyro_bias_sample_count() const { return gyro_bias_sample_count_; }
-  bool gyro_calibrated() const { return gyro_bias_sample_count_ >= 50; }
+  bool gyro_calibrated() const { return gyro_bias_ready_; }
+  bool orientation_ready_for_runtime() const {
+    return gyro_bias_ready_ && filter_.orientation_initialized();
+  }
+  float gyro_bias_stable_ms() const { return static_cast<float>(gyro_bias_elapsed_ms_); }
+  const char* gyro_bias_wait_reason() const { return gyro_bias_wait_reason_; }
+  const GyroBiasCalibrationConfig& gyro_bias_config() const { return gyro_bias_config_; }
   const RawControllerImuSample& corrected_sample() const { return corrected_sample_; }
 
  private:
   void update_initial_gyro_bias(const RawControllerImuSample& sample);
+  void reset_gyro_bias_candidate(const char* reason);
 
   Madgwick6Dof filter_;
   AccelerometerCalibration accelerometer_calibration_{};
   RawControllerImuSample corrected_sample_;
   Vec3f gyro_bias_rad_s_;
   uint32_t gyro_bias_sample_count_ = 0;
+  GyroBiasCalibrationConfig gyro_bias_config_;
+  bool gyro_bias_ready_ = false;
+  double gyro_bias_elapsed_ms_ = 0;
+  std::array<double, 3> gyro_bias_mean_{};
+  std::array<double, 3> gyro_bias_m2_{};
+  std::array<float, 3> gyro_bias_force_min_{};
+  std::array<float, 3> gyro_bias_force_max_{};
+  const char* gyro_bias_wait_reason_ = "need_stationary_window";
   uint64_t previous_timestamp_ns_ = 0;
 };
 

@@ -37,6 +37,34 @@ def raw_status_logger(messages):
 
 
 class ControllerImuConsoleTest(unittest.TestCase):
+    def test_gyro_zeroing_guidance_waits_for_valid_calibrated_orientation(self):
+        def frame(left, right):
+            return (f"[xr_runtime_adapter] frame=90 controller_left_connected=yes "
+                    f"controller_right_connected=yes controller_left_imu_data_flags={left} "
+                    f"controller_right_imu_data_flags={right}\n").encode("ascii")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "xr_runtime_adapter.log"
+            progress = b"[xr_runtime_adapter][imu-calibration] side=left yaw=collecting translation=need_motion\n"
+            path.write_bytes(progress + frame(327, 327) + progress + frame(359, 359) + frame(367, 327) +
+                             frame(367, 367) * 2 +
+                             progress +
+                             b"[xr_runtime_adapter][WARN] controller IMU state reset: reason=transport_discontinuity; yaw=reset\n" +
+                             frame(327, 327) + frame(367, 367))
+            item = SimpleNamespace(log_path=path, limiter_stop=threading.Event(),
+                                   process=SimpleNamespace(poll=lambda: 0))
+            messages = []
+            launcher = self.launcher(folder)
+            launcher._controller_gyro_zero_pending = True
+            with patch("xr_client.xr_backend_client.log", lambda message, **kw: messages.append(message)):
+                launcher.forward_controller_imu_status(item)
+            ready = "Both controller gyroscopes zeroed. Take the controllers in your hands and continue optical calibration."
+            self.assertEqual(messages.count(ready), 2)
+            self.assertEqual(sum(message.startswith("Left controller: keep it still") for message in messages), 2)
+            self.assertEqual(sum(message.startswith("Right controller: keep it still") for message in messages), 2)
+            self.assertEqual(messages.count("Left controller gyroscope zeroed."), 2)
+            self.assertEqual(messages.count("Right controller gyroscope zeroed."), 2)
+            self.assertEqual(sum(message.startswith("Calibrating left") for message in messages), 1)
+
     def launcher(self, folder):
         return Launcher(SimpleNamespace(log_dir=folder, root_project=folder, log_max_bytes=0))
 

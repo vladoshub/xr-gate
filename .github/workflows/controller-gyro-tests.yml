@@ -1,0 +1,26 @@
+name: Controller gyro startup tests
+
+"on":
+  pull_request:
+    paths: ['override_controller/**', 'xr_client/**', 'shared/include/**', '.github/workflows/controller-gyro-tests.yml']
+  push:
+    branches: [main, master]
+    paths: ['override_controller/**', 'xr_client/**', 'shared/include/**', '.github/workflows/controller-gyro-tests.yml']
+  workflow_dispatch:
+
+jobs:
+  controller-gyro:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake nlohmann-json3-dev
+      - name: Build controller and regression tests
+        run: |
+          cmake -S override_controller -B build/controller-tests -DCMAKE_BUILD_TYPE=Release -DOVERRIDE_CONTROLLER_BUILD_TESTS=ON
+          cmake --build build/controller-tests --parallel 2
+      - name: Test startup calibration, Bluetooth continuity and console guidance
+        run: |
+          ctest --test-dir build/controller-tests --output-on-failure --timeout 30
+          python3 -m unittest xr_client.tests.test_controller_imu_console

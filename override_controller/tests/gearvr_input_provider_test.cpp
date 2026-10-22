@@ -91,6 +91,25 @@ void zero_timeout_reads_ready_transport() {
           "zero-timeout poll skipped ready transport packets");
 }
 
+void configured_gyro_window_reaches_the_stream_and_gates_orientation() {
+  GearVrInputProvider provider({{"initial_scan_ms", "0"},
+      {"gyro_bias.stable_ms", "100"}, {"gyro_bias.min_samples", "2"}});
+  auto devices = provider.scan_devices(true);
+  const uint64_t base_ns = now_ns();
+  for (uint32_t i = 0; i < 10; ++i) {
+    transport->enqueue("left", 10000 + i * 10000, base_ns + uint64_t(i) * 10'000'000);
+    provider.wait_event(devices, 1, false);
+  }
+  require((provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0,
+          "provider advertised orientation before its configured gyro window");
+  transport->enqueue("left", 110000, base_ns + 100'000'000);
+  provider.wait_event(devices, 1, false);
+  const auto ready = provider.imu_state(devices[0]);
+  require((ready.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0 &&
+          (ready.data_flags & CONTROLLER_IMU_GYROSCOPE_CALIBRATED) != 0,
+          "provider options did not reach its IMU processor");
+}
+
 void positive_timeout_does_not_spin() {
   GearVrInputProvider provider({{"initial_scan_ms", "0"}});
   auto devices = provider.scan_devices(true);
@@ -208,8 +227,8 @@ void stale_output_preserves_filter_and_bias() {
   auto devices = provider.scan_devices(true);
   // Older receive timestamps make the provider stale deterministically,
   // without waiting for a wall-clock timeout in the test.
-  const uint64_t base_ns = now_ns() - 1'000'000'000;
-  for (uint32_t i = 0; i < 30; ++i) {
+  const uint64_t base_ns = now_ns() - 3'000'000'000;
+  for (uint32_t i = 0; i < 160; ++i) {
     transport->enqueue("left", 10000 + i * 10000,
                        base_ns + uint64_t(i) * 10'000'000);
     provider.wait_event(devices, 1, false);
@@ -220,7 +239,7 @@ void stale_output_preserves_filter_and_bias() {
           "stale provider advertises historical samples as active");
   require(stale.reserved[CONTROLLER_IMU_DIAG_EPOCH] == 1,
           "stale output reset the AHRS epoch");
-  transport->enqueue("left", 310000, now_ns());
+  transport->enqueue("left", 1610000, now_ns());
   provider.wait_event(devices, 1, false);
   const auto resumed = provider.imu_state(devices[0]);
   require(resumed.status == CONTROLLER_IMU_ACTIVE &&
@@ -283,6 +302,7 @@ void config_calibration_discards_old_batches_and_survives_reconnect() {
 }
 
 int main() {
+  configured_gyro_window_reaches_the_stream_and_gates_orientation();
   positive_timeout_does_not_spin();
   zero_timeout_reads_ready_transport();
   routing_reconnect_and_flush();

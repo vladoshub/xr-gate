@@ -177,7 +177,7 @@ bool GearVrImuStream::push(const DecodedPacket& packet, uint64_t host_receive_ns
   state.latest_sample_timestamp_ns = last_host_ns_;
   state.orientation_timestamp_ns = last_host_ns_;
   state.latest_device_timestamp_ticks = newest_us;
-  if (processor_.orientation_initialized()) state.data_flags |= CONTROLLER_IMU_ORIENTATION_VALID;
+  if (processor_.orientation_ready_for_runtime()) state.data_flags |= CONTROLLER_IMU_ORIENTATION_VALID;
   if (processor_.gyro_calibrated()) state.data_flags |= CONTROLLER_IMU_GYROSCOPE_CALIBRATED;
   if (processor_.accelerometer_calibrated()) state.data_flags |= CONTROLLER_IMU_ACCELEROMETER_CALIBRATED;
   state.magnetic_field_uT[0] = packet.magnetic_uT.x;

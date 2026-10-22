@@ -1,4 +1,5 @@
 #include "gearvr_options.hpp"
+#include <xr_override_controller/imu/gyro_bias_options.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -76,6 +77,8 @@ void apply_option(GearVrOptions& options,
     options.touchpad_invert_y = parse_bool(value, name);
   } else if (key == "madgwick_beta") {
     options.madgwick_beta = parse_double(value, name);
+  } else if (imu::apply_gyro_bias_option(options.gyro_bias, key, value)) {
+    // Shared controller IMU startup configuration.
   } else {
     throw std::runtime_error("unknown gearvr_ble provider option: " + raw_key);
   }
@@ -90,6 +93,7 @@ void apply_env(GearVrOptions& options,
 }
 
 void validate(const GearVrOptions& options) {
+  (void)imu::ControllerImuProcessor(0, options.gyro_bias);
   if (options.touchpad_mode != "relative_stick" &&
       options.touchpad_mode != "absolute_stick" &&
       options.touchpad_mode != "dpad" &&

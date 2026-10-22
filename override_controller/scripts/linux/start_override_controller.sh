@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
+export OVERRIDE_CONTROLLER_PROVIDER_OPTIONS="gearvr_ble.gyro_bias.max_bias_rad_s=0.12"
+
 log() { echo "[start_override_controller] $*" >&2; }
 fatal() { echo "[start_override_controller][ERROR] $*" >&2; exit 1; }
 

@@ -14,7 +14,9 @@ namespace xr_override_controller::gearvr {
 class GearVrImuStream {
  public:
   static constexpr size_t kMaxPendingBatches = 256;
-  explicit GearVrImuStream(float beta) : processor_(beta) {}
+  explicit GearVrImuStream(float beta, imu::GyroBiasCalibrationConfig gyro_bias = {})
+      : processor_(beta, gyro_bias) {}
+  const imu::ControllerImuProcessor& processor() const { return processor_; }
 
   void set_accelerometer_calibration(const imu::AccelerometerCalibration& calibration) {
     processor_.set_accelerometer_calibration(calibration);
