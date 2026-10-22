@@ -14,7 +14,7 @@ REQUIRED = ("XR-Gate.exe", "INSTALL.cmd", "RUN.cmd", "STOP.cmd", "DISPLAY.cmd", 
             ".env.example", "windows/Environment.ps1",
             "windows/Display.ps1", "windows/Driver.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
             "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1",
-            "linux/xr_gate_wsl.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py",
+            "linux/xr_gate_wsl.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
             "README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html")
 
 
@@ -62,9 +62,10 @@ def copy_installer(source, bundle, launcher, release_tag):
     # Also ship the Linux helper with Windows: a Windows-only build can use an
     # existing Ubuntu release which predates this helper. Ubuntu packages carry
     # the same source beside start_override_controller.sh.
-    helper = Path(__file__).resolve().parents[1] / "override_controller/scripts/linux/bluetooth_controllers.py"
+    helpers = Path(__file__).resolve().parents[1] / "override_controller/scripts/linux"
     (bundle / "linux").mkdir(exist_ok=True)
-    shutil.copy2(helper, bundle / "linux/bluetooth_controllers.py")
+    for helper in ("bluetooth_controllers.py", "select_bluetooth_adapter.py"):
+        shutil.copy2(helpers / helper, bundle / "linux" / helper)
     shutil.copy2(launcher, bundle / "XR-Gate.exe")
     notices = launcher.parent / "licenses"
     if notices.is_dir():

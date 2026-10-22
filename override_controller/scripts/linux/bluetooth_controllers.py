@@ -13,10 +13,13 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
+import selectors
 import subprocess
 import sys
 import tempfile
+import time
+
+from select_bluetooth_adapter import BlueZ, clean, find_adapter, print_adapters
 
 MAC = re.compile(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", re.I)
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -35,39 +38,173 @@ def address(value):
     return value.upper()
 
 
-def command(args, seconds=8, allow_timeout=False):
-    env = dict(os.environ, LC_ALL="C", LANG="C")
-    process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                               errors="replace", env=env, start_new_session=True)
-    try:
-        output, _ = process.communicate(timeout=seconds)
-    except BaseException as error:
+def choose_adapter(selector=None, interactive=False):
+    adapters = BlueZ(5).adapters()
+    if selector:
+        selected = find_adapter(adapters, selector)
+    else:
+        powered = [adapter for adapter in adapters if adapter.powered]
+        if len(powered) == 1:
+            selected = powered[0]
+        elif not powered:
+            raise RuntimeError("No powered Bluetooth adapter. Run select_bluetooth_adapter.py first.")
+        elif not interactive:
+            choices = ", ".join(f"{adapter.hci} {adapter.address}" for adapter in powered)
+            raise RuntimeError("Multiple powered Bluetooth adapters: " + choices + ". Use --adapter MAC or XR_BLUETOOTH_ADAPTER.")
+        else:
+            print_adapters(powered)
+            value = input("Bluetooth adapter number, MAC or hci index (Enter cancels): ").strip()
+            if not value:
+                raise KeyboardInterrupt
+            if value.isdecimal() and 1 <= int(value) <= len(powered):
+                selected = powered[int(value) - 1]
+            else:
+                selected = find_adapter(powered, value)
+    if not selected.powered:
+        raise RuntimeError(f"{selected.hci} is powered off. Enable it with select_bluetooth_adapter.py first.")
+    log(f"Adapter: {selected.name} [{selected.hci}, {selected.address}]")
+    return selected
+
+
+class BluetoothSession:
+    """Keep adapter selection, discovery and the pairing agent in one client.
+
+    bluetoothctl's `select` affects only that process. Each operation reselects
+    and verifies the same MAC before issuing any device command. Adapter power
+    and the desktop's default pairing agent are never changed here.
+    """
+    ERROR = re.compile(
+        r"(?:^|\n|# )((?:Failed\b|Invalid command\b|No default controller\b|"
+        r"(?:Controller|Device) (?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2} not available\b|"
+        r"Agent registration failed\b)[^\n]*)")
+    POWERED = r"(?m)^\s*Powered:\s+(?:yes|no)\s*$"
+
+    def __init__(self, adapter):
+        self.adapter = adapter
+        self.process = None
+        self.reader = None
+
+    def __enter__(self):
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-            output, _ = process.communicate(timeout=1)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            output, _ = process.communicate()
-        except ProcessLookupError:
-            output, _ = process.communicate()
-        if isinstance(error, subprocess.TimeoutExpired) and allow_timeout:
-            return ANSI.sub("", output)
-        if isinstance(error, subprocess.TimeoutExpired):
-            raise RuntimeError("Bluetooth command timed out: " + " ".join(args)) from None
-        raise
-    output = ANSI.sub("", output)
-    if process.returncode:
-        raise RuntimeError(output.strip() or "Bluetooth command failed: " + " ".join(args))
-    return output
+            self.process = subprocess.Popen(
+                ["bluetoothctl", "--agent", "NoInputNoOutput"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+                env=dict(os.environ, LC_ALL="C", LANG="C", TERM="dumb"), start_new_session=True)
+            self.reader = selectors.DefaultSelector()
+            self.reader.register(self.process.stdout, selectors.EVENT_READ)
+            self.ensure_selected()
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def __exit__(self, *_):
+        self.close()
+
+    def close(self):
+        process = self.process
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    try:
+                        process.stdin.write(b"quit\n")
+                        process.stdin.flush()
+                    except (OSError, ValueError):
+                        pass
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=1)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=1)
+            finally:
+                if self.reader is not None:
+                    self.reader.close()
+                process.stdin.close()
+                process.stdout.close()
+                self.process = None
+
+    def exchange(self, lines, finish, seconds=8, collect=False):
+        # Discard leftover prompts/properties before starting a new request.
+        if lines is not None:
+            for _ in range(32):
+                if not self.reader.select(0):
+                    break
+                if not os.read(self.process.stdout.fileno(), 65536):
+                    raise RuntimeError("bluetoothctl closed unexpectedly.")
+            try:
+                self.process.stdin.write((lines + "\n").encode("ascii"))
+                self.process.stdin.flush()
+            except OSError:
+                raise RuntimeError("bluetoothctl closed unexpectedly.") from None
+        deadline = time.monotonic() + seconds
+        output = bytearray()
+        while True:
+            text = ANSI.sub("", output.decode("utf-8", errors="replace")).replace("\r", "\n")
+            text = re.sub(r"(?m)^\[[^\]\n]*\]# ?", "", text)
+            error = self.ERROR.search(text)
+            if error:
+                raise RuntimeError(clean(error.group(1)))
+            if finish and re.search(finish, text):
+                return text
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if collect:
+                    return text
+                raise RuntimeError("Bluetooth command timed out: " + clean(lines or "scan"))
+            if not self.reader.select(remaining):
+                continue
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk:
+                raise RuntimeError("bluetoothctl closed unexpectedly.")
+            output.extend(chunk)
+            if len(output) > 1024 * 1024:
+                raise RuntimeError("Unexpectedly large bluetoothctl output.")
+
+    def ensure_selected(self):
+        text = self.exchange(f"select {self.adapter.address}\nshow", self.POWERED)
+        controllers = re.findall(r"(?m)^Controller ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\b", text)
+        if not controllers or controllers[-1].upper() != self.adapter.address:
+            raise RuntimeError("bluetoothctl did not select the requested adapter; no device command was sent.")
+        if not re.search(r"(?m)^\s*Powered:\s+yes\s*$", text):
+            raise RuntimeError("The selected Bluetooth adapter is powered off. Run select_bluetooth_adapter.py first.")
+
+    def ctl(self, action, value=None, seconds=8):
+        self.ensure_selected()
+        if action == "devices" and value is None:
+            # `show` is a synchronous delimiter even when the device list is empty.
+            return self.exchange("devices\nshow", self.POWERED, seconds)
+        if action == "scan" and value in ("on", "off"):
+            state = "started" if value == "on" else "stopped"
+            return self.exchange(f"scan {value}", rf"\bDiscovery {state}\b", seconds)
+        mac = address(value)
+        if mac is None or action not in ("info", "pair", "trust", "connect"):
+            raise ValueError("Unsupported Bluetooth device command.")
+        if action == "info":
+            finish = rf"(?ms)^Device {re.escape(mac)}\b[^\n]*\n.*?^\s*Connected:\s+(?:yes|no)\s*$"
+        elif action == "pair":
+            self.exchange("agent NoInputNoOutput", r"Agent (?:is already )?registered", seconds)
+            finish = r"\bPairing successful\b"
+        elif action == "trust":
+            finish = rf"Changing {re.escape(mac)} trust succeeded"
+        else:
+            finish = r"\bConnection successful\b"
+        return self.exchange(f"{action} {mac}", finish, seconds)
+
+    def scan(self, seconds):
+        self.ctl("scan", "on")
+        try:
+            self.exchange(None, None, seconds, collect=True)
+        finally:
+            # Exiting this client also releases only its own discovery session.
+            self.ctl("scan", "off")
 
 
-def ctl(*args, seconds=8):
-    return command(["bluetoothctl", "--timeout", str(max(1, seconds - 2)), *args], seconds)
-
-
-def device_info(mac):
-    text = ctl("info", mac)
+def device_info(mac, session):
+    text = session.ctl("info", mac)
     result = {"address": address(mac)}
     for key in ("Name", "Alias", "Paired", "Trusted", "Connected"):
         match = re.search(r"^\s*" + key + r":\s*(.*?)\s*$", text, re.M)
@@ -104,20 +241,14 @@ def selected_sides(config):
     return selected
 
 
-def discover(config, seconds=8):
-    if not re.search(r"^Controller\s+", ctl("list"), re.M):
-        raise RuntimeError("No Bluetooth controller is ready. Attach the selected adapter first.")
-    ctl("power", "on")
-    try:
-        command(["bluetoothctl", "--timeout", str(seconds), "scan", "on"], seconds + 2, allow_timeout=True)
-    finally:
-        ctl("scan", "off")
+def discover(config, session, seconds=8):
+    session.scan(seconds)
     devices = {}
-    for line in ctl("devices").splitlines():
+    for line in session.ctl("devices").splitlines():
         match = re.match(r"^Device\s+((?:[0-9A-F]{2}:){5}[0-9A-F]{2})\s+(.+)$", line, re.I)
         if match:
             mac = match.group(1).upper()
-            devices[mac] = {"address": mac, "name": match.group(2), "label": match.group(2) + " [" + mac + "]"}
+            devices[mac] = {"address": mac, "name": match.group(2), "label": clean(match.group(2)) + " [" + mac + "]"}
     return {"devices": sorted(devices.values(), key=lambda x: (x["name"].casefold(), x["address"])),
             "selected": selected_sides(config)}
 
@@ -211,7 +342,7 @@ def save_config(path, value):
             temporary.unlink(missing_ok=True)
 
 
-def pair_and_save(config_path, template_path, left, right):
+def pair_and_save(config_path, template_path, left, right, session):
     choices = {"left": address(left), "right": address(right)}
     if not any(choices.values()):
         raise ValueError("Select at least one controller.")
@@ -219,21 +350,21 @@ def pair_and_save(config_path, template_path, left, right):
         raise ValueError("Left and right must use different controllers.")
     config = read_config(config_path, template_path)
     template = read_config(template_path) if template_path else copy.deepcopy(config)
-    selected = {side: device_info(mac) if mac else None for side, mac in choices.items()}
+    selected = {side: device_info(mac, session) if mac else None for side, mac in choices.items()}
     updated = configure(config, template, selected)  # Validate before pairing or writing.
     for side, device in selected.items():
         if device is None:
             continue
         mac = device["address"]
-        log("Connecting " + side + ": " + device["name"] + " [" + mac + "]")
+        log("Connecting " + side + ": " + clean(device["name"]) + " [" + mac + "]")
         if not device.get("paired"):
-            ctl("--agent", "NoInputNoOutput", "pair", mac, seconds=25)
-            if not device_info(mac).get("paired"):
+            session.ctl("pair", mac, seconds=25)
+            if not device_info(mac, session).get("paired"):
                 raise RuntimeError("Pairing did not complete: " + mac + ". Put the controller in pairing mode and retry.")
-        ctl("trust", mac)
-        if not device_info(mac).get("connected"):
-            ctl("connect", mac, seconds=20)
-        final = device_info(mac)
+        session.ctl("trust", mac)
+        if not device_info(mac, session).get("connected"):
+            session.ctl("connect", mac, seconds=20)
+        final = device_info(mac, session)
         if not all(final.get(k) for k in ("paired", "trusted", "connected")):
             raise RuntimeError("Controller is not paired, trusted and connected: " + mac)
     save_config(config_path, updated)
@@ -248,24 +379,35 @@ def main(argv=None):
     parser.add_argument("--scan-seconds", type=int, default=8, choices=range(1, 31))
     parser.add_argument("--left")
     parser.add_argument("--right")
+    parser.add_argument("--adapter", default=os.environ.get("XR_BLUETOOTH_ADAPTER"), metavar="MAC|hciN",
+                        help="use this powered adapter; otherwise use the only powered adapter or prompt")
     args = parser.parse_args(argv)
-    if args.scan:
-        result = discover(read_config(args.config, args.template), args.scan_seconds)
-    else:
-        if args.left is None and args.right is None:
-            found = discover(read_config(args.config, args.template), args.scan_seconds)
-            for index, device in enumerate(found["devices"], 1):
-                print(f"{index}: {device['label']}")
-            def choose(side):
-                value = input(side + " controller number (Enter = not selected): ").strip()
-                if not value:
-                    return "none"
-                index = int(value)
-                if not 1 <= index <= len(found["devices"]):
-                    raise ValueError("Choose a listed controller number.")
-                return found["devices"][index - 1]["address"]
-            args.left, args.right = choose("Left"), choose("Right")
-        result = pair_and_save(args.config, args.template, args.left, args.right)
+    config = read_config(args.config, args.template)
+    interactive = sys.stdin.isatty() and not args.scan
+    adapter = choose_adapter(args.adapter, interactive=interactive)
+    with BluetoothSession(adapter) as session:
+        if args.scan:
+            result = discover(config, session, args.scan_seconds)
+        else:
+            if args.left is None and args.right is None:
+                if not interactive:
+                    raise ValueError("Interactive input is unavailable. Use --scan, then --left MAC and/or --right MAC.")
+                found = discover(config, session, args.scan_seconds)
+                if not found["devices"]:
+                    raise RuntimeError("No devices found on the selected adapter. Put controllers in pairing mode and retry.")
+                for index, device in enumerate(found["devices"], 1):
+                    print(f"{index}: {device['label']}")
+                def choose(side):
+                    value = input(side + " controller number (Enter = not selected): ").strip()
+                    if not value:
+                        return "none"
+                    index = int(value)
+                    if not 1 <= index <= len(found["devices"]):
+                        raise ValueError("Choose a listed controller number.")
+                    return found["devices"][index - 1]["address"]
+                args.left, args.right = choose("Left"), choose("Right")
+            result = pair_and_save(args.config, args.template, args.left, args.right, session)
+    result["adapter"] = {"address": adapter.address, "hci": adapter.hci, "name": adapter.name}
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0
 

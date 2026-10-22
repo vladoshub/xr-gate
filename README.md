@@ -265,49 +265,32 @@ sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/
 
 ### Samsung Gear VR controllers (IMU):
 
-1. Copy config:
+1. Stop XR Gate/controller capture. If you use a separate Bluetooth adapter, select it first:
 
 ```bash
-mkdir -p "$HOME/.config/xr_tracking/override_controller"
-
-cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_gearvr.json" \
-   "$HOME/.config/xr_tracking/override_controller/gearvr.json"
+cd ~/xr-gate-release/xr-gate
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py
 ```
 
+The selector shows hardware names and MAC addresses, enables the chosen adapter and disables the others. Devices using those other adapters will disconnect. You can skip this step if the desired adapter is already the only powered adapter.
 
-2. Connect controllers to PC
-
-
-**Pair controllers**
-
-Enable controllers and pair (separate commands):
+2. Put the Gear VR controllers in Bluetooth pairing mode and run:
 
 ```bash
-bluetoothctl
-power on
-
-agent on
-default-agent
-scan on
-
-pair CONTROLLER_1
-trust CONTROLLER_1
-connect CONTROLLER_1
-
-pair CONTROLLER_2
-trust CONTROLLER_2
-connect CONTROLLER_2
-scan off
-quit
+python3 bin/scripts/override_controller/bluetooth_controllers.py \
+  --config "$HOME/.config/xr_tracking/override_controller/gearvr.json" \
+  --template bin/override_controller/configs/empty_gearvr.json
 ```
 
-3. Register your controllers:
+The script uses the **only powered adapter** automatically. If several are powered, it asks which one to use. It keeps that adapter selected for discovery, pairing, trust and connection; it does not power on other adapters.
 
-```bash
-PROVIDERS=gearvr_ble GEARVR_INITIAL_SCAN_MS=10000 CONFIG_PATH="$HOME/.config/xr_tracking/override_controller/gearvr.json" VERBOSE=1 ~/xr-gate-release/xr-gate/devices/common/linux/scripts/override_controller/start_override_controller.sh --connect-devices
-```
+Choose the left and right controllers from the list of names and MAC addresses. Enter leaves a side unselected; at least one side is required. An unselected side is removed from the saved controller config. The script performs `pair`, `trust` and `connect`, creates `gearvr.json` from the template if needed, and saves the selected controller identities. Existing configs are backed up before saving. Manual `bluetoothctl` commands, copying the template over an existing config, and a separate `--connect-devices` registration are not required.
 
-4. Enable auto-start override_controller and gearvr in client:
+To choose a specific powered adapter without an adapter prompt, append `--adapter <ADAPTER_MAC>` (or set `XR_BLUETOOTH_ADAPTER`). `--scan` only lists devices and does not rewrite the config; when running without a terminal, specify an adapter if more than one is powered. For scripted assignment, use `--left <CONTROLLER_MAC>` and/or `--right <CONTROLLER_MAC>`; an omitted side is unselected.
+
+From a source checkout, use `override_controller/scripts/linux/select_bluetooth_adapter.py`, `override_controller/scripts/linux/bluetooth_controllers.py` and `override_controller/configs/empty_gearvr.json` instead of the packaged paths. Keep both Python helpers together when copying them to an older release. Bluetooth pairing/side assignment is separate from the IMU calibration performed at runtime startup.
+
+3. Enable auto-start for override_controller and Gear VR in the client:
 
 **XREAL ULTRA**
 ```bash
