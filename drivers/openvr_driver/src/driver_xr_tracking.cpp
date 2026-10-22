@@ -298,7 +298,7 @@ const std::string& driver_provided_chaperone_json() {
   // prompt. Coordinates are OpenVR tracking-space coordinates: +Y up, -Z
   // forward, meters.
   static const std::string kJson = R"json({
-  "json_id": "chaperone_info",
+  "jsonid": "chaperone_info",
   "version": 5,
   "time": "2026-06-16T00:00:00.000Z",
   "universes": [
@@ -374,7 +374,6 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
                                           is_display_on_desktop_);
     vr::VRProperties()->SetBoolProperty(property_container_, vr::Prop_DisplayDebugMode_Bool, display_debug_mode_);
     vr::VRProperties()->SetBoolProperty(property_container_, vr::Prop_DeviceIsWireless_Bool, false);
-    vr::VRProperties()->SetBoolProperty(property_container_, vr::Prop_ContainsProximitySensor_Bool, true);
     vr::VRProperties()->SetBoolProperty(property_container_, vr::Prop_DeviceProvidesBatteryStatus_Bool, false);
 
     pose_reader_ = create_runtime_pose_reader(reader_config_);
@@ -386,15 +385,19 @@ class XrTrackingHmdDriver final : public vr::ITrackedDeviceServerDriver,
                " udp=" + reader_config_.udp_bind_host + ":" + std::to_string(reader_config_.udp_port));
     }
 
+    // /proximity is a reserved HMD input. A regular /input/.../click component
+    // does not report presence to SteamVR's session/standby handling.
     const vr::EVRInputError proximity_err =
-        vr::VRDriverInput()->CreateBooleanComponent(property_container_, "/input/proximity/click", &proximity_component_);
+        vr::VRDriverInput()->CreateBooleanComponent(property_container_, "/proximity", &proximity_component_);
+    vr::VRProperties()->SetBoolProperty(property_container_, vr::Prop_ContainsProximitySensor_Bool,
+                                        proximity_err == vr::VRInputError_None);
     if (proximity_err != vr::VRInputError_None) {
-      log_line("[xr_tracking_openvr] failed to create /input/proximity/click component err=" +
+      log_line("[xr_tracking_openvr] failed to create /proximity component err=" +
                std::to_string(static_cast<int>(proximity_err)));
       proximity_component_ = 0;
     } else {
       vr::VRDriverInput()->UpdateBooleanComponent(proximity_component_, true, 0.0);
-      log_line("[xr_tracking_openvr] /input/proximity/click=true");
+      log_line("[xr_tracking_openvr] /proximity=true");
     }
 
     return vr::VRInitError_None;

@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(xr_tracking_openvr_driver LANGUAGES CXX)
 
+if(WIN32 AND NOT MSVC)
+  message(FATAL_ERROR "The Windows OpenVR driver requires the MSVC C++ ABI. Use MSVC/clang-cl or the existing Windows CI job; MinGW C++ interface calls are not supported.")
+endif()
+
 set(DRIVER_BASENAME xr_tracking)
 set(DRIVER_NAME "driver_${DRIVER_BASENAME}")
 
@@ -64,7 +68,7 @@ if(NOT OPENVR_LIBRARIES)
 endif()
 
 set(XR_TRACKING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "xr_tracking repository root")
-option(XR_OPENVR_BUILD_TESTS "Build application TCP integration tests" OFF)
+option(XR_OPENVR_BUILD_TESTS "Build OpenVR driver functional tests" OFF)
 set(NLOHMANN_JSON_INCLUDE_DIR "" CACHE PATH "Directory containing nlohmann/json.hpp (Windows TCP/tests only)")
 
 if(WIN32 OR XR_OPENVR_BUILD_TESTS)
@@ -160,6 +164,18 @@ endif()
 if(XR_OPENVR_BUILD_TESTS)
   enable_testing()
   find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+  add_executable(openvr_hmd_lifecycle_test tests/hmd_lifecycle_test.cpp)
+  target_compile_features(openvr_hmd_lifecycle_test PRIVATE cxx_std_17)
+  target_include_directories(openvr_hmd_lifecycle_test PRIVATE "${OPENVR_INCLUDE_DIR}")
+  target_link_libraries(openvr_hmd_lifecycle_test PRIVATE ${DRIVER_NAME} xr_openvr_tcp)
+  if(WIN32)
+    # Keep test executables outside the release package, alongside DLL copies.
+    add_custom_command(TARGET openvr_hmd_lifecycle_test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${DRIVER_NAME}>" "$<TARGET_FILE_DIR:openvr_hmd_lifecycle_test>/"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${XR_OPENVR_SDK_ROOT}/bin/win64/openvr_api.dll" "$<TARGET_FILE_DIR:openvr_hmd_lifecycle_test>/")
+  endif()
+  add_test(NAME openvr_hmd_lifecycle COMMAND openvr_hmd_lifecycle_test)
+  set_tests_properties(openvr_hmd_lifecycle PROPERTIES TIMEOUT 15)
   add_executable(openvr_app_tcp_probe tests/app_tcp_probe.cpp
     src/runtime_pose_reader.cpp src/runtime_hand_reader.cpp src/runtime_controller_state_reader.cpp
     ${XR_RUNTIME_POSE_PLATFORM_SOURCE} ${XR_RUNTIME_HAND_PLATFORM_SOURCE} ${XR_RUNTIME_CONTROLLER_PLATFORM_SOURCE})

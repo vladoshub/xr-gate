@@ -818,7 +818,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      - name: Build, test TCP client, and package Windows drivers
+      - name: Build, test driver functionality, and package Windows drivers
         env:
           WINDOWS_BUNDLE_RELEASE: ${{ inputs.publish_release && inputs.release_tag || 'latest' }}
         run: |
@@ -839,7 +839,7 @@ jobs:
                 -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
               if (!$tested) {
                 ctest --test-dir $build -C Release --output-on-failure
-                if ($LASTEXITCODE -ne 0) { throw 'Windows TCP integration tests failed' }
+                if ($LASTEXITCODE -ne 0) { throw 'Windows OpenVR driver functional tests failed' }
                 $tested = $true
               }
               $package = Join-Path $build 'xr_tracking'
