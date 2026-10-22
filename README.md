@@ -125,7 +125,7 @@ XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, Steam
 # Quick start Linux
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
-## 1. Install (once)
+## 1. Unpack binary (once)
 
 
 Download these artifacts:
@@ -176,7 +176,7 @@ reboot
 ```
 
 
-## 2. Optional: train override controller input (once)
+## 2. Setting up controllerst (once | optional)
 
 
 **1. Without this, input will be limited to gestures (pinch, grab).**
@@ -187,8 +187,25 @@ reboot
 
 **4. I recommend using an external USB Bluetooth device. For example, the ASUS USB-BT500. This can help reduce lag and connection loss if you have built-in Bluetooth.**
 
+**Choose your Device:**
 
-### Switch to external Bluetooth (Optional)
+**XREAL ULTRA**
+```bash
+export DEVICE_CONFIG=xreal_ultra
+```
+
+**UltraLeapUVC + nRF54L15**
+```bash
+export DEVICE_CONFIG=leap_motion_uvc_nrf54l15
+```
+
+**UltraLeapUVC**
+```bash
+export DEVICE_CONFIG=leap_motion_uvc
+```
+
+
+### Switch to external Bluetooth (optional | recomended)
 
 Connect the adapters, stop XR Gate/controller capture, then run the selector from the extracted Ubuntu release:
 
@@ -202,7 +219,7 @@ The selected adapter is powered on and verified **before** the other adapters ar
 
 
 
-## SUPPORTED BLUETOOTH CONTROLLERS (Recommended)
+## Choose supported Bluetooth controllers (recomended)
 
 **If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
 
@@ -230,22 +247,6 @@ cp "$HOME/xr-gate-release/xr-gate/bin/override_controller/configs/empty_vrpark.j
 ```
 
 4. Enable auto-start override_controller in client:
-
-**XREAL ULTRA**
-```bash
-DEVICE_CONFIG=xreal_ultra
-```
-
-**UltraLeapUVC + nRF54L15**
-```bash
-DEVICE_CONFIG=leap_motion_uvc_nrf54l15
-```
-
-**UltraLeapUVC**
-```bash
-DEVICE_CONFIG=leap_motion_uvc
-```
-
    
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
@@ -276,26 +277,11 @@ Choose the left and right controllers from the list of names and MAC addresses. 
 
 3. Enable auto-start for override_controller and Gear VR in the client:
 
-**XREAL ULTRA**
-```bash
-DEVICE_CONFIG=xreal_ultra
-```
-
-**UltraLeapUVC + nRF54L15**
-```bash
-DEVICE_CONFIG=leap_motion_uvc_nrf54l15
-```
-
-**UltraLeapUVC**
-```bash
-DEVICE_CONFIG=leap_motion_uvc
-```
 
 ```bash
 CFG="$HOME/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json"
 sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/"start_on_launch": true/' "$CFG"
 ```
-
 
 ```bash
 sed -i \
@@ -336,25 +322,25 @@ If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the 
 
 It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
 
-**XREAL ULTRA (recommended)**
+**XREAL ULTRA (recomended, VIO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-**XREAL ULTRA (no IMU)**
+**XREAL ULTRA (no IMU mode, VO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra --no-imu
 ```
 
-**UltraLeapUVC + nRF54L15 (experimental)**
+**UltraLeapUVC + nRF54L15 (experimental, VIO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config leap_motion_uvc_nrf54l15
 ```
 
-**UltraLeapUVC (experimental no IMU)**
+**UltraLeapUVC (experimental, no IMU mod, VO)**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config leap_motion_uvc
