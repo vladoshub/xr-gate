@@ -211,25 +211,6 @@ python3 bin/scripts/override_controller/select_bluetooth_adapter.py --adapter AA
 Replace the example MAC with the adapter's actual address. `XR_BLUETOOTH_ADAPTER` can also supply the MAC or `hci` index; prefer a MAC because `hci` numbering can change. This is a one-time power switch, not a boot service: rerun after reboot/hotplug if needed. The script requires Python 3, BlueZ and systemd's `busctl`; `udevadm` improves model names when available. If permission is denied, rerun the same command with `sudo`. Every external command has a deadline (`--timeout`, default 5 seconds).
 
 
-### Train new devices (Optional)
-Train your devices.
-Choose this option if you don't have any controllers from the list below or you want to use your own layout (for example, use the keyboard for control)
-
-```bash
-cd ~/xr-gate-release/xr-gate
-devices/common/linux/scripts/override_controller/start_override_controller.sh
-```
-
-The config will be saved in ~/.config/xr_tracking/override_controller/default.json
-
-If you want to retrain, you can delete default.json for new train
-
-If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
-
-When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
-
-
-
 **If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
 
 
@@ -355,6 +336,25 @@ sed -i \
   -e 's|"PROVIDERS": "evdev"|"PROVIDERS": "evdev,gearvr_ble"|' \
   ~/xr-gate-release/xr-gate/bin/python/xr_client/configs/$DEVICE_CONFIG.json
 ```
+
+
+## Train new devices (Optional)
+Train your devices.
+**Choose this option if you don't have any controllers from the list above or you want to use your own layout (for example, use the keyboard for control)**
+
+```bash
+cd ~/xr-gate-release/xr-gate
+devices/common/linux/scripts/override_controller/start_override_controller.sh
+```
+
+The config will be saved in ~/.config/xr_tracking/override_controller/default.json
+
+If you want to retrain, you can delete default.json for new train
+
+If you use an external controller, you can continue to use controller input when you lose hand tracking (default behavior)
+
+When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
+
 
 
 ## 3. Run xr_client
