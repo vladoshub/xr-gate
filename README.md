@@ -784,7 +784,7 @@ cd xr_tracking
 
 Build the complete multi-profile package (vendor components included by default) and download hand-tracking models:
 ```bash
-XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
 Build the complete multi-profile package (vendor components included by default):
@@ -807,7 +807,13 @@ this command and also writes `out/xr-gate`.
 Or clean build with ACT:
 
 ```bash
-./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --clean-artifacts
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh \
+  --clean-artifacts \
+  --full \
+  --input build_ubuntu_release=true \
+  --input release_windows_driver=false \
+  --input publish_release=false \
+  --input cpu_profile=avx2
 ```
 
 ACT build without pure vendor components:
@@ -815,7 +821,12 @@ ACT build without pure vendor components:
 ```bash
 ./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh \
   --no-vendor-components \
-  --clean-artifacts
+  --clean-artifacts \
+  --full \
+  --input build_ubuntu_release=true \
+  --input release_windows_driver=false \
+  --input publish_release=false \
+  --input cpu_profile=avx2
 ```
 
 
