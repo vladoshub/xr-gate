@@ -324,7 +324,11 @@ function Get-ReleaseInfo([string]$Tag) {
             # tags keep their meaning; only "latest" follows a usable runtime.
             $found = $null
             for ($page = 1; $page -le 10 -and !$found; $page++) {
-                $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases?per_page=100&page=$page" -Headers @{'User-Agent'='XR-Gate-WSL-Setup'} -TimeoutSec 45)
+                # Invoke-RestMethod emits a JSON array as one pipeline object.
+                # Assign it first: @(Invoke-RestMethod ...) nests the array and
+                # turns the draft/prerelease tests into tests of whole lists.
+                $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases?per_page=100&page=$page" -Headers @{'User-Agent'='XR-Gate-WSL-Setup'} -TimeoutSec 45
+                $releases = @($response)
                 if (!$releases.Count) { break }
                 foreach ($release in $releases) {
                     $names = @($release.assets | ForEach-Object { $_.name })

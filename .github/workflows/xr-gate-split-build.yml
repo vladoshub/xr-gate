@@ -800,29 +800,7 @@ jobs:
           PUBLISH_RELEASE: ${{ inputs.publish_release }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $runtimeTag = 'latest'
-          if ($env:BUILD_UBUNTU -eq 'true' -and $env:PUBLISH_RELEASE -eq 'true') {
-            $runtimeTag = $env:RELEASE_TAG
-          } elseif ($env:BUILD_UBUNTU -ne 'true') {
-            # A Windows-only release must not point its installer at itself:
-            # it contains no Linux runtime/model assets. Pin a usable prior tag.
-            $headers = @{Authorization="Bearer $env:GH_TOKEN"; Accept='application/vnd.github+json'}
-            $found = $null
-            for ($page = 1; $page -le 10 -and !$found; $page++) {
-              $releases = @(Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100&page=$page")
-              if (!$releases.Count) { break }
-              foreach ($release in $releases) {
-                $names = @($release.assets | ForEach-Object { $_.name })
-                if (!$release.draft -and 'xr-gate-ubuntu-24.04-linux-x64.tar.gz' -in $names -and
-                    'hand-tracking-models-mercury.tar.gz' -in $names) { $found = $release; break }
-              }
-            }
-            if (!$found) { throw 'No published Ubuntu runtime/models release exists. Enable Build ubuntu release and publish it first.' }
-            $runtimeTag = [string]$found.tag_name
-          }
-          "WINDOWS_BUNDLE_RELEASE=$runtimeTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Windows installer runtime release: $runtimeTag"
+          & ./win/ci/Resolve-RuntimeRelease.ps1
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
