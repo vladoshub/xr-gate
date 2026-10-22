@@ -4,19 +4,39 @@
  Title="XR Gate" Width="1060" Height="800" MinWidth="900" MinHeight="680"
  Background="#0C1320" Foreground="#E5EDF8" FontFamily="Segoe UI" FontSize="14"
  WindowStartupLocation="CenterScreen" Closing="Window_Closing">
+ <Window.Resources>
+  <DataTemplate x:Key="BluetoothControllerLabelTemplate">
+   <!-- Use the presenter's foreground in both the closed field and popup.
+        A local binding overrides the application's light TextBlock style. -->
+   <TextBlock Text="{Binding Label}"
+    Foreground="{Binding Path=(TextElement.Foreground), RelativeSource={RelativeSource TemplatedParent}, FallbackValue=#162438}" />
+  </DataTemplate>
+ </Window.Resources>
  <Grid Margin="26">
   <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
   <Grid Margin="0,0,0,20">
-   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-   <StackPanel><WrapPanel VerticalAlignment="Center">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+   <StackPanel>
     <TextBlock Text="XR Gate" FontSize="32" FontWeight="SemiBold" />
-    <TextBlock Text="{Binding DeviceName, StringFormat='Device: {0}'}" ToolTip="{Binding DeviceName}" MaxWidth="260" TextTrimming="CharacterEllipsis" Margin="18,13,12,0" Foreground="#ACBED5" />
-    <TextBlock x:Name="DeviceConnectionStatus" Text="—" Margin="0,13,0,0" Foreground="#83A3C7" FontWeight="SemiBold" />
-    </WrapPanel>
     <TextBlock Text="WINDOWS LAUNCHER" Foreground="#83A3C7" FontSize="11" Margin="2,3,0,0" />
     <TextBlock FontSize="12" Margin="2,5,0,0"><Hyperlink NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
    </StackPanel>
-   <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+   <StackPanel x:Name="DeviceHeader" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,0" MaxWidth="280">
+    <TextBlock Text="{Binding DeviceName, StringFormat='Device: {0}'}" ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5" />
+    <TextBlock x:Name="DeviceConnectionStatus" Text="—" HorizontalAlignment="Center" Margin="0,6,0,0" FontWeight="SemiBold">
+     <TextBlock.Style>
+      <Style TargetType="TextBlock">
+       <Setter Property="Foreground" Value="#8994A4" />
+       <Style.Triggers>
+        <Trigger Property="Text" Value="CONNECTED"><Setter Property="Foreground" Value="#FFFFFF" /></Trigger>
+        <Trigger Property="Text" Value="TRACKING"><Setter Property="Foreground" Value="#4ADE80" /></Trigger>
+        <Trigger Property="Text" Value="NOT CONNECTED"><Setter Property="Foreground" Value="#8994A4" /></Trigger>
+       </Style.Triggers>
+      </Style>
+     </TextBlock.Style>
+    </TextBlock>
+   </StackPanel>
+   <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
     <Button Content="Open Ubuntu" Click="OpenUbuntu_Click" Margin="0,0,8,0" Background="#18253A" />
     <Button Content="Guide" Click="Guide_Click" Margin="0" Background="#18253A" />
    </StackPanel>
@@ -40,19 +60,37 @@
    </StackPanel>
   </Border>
   <TabControl x:Name="MainTabs" Grid.Row="2" Background="Transparent" BorderThickness="0">
-   <TabItem Header="Run &amp; activity">
+   <TabItem Header="Run">
     <Grid Margin="0,8,0,0">
-     <Grid.ColumnDefinitions><ColumnDefinition Width="265" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="330" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
      <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel>
        <StackPanel x:Name="ActionPanel">
         <Button x:Name="StartButton" Content="Start VR" Click="Start_Click" Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
         <Button Content="Install / continue" Click="Install_Click" />
         <Button Content="Select glasses display" Click="Display_Click" />
-        <Button Content="Diagnostics" Click="Doctor_Click" />
         <Button Content="Refresh status" Click="Refresh_Click" Background="#18253A" />
        </StackPanel>
        <Button x:Name="StopButton" Content="Stop tracking &amp; return USB" Click="Stop_Click" Background="#4A2932" Margin="0,4,0,15" />
+       <StackPanel x:Name="ConnectionPanel" Margin="0,0,0,15">
+        <TextBlock Text="Enable Bluetooth in Settings, then put controllers in pairing mode." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,0,0,10" />
+        <Button Content="Attach USB devices" Click="Usb_Click" />
+        <Button Content="Pair Bluetooth controllers" Click="Pair_Click" />
+        <Border x:Name="BluetoothControllersPanel" Visibility="Collapsed" Background="#18283B" CornerRadius="8" Padding="14" Margin="0,8,0,12">
+         <StackPanel>
+          <TextBlock Text="Bluetooth controllers" FontWeight="SemiBold" />
+          <TextBlock Text="Select by name; MAC addresses distinguish controllers with identical names. Not selected disables that side in the saved controller config." TextWrapping="Wrap" Foreground="#ACBED5" Margin="0,8,0,12" />
+          <TextBlock Text="Left controller" />
+          <ComboBox x:Name="LeftBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+          <TextBlock Text="Right controller" />
+          <ComboBox x:Name="RightBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+          <WrapPanel>
+           <Button Content="Connect &amp; save" Click="SaveBluetoothControllers_Click" Margin="0,0,8,0" />
+           <Button Content="Scan again" Click="Pair_Click" Margin="0" />
+          </WrapPanel>
+         </StackPanel>
+        </Border>
+       </StackPanel>
        <TextBlock Text="STARTUP" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
        <TextBlock Text="A tracking console opens for calibration and startup prompts. Keep it open during VR." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,16" />
        <TextBlock Text="REFRESH RATE" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
@@ -111,27 +149,11 @@
      </StackPanel>
     </ScrollViewer>
    </TabItem>
-   <TabItem Header="Controllers &amp; tools">
+   <TabItem Header="tools">
     <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
      <StackPanel x:Name="ToolsPanel" MaxWidth="650" HorizontalAlignment="Left">
       <TextBlock Text="Connect and configure" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" />
-      <TextBlock Text="Enable Bluetooth in Settings and select its USB adapter. Put controllers in pairing mode, then choose their names for the left and right sides. Either side can be left unselected. A separate adapter is recommended so Windows keeps its system Bluetooth." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,0,0,18" />
-      <Button Content="Attach USB devices" Click="Usb_Click" />
-      <Button Content="Pair Bluetooth controllers" Click="Pair_Click" />
-      <Border x:Name="BluetoothControllersPanel" Visibility="Collapsed" Background="#18283B" CornerRadius="8" Padding="14" Margin="0,8,0,12">
-       <StackPanel>
-        <TextBlock Text="Bluetooth controllers" FontWeight="SemiBold" />
-        <TextBlock Text="Select by name; MAC addresses distinguish controllers with identical names. Not selected disables that side in the saved controller config." TextWrapping="Wrap" Foreground="#ACBED5" Margin="0,8,0,12" />
-        <TextBlock Text="Left controller" />
-        <ComboBox x:Name="LeftBluetoothController" DisplayMemberPath="Label" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
-        <TextBlock Text="Right controller" />
-        <ComboBox x:Name="RightBluetoothController" DisplayMemberPath="Label" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
-        <WrapPanel>
-         <Button Content="Connect &amp; save" Click="SaveBluetoothControllers_Click" Margin="0,0,8,0" />
-         <Button Content="Scan again" Click="Pair_Click" Margin="0" />
-        </WrapPanel>
-       </StackPanel>
-      </Border>
+      <Button Content="Diagnostics" Click="Doctor_Click" />
       <Button Content="Register / train controllers" Click="Controllers_Click" />
       <Button Content="Register SteamVR driver" Click="Driver_Click" />
       <Button Content="Start tracking without SteamVR" Click="Tracking_Click" />

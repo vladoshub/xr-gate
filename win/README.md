@@ -16,7 +16,7 @@ Extract the complete **xr-gate-windows-wsl-usbip.zip** and open **XR-Gate.exe**.
 
 **Diagnostics** and **Refresh status** can be cancelled and have a 60-second time limit. Individual Linux diagnostic commands have a 10-second limit; a stalled probe is reported and the remaining checks continue. Status reports the configured driver frequency separately from the current Windows mode of the identified glasses output. If no output is identified, its current refresh rate remains unknown.
 
-**Controllers & tools** contains USB attach, Bluetooth pairing, controller registration, driver registration and head-tracking checks. Pairing, display selection and registration open interactive consoles. **Diagnostics** and **Save log** provide troubleshooting output. Advanced `.env` settings and comments are preserved when saving the GUI settings; reopen the launcher after editing `.env` externally.
+**Run** contains USB attachment, Bluetooth discovery and left/right controller selection. **tools** contains Diagnostics, controller/driver registration and head-tracking checks. Display selection and controller training open interactive consoles. **Diagnostics** and **Save log** provide troubleshooting output. Advanced `.env` settings and comments are preserved when saving the GUI settings; reopen the launcher after editing `.env` externally.
 
 **Attach USB devices** has a **Cancel USB operation** button. Closing the window also cancels the current USB operation and its transient child processes. Each `usbipd` command has a 30-second limit (`XR_USB_COMMAND_TIMEOUT`, 5–120 seconds, in `.env`); the desktop USB action has a three-minute overall limit. Cancellation or a timeout may leave devices attached by earlier steps: check **List USB devices**, reconnect the selected adapter if necessary, and retry. BUSIDs are refreshed from the selected Windows instance before attach. With automatic Bluetooth selection, leave its BUSID empty so a reboot or port change can be resolved through VID:PID.
 
@@ -28,7 +28,7 @@ Bluetooth preparation now requires a real HCI controller when Bluetooth is enabl
 
 When updating the launcher, close it and replace the **whole archive**, including scripts and `windows/DeadlineLineReader.cs`. Keep your `.env`; run Install / continue when changing the release or driver variant. See [CHANGELOG.md](CHANGELOG.md) for launcher changes.
 
-If installation reports an unavailable drive while locating SteamVR, check **Settings > SteamVR folder** (`XR_STEAMVR_PATH`). Clear it for automatic detection or enter the installed SteamVR folder. Old OpenVR/library paths on missing drives are skipped. The Linux installation can finish with a warning if registration must be deferred; afterward use **Controllers & tools > Register SteamVR driver**.
+If installation reports an unavailable drive while locating SteamVR, check **Settings > SteamVR folder** (`XR_STEAMVR_PATH`). Clear it for automatic detection or enter the installed SteamVR folder. Old OpenVR/library paths on missing drives are skipped. The Linux installation can finish with a warning if registration must be deferred; afterward use **tools > Register SteamVR driver**.
 
 ### CI builds
 
@@ -169,7 +169,7 @@ With Bluetooth enabled, **Install / continue** installs the configured Ubuntu fi
 .\USB.cmd
 ~~~
 
-2. Stop tracking, put the controllers into pairing mode and click **Pair Bluetooth controllers**.
+2. Stop tracking, put the controllers into pairing mode and click **Run > Pair Bluetooth controllers**.
 3. Choose **Left controller** and **Right controller** by name. MAC addresses distinguish identical names. **Not selected** disables that side in the saved configuration. Choose at least one side and use different devices for the two hands.
 4. Click **Connect & save**. Pairing, trust and connect run automatically, and MAC addresses/device fingerprints are saved to `~/xr-gate-wsl/config/override_controller.json`. Existing button mappings and settings are retained for selected sides. The previous configuration is backed up; connection failure leaves it unchanged.
 5. Click **Start VR**. The supplied GearVR profile needs no separate registration afterward. **Register / train controllers** remains available for changing mappings and other profiles.

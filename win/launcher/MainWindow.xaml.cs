@@ -121,7 +121,7 @@ public partial class MainWindow : Window
         busyAction = action;
         bool busy = action.Length > 0;
         bool recovery = configurationProblem is not null;
-        ActionPanel.IsEnabled = ToolsPanel.IsEnabled = !busy && !recovery;
+        ActionPanel.IsEnabled = ConnectionPanel.IsEnabled = ToolsPanel.IsEnabled = !busy && !recovery;
         SettingsPanel.IsEnabled = !busy;
         SettingsFields.IsEnabled = !busy && (!runtimeMayBeRunning || recovery);
         SaveSettingsButton.IsEnabled = AdvancedSettingsButton.IsEnabled = !busy && !runtimeMayBeRunning && !recovery;
@@ -374,8 +374,11 @@ public partial class MainWindow : Window
     {
         if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("device_status", out var status))
         {
-            DeviceConnectionStatus.Text = status.GetString();
-            DeviceConnectionStatus.ToolTip = data.TryGetProperty("device_status_message", out var message) ? message.GetString() : null;
+            // Keep compatibility with helpers that report USB attachment as SHARED.
+            string? value = status.GetString();
+            DeviceConnectionStatus.Text = value == "SHARED" ? "TRACKING" : value;
+            DeviceConnectionStatus.ToolTip = data.TryGetProperty("device_status_message", out var message)
+                ? message.GetString()?.Replace("SHARED:", "TRACKING:") : null;
         }
     }
     private async void Controllers_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Controllers", console: true);

@@ -57,7 +57,7 @@ public partial class MainWindow
             CancelDiagnosticsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             if (await pending.WaitAsync(TimeSpan.FromSeconds(5)))
                 throw new InvalidOperationException("Cancelled check reported success.");
-            if (!ActionPanel.IsEnabled || !SettingsPanel.IsEnabled)
+            if (!ActionPanel.IsEnabled || !ConnectionPanel.IsEnabled || !SettingsPanel.IsEnabled)
                 throw new InvalidOperationException("Cancellation left the UI blocked.");
             if (!await ExecuteAsync("Status", saveSettings: false))
                 throw new InvalidOperationException("The UI could not start an action after cancellation.");
@@ -67,13 +67,13 @@ public partial class MainWindow
         // The close handler uses this same cancellation-and-wait path.
         if (!IsCancellableOperation(busyAction)) throw new InvalidOperationException("USB attach still blocks window closing.");
         await CancelActiveOperationAsync().WaitAsync(TimeSpan.FromSeconds(5));
-        if (await closingUsb || busyAction.Length != 0 || !ActionPanel.IsEnabled)
+        if (await closingUsb || busyAction.Length != 0 || !ActionPanel.IsEnabled || !ConnectionPanel.IsEnabled)
             throw new InvalidOperationException("Closing during USB attach left an active operation.");
         int calls = 0;
         smokeAction = (_, _) => { calls++; throw new InvalidOperationException("Recovery invoked a backend action."); };
         configurationProblem = new ConfigurationProblem(Path.Combine(root, ".env"), "fixture configuration error", true);
         UpdateRecoveryUi();
-        if (RecoveryPanel.Visibility != Visibility.Visible || !SettingsFields.IsEnabled || ActionPanel.IsEnabled ||
+        if (RecoveryPanel.Visibility != Visibility.Visible || !SettingsFields.IsEnabled || ActionPanel.IsEnabled || ConnectionPanel.IsEnabled ||
             await ExecuteAsync("Doctor", saveSettings: false) || calls != 0)
             throw new InvalidOperationException("Configuration recovery did not keep the repair UI available and actions blocked.");
         configurationProblem = null;
