@@ -189,31 +189,26 @@ reboot
 
 
 ### Switch to external Bluetooth (Optional)
-Without external Bluetooth
+
+Connect the adapters, stop XR Gate/controller capture, then run the selector from the extracted Ubuntu release:
 
 ```bash
-bluetoothctl list
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py
 ```
 
-Remember the MAC address of the built-in adapter. Then connect the USB and repeat the command—the MAC address that appears is its own.
+From a source checkout, use `python3 override_controller/scripts/linux/select_bluetooth_adapter.py` instead.
+The menu shows each adapter's hardware model (USB/sysfs and udev), `hci` index, MAC address, power state and USB VID:PID when available. Choose a number, MAC address or `hci` index; there is no need to unplug adapters to identify them. Enter cancels without changes.
+
+The selected adapter is powered on and verified **before** the other adapters are powered off. Switching disconnects devices using those other adapters. A failed switch attempts to restore the original power states. This does not change pairing records, firmware or service configuration. Pair controllers with the selected adapter if they were previously paired with another one.
+
+For inventory only, or to repeat a known selection without a menu:
 
 ```bash
-bluetoothctl
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py --list
+python3 bin/scripts/override_controller/select_bluetooth_adapter.py --adapter AA:BB:CC:DD:EE:FF
 ```
 
-Inside, execute the following, substituting the actual MAC addresses:
-
-```bash
-select AA:AA:AA:AA:AA:AA
-power off
-
-select BB:BB:BB:BB:BB:BB
-power on
-show
-quit
-```
-
-Here, AA:... is the built-in adapter, BB:... is the USB adapter. The show output for USB should show "Powered: yes." The select and power commands select the adapter and
+Replace the example MAC with the adapter's actual address. `XR_BLUETOOTH_ADAPTER` can also supply the MAC or `hci` index; prefer a MAC because `hci` numbering can change. This is a one-time power switch, not a boot service: rerun after reboot/hotplug if needed. The script requires Python 3, BlueZ and systemd's `busctl`; `udevadm` improves model names when available. If permission is denied, rerun the same command with `sudo`. Every external command has a deadline (`--timeout`, default 5 seconds).
 
 
 ### Train new devices (Optional)
