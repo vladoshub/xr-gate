@@ -15,6 +15,8 @@ Supported:
 
 [Quick Start Windows](win/README.md)
 
+For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones. See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
+
 ## Supported devices
 
 ### Headsets and tracking hardware

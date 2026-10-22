@@ -2,14 +2,35 @@
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
 <nav class="languages" aria-label="Language"><a href="START-HERE.html" lang="en">English</a><a href="START-HERE.ru.html" lang="ru" aria-current="page">Русский</a></nav>
 <h1>XR Gate в Windows</h1>
+<h2>Запуск через приложение</h2>
+<p>В заголовке приложения показаны ссылка на <a href="https://github.com/vladoshub/xr-gate">проект</a>, имя из <code>XR_DEVICE_NAME</code> (для XREAL: <strong>Device: XREAL ULTRA</strong>) и USB-статус: <strong>CONNECTED</strong> — доступно Windows; <strong>SHARED</strong> — передано в WSL; <strong>NOT CONNECTED</strong> — не обнаружено.</p><p><strong>Attach USB devices</strong> можно отменить кнопкой <strong>Cancel USB operation</strong> или закрытием окна. Каждая команда usbipd ограничена 30 секундами (<code>XR_USB_COMMAND_TIMEOUT</code> в <code>.env</code>, 5–120 секунд), вся USB-операция приложения — тремя минутами. Часть устройств может оставаться подключённой после отмены: проверьте <strong>List USB devices</strong>, при необходимости переподключите выбранный адаптер и повторите. Для автоматического выбора Bluetooth по VID:PID после перезагрузки или смены порта оставьте его BUSID пустым.</p>
+<p>Распакуйте весь Windows-архив и откройте <strong>XR-Gate.exe</strong>. .NET 10 уже включён. Сохраните скрипты и подпапки рядом с исполняемым файлом.</p>
+<ol>
+<li>В <strong>Settings</strong> выберите аппаратный профиль и отдельный Bluetooth-донгл при необходимости. Идентификаторы устройств, модули, пути, геометрия и профили контроллеров задаются в <code>hardware/*.env</code> и <code>.env</code>.</li>
+<li>Нажмите <strong>Install / continue</strong>. Программа объяснит, когда нужна перезагрузка Windows, первый вход в Ubuntu или её перезапуск. Затем продолжите установку.</li>
+<li>Включите SBS и «Расширить эти экраны» в Windows. Закройте SteamVR и нажмите <strong>Select glasses display</strong>, если автоматическая идентификация недоступна.</li>
+<li>Нажмите <strong>Start VR</strong>, пройдите калибровку в консоли трекинга. SteamVR откроется после появления актуальной валидной позы головы; лаунчер удерживает WSL работающим.</li>
+<li><strong>Stop tracking &amp; return USB</strong> останавливает управляемый сеанс и возвращает устройства Windows. Закрытие лаунчера также запрашивает корректную остановку.</li>
+</ol>
+<p>Драйвер выбирается по текущей частоте очков. При неподдерживаемой или неизвестной частоте используется <strong>60 Гц с предупреждением</strong>. Для однозначно определённого выхода программа проверяет и устанавливает 60 Гц, сохраняя разрешение; иначе потребуется выбрать дисплей. Основной монитор не выбирается наугад. Для ручного режима отключите <code>XR_AUTO_DRIVER_FREQUENCY</code>. Поиск дисплея использует сохранённый выбор, <code>XR_DISPLAY_NAME</code>, однозначное совпадение по <code>XR_DISPLAY_MATCH</code> из аппаратного профиля. Одно лишь разрешение не идентифицирует очки.</p>
+<p><strong>Diagnostics</strong> и <strong>Refresh status</strong> можно отменить; время ограничено 60 секундами. Для команд диагностики Linux действует лимит 10 секунд. Статус отдельно показывает настроенную частоту драйвера и текущую частоту найденного дисплея очков. Если дисплей не определён, его частота остаётся неизвестной.</p>
+<p><strong>Diagnostics</strong> и <strong>Save log</strong> собирают диагностику. В <strong>Controllers &amp; tools</strong> доступны сопряжение, регистрация и проверка трекинга. Workflow <strong>Launcher configuration tests</strong> публикует artifact <strong>xr-gate-windows-wsl-usbip-launcher</strong>; полная Windows-сборка кладёт лаунчер и драйверы в <strong>xr-gate-windows-wsl-usbip.zip</strong>, всегда включая запасной вариант 60 Гц.</p>
+<p>Ниже остаётся инструкция для запуска командами.</p>
 <h2>1. Скачайте и подготовьте</h2>
 <ol start="1">
 <li>Нужны Windows 11 x64 и процессор с поддержкой AVX2.</li>
 <li>Установите Steam и SteamVR. Один раз откройте SteamVR, затем закройте его.</li>
-<li>Скачайте <strong>xr-gate-windows.zip</strong> из <a href="https://github.com/vladoshub/xr-gate/releases">Releases</a> или artifact <strong>xr-gate-windows</strong> из своего запуска CI.</li>
-<li>Распакуйте ZIP в постоянную папку. Откройте вложенную папку <code>xr-gate-windows</code>. Сохраните подпапки <code>drivers</code>, <code>hardware</code>, <code>linux</code> и <code>windows</code> вместе.</li>
+<li>Скачайте <strong>xr-gate-windows-wsl-usbip.zip</strong> из <a href="https://github.com/vladoshub/xr-gate/releases">Releases</a> или artifact <strong>xr-gate-windows-wsl-usbip</strong> из своего запуска CI.</li>
+<li>Распакуйте ZIP в постоянную папку. Откройте вложенную папку <code>xr-gate-windows-wsl-usbip</code>. Сохраните подпапки <code>drivers</code>, <code>hardware</code>, <code>linux</code> и <code>windows</code> вместе.</li>
 <li>Откройте в этой папке обычный Windows PowerShell. Все команды ниже выполняйте в нём.</li>
 </ol>
+<h3 id="bluetooth-adapter-for-wsl2">Bluetooth-адаптер для WSL2</h3>
+<p><strong>Проверенный адаптер: ASUS USB-BT500</strong> (<code>0b05:190e</code>), Ubuntu 24.04 в WSL2, ядро <code>6.18.54.1-microsoft-standard-WSL2</code>.</p>
+<p><strong>Рекомендуется использовать для XR Gate отдельный USB Bluetooth-адаптер, а системный оставить Windows.</strong> Проброс USB передаёт адаптер целиком в WSL; пока он подключён туда, Windows не может использовать его для Bluetooth-клавиатуры, мыши, наушников и других устройств. После возврата адаптера Windows снова получает к нему доступ. См. <a href="https://github.com/dorssel/usbipd-win/wiki/WSL-support">документацию usbipd для WSL</a>.</p>
+<p>В лаунчере включите <strong>Enable Bluetooth</strong>. Для ASUS USB-BT500 очистите <strong>Bluetooth USB BUSID</strong> и оставьте в <strong>Bluetooth VID:PID</strong> значение <code>0b05:190e</code> из готового профиля XREAL. Сохраните настройки и нажмите <strong>Attach USB devices</strong>. Текущий BUSID адаптера определится автоматически, в том числе после смены USB-порта.</p>
+<p>Для запуска скриптами укажите <code>XR_BLUETOOTH=1</code> и <code>XR_BLUETOOTH_USB_ID=0b05:190e</code> в <code>.env</code>, оставив <code>XR_BLUETOOTH_BUS_ID</code> пустым. Также можно явно передать <code>-BluetoothUsbId 0b05:190e</code>. В универсальном аппаратном шаблоне VID:PID оставлен пустым для настройки другого адаптера.</p>
+<p><strong>Приоритет выбора:</strong> явный BUSID, явный <code>XR_BLUETOOTH_INSTANCE_ID</code>, настроенный VID:PID, затем сохранённый адаптер при пустых селекторах. Указанный BUSID должен существовать: незаметной подмены на выбор по VID:PID нет. Настроенный VID:PID не заменяется посторонним системным адаптером. При нескольких совпадениях используется сохранённый экземпляр с тем же VID:PID; если его нет, выберите один по BUSID. Bluetooth должен быть включён: само значение VID:PID по умолчанию не запускает проброс устройства.</p>
+<p><strong>Ограничение MediaTek в проверенном ядре:</strong> встроенный MT7922 (<code>0489:e0e2</code>) не инициализируется, поскольку в штатной конфигурации WSL <code>6.18.54.1</code> отключён <code>CONFIG_BT_HCIBTUSB_MTK</code>. Установка прошивок или наличие адаптера в <code>lsusb</code> не добавляет недостающую поддержку драйвера в ядре. Переход на дистрибутив Ubuntu 26.04 внутри WSL также её не включает. См. <a href="https://github.com/microsoft/WSL2-Linux-Kernel/blob/linux-msft-wsl-6.18.54.1/arch/x86/configs/config-wsl">конфигурацию этой версии ядра</a>. Другие адаптеры могут работать при поддержке их драйвера и прошивок текущим ядром WSL; для этой конфигурации проверен ASUS USB-BT500.</p>
 <h2>2. Настройте оборудование (Пропустите для XREAL Ultra)</h2>
 <p>Для XREAL Air 2 Ultra готовый профиль уже настроен. Один раз создайте файл своих настроек:</p>
 <pre><code>if (!(Test-Path .env)) { Copy-Item .env.example .env }
@@ -25,7 +46,7 @@
 <li>Укажите подходящий скрипт настройки из релиза в <code>XR_DEVICE_ACCESS_SCRIPT</code> или оставьте поле пустым. Перечислите нужные модули Linux в <code>XR_KERNEL_MODULES</code>.</li>
 <li>Задайте <code>XR_WINDOW_WIDTH</code>, <code>XR_WINDOW_HEIGHT</code>, <code>XR_RENDER_WIDTH</code>, <code>XR_RENDER_HEIGHT</code>, <code>XR_DISPLAY_FREQUENCY_HZ</code> и оптические параметры своего дисплея.</li>
 </ol>
-<p>Чтобы переопределить сохранённый выбор, укажите настройку прямо в <code>.env</code>. Выбирайте частоту и <code>XR_DISPLAY_MODE</code> (<code>direct</code> или <code>extended_sbs</code>), которые есть в архиве. Для отдельного Bluetooth-донгла укажите его BUSID в <code>XR_BLUETOOTH_BUS_ID</code>. Для отключения сохранённого донгла укажите <code>XR_BLUETOOTH=0</code>; для отключения Gear VR — <code>XR_GEARVR=0</code>. Если SteamVR не найден автоматически, задайте <code>XR_STEAMVR_PATH</code>.</p>
+<p>Чтобы переопределить сохранённый выбор, укажите настройку прямо в <code>.env</code>. Выбирайте частоту и <code>XR_DISPLAY_MODE</code> (<code>direct</code> или <code>extended_sbs</code>), которые есть в архиве. Для отдельного Bluetooth-адаптера укажите его VID:PID в <code>XR_BLUETOOTH_USB_ID</code> для автоматического выбора либо BUSID в <code>XR_BLUETOOTH_BUS_ID</code> для явного выбора порта. Для отключения сохранённого донгла укажите <code>XR_BLUETOOTH=0</code>; для отключения Gear VR — <code>XR_GEARVR=0</code>. Если SteamVR не найден автоматически, задайте <code>XR_STEAMVR_PATH</code>.</p>
 <h2>3. Установите</h2>
 <ol start="1">
 <li>Дважды щёлкните <strong>INSTALL.cmd</strong> или выполните:</li>
@@ -79,42 +100,8 @@
 <pre><code>.\CONSOLE.cmd
 </code></pre>
 <h2>6. Подключите контроллеры Gear VR</h2>
-<ol start="1">
-<li>Укажите BUSID донгла в <code>XR_BLUETOOTH_BUS_ID</code> в <code>.env</code>, затем подключите устройства:</li>
-</ol>
-<pre><code>.\USB.cmd
-</code></pre>
-<ol start="2">
-<li>Откройте консоль сопряжения:</li>
-</ol>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair
-</code></pre>
-<ol start="3">
-<li>Включите режим сопряжения на контроллерах. Подставьте их адреса вместо <code>MAC_LEFT</code> и <code>MAC_RIGHT</code> и введите:</li>
-</ol>
-<pre><code>power on
-agent on
-default-agent
-scan on
-pair MAC_LEFT
-trust MAC_LEFT
-connect MAC_LEFT
-pair MAC_RIGHT
-trust MAC_RIGHT
-connect MAC_RIGHT
-scan off
-quit
-</code></pre>
-<ol start="4">
-<li>Если трекинг запущен, остановите его. Запустите регистрацию:</li>
-</ol>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Controllers -GearVR
-</code></pre>
-<ol start="5">
-<li>Назначьте левый и правый контроллеры по подсказкам, сохраните конфиг и запустите <strong>RUN.cmd</strong>.</li>
-</ol>
-<h2>7. Остановите или измените настройки</h2>
-<ol start="1">
+<ol><li>В Settings включите <strong>Enable Bluetooth</strong> и выберите USB-адаптер.</li><li>Остановите трекинг и включите режим сопряжения на контроллерах.</li><li>Нажмите <strong>Pair Bluetooth controllers</strong>. Выберите левый и правый контроллеры по имени; MAC различает одинаковые имена. Одну сторону можно оставить <strong>Not selected</strong>, чтобы отключить её в конфиге.</li><li>Нажмите <strong>Connect &amp; save</strong>. Программа выполнит pairing, trust и connect и сохранит MAC в <code>~/xr-gate-wsl/config/override_controller.json</code>. Исходный конфиг резервируется; ошибка подключения не изменяет его.</li><li>Нажмите <strong>Start VR</strong>. Для штатного GearVR-профиля отдельная регистрация после этого не нужна. <strong>Register / train controllers</strong> используется для изменения кнопок и других профилей.</li></ol><p>Скриптами та же операция предлагает выбор имён в консоли:</p><pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair</code></pre><p>В Ubuntu-пакете скрипт <code>bin/scripts/override_controller/bluetooth_controllers.py</code> находится рядом со <code>start_override_controller.sh</code>. Автоматическая запись идентификаторов поддерживает backend <code>gearvr_ble</code> из выбранного конфига.</p><h2>7. Остановите или измените настройки</h2>
+<p><strong>Stop tracking &amp; return USB</strong> и закрытие окна дожидаются остановки всех процессов управляемой сессии, затем проверяют возврат USB. Это работает и после одного Attach, без запуска VR. При сбое одного detach проверяются остальные выбранные устройства. Если очистка не завершилась, окно остаётся открытым для проверки журнала и повторного Stop.</p><ol start="1">
 <li>Закройте SteamVR.</li>
 <li>Нажмите <strong>Ctrl+C</strong> в консоли трекинга и дождитесь остановки.</li>
 <li>Для возврата USB-устройств Windows выполните:</li>
@@ -130,4 +117,4 @@ quit
 <pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
 </code></pre>
 <p>Если SteamVR сообщает о неверном дисплее рабочего стола, закройте SteamVR, проверьте расширение экранов, разрешение и частоту в Windows, затем повторите <strong>DISPLAY.cmd</strong> и <strong>RUN.cmd</strong>.</p>
-</article></body></html>
+<h2>Выбор платформ в CI</h2><p>В <strong>XR Gate split build → Run workflow</strong> доступны независимые переключатели <strong>Build ubuntu release</strong> и <strong>Build windows release (includes SteamVR driver)</strong>. Можно собрать Ubuntu, Windows или обе платформы. Windows-пакет <strong>xr-gate-windows-wsl-usbip.zip</strong> включает WPF-приложение со встроенным .NET и SteamVR-драйверы.</p><p>При сборке только Windows установщик использует точный тег уже опубликованного Ubuntu-релиза с runtime и моделями. Повторная сборка Linux не требуется. Если такого релиза нет, CI попросит сначала опубликовать Ubuntu. Публикация загружает только выбранные платформы.</p></article></body></html>

@@ -545,6 +545,9 @@ copy_runtime_scripts() {
   copy_runtime_file \
     "$XR_ROOT_PROJECT/override_controller/scripts/linux/start_override_controller.sh" \
     "$XR_OUT_BIN_ROOT/scripts/override_controller/start_override_controller.sh"
+  copy_runtime_file \
+    "$XR_ROOT_PROJECT/override_controller/scripts/linux/bluetooth_controllers.py" \
+    "$XR_OUT_BIN_ROOT/scripts/override_controller/bluetooth_controllers.py"
 
   copy_runtime_file \
     "$XR_ROOT_PROJECT/bridges/scripts/linux/start_capture_net_bridge.sh" \

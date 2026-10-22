@@ -46,6 +46,21 @@ namespace XrGateWsl {
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool EnumDisplaySettings(string device, int mode, ref DisplayMode info);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "ChangeDisplaySettingsExW")]
+        private static extern int ChangeDisplaySettingsEx(string device, ref DisplayMode mode, IntPtr window, uint flags, IntPtr parameter);
+
+        public static void SetFrequency(string device, int frequency) {
+            var mode = new DisplayMode();
+            mode.Size = (ushort)ModeStructSize;
+            if (!EnumDisplaySettings(device, -1, ref mode)) throw new InvalidOperationException("Cannot read the glasses display mode.");
+            mode.Frequency = (uint)frequency;
+            mode.Fields = 0x00080000 | 0x00100000 | 0x00400000; // width, height, frequency; preserve resolution.
+            int tested = ChangeDisplaySettingsEx(device, ref mode, IntPtr.Zero, 2, IntPtr.Zero);
+            if (tested != 0) throw new InvalidOperationException("Windows cannot use 60 Hz at the current glasses resolution. Select 60 Hz in Windows Display settings before starting VR. Error: " + tested);
+            int applied = ChangeDisplaySettingsEx(device, ref mode, IntPtr.Zero, 1, IntPtr.Zero);
+            if (applied != 0) throw new InvalidOperationException("Could not switch the glasses to 60 Hz. Windows error: " + applied);
+        }
+
         public static int DeviceStructSize { get { return Marshal.SizeOf(typeof(DisplayDevice)); } }
         public static int ModeStructSize { get { return Marshal.SizeOf(typeof(DisplayMode)); } }
 

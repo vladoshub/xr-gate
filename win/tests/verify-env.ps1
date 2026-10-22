@@ -69,8 +69,13 @@ XR_STEAMVR_PATH="D:\A folder\SteamVR"
     $script:SettingOverrides['XR_DISPLAY_FREQUENCY_HZ'] = '72'
     Load-State
     Assert ([int]$script:State.FrequencyHz -eq 72) '.env did not override the saved selection.'
+    $script:Settings['XR_AUTO_DRIVER_FREQUENCY'] = '1'
+    Load-State
+    Assert ([int]$script:State.FrequencyHz -eq 90) 'Manual .env frequency replaced the automatically selected/saved driver frequency.'
+    $script:Settings['XR_AUTO_DRIVER_FREQUENCY'] = '0'
+    Load-State
 
-    $bundleRoot = Join-Path $temporary 'archive/xr-gate-windows'
+    $bundleRoot = Join-Path $temporary 'archive/xr-gate-windows-wsl-usbip'
     $package = Join-Path $bundleRoot 'drivers/72Hz-extended_sbs/xr_tracking'
     foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
         $target = Join-Path $package $name
@@ -81,21 +86,62 @@ XR_STEAMVR_PATH="D:\A folder\SteamVR"
         Set-Content -LiteralPath (Join-Path $bundleRoot 'bundle.json')
     Assert ((Find-BundledDriver $bundleRoot) -eq $package) 'Bundled driver selection failed.'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $script:TestArchive = Join-Path $temporary 'xr-gate-windows.zip'
+    $script:TestArchive = Join-Path $temporary 'xr-gate-windows-wsl-usbip.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory((Split-Path -Parent $bundleRoot), $script:TestArchive)
     function Save-ReleaseAsset($Asset, [string]$Directory) {
-        Assert ($Asset.name -eq 'xr-gate-windows.zip') 'Installer requested an old standalone variant.'
+        Assert ($Asset.name -eq 'xr-gate-windows-wsl-usbip.zip') 'Installer requested an old standalone variant.'
         return $script:TestArchive
     }
     $release = [pscustomobject]@{tag_name='v9.9.9'; assets=@([pscustomobject]@{
-        name='xr-gate-windows.zip'; digest=('sha256:' + ('f' * 64));
-        browser_download_url='https://github.com/vladoshub/xr-gate/releases/download/v9.9.9/xr-gate-windows.zip'
+        name='xr-gate-windows-wsl-usbip.zip'; digest=('sha256:' + ('f' * 64));
+        browser_download_url='https://github.com/vladoshub/xr-gate/releases/download/v9.9.9/xr-gate-windows-wsl-usbip.zip'
     })}
     $cache = Join-Path $temporary 'cache'
     New-Item -ItemType Directory $cache | Out-Null
     $downloaded = Get-DriverPackage $release $cache
     Assert (Test-Path -LiteralPath (Join-Path $downloaded 'bin/win64/driver_xr_tracking.dll')) 'Combined release bundle was not installed.'
-    'OK Windows env precedence, generic USB, display geometry, state migration and combined archive installation'
+    $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 90
+    Assert ($selection.Frequency -eq 90 -and !$selection.Fallback) 'Current glasses frequency did not select its matching driver.'
+    $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 59
+    Assert ($selection.Frequency -eq 60 -and !$selection.Fallback) '59/60 Hz Windows rounding was not handled.'
+    $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 120
+    Assert ($selection.Frequency -eq 60 -and $selection.Fallback) 'Unsupported glasses frequency did not fall back to 60 Hz.'
+    $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 0
+    Assert ($selection.Frequency -eq 60 -and $selection.Fallback) 'Unknown glasses frequency silently selected another monitor frequency.'
+    $bad = $false
+    try { Resolve-DriverFrequency -Available @(90) -Detected 120 } catch { $bad = $true }
+    Assert $bad 'A package without the required fallback silently selected 90 Hz.'
+    $DisplayName = ''; $script:State.DisplayDeviceId = ''
+    $script:Settings['XR_DISPLAY_MATCH'] = 'Custom headset'
+    $glasses = [pscustomobject]@{DeviceName='DISPLAY7'; DeviceId='custom-1'; Name='Custom headset'; Width=2520; Height=1440; Frequency=72; Primary=$false}
+    $main = [pscustomobject]@{DeviceName='DISPLAY1'; DeviceId='monitor-1'; Name='Main monitor'; Width=1920; Height=1080; Frequency=144; Primary=$true}
+    Assert ((Find-AutomaticXrDisplay @($main,$glasses)).DeviceId -eq 'custom-1') 'A non-XREAL hardware display match was ignored.'
+    $clone = [pscustomobject]@{DeviceName='DISPLAY7'; DeviceId='clone'; Name='Another monitor'; Width=2520; Height=1440; Frequency=72; Primary=$false}
+    Assert ($null -eq (Find-AutomaticXrDisplay @($main,$glasses,$clone))) 'An ambiguous cloned output was selected automatically.'
+    $script:State.DisplayDeviceId = 'custom-1'
+    Assert ($null -eq (Find-AutomaticXrDisplay @($main,$glasses,$clone))) 'A saved display silently changed a cloned main-monitor output.'
+    $script:State.DisplayDeviceId = ''; $script:Settings['XR_DISPLAY_MATCH'] = ''
+    $main.Width = 2520; $main.Height = 1440
+    Assert ($null -eq (Find-AutomaticXrDisplay @($main))) 'The main monitor was guessed from geometry alone.'
+    $unrelated = [pscustomobject]@{DeviceName='DISPLAY8'; DeviceId='monitor-2'; Name='Office monitor'; Width=2520; Height=1440; Frequency=144; Primary=$false}
+    Assert ($null -eq (Find-AutomaticXrDisplay @($main,$unrelated))) 'An unrelated secondary monitor was guessed from resolution.'
+    function Get-DesktopDisplays { return @($main, $unrelated) }
+    $observation = Get-XrDisplayObservation
+    Assert ($null -eq $observation.frequency_hz) 'Missing glasses were assigned a monitor or configured driver frequency.'
+    $script:Settings['XR_DISPLAY_MATCH'] = 'Custom headset'
+    function Get-DesktopDisplays { return @($main, $glasses) }
+    $configuredBeforeObservation = [int]$script:State.FrequencyHz
+    $observation = Get-XrDisplayObservation
+    Assert ($observation.frequency_hz -eq 72) 'Status did not read the current glasses output frequency.'
+    Assert ([int]$script:State.FrequencyHz -eq $configuredBeforeObservation) 'Read-only status changed the selected driver.'
+    Select-AutomaticDriverFrequency $release $cache
+    Assert ([int]$script:State.FrequencyHz -eq 72) 'Automatic selection did not use the current custom headset frequency.'
+    Assert ($script:State.DisplayDeviceId -eq 'custom-1') 'Automatic selection did not save the selected glasses identity.'
+    Assert ($script:ResolvedDriverRoot -eq (Split-Path -Parent $downloaded | Split-Path -Parent | Split-Path -Parent)) 'Automatic selection ignored the verified cached Windows bundle.'
+    Add-Type -Path (Join-Path $root 'windows/DisplayNative.cs')
+    Assert ([XrGateWsl.DisplayNative]::ModeStructSize -eq 220) 'DEVMODEW layout changed.'
+    Assert ([XrGateWsl.DisplayNative]::DeviceStructSize -eq 840) 'DISPLAY_DEVICEW layout changed.'
+    'OK Windows env, generic USB/display matching, frequency fallback, state migration and archive installation'
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force
 }

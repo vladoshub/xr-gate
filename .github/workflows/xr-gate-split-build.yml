@@ -6,6 +6,11 @@ name: XR Gate split build
   pull_request:
   workflow_dispatch:
     inputs:
+      build_ubuntu_release:
+        description: "Build ubuntu release"
+        type: boolean
+        required: false
+        default: true
       cpu_profile:
         description: "Native CPU target (native requires consistent builder CPUs)"
         type: choice
@@ -51,7 +56,7 @@ name: XR Gate split build
         required: false
         default: false
       release_windows_driver:
-        description: "Include Windows SteamVR driver packages in the GitHub Release"
+        description: "Build windows release (includes SteamVR driver)"
         type: boolean
         required: false
         default: true
@@ -80,13 +85,15 @@ env:
   XR_BUILD_CPU: ${{ github.event_name == 'workflow_dispatch' && inputs.cpu_profile || 'avx2' }}
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
-  XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer && '1' || '0' }}
+  XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ubuntu_release && inputs.include_xrizer && '1' || '0' }}
   XR_BUILD_VENDOR_COMPONENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.include_vendor_components == false && '0' || '1' }}
   XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
   XR_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_modes || 'direct' }}
-  XR_WINDOWS_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_openvr_frequencies || '60 90' }}
+  # Every Windows package includes the automatic selection's 60 Hz fallback.
+  XR_WINDOWS_OPENVR_BUILD_FREQUENCIES: ${{ format('60 {0}', github.event_name == 'workflow_dispatch' && inputs.windows_openvr_frequencies || '60 90') }}
   XR_WINDOWS_OPENVR_BUILD_MODES: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_openvr_modes || 'direct extended_sbs' }}
   XR_RELEASE_WINDOWS_DRIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.release_windows_driver && '1' || '0' }}
+  XR_BUILD_UBUNTU_RELEASE: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.build_ubuntu_release && '1' || '0' }}
 
 defaults:
   run:
@@ -123,6 +130,7 @@ jobs:
 
   release-unpack-helper:
     name: release unpack helper
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ubuntu_release }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -160,6 +168,7 @@ jobs:
           retention-days: 7
 
   build-opencv:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ubuntu_release }}
     name: OpenCV SDK / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
     container: ubuntu:${{ matrix.ubuntu }}
@@ -466,7 +475,7 @@ jobs:
     runs-on: ubuntu-24.04
     container: ubuntu:${{ matrix.ubuntu }}
     needs: build-opencv
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer == true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ubuntu_release && inputs.include_xrizer == true }}
     timeout-minutes: 180
 
     strategy:
@@ -572,6 +581,7 @@ jobs:
 
 
   hand-tracking-models-mercury:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ubuntu_release }}
     name: hand-tracking models Mercury
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -771,21 +781,76 @@ jobs:
           xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
 
   build-steamvr-windows:
-    name: Windows installer and SteamVR drivers
+    name: Windows WPF launcher and SteamVR drivers
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_windows_driver }}
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Resolve the Ubuntu runtime release used by the Windows installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_UBUNTU: ${{ inputs.build_ubuntu_release }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtimeTag = 'latest'
+          if ($env:BUILD_UBUNTU -eq 'true' -and $env:PUBLISH_RELEASE -eq 'true') {
+            $runtimeTag = $env:RELEASE_TAG
+          } elseif ($env:BUILD_UBUNTU -ne 'true') {
+            # A Windows-only release must not point its installer at itself:
+            # it contains no Linux runtime/model assets. Pin a usable prior tag.
+            $headers = @{Authorization="Bearer $env:GH_TOKEN"; Accept='application/vnd.github+json'}
+            $found = $null
+            for ($page = 1; $page -le 10 -and !$found; $page++) {
+              $releases = @(Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100&page=$page")
+              if (!$releases.Count) { break }
+              foreach ($release in $releases) {
+                $names = @($release.assets | ForEach-Object { $_.name })
+                if (!$release.draft -and 'xr-gate-ubuntu-24.04-linux-x64.tar.gz' -in $names -and
+                    'hand-tracking-models-mercury.tar.gz' -in $names) { $found = $release; break }
+              }
+            }
+            if (!$found) { throw 'No published Ubuntu runtime/models release exists. Enable Build ubuntu release and publish it first.' }
+            $runtimeTag = [string]$found.tag_name
+          }
+          "WINDOWS_BUNDLE_RELEASE=$runtimeTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Windows installer runtime release: $runtimeTag"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify installer and driver contracts on Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          & ./win/tests/verify-env.ps1
+          & ./win/tests/verify-steamvr-paths.ps1
+          & ./win/tests/verify-runtime-contracts.ps1
+          & ./win/tests/verify-bluetooth-firmware.ps1
+          & ./win/tests/verify-bluetooth-selection.ps1
+          & ./win/tests/verify-usb-timeout.ps1
+          & ./win/tests/verify-device-lifecycle.ps1
+          & ./win/tests/verify-release-platforms.ps1
+      - name: Test Bluetooth side selection and configuration updates
+        run: python -m unittest discover -s win/tests -p 'test_bluetooth_controllers.py'
+      - name: Verify partial TCP streams have a total deadline
+        run: python -m unittest discover -s win/tests -p 'test_windows_contracts.py'
+      - name: Publish and smoke-test self-contained WPF launcher
+        run: '& ./win/launcher/build.ps1 -OutputDirectory ./out/windows-launcher'
       - name: Validate Windows driver selection
         run: |
           $ErrorActionPreference = 'Stop'
           $frequencies = @($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split '[\s,;]+' | Where-Object { $_ } | Select-Object -Unique)
           $modes = @($env:XR_WINDOWS_OPENVR_BUILD_MODES -split '[\s,;]+' | Where-Object { $_ } | Select-Object -Unique)
           if (!$frequencies.Count -or !$modes.Count) { throw 'Select at least one Windows OpenVR frequency and mode.' }
+          # Automatic driver selection always needs the requested 60 Hz fallback.
+          if ($frequencies -notcontains '60') { $frequencies += '60' }
           foreach ($frequency in $frequencies) {
             if ($frequency -cnotmatch '^[1-9][0-9]{0,3}$' -or [int]$frequency -gt 1000) {
               throw "Invalid Windows OpenVR frequency '$frequency'; use integer Hz values from 1 to 1000."
@@ -812,15 +877,10 @@ jobs:
           repository: nlohmann/json
           ref: v3.11.3
           path: .build-deps/json
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
       - name: Build, test driver functionality, and package Windows drivers
-        env:
-          WINDOWS_BUNDLE_RELEASE: ${{ inputs.publish_release && inputs.release_tag || 'latest' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $root = $env:GITHUB_WORKSPACE
@@ -856,17 +916,18 @@ jobs:
             }
           }
           python win/package_windows.py build --drivers-root $drivers `
-            --output (Join-Path $dist 'xr-gate-windows.zip') `
+            --launcher-exe (Join-Path $root 'out/windows-launcher/XR-Gate.exe') `
+            --output (Join-Path $dist 'xr-gate-windows-wsl-usbip.zip') `
             --frequencies $env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES `
             --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE
           if ($LASTEXITCODE -ne 0) { throw 'Windows bundle packaging failed' }
       - name: Upload Windows installer and SteamVR drivers
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-windows
+          name: xr-gate-windows-wsl-usbip
           path: |
-            dist-windows/xr-gate-windows.zip
-            dist-windows/xr-gate-windows.zip.sha256
+            dist-windows/xr-gate-windows-wsl-usbip.zip
+            dist-windows/xr-gate-windows-wsl-usbip.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -887,10 +948,13 @@ jobs:
           inputs.publish_release == true ||
           github.event.inputs.publish_release == 'true'
         ) &&
-        needs.release-unpack-helper.result == 'success' &&
-        needs.hand-tracking-models-mercury.result == 'success' &&
-        needs.merge-package.result == 'success'
-        && needs.check-24-on-26.result == 'success'
+        (inputs.build_ubuntu_release || inputs.release_windows_driver) &&
+        (!inputs.build_ubuntu_release || (
+          needs.release-unpack-helper.result == 'success' &&
+          needs.hand-tracking-models-mercury.result == 'success' &&
+          needs.merge-package.result == 'success' &&
+          needs.check-24-on-26.result == 'success'
+        ))
         && (inputs.release_windows_driver == false || needs.build-steamvr-windows.result == 'success')
       }}
     timeout-minutes: 20
@@ -902,6 +966,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download merged runtime package
+        if: ${{ env.XR_BUILD_UBUNTU_RELEASE == '1' }}
         uses: actions/download-artifact@v4
         with:
           pattern: xr-gate-ubuntu-*-linux-x64
@@ -909,6 +974,7 @@ jobs:
           path: release-assets/runtime
 
       - name: Download Mercury hand-tracking models
+        if: ${{ env.XR_BUILD_UBUNTU_RELEASE == '1' }}
         uses: actions/download-artifact@v4
         with:
           name: hand-tracking-models-mercury
@@ -918,10 +984,11 @@ jobs:
         if: ${{ env.XR_RELEASE_WINDOWS_DRIVER == '1' }}
         uses: actions/download-artifact@v4
         with:
-          name: xr-gate-windows
+          name: xr-gate-windows-wsl-usbip
           path: release-assets/windows
 
       - name: Download unpack helper
+        if: ${{ env.XR_BUILD_UBUNTU_RELEASE == '1' }}
         uses: actions/download-artifact@v4
         with:
           name: unpack-xr-gate
@@ -941,16 +1008,19 @@ jobs:
 
           find release-assets -maxdepth 5 -type f -print -exec ls -lh {} \;
 
-          test -f release-assets/models/hand-tracking-models-mercury.tar.gz
-          test -f release-assets/unpack-helper/unpack_xr_gate.sh
+          if [[ "$XR_BUILD_UBUNTU_RELEASE" == "1" ]]; then
+            test -f release-assets/models/hand-tracking-models-mercury.tar.gz
+            test -f release-assets/unpack-helper/unpack_xr_gate.sh
+          fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            test -f release-assets/windows/xr-gate-windows.zip
-            test -f release-assets/windows/xr-gate-windows.zip.sha256
-            (cd release-assets/windows && sha256sum -c xr-gate-windows.zip.sha256)
-            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows.zip \
+            test -f release-assets/windows/xr-gate-windows-wsl-usbip.zip
+            test -f release-assets/windows/xr-gate-windows-wsl-usbip.zip.sha256
+            (cd release-assets/windows && sha256sum -c xr-gate-windows-wsl-usbip.zip.sha256)
+            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows-wsl-usbip.zip \
               --frequencies "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" --modes "$XR_WINDOWS_OPENVR_BUILD_MODES"
           fi
 
+          if [[ "$XR_BUILD_UBUNTU_RELEASE" == "1" ]]; then
           for ubuntu in 24.04 26.04; do
             rm -rf verify/runtime
             mkdir -p verify/runtime
@@ -1002,6 +1072,8 @@ jobs:
             test ! -e verify/runtime/xr-gate/devices/xreal_ultra/linux/scripts/xr_spatial
           done
 
+          fi
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1010,14 +1082,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          ASSETS=(
-            release-assets/runtime/xr-gate-ubuntu-24.04-linux-x64.tar.gz
-            release-assets/runtime/xr-gate-ubuntu-26.04-linux-x64.tar.gz
-            release-assets/models/hand-tracking-models-mercury.tar.gz
-            release-assets/unpack-helper/unpack_xr_gate.sh
-          )
+          ASSETS=()
+          if [[ "$XR_BUILD_UBUNTU_RELEASE" == "1" ]]; then
+            ASSETS+=(
+              release-assets/runtime/xr-gate-ubuntu-24.04-linux-x64.tar.gz
+              release-assets/runtime/xr-gate-ubuntu-26.04-linux-x64.tar.gz
+              release-assets/models/hand-tracking-models-mercury.tar.gz
+              release-assets/unpack-helper/unpack_xr_gate.sh
+            )
+          fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            ASSETS+=(release-assets/windows/xr-gate-windows.zip release-assets/windows/xr-gate-windows.zip.sha256)
+            ASSETS+=(release-assets/windows/xr-gate-windows-wsl-usbip.zip release-assets/windows/xr-gate-windows-wsl-usbip.zip.sha256)
           fi
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             for ubuntu in 24.04 26.04; do
@@ -1043,6 +1118,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "XR Gate $TAG" \
-              --notes "XR Gate Linux x64, CPU profile: $XR_BUILD_CPU. Separate Ubuntu 24.04 and 26.04 packages; Mercury models are shared." \
+              --notes "XR Gate. Ubuntu release: $XR_BUILD_UBUNTU_RELEASE; Windows WSL/USB-IP release with SteamVR driver: $XR_RELEASE_WINDOWS_DRIVER. CPU profile: $XR_BUILD_CPU." \
               "${args[@]}"
           fi
