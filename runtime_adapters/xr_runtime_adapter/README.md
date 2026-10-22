@@ -247,7 +247,8 @@ drift.
 The runtime defaults to smooth yaw correction. It compares interpolated IMU
 orientation with an accepted optical pose at the camera source timestamp, then
 advances only the retained yaw offset each runtime tick. Gyro motion is not
-scaled or low-pass filtered. Initial alignment is immediate; later correction,
+scaled or low-pass filtered. Initial alignment waits for 1000 ms of consistent,
+distinct source-time pairs; later correction,
 including optical reacquire, has a degrees-per-second limit. Source timestamps
 are required in smooth mode; legacy timestamp-less producers can use periodic
 mode instead.
@@ -257,6 +258,9 @@ export RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_SMOOTH=1
 export RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_DEADBAND_DEG=1
 export RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_MAX_SPEED_DEG_S=2
 export RUNTIME_CONTROLLER_IMU_YAW_SMOOTH_TAU_MS=2000
+export RUNTIME_CONTROLLER_IMU_YAW_MAX_SOURCE_AGE_MS=250
+export RUNTIME_CONTROLLER_IMU_YAW_REFERENCE_STABLE_MS=1000
+export RUNTIME_CONTROLLER_IMU_YAW_REFERENCE_MAX_RANGE_DEG=3
 ```
 
 The deadband is soft: only the residual outside it contributes to correction.
@@ -265,16 +269,70 @@ speed even for large errors. These values are an initial aiming-oriented
 profile, not hardware-validated tuning. Raw gyro response remains unchanged.
 The new options also read these environment variables directly through CLI11,
 so installed launch scripts from before this change can use them without being
-replaced. The startup log reports `runtime_controller_imu_yaw_correction_mode`.
+replaced. An unconditional `[xr_runtime_adapter][yaw-config]` startup line
+identifies `algorithm=relative_rotation_v2` and its effective settings.
+
+Only the first reference uses projected forward headings. Subsequent targets
+compare the world-Y twist of full optical/IMU rotations relative to that pair.
+A fixed local palm-to-sensor mounting cancels from these relative rotations.
+Subtracting absolute projected headings at every frame can otherwise invent
+nearly 180 degrees of yaw drift when a rigidly held wrist pitches or rolls.
+A second trusted reference covers the first reference's relative 180-degree
+horizontal-swing singularity. If neither reference is observable, correction
+waits and preserves the retained yaw; it does not invent a new frame.
+
+Startup confirmation checks the range of the relative yaw target, not whether
+the controller stays still. Useful IMU rotation remains live while confirming.
+Loss, rejected/low-confidence optics or a source-time gap over 150 ms restart
+an unconfirmed reference. Cached frames cannot advance the source-time clock.
+An optical outlier outside REFERENCE_MAX_RANGE_DEG restarts confirmation;
+the default REFERENCE_STABLE_MS is 1000 (0 retains immediate initialization).
+This presentation reference is separate from the physical acceleration frame's
+four-second confirmation. `[xr_runtime_adapter][yaw-reference]` reports its
+readiness independently; the client's IMU prediction calibration message refers
+to the physical frame. Saved mounting and accelerometer calibration is unchanged.
 
 Rejected/predicted/held optical poses, confidence below MIN_CONFIDENCE (default
-0.5), source age over 150 ms and nearly vertical headings suspend correction.
+0.5), excessive source age and unobservable relative rotations suspend correction.
+A nearly vertical forward heading cannot establish the initial reference, but
+does not prevent correction after an observable full-rotation reference exists.
+`RUNTIME_CONTROLLER_IMU_YAW_MAX_SOURCE_AGE_MS` bounds the age of a matched
+optical/IMU pair and the retained smooth target. It defaults to 250 ms, matching
+the runtime's default hand age budget. A 30 Hz camera arriving 140 ms after
+measurement can have usable evidence aged 140--173 ms; the former fixed 150 ms
+cutoff intermittently stopped correction despite accepted optical poses.
+The setting is also available as `--runtime-controller-imu-yaw-max-source-age-ms`
+(1--1000 ms). This permits bounded delivery latency; it does not compare the
+camera pose with the latest IMU pose. Both still match at camera source time.
+Frozen observations and targets expire at the configured limit. The separate
+IMU interpolation-gap and optical jump-confirmation continuity checks stay
+unchanged, as do physical force-heading calibration and position prediction.
 Optical yaw innovations above MAX_JUMP_DEG (default 15) must remain within
 3 degrees of the candidate for JUMP_HOLD_MS (default 200) before becoming a target. These
 checks compare matched yaw differences, so a real rigid turn is not a jump.
+The last confirmed yaw difference survives optical loss and stale/low-quality
+observations. A large change in the first returning palm pose still needs the
+same jump confirmation; a gap only discards the pending candidate's support.
+An AHRS epoch, device or explicit controller-state reset clears that reference.
 Stale targets cannot resume correction until a fresh pair arrives; long runtime
 stalls do not accumulate a catch-up correction budget. This presentation yaw
 does not change the physical frame used by acceleration/position prediction.
+
+Runtime status lines distinguish the optical observation from the retained yaw
+target: `controller_*_yaw_optical_reason` reports `no_tracked_pose`,
+`invalid_quaternion`, `not_accepted` (hand gate or frame mismatch),
+`low_confidence`, `missing_source_time`, `waiting_imu_pair`, `future_pair`,
+`pair_too_old` or `matched`. The per-side `yaw_pair_age_ms`, `yaw_target_age_ms`
+and `raw_optical_confidence` fields explain why a correction is suspended even
+when position tracking is available. A logged `yaw_error_deg` can be retained
+from an earlier observation while optics are rejected; it is not necessarily
+the current visible wrist error.
+The `yaw_ready`, `yaw_reference_elapsed_ms`, `yaw_relative_condition` and
+`yaw_desired_deg` fields distinguish startup confirmation, poor rotation
+observability and a newly measured target from the filtered output.
+`controller_publish_ns` and `controller_receive_ns`, together with the existing
+`controller_tick_ns` and per-side `imu_orientation_ns`, separate sample age from
+publication/transport age. Sample age alone does not identify the delayed stage.
 
 Set `RUNTIME_CONTROLLER_IMU_YAW_CORRECTION_SMOOTH=0` to select the previous
 periodic hold/interval/blend mechanism. Those periodic settings are ignored in

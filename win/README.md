@@ -84,6 +84,11 @@ For **direct**, use `Direct-Mode-Guide.bat` in the selected `drivers/<frequency>
 
 ## 5. Start
 
+Optional `.env` setting `XR_HMD_MAX_AGE_MS` controls the maximum source HMD pose
+age (default 250 ms). Setting it to `500` is a temporary workaround for source
+timestamp delays in WSL. It does not reduce sensor latency and increases the
+time before a stopped source is reported as lost.
+
 1. Connect the devices. Place IMU controllers on a flat surface and keep them still.
 2. Run:
 

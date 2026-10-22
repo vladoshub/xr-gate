@@ -214,6 +214,7 @@ xr_runtime::HmdPoseF64V1 HmdPoseStabilityFilter::filter(
   }
 
   if (!has_last_good_) {
+    has_last_good_ = true;
     last_good_ = input;
     last_good_receive_ns_ = now_ns;
     last_reset_counter_ = input.reset_counter;
@@ -224,10 +225,18 @@ xr_runtime::HmdPoseF64V1 HmdPoseStabilityFilter::filter(
     return input;
   }
 
-  int64_t dt_ns = now_ns - last_good_receive_ns_;
-  if (dt_ns <= 0 && input.timestamp_ns > last_good_.timestamp_ns) {
-    dt_ns = static_cast<int64_t>(input.timestamp_ns - last_good_.timestamp_ns);
+  // A 90 Hz (or faster polling) consumer reads each 30 Hz source pose more
+  // than once. Re-reading a good pose must not move its time anchor forward.
+  if (input.sequence == last_good_.sequence && input.timestamp_ns == last_good_.timestamp_ns) {
+    if (decision_out) *decision_out = decision;
+    return input;
   }
+
+  // Compare motion in the source clock, independently of USB/WSL scheduling
+  // and bursts of already timestamped poses delivered close together.
+  int64_t dt_ns = input.timestamp_ns > last_good_.timestamp_ns
+      ? static_cast<int64_t>(input.timestamp_ns - last_good_.timestamp_ns)
+      : now_ns - last_good_receive_ns_;
   if (dt_ns <= 0) {
     dt_ns = ms_to_ns_local(cfg_.window_ms);
   }

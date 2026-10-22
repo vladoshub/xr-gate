@@ -1,0 +1,24 @@
+name: Runtime functional tests
+
+"on":
+  pull_request:
+    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', '.github/workflows/runtime-controller-tests.yml']
+  push:
+    branches: [main, master]
+    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', '.github/workflows/runtime-controller-tests.yml']
+  workflow_dispatch:
+
+jobs:
+  runtime-controller:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libcli11-dev nlohmann-json3-dev
+      - name: Build runtime and regression tests
+        run: |
+          cmake -S runtime_adapters/xr_runtime_adapter -B build/runtime-tests -DCMAKE_BUILD_TYPE=Release -DXR_RUNTIME_ADAPTER_BUILD_TESTS=ON
+          cmake --build build/runtime-tests --parallel 2
+      - name: Test HMD stability, source age, optical reacquire, yaw and IMU delivery
+        run: ctest --test-dir build/runtime-tests --output-on-failure --timeout 30

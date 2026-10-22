@@ -493,6 +493,10 @@ class Runtime:
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+        if self.settings.get("XR_HMD_MAX_AGE_MS"):
+            age_ms = integer_setting(self.settings, "XR_HMD_MAX_AGE_MS", maximum=5000)
+            env["MAX_HMD_AGE_MS"] = str(age_ms)
+            log(f"HMD source max age: {age_ms} ms (this does not reduce capture latency).")
         args = ["bash", str(package / "run_xr_client.sh"), "--config", str(profile),
                 "--root", str(package), "--prestart-option", option]
         os.chdir(package)

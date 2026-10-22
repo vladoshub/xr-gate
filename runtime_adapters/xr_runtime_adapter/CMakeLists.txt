@@ -63,12 +63,29 @@ install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_r
 option(XR_RUNTIME_ADAPTER_BUILD_TESTS "Build runtime tracking regression tests" OFF)
 if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
   enable_testing()
+  add_executable(hmd_pose_stability_test tests/hmd_pose_stability_test.cpp src/hmd_pose_stability_filter.cpp)
+  target_compile_features(hmd_pose_stability_test PRIVATE cxx_std_17)
+  target_include_directories(hmd_pose_stability_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${XR_SHARED_INCLUDE_DIR}")
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(hmd_pose_stability_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(hmd_pose_stability_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  add_test(NAME hmd_pose_stability_test COMMAND hmd_pose_stability_test)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(NAME app_tcp_server_test
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_tcp_server_test.py"
         --adapter $<TARGET_FILE:xr_runtime_adapter>)
     set_tests_properties(app_tcp_server_test PROPERTIES TIMEOUT 30)
+    add_test(NAME controller_yaw_configuration_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/controller_yaw_configuration_test.py"
+        --adapter $<TARGET_FILE:xr_runtime_adapter>)
+    set_tests_properties(controller_yaw_configuration_test PROPERTIES TIMEOUT 15)
+    add_test(NAME hmd_age_configuration_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/hmd_age_configuration_test.py"
+        --adapter $<TARGET_FILE:xr_runtime_adapter>)
+    set_tests_properties(hmd_age_configuration_test PROPERTIES TIMEOUT 15)
   endif()
   add_executable(controller_imu_angular_velocity_test
     tests/controller_imu_angular_velocity_test.cpp
