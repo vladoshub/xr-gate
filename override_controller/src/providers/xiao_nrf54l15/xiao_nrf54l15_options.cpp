@@ -1,4 +1,5 @@
 #include "xiao_nrf54l15_options.hpp"
+#include <xr_override_controller/imu/gyro_bias_options.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -91,6 +92,8 @@ void apply_option(XiaoNrf54l15Options& options,
     options.axis_flat = parse_int(value, name);
   } else if (key == "madgwick_beta") {
     options.madgwick_beta = parse_double(value, name);
+  } else if (imu::apply_gyro_bias_option(options.gyro_bias, key, value)) {
+    // Shared controller IMU startup configuration.
   } else {
     throw std::runtime_error("unknown xiao_nrf54l15 provider option: " + raw_key);
   }
@@ -104,6 +107,7 @@ void apply_env(XiaoNrf54l15Options& options, const char* env, const char* key) {
 }
 
 void validate(const XiaoNrf54l15Options& options) {
+  (void)imu::ControllerImuProcessor(0, options.gyro_bias);
   if (options.baud_rate != 115200 && options.baud_rate != 230400 &&
       options.baud_rate != 460800 && options.baud_rate != 921600) {
     throw std::runtime_error(

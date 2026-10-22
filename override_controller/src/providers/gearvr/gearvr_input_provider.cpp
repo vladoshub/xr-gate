@@ -13,6 +13,7 @@
 #include "gearvr_imu_stream.hpp"
 #include "gearvr_touchpad.hpp"
 #include <xr_override_controller/imu/controller_imu_calibration.hpp>
+#include <xr_override_controller/imu/gyro_bias_status.hpp>
 
 #include <algorithm>
 #include <array>
@@ -95,11 +96,13 @@ struct GearVrInputProvider::Impl {
     TouchpadProcessor touchpad;
     uint64_t last_packet_ns = 0;
     uint64_t last_imu_drop_warning_ns = 0;
+    imu::GyroBiasLogState gyro_bias_log;
     uint8_t previous_buttons = 0;
     bool previous_touch = false;
 
-    Session(float beta, TouchpadOptions touchpad_options)
-        : imu_stream(beta), touchpad(std::move(touchpad_options)) {}
+    Session(float beta, TouchpadOptions touchpad_options,
+            imu::GyroBiasCalibrationConfig gyro_bias)
+        : imu_stream(beta, gyro_bias), touchpad(std::move(touchpad_options)) {}
   };
 
   explicit Impl(ProviderOptionValues input_options)
@@ -205,7 +208,7 @@ struct GearVrInputProvider::Impl {
       auto& session_ptr = sessions[snapshot.stable_id];
       if (!session_ptr) {
         session_ptr = std::make_unique<Session>(
-            static_cast<float>(options.madgwick_beta), touchpad_options());
+            static_cast<float>(options.madgwick_beta), touchpad_options(), options.gyro_bias);
         session_ptr->stable_id = snapshot.stable_id;
       }
       Session& session = *session_ptr;
@@ -282,6 +285,10 @@ struct GearVrInputProvider::Impl {
     const uint32_t dropped_before = session.imu_stream.dropped_batches();
     const uint32_t wraps_before = session.imu_stream.clock_wraps();
     const bool accepted = session.imu_stream.push(*decoded, packet_host_ns);
+    if (accepted) {
+      imu::log_gyro_bias_status(session.imu_stream.processor(), session.stable_id,
+          session.imu_stream.epoch(), packet_host_ns, session.gyro_bias_log);
+    }
     if (accepted && options.madgwick_beta > 0 &&
         (session.imu_stream.latest.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) != 0u &&
         ((previous.data_flags & xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID) == 0u ||

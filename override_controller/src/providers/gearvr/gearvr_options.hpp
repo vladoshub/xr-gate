@@ -1,6 +1,7 @@
 #pragma once
 
 #include <xr_override_controller/input_provider.hpp>
+#include <xr_override_controller/imu/controller_imu_processor.hpp>
 
 #include <cstdint>
 #include <string>
@@ -16,6 +17,7 @@ struct GearVrOptions {
   bool touchpad_invert_x = false;
   bool touchpad_invert_y = true;
   double madgwick_beta = 0.04;
+  imu::GyroBiasCalibrationConfig gyro_bias;
 };
 
 // Precedence: built-in defaults < legacy Gear VR environment variables <

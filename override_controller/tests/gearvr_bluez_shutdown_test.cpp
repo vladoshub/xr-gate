@@ -4,6 +4,7 @@
 
 #include <cstdarg>
 #include <iterator>
+#include <sstream>
 
 using namespace xr_override_controller::gearvr;
 
@@ -14,6 +15,9 @@ std::string cleanup_path;
 std::vector<std::string> operations;
 std::vector<uint64_t> timeouts;
 bool fail_left_disconnect = false;
+bool refresh_pending = false;
+sd_bus_message_handler_t refresh_callback = nullptr;
+void* refresh_userdata = nullptr;
 
 void require(bool condition, const char* reason) {
   if (!condition) throw std::runtime_error(reason);
@@ -33,13 +37,24 @@ Node device(const std::string& path, const char* name, const char* address,
   return {'e', "oa{sa{sv}}", {{'o', path, {}}, {'a', "{sa{sv}}", {
     {'e', "sa{sv}", {string_node("org.bluez.Device1"), {'a', "{sv}", {
       property("Address", 's', address), property("Name", 's', name),
+      property("Adapter", 'o', path.substr(0, path.find_last_of('/')).c_str()),
       property("Paired", 'b', paired ? "1" : "0"),
       property("Connected", 'b', connected ? "1" : "0"),
       property("ServicesResolved", 'b', "0")
     }}}}
   }}}};
 }
+Node adapter(const std::string& path, const char* address, bool powered) {
+  return {'e', "oa{sa{sv}}", {{'o', path, {}}, {'a', "{sa{sv}}", {
+    {'e', "sa{sv}", {string_node("org.bluez.Adapter1"), {'a', "{sv}", {
+      property("Address", 's', address), property("Alias", 's', "Test adapter"),
+      property("Powered", 'b', powered ? "1" : "0")
+    }}}}
+  }}}};
+}
 Node root{'r', "", {{'a', "{oa{sa{sv}}}", {
+  adapter("/org/bluez/hci0", "00:00:00:00:00:01", true),
+  adapter("/org/bluez/hci2", "00:00:00:00:00:02", true),
   device(left_path, "Gear VR Controller(Left)", "AA:BB:CC:DD:EE:01", true),
   device(right_path, "Gear VR Controller(Right)", "AA:BB:CC:DD:EE:02", false),
   device("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_03", "Keyboard", "AA:BB:CC:DD:EE:03", true),
@@ -68,9 +83,21 @@ sd_bus_slot* fake_slot_unref(sd_bus_slot*) {
   operations.push_back("cancel-connect");
   return nullptr;
 }
-int fake_match(sd_bus*, sd_bus_slot**, const char*, sd_bus_message_handler_t, void*) { return 0; }
+int fake_match(sd_bus*, sd_bus_slot**, const char* match,
+               sd_bus_message_handler_t callback, void* userdata) {
+  if (std::strstr(match, "InterfacesAdded")) {
+    refresh_callback = callback;
+    refresh_userdata = userdata;
+  }
+  return 0;
+}
 int fake_set_timeout(sd_bus*, uint64_t value) { timeouts.push_back(value); return 0; }
-int fake_process(sd_bus*, sd_bus_message**) { return 0; }
+int fake_process(sd_bus*, sd_bus_message**) {
+  if (!refresh_pending) return 0;
+  refresh_pending = false;
+  refresh_callback(nullptr, refresh_userdata, nullptr);
+  return 1;
+}
 int fake_fd(sd_bus*) { return -1; }
 int fake_events(sd_bus*) { return 0; }
 int fake_timeout(sd_bus*, uint64_t* timeout) {
@@ -124,14 +151,114 @@ int fake_connect(sd_bus*, sd_bus_slot** slot, const char*, const char* path,
                  const char*, const char* method, sd_bus_message_handler_t,
                  void*, const char*, ...) {
   require(std::strcmp(method, "Connect") == 0, "unexpected async method");
-  require(records().find("+" + std::string(path) + "\n") != std::string::npos,
-          "connection was not registered before Connect");
+  if (std::getenv("OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE")) {
+    require(records().find("+" + std::string(path) + "\n") != std::string::npos,
+            "connection was not registered before Connect");
+  }
   static char token;
   *slot = reinterpret_cast<sd_bus_slot*>(&token);
   operations.push_back("Connect:" + std::string(path));
   return 0;
 }
 void fake_error_free(sd_bus_error*) {}
+
+void refresh(BleTransport& transport) {
+  refresh_pending = true;
+  transport.pump(0, false, nullptr);
+}
+
+Node duplicate_controller_objects(bool first_powered, bool second_powered,
+                                  bool first_connected, bool second_connected) {
+  return {'r', "", {{'a', "{oa{sa{sv}}}", {
+    adapter("/org/bluez/hci0", "00:00:00:00:00:01", first_powered),
+    adapter("/org/bluez/hci2", "00:00:00:00:00:02", second_powered),
+    device("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01", "Gear VR Controller",
+           "AA:BB:CC:DD:EE:01", first_connected),
+    device("/org/bluez/hci2/dev_AA_BB_CC_DD_EE_01", "Gear VR Controller",
+           "AA:BB:CC:DD:EE:01", second_connected)
+  }}}};
+}
+
+void duplicate_pairings_keep_one_adapter_route() {
+  const Node saved_root = root;
+  fail_left_disconnect = false;
+  unsetenv("OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE");
+  unsetenv("XR_BLUETOOTH_ADAPTER");
+  // Exercise both BlueZ object orders and both-powered/offline old pairings.
+  for (bool first_connected : {false, true}) {
+    for (bool other_powered : {false, true}) {
+      root = duplicate_controller_objects(first_connected || other_powered,
+                                          !first_connected || other_powered,
+                                          first_connected, !first_connected);
+      operations.clear();
+      auto transport = make_platform_ble_transport(GearVrOptions{});
+      transport->pump(0, false, nullptr);
+      const auto snapshots = transport->devices();
+      require(snapshots.size() == 1 && snapshots[0].connected,
+              "duplicate pairing hid the connected controller");
+      std::ostringstream progress;
+      auto* previous = std::cerr.rdbuf(progress.rdbuf());
+      for (unsigned i = 0; i < 6; ++i) refresh(*transport);
+      std::cerr.rdbuf(previous);
+      require(progress.str().find("] disconnected ") == std::string::npos,
+              "refresh fabricated a disconnect from the other adapter's pairing");
+      require(progress.str().find("] connected ") == std::string::npos,
+              "refresh reinitialized an unchanged Bluetooth connection");
+      require(operations.empty(), "refresh connected to the other adapter");
+    }
+  }
+  root = saved_root;
+}
+
+void adapter_selection_and_power_changes() {
+  const Node saved_root = root;
+  unsetenv("OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE");
+  for (const char* selector : {"hci0", "/org/bluez/hci0", "00:00:00:00:00:01"}) {
+    root = duplicate_controller_objects(true, true, false, true);
+    operations.clear();
+    setenv("XR_BLUETOOTH_ADAPTER", selector, 1);
+    {
+      auto transport = make_platform_ble_transport(GearVrOptions{});
+      transport->pump(0, false, nullptr);
+      require(transport->devices().size() == 1 && !transport->devices()[0].connected,
+              "explicit adapter selector was ignored");
+      require(operations == std::vector<std::string>{
+                  "Connect:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01"},
+              "provider connected outside the selected adapter");
+    }
+    require(std::find(operations.begin(), operations.end(),
+                "Disconnect:/org/bluez/hci2/dev_AA_BB_CC_DD_EE_01") == operations.end(),
+            "shutdown disconnected another adapter's controller");
+  }
+  unsetenv("XR_BLUETOOTH_ADAPTER");
+  root = duplicate_controller_objects(false, false, false, false);
+  operations.clear();
+  {
+    auto transport = make_platform_ble_transport(GearVrOptions{});
+    transport->pump(0, false, nullptr);
+    require(transport->devices().empty() && operations.empty(),
+            "provider attempted to connect through an unpowered adapter");
+  }
+  root = duplicate_controller_objects(true, true, false, true);
+  operations.clear();
+  {
+    auto transport = make_platform_ble_transport(GearVrOptions{});
+    transport->pump(0, false, nullptr);
+    // Once selected, the route stays pinned for this provider lifetime.
+    root = duplicate_controller_objects(true, false, false, false);
+    refresh(*transport);
+    require(transport->devices().size() == 1 && !transport->devices()[0].connected,
+            "unpowered adapter left a connected snapshot");
+    require(operations.empty(), "provider silently switched to another adapter");
+    for (unsigned i = 0; i < 3; ++i) refresh(*transport);
+    require(operations.empty(), "provider kept retrying an unavailable adapter");
+    root = duplicate_controller_objects(true, true, false, true);
+    refresh(*transport);
+    require(transport->devices()[0].connected,
+            "original adapter could not resume after powering on");
+  }
+  root = saved_root;
+}
 }
 
 extern "C" void* __real_dlsym(void*, const char*);
@@ -160,6 +287,7 @@ extern "C" void* __wrap_dlsym(void* handle, const char* name) {
 }
 
 int main() {
+  unsetenv("XR_BLUETOOTH_ADAPTER");
   for (bool fail : {false, true}) {
     char path[] = "/tmp/gearvr-shutdown-test-XXXXXX";
     const int fd = mkstemp(path);
@@ -190,5 +318,7 @@ int main() {
     unlink(path);
   }
   unsetenv("OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE");
+  duplicate_pairings_keep_one_adapter_route();
+  adapter_selection_and_power_changes();
   std::cout << "BlueZ normal/pending/failed shutdown and crash cleanup registration: OK\n";
 }

@@ -126,8 +126,22 @@ QuaternionXyzw Madgwick6Dof::update(const Vec3f& gyro,
   return orientation_;
 }
 
-ControllerImuProcessor::ControllerImuProcessor(float madgwick_beta)
-    : filter_(madgwick_beta) {}
+ControllerImuProcessor::ControllerImuProcessor(float madgwick_beta,
+    GyroBiasCalibrationConfig gyro_bias_config)
+    : filter_(madgwick_beta), gyro_bias_config_(gyro_bias_config) {
+  const auto positive = [](float value) { return std::isfinite(value) && value > 0; };
+  if (!positive(gyro_bias_config_.stable_ms) || gyro_bias_config_.stable_ms > 60'000 ||
+      gyro_bias_config_.min_samples < 2 || gyro_bias_config_.min_samples > 100'000 ||
+      !positive(gyro_bias_config_.max_gap_ms) ||
+      !positive(gyro_bias_config_.max_sample_speed_rad_s) ||
+      !positive(gyro_bias_config_.max_bias_rad_s) ||
+      gyro_bias_config_.max_bias_rad_s > gyro_bias_config_.max_sample_speed_rad_s ||
+      !positive(gyro_bias_config_.max_gyro_stddev_rad_s) ||
+      !positive(gyro_bias_config_.max_force_error_m_s2) ||
+      !positive(gyro_bias_config_.max_force_range_m_s2)) {
+    throw std::invalid_argument("invalid controller gyro bias calibration limits");
+  }
+}
 
 void ControllerImuProcessor::set_accelerometer_calibration(
     const AccelerometerCalibration& calibration) {
@@ -152,23 +166,93 @@ void ControllerImuProcessor::reset() {
   filter_.reset();
   corrected_sample_ = {};
   gyro_bias_rad_s_ = {};
-  gyro_bias_sample_count_ = 0;
+  gyro_bias_ready_ = false;
+  reset_gyro_bias_candidate("need_stationary_window");
   previous_timestamp_ns_ = 0;
 }
 
+void ControllerImuProcessor::reset_gyro_bias_candidate(const char* reason) {
+  gyro_bias_sample_count_ = 0;
+  gyro_bias_elapsed_ms_ = 0;
+  gyro_bias_mean_ = {};
+  gyro_bias_m2_ = {};
+  gyro_bias_wait_reason_ = reason;
+}
+
 void ControllerImuProcessor::update_initial_gyro_bias(const RawControllerImuSample& sample) {
-  if (!sample.gyroscope_valid || !sample.accelerometer_valid || gyro_bias_sample_count_ >= 200) return;
+  if (gyro_bias_ready_) return;
+  if (!sample.gyroscope_valid || !sample.accelerometer_valid ||
+      sample.host_timestamp_ns == 0 ||
+      (previous_timestamp_ns_ && sample.host_timestamp_ns <= previous_timestamp_ns_)) {
+    reset_gyro_bias_candidate("invalid_sample_or_time");
+    return;
+  }
   const float gyro_magnitude = vector_norm(sample.angular_velocity_rad_s);
   const float accel_magnitude = vector_norm(sample.specific_force_m_s2);
   const float gravity_magnitude = current_backend_control_snapshot().gravity_magnitude;
   if (!std::isfinite(gyro_magnitude) || !std::isfinite(accel_magnitude) ||
-      gyro_magnitude >= 0.20f || std::abs(accel_magnitude - gravity_magnitude) >= 1.0f) return;
-
+      gyro_magnitude > gyro_bias_config_.max_sample_speed_rad_s ||
+      std::abs(accel_magnitude - gravity_magnitude) > gyro_bias_config_.max_force_error_m_s2) {
+    reset_gyro_bias_candidate("motion_or_invalid_force");
+    return;
+  }
+  double interval_ms = double(sample.sample_interval_seconds) * 1000.0;
+  if (sample.sample_interval_seconds == 0 && previous_timestamp_ns_) {
+    interval_ms = double(sample.host_timestamp_ns - previous_timestamp_ns_) * 1e-6;
+  }
+  if (!std::isfinite(interval_ms) || interval_ms < 0 ||
+      (previous_timestamp_ns_ && (interval_ms <= 0 ||
+       interval_ms > gyro_bias_config_.max_gap_ms))) {
+    reset_gyro_bias_candidate("sample_gap");
+    return;
+  }
+  const float gyro[] = {sample.angular_velocity_rad_s.x,
+                        sample.angular_velocity_rad_s.y, sample.angular_velocity_rad_s.z};
+  const float force[] = {sample.specific_force_m_s2.x,
+                         sample.specific_force_m_s2.y, sample.specific_force_m_s2.z};
+  if (gyro_bias_sample_count_ == 0) {
+    std::copy_n(force, 3, gyro_bias_force_min_.begin());
+    std::copy_n(force, 3, gyro_bias_force_max_.begin());
+  } else {
+    gyro_bias_elapsed_ms_ += interval_ms;
+  }
   ++gyro_bias_sample_count_;
-  const float alpha = 1.0f / static_cast<float>(gyro_bias_sample_count_);
-  gyro_bias_rad_s_.x += (sample.angular_velocity_rad_s.x - gyro_bias_rad_s_.x) * alpha;
-  gyro_bias_rad_s_.y += (sample.angular_velocity_rad_s.y - gyro_bias_rad_s_.y) * alpha;
-  gyro_bias_rad_s_.z += (sample.angular_velocity_rad_s.z - gyro_bias_rad_s_.z) * alpha;
+  double force_range2 = 0;
+  for (size_t axis = 0; axis < 3; ++axis) {
+    const double delta = double(gyro[axis]) - gyro_bias_mean_[axis];
+    gyro_bias_mean_[axis] += delta / gyro_bias_sample_count_;
+    gyro_bias_m2_[axis] += delta * (double(gyro[axis]) - gyro_bias_mean_[axis]);
+    gyro_bias_force_min_[axis] = std::min(gyro_bias_force_min_[axis], force[axis]);
+    gyro_bias_force_max_[axis] = std::max(gyro_bias_force_max_[axis], force[axis]);
+    const double range = gyro_bias_force_max_[axis] - gyro_bias_force_min_[axis];
+    force_range2 += range * range;
+  }
+  if (std::sqrt(force_range2) > gyro_bias_config_.max_force_range_m_s2) {
+    reset_gyro_bias_candidate("changing_gravity_or_acceleration");
+    return;
+  }
+  gyro_bias_wait_reason_ = "collecting";
+  if (gyro_bias_elapsed_ms_ + 1e-3 < gyro_bias_config_.stable_ms ||
+      gyro_bias_sample_count_ < gyro_bias_config_.min_samples) return;
+  double mean2 = 0, variance = 0;
+  for (size_t axis = 0; axis < 3; ++axis) {
+    mean2 += gyro_bias_mean_[axis] * gyro_bias_mean_[axis];
+    variance += gyro_bias_m2_[axis] / double(gyro_bias_sample_count_ - 1);
+  }
+  // Constant slow yaw and gyro bias cannot be distinguished by a 6DoF IMU
+  // alone. Bound the accepted mean separately from zero-mean sensor noise.
+  if (std::sqrt(mean2) > gyro_bias_config_.max_bias_rad_s ||
+      std::sqrt(std::max(0.0, variance)) > gyro_bias_config_.max_gyro_stddev_rad_s) {
+    reset_gyro_bias_candidate("possible_rotation_or_excess_noise");
+    return;
+  }
+  gyro_bias_rad_s_ = {float(gyro_bias_mean_[0]), float(gyro_bias_mean_[1]),
+                       float(gyro_bias_mean_[2])};
+  gyro_bias_ready_ = true;
+  gyro_bias_wait_reason_ = "ready";
+  // No provisional bias is applied. The old unadvertised orientation may
+  // have integrated startup motion; initialize its gravity reference afresh.
+  filter_.reset();
 }
 
 QuaternionXyzw ControllerImuProcessor::process(const RawControllerImuSample& sample) {
@@ -193,7 +277,9 @@ QuaternionXyzw ControllerImuProcessor::process(const RawControllerImuSample& sam
   }
   previous_timestamp_ns_ = sample.host_timestamp_ns;
 
-  if (sample.gyroscope_valid && sample.accelerometer_valid) {
+  if (sample.gyroscope_valid && sample.accelerometer_valid &&
+      std::isfinite(vector_norm(corrected_sample_.angular_velocity_rad_s)) &&
+      std::isfinite(vector_norm(corrected_sample_.specific_force_m_s2))) {
     return filter_.update(corrected_sample_.angular_velocity_rad_s,
                           corrected_sample_.specific_force_m_s2,
                           dt);

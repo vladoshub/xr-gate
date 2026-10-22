@@ -78,6 +78,9 @@ CONTROLLER_IMU_CALIBRATION_PROGRESS = re.compile(
     rb"^\[xr_runtime_adapter\]\[imu-calibration\] side=(?P<side>left|right) "
     rb"yaw=[a-z_]+ translation=(?P<translation>[a-z_]+)(?: [a-z_]+=[a-z0-9.+/-]+)*$"
 )
+CONTROLLER_IMU_GYRO_FLAGS = re.compile(
+    rb"\bcontroller_(left|right)_imu_data_flags=(\d+)\b"
+)
 
 
 class StartupGateFailure(RuntimeError):
@@ -169,6 +172,7 @@ class Launcher:
         self._gate_imu_ready = False
         self._gate_quality_ready = False
         self._controller_imu_console_suppressed = False
+        self._controller_gyro_zero_pending = False
         self._last_gate_quality_hint: Optional[Tuple[int, int, int]] = None
         self.restart_history: Dict[str, List[float]] = {}
 
@@ -404,6 +408,7 @@ class Launcher:
         last_status = None
         last_ready = (False, False)
         translation_disabled = set()
+        last_gyro_ready = {}
         trimmed_bytes_seen = 0
         try:
             with item.log_path.open("rb") as source:
@@ -437,8 +442,34 @@ class Launcher:
                                 last_status = None
                                 last_ready = (False, False)
                                 translation_disabled.clear()
+                                last_gyro_ready.clear()
                                 continue
                             line = line.rstrip(b"\r")
+                            if b"controller IMU state reset: reason=transport_discontinuity" in line:
+                                last_gyro_ready.clear()
+                                self._controller_gyro_zero_pending = True
+                            if line.startswith(b"[xr_runtime_adapter] frame="):
+                                previous_both = all(last_gyro_ready.get(side) is True
+                                                    for side in (b"left", b"right"))
+                                for side, flags in CONTROLLER_IMU_GYRO_FLAGS.findall(line):
+                                    if b"controller_" + side + b"_connected=yes" not in line:
+                                        last_gyro_ready.pop(side, None)
+                                        continue
+                                    ready = bool(int(flags) & 32) and bool(int(flags) & 8)
+                                    if last_gyro_ready.get(side) is ready:
+                                        continue
+                                    last_gyro_ready[side] = ready
+                                    label = side.decode("ascii").capitalize()
+                                    log(f"{label} controller gyroscope zeroed." if ready else
+                                        f"{label} controller: keep it still on a stable surface while the gyroscope is zeroed.",
+                                        color="green" if ready else "yellow")
+                                    console_updated = True
+                                if not previous_both and all(last_gyro_ready.get(side) is True
+                                                           for side in (b"left", b"right")):
+                                    log("Both controller gyroscopes zeroed. Take the controllers in your hands and continue optical calibration.",
+                                        color="green")
+                                    console_updated = True
+                                continue
                             match = CONTROLLER_IMU_ALIGNMENT_STATUS.fullmatch(line)
                             if match is not None and match.groups() != last_status:
                                 last_status = match.groups()
@@ -464,6 +495,10 @@ class Launcher:
                                 if progress is None:
                                     continue
                                 side = progress.group("side")
+                                if (last_gyro_ready.get(side) is False or
+                                        (self._controller_gyro_zero_pending and
+                                         last_gyro_ready.get(side) is not True)):
+                                    continue
                                 if last_ready[0 if side == b"left" else 1]:
                                     # Completion owns the side until a fresh
                                     # alignment status actually resets it.
@@ -547,6 +582,8 @@ class Launcher:
         self.running.append(item)
         if spec.name == "override_controller":
             self._controller_imu_console_suppressed = False
+            self._controller_gyro_zero_pending = True
+            log("Keep IMU controllers still on a stable surface until their gyroscopes are zeroed.", color="yellow")
         if spec.name == "xr_runtime_adapter":
             threading.Thread(
                 target=self.forward_controller_imu_status,

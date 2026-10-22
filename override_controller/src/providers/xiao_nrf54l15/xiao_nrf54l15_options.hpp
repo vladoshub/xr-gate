@@ -1,6 +1,7 @@
 #pragma once
 
 #include <xr_override_controller/input_provider.hpp>
+#include <xr_override_controller/imu/controller_imu_processor.hpp>
 
 #include <cstdint>
 #include <string>
@@ -18,6 +19,7 @@ struct XiaoNrf54l15Options {
   uint32_t stale_ms = 250;
   int axis_flat = 1024;
   double madgwick_beta = 0.04;
+  imu::GyroBiasCalibrationConfig gyro_bias;
 };
 
 XiaoNrf54l15Options load_xiao_nrf54l15_options(const ProviderOptionValues& values);

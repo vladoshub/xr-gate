@@ -7,6 +7,7 @@
 
 #include <xr_override_controller/imu/controller_imu_processor.hpp>
 #include <xr_override_controller/imu/controller_imu_calibration.hpp>
+#include <xr_override_controller/imu/gyro_bias_status.hpp>
 #include <xr_tracking/timing/serial_imu_clock.hpp>
 
 #include <algorithm>
@@ -74,7 +75,8 @@ struct XiaoNrf54l15InputProvider::Impl {
   };
 
   struct Session {
-    explicit Session(float beta) : imu_processor(beta) {}
+    explicit Session(float beta, imu::GyroBiasCalibrationConfig gyro_bias)
+        : imu_processor(beta, gyro_bias) {}
 
     std::string stable_id;
     SerialDeviceSnapshot snapshot;
@@ -94,6 +96,7 @@ struct XiaoNrf54l15InputProvider::Impl {
     uint32_t queue_dropped = 0;
     uint64_t last_drop_warning_ns = 0;
     imu::ControllerImuProcessor imu_processor;
+    imu::GyroBiasLogState gyro_bias_log;
     xr_runtime::ControllerImuStateV1 imu;
   };
 
@@ -218,7 +221,7 @@ struct XiaoNrf54l15InputProvider::Impl {
       auto& session_ptr = sessions[snapshot.stable_id];
       if (!session_ptr) {
         session_ptr = std::make_unique<Session>(
-            static_cast<float>(options.madgwick_beta));
+            static_cast<float>(options.madgwick_beta), options.gyro_bias);
         session_ptr->stable_id = snapshot.stable_id;
       }
       Session& session = *session_ptr;
@@ -347,6 +350,8 @@ struct XiaoNrf54l15InputProvider::Impl {
     raw.accelerometer_valid = true;
 
     const imu::QuaternionXyzw orientation = session.imu_processor.process(raw);
+    imu::log_gyro_bias_status(session.imu_processor, session.stable_id,
+        session.clock.epoch(), sample_timestamp_ns, session.gyro_bias_log);
     const imu::RawControllerImuSample corrected =
         session.imu_processor.corrected_sample();
 
@@ -362,7 +367,7 @@ struct XiaoNrf54l15InputProvider::Impl {
     }
     state.data_flags = xr_runtime::CONTROLLER_IMU_GYROSCOPE_VALID |
                        xr_runtime::CONTROLLER_IMU_ACCELEROMETER_VALID;
-    if (session.imu_processor.orientation_initialized()) {
+    if (session.imu_processor.orientation_ready_for_runtime()) {
       state.data_flags |= xr_runtime::CONTROLLER_IMU_ORIENTATION_VALID;
     }
     if (timing.device_time_valid) state.data_flags |= xr_runtime::CONTROLLER_IMU_HOST_TIME_SYNCED;

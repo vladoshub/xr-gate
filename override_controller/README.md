@@ -307,6 +307,27 @@ them automatically, verifies the Gear VR GATT service/characteristics, enables
 VR sensor mode, and keeps reconnecting after sleep or signal loss. No MAC
 address is entered in the launcher or JSON by hand.
 
+With multiple Bluetooth adapters, the Linux provider ignores unpowered radios
+and selects one adapter-specific BlueZ record per controller. It initially
+prefers an already connected record and pins that route until the provider
+restarts. Old pairings on another adapter cannot reset the working sensor
+stream or redirect reconnect attempts. The chosen adapter name, address and
+BlueZ path are printed in `override_controller.log`.
+
+To select an adapter explicitly, set `XR_BLUETOOTH_ADAPTER` to its Bluetooth
+address, `hciN` name, or `/org/bluez/hciN` path before starting XR Gate. Prefer
+the address because `hciN` numbering can change after reboot. The selector
+restricts discovery, reconnects and exit cleanup to that adapter; it does not
+change adapter power or transfer pairings. Pair the controllers on that adapter
+first. After changing adapters, restart `override_controller`; an unavailable
+pinned adapter does not trigger automatic takeover through another radio.
+
+```bash
+bluetoothctl list
+export XR_BLUETOOTH_ADAPTER='AA:BB:CC:DD:EE:FF'  # Adapter address, not controller address.
+./run_xr_client.sh --config xreal_ultra
+```
+
 ```bash
 bluetoothctl
 scan on
@@ -379,7 +400,7 @@ launcher and argument parser do not contain Gear VR-specific option handling.
 ### IMU output
 
 The native provider decodes gyroscope, accelerometer, and magnetometer values,
-performs a short stationary gyroscope-bias estimate, and computes a 6DoF
+performs a confirmed stationary gyroscope-bias estimate, and computes a 6DoF
 orientation with the shared C++ `ControllerImuProcessor`. Raw magnetic field
 is published, but is intentionally not used by the AHRS until a proper
 magnetometer-calibration flow is added. IMU routing is configured explicitly in
@@ -437,3 +458,53 @@ OVERRIDE_CONTROLLER_BACKEND_CONTROL_POLL_MS=500
 from `LSB/g` to `m/s²` and by the shared IMU processor's Madgwick/stationary gates.
 Changing gravity is applied without restarting the service. `reset_counter` is tracked
 for diagnostics; runtime prediction/yaw reset handling remains in `xr_runtime_adapter`.
+
+
+## Startup gyroscope zeroing
+
+Start the controller service with each controller resting on a stable surface.
+Wait for `Both controller gyroscopes zeroed` in the XR Gate console before taking
+them in your hands and starting the separate optical motion calibration. For a
+single controller, wait for its individual `gyroscope zeroed` message.
+
+The common IMU processor accepts one continuous stationary window, commits its
+bias atomically, and freezes that bias until a device/AHRS reset. Motion, invalid
+samples, sample gaps, changing gravity and excessive mean rotation or noise
+restart the candidate. Pending samples retain their timestamps, buttons, gyro
+and force, but orientation is not advertised as runtime-ready before zeroing.
+There is no timeout that silently accepts a moving controller. The provider log
+contains throttled `[override_controller][gyro-zero]` progress, accepted bias in
+native sensor axes, and the device epoch. A disconnect/reconnect or accelerometer
+calibration change requires a fresh window.
+
+Both `gearvr_ble` and `xiao_nrf54l15` accept these provider options. All angles in
+this table use radians, and all force values use SI units; no USB IDs, models or
+mounting angles enter the estimator.
+
+| Option after the provider prefix | Default | Meaning |
+| --- | ---: | --- |
+| `gyro_bias.stable_ms` | `1500` | Continuous stationary sample time |
+| `gyro_bias.min_samples` | `100` | Minimum distinct samples in that window |
+| `gyro_bias.max_gap_ms` | `50` | Maximum device-sample interval during acquisition |
+| `gyro_bias.max_sample_speed_rad_s` | `0.20` | Reject individual large rotations |
+| `gyro_bias.max_bias_rad_s` | `0.01745329252` | Maximum accepted mean bias, 1 degree/s |
+| `gyro_bias.max_gyro_stddev_rad_s` | `0.05` | Maximum combined gyro standard deviation |
+| `gyro_bias.max_force_error_m_s2` | `1.0` | Maximum difference from gravity magnitude |
+| `gyro_bias.max_force_range_m_s2` | `0.35` | Maximum vector range of force over the window |
+
+For example, a device profile can specify:
+
+```bash
+export PROVIDER_OPTIONS='gearvr_ble.gyro_bias.stable_ms=2000;gearvr_ble.gyro_bias.max_bias_rad_s=0.01745329252'
+```
+
+Keep any other existing provider options in that value. The same settings can be
+passed as repeated `--provider-option` arguments. Invalid, nonfinite or
+inconsistent limits fail at provider creation, before connecting to hardware.
+
+A 6DoF IMU cannot distinguish arbitrarily slow constant yaw from sensor bias
+without an external reference. A stable window and bounded accepted mean reject
+common startup movements, but the controller must still actually rest during
+zeroing. Sensors with a larger measured stationary bias or noise need explicit
+profile limits. Optical yaw confirmation, optical drift correction and saved
+accelerometer/mounting calibration are separate from this startup estimate.

@@ -157,12 +157,19 @@ void gravity_reference_controls_orientation_validity() {
     sample.accel_m_s2 = {0, 8.492808f, -4.903325f};
   }
   require(stream.push(quiet, start_ns + 10'000'000), "quiet startup packet rejected");
+  require((stream.latest.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
+          "single quiet packet bypassed gyro startup confirmation");
+  for (uint32_t i = 1; i <= 160; ++i) {
+    for (auto& sample : quiet.imu_samples) sample.device_timestamp_us += 10000;
+    require(stream.push(quiet, start_ns + uint64_t(i + 1) * 10'000'000),
+            "stationary gyro warmup rejected");
+  }
   require((stream.latest.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0u,
           "initialized gravity reference was not published");
   require(stream.latest.reserved[CONTROLLER_IMU_DIAG_EPOCH] == 1,
           "initializing unadvertised orientation changed the clock epoch");
   stream.reset();
-  require(stream.push(moving, start_ns + 20'000'000), "post-reset packet rejected");
+  require(stream.push(moving, start_ns + 2'000'000'000), "post-reset packet rejected");
   require((stream.latest.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
           "reset published an old gravity reference as valid");
 }
@@ -184,9 +191,12 @@ void accelerometer_calibration_survives_clock_reset() {
     return decoded;
   };
   for (int reset = 0; reset < 2; ++reset) {
-    require(stream.push(biased_packet(reset == 0 ? 10000 : 100),
-                        base_ns + uint64_t(reset) * 100'000'000),
-            "calibrated packet rejected");
+    for (uint32_t i = 0; i <= 160; ++i) {
+      require(stream.push(biased_packet((reset == 0 ? 10000 : 100) + i * 10000),
+                          base_ns + uint64_t(reset) * 2'000'000'000 + uint64_t(i) * 10'000'000),
+              "calibrated packet rejected");
+      if (i < 160) stream.consume();
+    }
     const auto state = stream.consume();
     require((state.data_flags & CONTROLLER_IMU_ACCELEROMETER_CALIBRATED) != 0,
             "batch calibration flag missing");
