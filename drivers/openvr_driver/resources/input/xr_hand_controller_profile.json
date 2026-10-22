@@ -1,28 +1,36 @@
 {
   "jsonid": "input_profile",
   "controller_type": "xr_hand_controller",
-  "description": "XR hand-tracking controller",
+  "description": "XR runtime virtual controller",
   "input_source": {
     "/input/trigger": {
       "type": "trigger",
       "binding_image_point": [
         64,
         64
-      ]
+      ],
+      "value": true,
+      "click": true,
+      "touch": true
     },
     "/input/grip": {
       "type": "trigger",
       "binding_image_point": [
         64,
         128
-      ]
+      ],
+      "value": true,
+      "click": true,
+      "touch": true
     },
     "/input/joystick": {
       "type": "joystick",
       "binding_image_point": [
         64,
         192
-      ]
+      ],
+      "click": true,
+      "touch": true
     },
     "/input/trackpad": {
       "type": "trackpad",
@@ -31,42 +39,52 @@
       "binding_image_point": [
         64,
         224
-      ]
+      ],
+      "force": true
     },
     "/input/application_menu": {
       "type": "button",
       "binding_image_point": [
         64,
         256
-      ]
+      ],
+      "click": true
     },
     "/input/a": {
       "type": "button",
       "binding_image_point": [
         128,
         64
-      ]
+      ],
+      "click": true,
+      "touch": true
     },
     "/input/b": {
       "type": "button",
       "binding_image_point": [
         128,
         128
-      ]
+      ],
+      "click": true,
+      "touch": true
     },
     "/input/x": {
       "type": "button",
       "binding_image_point": [
         128,
         192
-      ]
+      ],
+      "click": true,
+      "touch": true
     },
     "/input/y": {
       "type": "button",
       "binding_image_point": [
         128,
         256
-      ]
+      ],
+      "click": true,
+      "touch": true
     },
     "/pose/raw": {
       "type": "pose",
@@ -90,6 +108,6 @@
       ]
     }
   },
-  "compatibility_mode_controller_type": "vive_controller",
-  "input_bindingui_mode": "controller_handed"
+  "input_bindingui_mode": "controller_handed",
+  "remapping": "{xr_tracking}/input/xr_hand_controller_remapping.json"
 }

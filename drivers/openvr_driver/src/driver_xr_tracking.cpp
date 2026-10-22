@@ -3,6 +3,7 @@
 #include "runtime_pose_reader.hpp"
 #include "runtime_hand_reader.hpp"
 #include "runtime_controller_state_reader.hpp"
+#include "controller_input_mapping.hpp"
 
 #include <algorithm>
 #include <array>
@@ -744,6 +745,7 @@ struct HandControllerConfig {
   std::string right_serial = "xr-tracking-right-hand-001";
   std::string render_model;
   bool expose_system_button = false;
+  ControllerInputMappingConfig input_mapping;
   float pose_y_offset = 1.60f;
   CoordinateMode coordinate_mode = CoordinateMode::RuntimeReady;
 };
@@ -782,8 +784,6 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
       render_model = kHiddenHandControllerRenderModel;
     }
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_RenderModelName_String, render_model.c_str());
-    vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_ModelNumber_String, "Vive Controller MV");
-    vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_ManufacturerName_String, "HTC");
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_SerialNumber_String, serial().c_str());
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_ControllerType_String, "xr_hand_controller");
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_InputProfilePath_String,
@@ -842,20 +842,28 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     property_container_ = vr::k_ulInvalidPropertyContainer;
     trigger_value_component_ = 0;
     trigger_click_component_ = 0;
+    trigger_touch_component_ = 0;
     grip_value_component_ = 0;
     grip_click_component_ = 0;
+    grip_touch_component_ = 0;
     thumbstick_x_component_ = 0;
     thumbstick_y_component_ = 0;
     thumbstick_click_component_ = 0;
+    thumbstick_touch_component_ = 0;
     trackpad_x_component_ = 0;
     trackpad_y_component_ = 0;
     trackpad_touch_component_ = 0;
     trackpad_click_component_ = 0;
+    trackpad_force_component_ = 0;
     menu_click_component_ = 0;
     a_click_component_ = 0;
     b_click_component_ = 0;
     x_click_component_ = 0;
     y_click_component_ = 0;
+    a_touch_component_ = 0;
+    b_touch_component_ = 0;
+    x_touch_component_ = 0;
+    y_touch_component_ = 0;
     system_click_component_ = 0;
     haptic_component_ = 0;
     controller_reader_.reset();
@@ -1112,24 +1120,29 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
   void create_input_components() {
     create_scalar_component("/input/trigger/value", &trigger_value_component_);
     create_boolean_component("/input/trigger/click", &trigger_click_component_);
+    create_boolean_component("/input/trigger/touch", &trigger_touch_component_);
     create_scalar_component("/input/grip/value", &grip_value_component_);
     create_boolean_component("/input/grip/click", &grip_click_component_);
+    create_boolean_component("/input/grip/touch", &grip_touch_component_);
     create_scalar_component("/input/joystick/x", &thumbstick_x_component_, vr::VRScalarUnits_NormalizedTwoSided);
     create_scalar_component("/input/joystick/y", &thumbstick_y_component_, vr::VRScalarUnits_NormalizedTwoSided);
     create_boolean_component("/input/joystick/click", &thumbstick_click_component_);
-    // Vive-compatibility path: many SteamVR Input bindings, including HL Alyx,
-    // have mature defaults for Vive Controller /input/trackpad. Mirror the same
-    // runtime stick/D-pad state into a trackpad source so compatibility-mode
-    // bindings can drive application actions instead of leaving them unbound.
+    create_boolean_component("/input/joystick/touch", &thumbstick_touch_component_);
+    // Alternative binding source for applications that use a touchpad layout.
     create_scalar_component("/input/trackpad/x", &trackpad_x_component_, vr::VRScalarUnits_NormalizedTwoSided);
     create_scalar_component("/input/trackpad/y", &trackpad_y_component_, vr::VRScalarUnits_NormalizedTwoSided);
     create_boolean_component("/input/trackpad/touch", &trackpad_touch_component_);
     create_boolean_component("/input/trackpad/click", &trackpad_click_component_);
+    create_scalar_component("/input/trackpad/force", &trackpad_force_component_);
     create_boolean_component("/input/application_menu/click", &menu_click_component_);
     create_boolean_component("/input/a/click", &a_click_component_);
     create_boolean_component("/input/b/click", &b_click_component_);
     create_boolean_component("/input/x/click", &x_click_component_);
     create_boolean_component("/input/y/click", &y_click_component_);
+    create_boolean_component("/input/a/touch", &a_touch_component_);
+    create_boolean_component("/input/b/touch", &b_touch_component_);
+    create_boolean_component("/input/x/touch", &x_touch_component_);
+    create_boolean_component("/input/y/touch", &y_touch_component_);
     if (cfg_.expose_system_button) {
       create_boolean_component("/input/system/click", &system_click_component_);
     } else {
@@ -1168,157 +1181,59 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     }
   }
 
-  void update_inputs(const xr_tracking::HandSideF32V2* side) {
-    const float pinch = side != nullptr && (side->flags & xr_tracking::HAND_PINCH_VALID) != 0u
-                            ? std::clamp(side->pinch_strength, 0.0f, 1.0f)
-                            : 0.0f;
-    const float grab = side != nullptr && (side->flags & xr_tracking::HAND_GRAB_VALID) != 0u
-                           ? std::clamp(side->grab_strength, 0.0f, 1.0f)
-                           : 0.0f;
-    const bool pinch_click = side != nullptr && side->pinch_active != 0;
-    const bool grab_click = side != nullptr && side->grab_active != 0;
+  void publish_inputs(const ControllerInputState& state) {
+    const auto scalar = [](vr::VRInputComponentHandle_t handle, float value) {
+      if (handle != 0) vr::VRDriverInput()->UpdateScalarComponent(handle, value, 0.0);
+    };
+    const auto boolean = [](vr::VRInputComponentHandle_t handle, bool value) {
+      if (handle != 0) vr::VRDriverInput()->UpdateBooleanComponent(handle, value, 0.0);
+    };
+    scalar(trigger_value_component_, state.trigger);
+    boolean(trigger_click_component_, state.trigger_click);
+    boolean(trigger_touch_component_, state.trigger_touch);
+    scalar(grip_value_component_, state.grip);
+    boolean(grip_click_component_, state.grip_click);
+    boolean(grip_touch_component_, state.grip_touch);
+    scalar(thumbstick_x_component_, state.x);
+    scalar(thumbstick_y_component_, state.y);
+    boolean(thumbstick_click_component_, state.stick_click);
+    boolean(thumbstick_touch_component_, state.stick_touch);
+    scalar(trackpad_x_component_, state.x);
+    scalar(trackpad_y_component_, state.y);
+    boolean(trackpad_click_component_, state.trackpad_click);
+    boolean(trackpad_touch_component_, state.trackpad_touch);
+    // The normalized contract has a switch but no pressure sensor. Represent
+    // that switch as binary force for bindings authored for a force trackpad.
+    scalar(trackpad_force_component_, state.stick_click ? 1.0f : 0.0f);
+    boolean(menu_click_component_, state.menu);
+    boolean(a_click_component_, state.a);
+    boolean(b_click_component_, state.b);
+    boolean(x_click_component_, state.x_button);
+    boolean(y_click_component_, state.y_button);
+    boolean(a_touch_component_, state.a_touch);
+    boolean(b_touch_component_, state.b_touch);
+    boolean(x_touch_component_, state.x_touch);
+    boolean(y_touch_component_, state.y_touch);
+    boolean(system_click_component_, state.system);
+  }
 
-    if (trigger_value_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(trigger_value_component_, pinch, 0.0);
-    }
-    if (trigger_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(trigger_click_component_, pinch_click, 0.0);
-    }
-    if (grip_value_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(grip_value_component_, grab, 0.0);
-    }
-    if (grip_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(grip_click_component_, grab_click, 0.0);
-    }
-    // When no external controller state is active, keep the compatibility
-    // stick/trackpad inputs neutral instead of leaving a stale value.
-    if (thumbstick_x_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(thumbstick_x_component_, 0.0f, 0.0);
-    }
-    if (thumbstick_y_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(thumbstick_y_component_, 0.0f, 0.0);
-    }
-    if (thumbstick_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(thumbstick_click_component_, false, 0.0);
-    }
-    if (trackpad_x_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(trackpad_x_component_, 0.0f, 0.0);
-    }
-    if (trackpad_y_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(trackpad_y_component_, 0.0f, 0.0);
-    }
-    if (trackpad_touch_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(trackpad_touch_component_, false, 0.0);
-    }
-    if (trackpad_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(trackpad_click_component_, false, 0.0);
-    }
+  void update_inputs(const xr_tracking::HandSideF32V2* side) {
+    ControllerInputState state;
+    state.trigger = side != nullptr && (side->flags & xr_tracking::HAND_PINCH_VALID) != 0u
+        ? finite_clamp(side->pinch_strength, 0.0f, 1.0f) : 0.0f;
+    state.grip = side != nullptr && (side->flags & xr_tracking::HAND_GRAB_VALID) != 0u
+        ? finite_clamp(side->grab_strength, 0.0f, 1.0f) : 0.0f;
+    state.trigger_click = side != nullptr && side->pinch_active != 0;
+    state.grip_click = side != nullptr && side->grab_active != 0;
+    state.trigger_touch = state.trigger_click || state.trigger > 0.0f;
+    state.grip_touch = state.grip_click || state.grip > 0.0f;
+    // Clear every external input, including face/menu buttons, on fallback.
+    publish_inputs(state);
   }
 
   void update_inputs_from_runtime_controller(const xr_runtime::RuntimeControllerSideStateV1* side) {
-    const uint64_t buttons = side != nullptr ? side->buttons : 0ull;
-    const uint64_t touches = side != nullptr ? side->touches : 0ull;
-    const float trigger = side != nullptr ? std::clamp(side->trigger, 0.0f, 1.0f) : 0.0f;
-    const float grip = side != nullptr ? std::clamp(side->grip, 0.0f, 1.0f) : 0.0f;
-    float stick_x = side != nullptr ? std::clamp(side->thumbstick_x, -1.0f, 1.0f) : 0.0f;
-    float stick_y = side != nullptr ? std::clamp(side->thumbstick_y, -1.0f, 1.0f) : 0.0f;
-
-    if (std::abs(stick_x) < 0.05f) {
-  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT) != 0ull) stick_x = -1.0f;
-      if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT) != 0ull) stick_x = 1.0f;
-}
-if (std::abs(stick_y) < 0.05f) {
-  if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) stick_y = -1.0f;
-      if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_UP) != 0ull) stick_y = 1.0f;
-}
-
-    const bool trigger_click = trigger >= 0.55f ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_TRIGGER) != 0ull;
-    const bool grip_click = grip >= 0.55f ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_GRIP) != 0ull;
-    const bool dpad_direction_pressed =
-        (buttons & (xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT |
-                    xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT |
-                    xr_runtime::CONTROLLER_BUTTON_DPAD_UP |
-                    xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN)) != 0ull;
-    const bool thumbstick_click = (buttons & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull ||
-        (buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_CENTER) != 0ull;
-    const bool thumbstick_touch =
-        (touches & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull;
-    const bool trackpad_axis_active =
-        std::abs(stick_x) >= 0.05f || std::abs(stick_y) >= 0.05f;
-    // Vive Wand bindings commonly require /input/trackpad/click together with
-    // the trackpad coordinates. Gear VR reports capacitive motion without the
-    // physical touchpad switch, so expose either the touch bit or active sensor
-    // coordinates as a Vive-compatible trackpad click. Keep /input/joystick/click
-    // bound only to the physical switch above.
-    const bool trackpad_click = thumbstick_click || dpad_direction_pressed ||
-        thumbstick_touch || trackpad_axis_active;
-    const bool menu_click = (buttons & xr_runtime::CONTROLLER_BUTTON_MENU) != 0ull;
-    const bool a_click = (buttons & xr_runtime::CONTROLLER_BUTTON_A) != 0ull;
-    const bool b_click = (buttons & xr_runtime::CONTROLLER_BUTTON_B) != 0ull;
-    const bool x_click = (buttons & xr_runtime::CONTROLLER_BUTTON_X) != 0ull;
-    const bool y_click = (buttons & xr_runtime::CONTROLLER_BUTTON_Y) != 0ull;
-    const bool system_click = cfg_.expose_system_button &&
-        (buttons & xr_runtime::CONTROLLER_BUTTON_SYSTEM) != 0ull;
-
-    if (trigger_value_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(trigger_value_component_, trigger, 0.0);
-    }
-    if (trigger_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(trigger_click_component_, trigger_click, 0.0);
-    }
-    if (grip_value_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(grip_value_component_, grip, 0.0);
-    }
-    if (grip_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(grip_click_component_, grip_click, 0.0);
-    }
-    if (thumbstick_x_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(thumbstick_x_component_, stick_x, 0.0);
-    }
-    if (thumbstick_y_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(thumbstick_y_component_, stick_y, 0.0);
-    }
-    if (thumbstick_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(thumbstick_click_component_, thumbstick_click, 0.0);
-    }
-
-    const bool trackpad_touch =
-        thumbstick_touch || trackpad_axis_active || trackpad_click;
-    if (trackpad_x_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(trackpad_x_component_, stick_x, 0.0);
-    }
-    if (trackpad_y_component_ != 0) {
-      vr::VRDriverInput()->UpdateScalarComponent(trackpad_y_component_, stick_y, 0.0);
-    }
-    if (trackpad_touch_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(trackpad_touch_component_, trackpad_touch, 0.0);
-    }
-    if (trackpad_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(trackpad_click_component_, trackpad_click, 0.0);
-    }
-
-    if (menu_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(menu_click_component_, menu_click, 0.0);
-    }
-    if (a_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(a_click_component_, a_click, 0.0);
-    }
-    if (b_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(b_click_component_, b_click, 0.0);
-    }
-    if (x_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(x_click_component_, x_click, 0.0);
-    }
-    if (y_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(y_click_component_, y_click, 0.0);
-    }
-    if (system_click_component_ != 0) {
-      vr::VRDriverInput()->UpdateBooleanComponent(system_click_component_, system_click, 0.0);
-    }
+    publish_inputs(map_controller_input(side, left_, cfg_.input_mapping));
   }
-
 
   static uint64_t steady_now_ns() {
     return static_cast<uint64_t>(
@@ -1428,20 +1343,28 @@ if (std::abs(stick_y) < 0.05f) {
 
   vr::VRInputComponentHandle_t trigger_value_component_ = 0;
   vr::VRInputComponentHandle_t trigger_click_component_ = 0;
+  vr::VRInputComponentHandle_t trigger_touch_component_ = 0;
   vr::VRInputComponentHandle_t grip_value_component_ = 0;
   vr::VRInputComponentHandle_t grip_click_component_ = 0;
+  vr::VRInputComponentHandle_t grip_touch_component_ = 0;
   vr::VRInputComponentHandle_t thumbstick_x_component_ = 0;
   vr::VRInputComponentHandle_t thumbstick_y_component_ = 0;
   vr::VRInputComponentHandle_t thumbstick_click_component_ = 0;
+  vr::VRInputComponentHandle_t thumbstick_touch_component_ = 0;
   vr::VRInputComponentHandle_t trackpad_x_component_ = 0;
   vr::VRInputComponentHandle_t trackpad_y_component_ = 0;
   vr::VRInputComponentHandle_t trackpad_touch_component_ = 0;
   vr::VRInputComponentHandle_t trackpad_click_component_ = 0;
+  vr::VRInputComponentHandle_t trackpad_force_component_ = 0;
   vr::VRInputComponentHandle_t menu_click_component_ = 0;
   vr::VRInputComponentHandle_t a_click_component_ = 0;
   vr::VRInputComponentHandle_t b_click_component_ = 0;
   vr::VRInputComponentHandle_t x_click_component_ = 0;
   vr::VRInputComponentHandle_t y_click_component_ = 0;
+  vr::VRInputComponentHandle_t a_touch_component_ = 0;
+  vr::VRInputComponentHandle_t b_touch_component_ = 0;
+  vr::VRInputComponentHandle_t x_touch_component_ = 0;
+  vr::VRInputComponentHandle_t y_touch_component_ = 0;
   vr::VRInputComponentHandle_t system_click_component_ = 0;
   vr::VRInputComponentHandle_t haptic_component_ = 0;
   bool has_cached_runtime_controller_side_ = false;
@@ -1527,12 +1450,22 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
     hand_cfg_.pose_y_offset = get_float_setting(kHandControllerPoseYOffsetKey, 0.0f);
     hand_cfg_.render_model = get_string_setting(kHandControllerRenderModelKey, kHiddenHandControllerRenderModel);
     hand_cfg_.expose_system_button = get_bool_setting(kHandControllerExposeSystemButtonKey, false);
+    hand_cfg_.input_mapping.expose_system_button = hand_cfg_.expose_system_button;
+    hand_cfg_.input_mapping.left_ab_xy_alias = get_bool_setting("handControllerLeftABXYAlias", true);
+    hand_cfg_.input_mapping.trackpad_click_from_touch = get_bool_setting("handControllerTrackpadClickFromTouch", false);
+    hand_cfg_.input_mapping.axis_activity_threshold = get_float_setting("handControllerInputAxisThreshold", 0.05f);
+    hand_cfg_.input_mapping.analog_click_threshold = get_float_setting("handControllerInputClickThreshold", 0.55f);
     hand_cfg_.left_serial = get_string_setting(kLeftHandSerialKey, "xr-tracking-left-hand-001");
     hand_cfg_.right_serial = get_string_setting(kRightHandSerialKey, "xr-tracking-right-hand-001");
 
     log_line(std::string("[xr_tracking_openvr] hand coordinateMode=") +
              coordinate_mode_name(hand_cfg_.coordinate_mode) +
              " handControllerPoseMode=" + hand_cfg_.pose_mode);
+    log_line(std::string("[xr_tracking_openvr] controller input leftABXYAlias=") +
+             (hand_cfg_.input_mapping.left_ab_xy_alias ? "on" : "off") +
+             " trackpadClickFromTouch=" + (hand_cfg_.input_mapping.trackpad_click_from_touch ? "on" : "off") +
+             " axisThreshold=" + std::to_string(hand_cfg_.input_mapping.axis_activity_threshold) +
+             " clickThreshold=" + std::to_string(hand_cfg_.input_mapping.analog_click_threshold));
   }
 
   void maybe_add_hand_controllers() {

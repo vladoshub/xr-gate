@@ -1,14 +1,33 @@
-name: Runtime functional tests
+name: Runtime and driver functional tests
 
 "on":
   pull_request:
-    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', '.github/workflows/runtime-controller-tests.yml']
+    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', 'drivers/openvr_driver/**', '.github/workflows/runtime-controller-tests.yml']
   push:
     branches: [main, master]
-    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', '.github/workflows/runtime-controller-tests.yml']
+    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', 'drivers/openvr_driver/**', '.github/workflows/runtime-controller-tests.yml']
   workflow_dispatch:
 
 jobs:
+  openvr-controller:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: ValveSoftware/openvr
+          ref: 0924064316de3effbcd1acf1e309182a2deb1c05
+          path: .build-deps/openvr
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ python3 nlohmann-json3-dev
+      - name: Build OpenVR driver and functional tests
+        run: |
+          cmake -S drivers/openvr_driver -B build/openvr-tests -DCMAKE_BUILD_TYPE=Release -DXR_OPENVR_SDK_ROOT="$GITHUB_WORKSPACE/.build-deps/openvr" -DXR_OPENVR_BUILD_TESTS=ON
+          cmake --build build/openvr-tests --parallel 2
+      - name: Test virtual controller input, binding resources, HMD lifecycle and runtime transports
+        run: ctest --test-dir build/openvr-tests --output-on-failure --timeout 45
+
   runtime-controller:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
