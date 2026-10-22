@@ -41,10 +41,41 @@ Capture, tracking backends, SteamVR and calibration files need no changes.
 ## Controllers and optional OpenXR hands
 
 Controllers use the Touch interaction profile, including A/B/X/Y, analog
-trigger/squeeze and touch state. Simple-controller, Vive Wand and WMR binding
-profiles remain available. The Vive trackpad compatibility path uses the same
-Gear VR touch/motion/D-pad activation rules as the OpenVR driver. SteamVR sources
-are not modified by this integration.
+trigger/squeeze and touch state. Alternative profiles default to Index, WMR,
+Vive, then Simple. Monado tries native Touch first when the app supplies it,
+then the first available alternative in this order. Simple no longer hides a
+richer available profile. Index exposes button/stick/pad/pose compatibility;
+it does not add skeletal fingers or physical haptics.
+
+Monado and OpenVR share the generic input conversion in
+`shared/include/xr_runtime/input/controller_input_mapping.hpp`. Capacitive touch
+and direction do not imply a pad click. The physical switch drives pad/stick
+click; the legacy touch-to-click behavior is opt-in. Left A/B and X/Y are aliases
+by default, configurable for devices with four independent left face buttons.
+Menu and System remain separate inputs. Trigger/grip analog values survive
+digital click flags; digital-only presses supply a full pull. Input flags and
+pose validity are independent.
+
+`start.sh` loads `profiles/controller_input.env` for every hardware/display
+profile. Use `XR_MONADO_CONTROLLER_INPUT_CONFIG=/path/to/controller_input.env`
+for another file. Explicit environment overrides work with the supplied file.
+The driver also has the same defaults when starting `monado-service` directly.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS` | `1` | Alias left A/X and B/Y; use `0` for independent inputs. |
+| `XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH` | `0` | Restore the old synthetic click for custom compatibility bindings. |
+| `XR_MONADO_CONTROLLER_AXIS_THRESHOLD` | `0.05` | Neutral axis region and virtual touch activity threshold. |
+| `XR_MONADO_CONTROLLER_CLICK_THRESHOLD` | `0.55` | Analog trigger/grip click threshold. |
+| `XR_MONADO_CONTROLLER_EXPOSE_SYSTEM_BUTTON` | `1` | Publish the existing System input; it does not press application Menu. |
+| `XR_MONADO_CONTROLLER_PROFILE_ORDER` | `index,wmr,vive,simple` | Alternative profile order; native Touch remains first. |
+
+The order accepts a comma-separated subset of those four names, without
+duplicates. Invalid lists fall back to the default with a warning. Each device
+keeps its own ordered binding table. Index squeeze force follows normalized
+grip value and trackpad force is binary physical-switch state; neither measures
+actual pressure. In Vive/WMR games, actions bound to pad click require a physical
+press by default. See [the Russian controller guide](docs/CONTROLLER_INPUT.ru.md).
 
 Both controller poses and the optional hand fallback are already in runtime
 coordinates. The driver copies position, orientation and valid velocities
@@ -117,7 +148,10 @@ Set `NLOHMANN_JSON_INCLUDE_DIR` if the JSON headers are outside the default
 compiler search path. Add `SANITIZE=1` for AddressSanitizer/UndefinedBehaviorSanitizer.
 These tests replace device allocation/debug/display helpers and incoming samples;
 they exercise the real input, pose and hand callbacks, including concurrent
-calls, default-off capabilities, analog/button handling and tracking loss.
+calls, default-off capabilities, touch/click separation, per-hand button aliases,
+configurable thresholds/profile order, Index mapping, gesture fallback and input
+release on stream loss. The existing functional-test workflow runs these checks
+against the Monado revision pinned by `install.sh`.
 They do not replace an OpenXR application test with physical devices.
 
 ## Generic build and package target

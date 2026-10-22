@@ -27,6 +27,8 @@ builds with this option disabled do not compile or link the TCP client/parser.
 ## Controller compatibility
 
 The same virtual controller input path is used on Windows and Linux. SteamVR
+and Monado use the shared conversion in
+`shared/include/xr_runtime/input/controller_input_mapping.hpp`. SteamVR
 1.26+ automatic rebinding selects the highest-priority layout for which the
 application supplies bindings: Oculus Touch, Index, Vive, then Simple Controller.
 `resources/input/xr_hand_controller_remapping.json` owns that order and all

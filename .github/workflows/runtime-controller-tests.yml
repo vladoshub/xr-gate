@@ -2,13 +2,41 @@ name: Runtime and driver functional tests
 
 "on":
   pull_request:
-    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', 'drivers/openvr_driver/**', '.github/workflows/runtime-controller-tests.yml']
+    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', 'drivers/openvr_driver/**', 'drivers/monado_driver/**', '.github/workflows/runtime-controller-tests.yml']
   push:
     branches: [main, master]
-    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', 'drivers/openvr_driver/**', '.github/workflows/runtime-controller-tests.yml']
+    paths: ['runtime_adapters/xr_runtime_adapter/**', 'override_controller/src/imu/**', 'override_controller/include/**', 'shared/include/**', 'drivers/openvr_driver/**', 'drivers/monado_driver/**', '.github/workflows/runtime-controller-tests.yml']
   workflow_dispatch:
 
 jobs:
+  monado-controller:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MONADO_DIR: ${{ github.workspace }}/.build-deps/monado
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y g++ nlohmann-json3-dev
+      - name: Fetch the Monado revision used by the installer
+        run: |
+          MONADO_REF="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+          script = Path('drivers/monado_driver/scripts/linux/install.sh').read_text()
+          line = next(x for x in script.splitlines() if x.startswith('MONADO_REF='))
+          ref = line.split(':-', 1)[1].split('}', 1)[0]
+          assert re.fullmatch(r'[0-9a-f]{40}', ref), 'Expected a pinned Monado commit'
+          print(ref)
+          PY
+          )"
+          git init "$MONADO_DIR"
+          git -C "$MONADO_DIR" remote add origin https://gitlab.freedesktop.org/monado/monado.git
+          git -C "$MONADO_DIR" fetch --depth 1 origin "$MONADO_REF"
+          git -C "$MONADO_DIR" checkout --detach FETCH_HEAD
+      - name: Test Monado input, profile mappings, pose and stream recovery
+        run: bash drivers/monado_driver/tests/run_tests.sh
+
   openvr-controller:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

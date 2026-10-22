@@ -345,8 +345,31 @@ load_display_profile() {
   fi
 }
 
+load_controller_input_config() {
+  local selected="${XR_MONADO_CONTROLLER_INPUT_CONFIG:-}"
+  if [[ -n "$selected" ]]; then
+    selected="$(expand_path "$selected")"
+    [[ -f "$selected" ]] || fail "controller input config not found: $selected"
+  else
+    local dir=""
+    for dir in "$BIN_DIR/profiles" "$SCRIPT_DIR/profiles" "$SCRIPT_DIR/../../profiles" "$ROOT_PROJECT/drivers/monado_driver/profiles"; do
+      if [[ -f "$dir/controller_input.env" ]]; then
+        selected="$dir/controller_input.env"
+        break
+      fi
+    done
+  fi
+  if [[ -n "$selected" ]]; then
+    # shellcheck disable=SC1090
+    source "$selected"
+    export XR_MONADO_CONTROLLER_INPUT_CONFIG="$selected"
+    log "loaded controller input config: $selected"
+  fi
+}
+
 load_display_config
 load_display_profile
+load_controller_input_config
 
 # Prefer explicit binary override, then installed binary, then build tree binary.
 CANDIDATES=()

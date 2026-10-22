@@ -4,13 +4,16 @@
 // xr_runtime_adapter and exposes one HMD plus two controller devices to Monado.
 
 #include "xr_monado_driver/runtime_readers.hpp"
+#include <xr_runtime/input/controller_input_mapping.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -71,13 +74,15 @@ struct XrTrackingDevice {
   bool is_controller = false;
   bool left = false;
   bool hand_tracking_enabled = false;
+  xr_runtime::ControllerInputMappingConfig input_cfg;
+  struct xrt_binding_profile controller_profiles[4];
 
   XrRuntimeIo* io = nullptr;
   bool owns_io = false;
 };
 
 static struct xrt_binding_input_pair wmr_to_simple_inputs[] = {
-    {XRT_INPUT_SIMPLE_SELECT_CLICK, XRT_INPUT_WMR_TRIGGER_VALUE},
+    {XRT_INPUT_SIMPLE_SELECT_CLICK, XRT_INPUT_INDEX_TRIGGER_CLICK},
     {XRT_INPUT_SIMPLE_MENU_CLICK, XRT_INPUT_WMR_MENU_CLICK},
     {XRT_INPUT_SIMPLE_GRIP_POSE, XRT_INPUT_WMR_GRIP_POSE},
     {XRT_INPUT_SIMPLE_AIM_POSE, XRT_INPUT_WMR_AIM_POSE},
@@ -86,7 +91,7 @@ static struct xrt_binding_input_pair wmr_to_simple_inputs[] = {
 static struct xrt_binding_input_pair wmr_to_vive_inputs[] = {
     {XRT_INPUT_VIVE_SQUEEZE_CLICK, XRT_INPUT_WMR_SQUEEZE_CLICK},
     {XRT_INPUT_VIVE_MENU_CLICK, XRT_INPUT_WMR_MENU_CLICK},
-    {XRT_INPUT_VIVE_TRIGGER_CLICK, XRT_INPUT_WMR_TRIGGER_VALUE},
+    {XRT_INPUT_VIVE_TRIGGER_CLICK, XRT_INPUT_INDEX_TRIGGER_CLICK},
     {XRT_INPUT_VIVE_TRIGGER_VALUE, XRT_INPUT_WMR_TRIGGER_VALUE},
     {XRT_INPUT_VIVE_TRACKPAD, XRT_INPUT_WMR_TRACKPAD},
     {XRT_INPUT_VIVE_TRACKPAD_CLICK, XRT_INPUT_WMR_TRACKPAD_CLICK},
@@ -108,11 +113,36 @@ static struct xrt_binding_input_pair wmr_inputs[] = {
     {XRT_INPUT_WMR_TRACKPAD, XRT_INPUT_WMR_TRACKPAD},
 };
 
-static struct xrt_binding_profile controller_binding_profiles[] = {
-    {XRT_DEVICE_SIMPLE_CONTROLLER, wmr_to_simple_inputs, ARRAY_SIZE(wmr_to_simple_inputs), nullptr, 0},
-    {XRT_DEVICE_VIVE_WAND, wmr_to_vive_inputs, ARRAY_SIZE(wmr_to_vive_inputs), nullptr, 0},
-    {XRT_DEVICE_WMR_CONTROLLER, wmr_inputs, ARRAY_SIZE(wmr_inputs), nullptr, 0},
+static struct xrt_binding_input_pair touch_to_index_inputs[] = {
+    {XRT_INPUT_INDEX_SYSTEM_CLICK, XRT_INPUT_TOUCH_SYSTEM_CLICK},
+    {XRT_INPUT_INDEX_SYSTEM_TOUCH, XRT_INPUT_TOUCH_SYSTEM_CLICK},
+    {XRT_INPUT_INDEX_A_CLICK, XRT_INPUT_TOUCH_A_CLICK},
+    {XRT_INPUT_INDEX_A_TOUCH, XRT_INPUT_TOUCH_A_TOUCH},
+    {XRT_INPUT_INDEX_B_CLICK, XRT_INPUT_TOUCH_B_CLICK},
+    {XRT_INPUT_INDEX_B_TOUCH, XRT_INPUT_TOUCH_B_TOUCH},
+    {XRT_INPUT_INDEX_SQUEEZE_VALUE, XRT_INPUT_TOUCH_SQUEEZE_VALUE},
+    {XRT_INPUT_INDEX_SQUEEZE_FORCE, XRT_INPUT_INDEX_SQUEEZE_FORCE},
+    {XRT_INPUT_INDEX_TRIGGER_CLICK, XRT_INPUT_INDEX_TRIGGER_CLICK},
+    {XRT_INPUT_INDEX_TRIGGER_VALUE, XRT_INPUT_TOUCH_TRIGGER_VALUE},
+    {XRT_INPUT_INDEX_TRIGGER_TOUCH, XRT_INPUT_TOUCH_TRIGGER_TOUCH},
+    {XRT_INPUT_INDEX_THUMBSTICK, XRT_INPUT_TOUCH_THUMBSTICK},
+    {XRT_INPUT_INDEX_THUMBSTICK_CLICK, XRT_INPUT_TOUCH_THUMBSTICK_CLICK},
+    {XRT_INPUT_INDEX_THUMBSTICK_TOUCH, XRT_INPUT_TOUCH_THUMBSTICK_TOUCH},
+    {XRT_INPUT_INDEX_TRACKPAD, XRT_INPUT_WMR_TRACKPAD},
+    {XRT_INPUT_INDEX_TRACKPAD_FORCE, XRT_INPUT_INDEX_TRACKPAD_FORCE},
+    {XRT_INPUT_INDEX_TRACKPAD_TOUCH, XRT_INPUT_WMR_TRACKPAD_TOUCH},
+    {XRT_INPUT_INDEX_GRIP_POSE, XRT_INPUT_TOUCH_GRIP_POSE},
+    {XRT_INPUT_INDEX_AIM_POSE, XRT_INPUT_TOUCH_AIM_POSE},
 };
+
+// Native Touch is tried first by Monado. Keep rich alternatives before Simple.
+static struct xrt_binding_profile controller_binding_profiles[] = {
+    {XRT_DEVICE_INDEX_CONTROLLER, touch_to_index_inputs, ARRAY_SIZE(touch_to_index_inputs), nullptr, 0},
+    {XRT_DEVICE_WMR_CONTROLLER, wmr_inputs, ARRAY_SIZE(wmr_inputs), nullptr, 0},
+    {XRT_DEVICE_VIVE_WAND, wmr_to_vive_inputs, ARRAY_SIZE(wmr_to_vive_inputs), nullptr, 0},
+    {XRT_DEVICE_SIMPLE_CONTROLLER, wmr_to_simple_inputs, ARRAY_SIZE(wmr_to_simple_inputs), nullptr, 0},
+};
+constexpr const char* kControllerProfileNames[] = {"index", "wmr", "vive", "simple"};
 
 // Touch provides face buttons and analog squeeze. Keep the WMR inputs as
 // compatibility sources for the existing simple-controller/Vive/WMR bindings.
@@ -131,6 +161,8 @@ constexpr enum xrt_input_name kControllerInputNames[] = {
     XRT_INPUT_TOUCH_B_CLICK, XRT_INPUT_TOUCH_B_TOUCH,
     XRT_INPUT_TOUCH_X_CLICK, XRT_INPUT_TOUCH_X_TOUCH,
     XRT_INPUT_TOUCH_Y_CLICK, XRT_INPUT_TOUCH_Y_TOUCH,
+    XRT_INPUT_INDEX_TRIGGER_CLICK, XRT_INPUT_INDEX_SQUEEZE_FORCE,
+    XRT_INPUT_INDEX_TRACKPAD_FORCE,
 };
 
 XrTrackingDevice* from_xdev(struct xrt_device* xdev) {
@@ -230,6 +262,59 @@ std::string env_string(const char* name, const char* fallback) {
   const char* value = std::getenv(name);
   if (value == nullptr || value[0] == '\0') return fallback;
   return value;
+}
+
+bool env_bool(const char* name, bool fallback) {
+  if (!env_has_value(name)) return fallback;
+  if (env_truthy(name)) return true;
+  const std::string value = env_string(name, "");
+  if (value == "0" || value == "false" || value == "FALSE" ||
+      value == "no" || value == "NO" || value == "off" || value == "OFF") return false;
+  std::fprintf(stderr, "[xr_tracking_monado][WARN] invalid %s; using default\n", name);
+  return fallback;
+}
+
+xr_runtime::ControllerInputMappingConfig load_controller_input_config() {
+  xr_runtime::ControllerInputMappingConfig cfg;
+  cfg.left_ab_xy_alias = env_bool("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", cfg.left_ab_xy_alias);
+  cfg.trackpad_click_from_touch = env_bool("XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH", false);
+  // Preserve Monado's existing system-button publication; menu is independent.
+  cfg.expose_system_button = env_bool("XR_MONADO_CONTROLLER_EXPOSE_SYSTEM_BUTTON", true);
+  cfg.axis_activity_threshold = env_float("XR_MONADO_CONTROLLER_AXIS_THRESHOLD", cfg.axis_activity_threshold, 0.001f, 1.0f);
+  cfg.analog_click_threshold = env_float("XR_MONADO_CONTROLLER_CLICK_THRESHOLD", cfg.analog_click_threshold, 0.001f, 1.0f);
+  return cfg;
+}
+
+void configure_controller_binding_profiles(XrTrackingDevice* dev) {
+  const std::string order = env_string("XR_MONADO_CONTROLLER_PROFILE_ORDER", "index,wmr,vive,simple");
+  bool seen[ARRAY_SIZE(controller_binding_profiles)] = {};
+  size_t count = 0;
+  bool valid = true;
+  size_t begin = 0;
+  while (begin <= order.size()) {
+    const size_t end = order.find(',', begin);
+    std::string token = order.substr(begin, end == std::string::npos ? end : end - begin);
+    const auto first = token.find_first_not_of(" \t\r\n");
+    const auto last = token.find_last_not_of(" \t\r\n");
+    token = first == std::string::npos ? "" : token.substr(first, last - first + 1);
+    std::transform(token.begin(), token.end(), token.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    size_t index = 0;
+    while (index < ARRAY_SIZE(kControllerProfileNames) && token != kControllerProfileNames[index]) ++index;
+    if (index == ARRAY_SIZE(kControllerProfileNames) || seen[index]) { valid = false; break; }
+    seen[index] = true;
+    dev->controller_profiles[count++] = controller_binding_profiles[index];
+    if (end == std::string::npos) break;
+    begin = end + 1;
+  }
+  if (!valid || count == 0) {
+    std::fprintf(stderr, "[xr_tracking_monado][WARN] invalid XR_MONADO_CONTROLLER_PROFILE_ORDER; using index,wmr,vive,simple\n");
+    count = ARRAY_SIZE(controller_binding_profiles);
+    std::copy(std::begin(controller_binding_profiles), std::end(controller_binding_profiles), dev->controller_profiles);
+  }
+  dev->base.binding_profiles = dev->controller_profiles;
+  dev->base.binding_profile_count = count;
 }
 
 float load_eye_fov_deg(const char* name, float fallback_rad) {
@@ -733,6 +818,8 @@ bool controller_pose_input_name(enum xrt_input_name name) {
     case XRT_INPUT_VIVE_AIM_POSE:
     case XRT_INPUT_TOUCH_GRIP_POSE:
     case XRT_INPUT_TOUCH_AIM_POSE:
+    case XRT_INPUT_INDEX_GRIP_POSE:
+    case XRT_INPUT_INDEX_AIM_POSE:
       return true;
     default:
       return false;
@@ -890,49 +977,11 @@ void clear_controller_inputs(struct xrt_device* xdev, int64_t now_ns) {
   }
 }
 
-float finite_clamp(float value, float low, float high) {
-  return std::isfinite(value) ? std::clamp(value, low, high) : 0.0f;
-}
-
-float controller_value_or_button(float value, uint64_t buttons, uint64_t bit) {
-  value = finite_clamp(value, 0.0f, 1.0f);
-  // Digital-only controllers need a value, but an existing analog value must
-  // survive even when the runtime's gesture/button threshold is also active.
-  return value > 0.0f ? value : ((buttons & bit) != 0ull ? 1.0f : 0.0f);
-}
-
 void publish_controller_inputs(struct xrt_device* xdev,
                                const xr_runtime::RuntimeControllerSideStateV1& side,
                                int64_t timestamp_ns) {
-  const uint64_t buttons = side.buttons;
-  const uint64_t touches = side.touches;
-  const auto pressed = [buttons](uint64_t bit) { return (buttons & bit) != 0ull; };
-  const auto touched = [buttons, touches](uint64_t bit) { return ((touches | buttons) & bit) != 0ull; };
-  const float trigger = controller_value_or_button(side.trigger, buttons, xr_runtime::CONTROLLER_BUTTON_TRIGGER);
-  const float grip = controller_value_or_button(side.grip, buttons, xr_runtime::CONTROLLER_BUTTON_GRIP);
-  float stick_x = finite_clamp(side.thumbstick_x, -1.0f, 1.0f);
-  float stick_y = finite_clamp(side.thumbstick_y, -1.0f, 1.0f);
-  if (std::abs(stick_x) < 0.05f) {
-    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT)) stick_x = -1.0f;
-    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT)) stick_x = 1.0f;
-  }
-  if (std::abs(stick_y) < 0.05f) {
-    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN)) stick_y = -1.0f;
-    if (pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_UP)) stick_y = 1.0f;
-  }
-  const bool stick_click = pressed(xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) ||
-                           pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_CENTER);
-  const bool stick_touch = (touches & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK) != 0ull;
-  const bool axis_active = std::abs(stick_x) >= 0.05f || std::abs(stick_y) >= 0.05f;
-  const bool dpad_direction = pressed(xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT |
-                                      xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT |
-                                      xr_runtime::CONTROLLER_BUTTON_DPAD_UP |
-                                      xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN);
-  // Match the existing OpenVR Gear VR compatibility behavior, independently of
-  // the physical stick/centre switch. Capacitive motion can drive Vive bindings.
-  const bool trackpad_click = stick_click || stick_touch || axis_active || dpad_direction;
-  const bool trackpad_touch = stick_touch || axis_active || trackpad_click;
-
+  const auto* dev = from_xdev(xdev);
+  const auto state = xr_runtime::map_controller_input(&side, dev->left, dev->input_cfg);
   for (uint32_t i = 0; i < xdev->input_count; ++i) {
     auto& input = xdev->inputs[i];
     if (is_hand_tracking_input(input.name)) continue;
@@ -941,32 +990,32 @@ void publish_controller_inputs(struct xrt_device* xdev,
     std::memset(&input.value, 0, sizeof(input.value));
     switch (input.name) {
       case XRT_INPUT_WMR_TRIGGER_VALUE:
-      case XRT_INPUT_TOUCH_TRIGGER_VALUE: input.value.vec1.x = trigger; break;
-      case XRT_INPUT_TOUCH_SQUEEZE_VALUE: input.value.vec1.x = grip; break;
-      case XRT_INPUT_WMR_SQUEEZE_CLICK:
-        input.value.boolean = grip >= 0.55f || pressed(xr_runtime::CONTROLLER_BUTTON_GRIP); break;
+      case XRT_INPUT_TOUCH_TRIGGER_VALUE: input.value.vec1.x = state.trigger; break;
+      case XRT_INPUT_TOUCH_SQUEEZE_VALUE:
+      case XRT_INPUT_INDEX_SQUEEZE_FORCE: input.value.vec1.x = state.grip; break;
+      case XRT_INPUT_INDEX_TRACKPAD_FORCE: input.value.vec1.x = state.stick_click ? 1.0f : 0.0f; break;
+      case XRT_INPUT_INDEX_TRIGGER_CLICK: input.value.boolean = state.trigger_click; break;
+      case XRT_INPUT_WMR_SQUEEZE_CLICK: input.value.boolean = state.grip_click; break;
       case XRT_INPUT_WMR_THUMBSTICK:
       case XRT_INPUT_WMR_TRACKPAD:
-      case XRT_INPUT_TOUCH_THUMBSTICK: input.value.vec2 = {stick_x, stick_y}; break;
+      case XRT_INPUT_TOUCH_THUMBSTICK: input.value.vec2 = {state.x, state.y}; break;
       case XRT_INPUT_WMR_THUMBSTICK_CLICK:
-      case XRT_INPUT_TOUCH_THUMBSTICK_CLICK: input.value.boolean = stick_click; break;
-      case XRT_INPUT_TOUCH_THUMBSTICK_TOUCH:
-        input.value.boolean = stick_touch || stick_click || axis_active; break;
-      case XRT_INPUT_WMR_TRACKPAD_CLICK: input.value.boolean = trackpad_click; break;
-      case XRT_INPUT_WMR_TRACKPAD_TOUCH: input.value.boolean = trackpad_touch; break;
+      case XRT_INPUT_TOUCH_THUMBSTICK_CLICK: input.value.boolean = state.stick_click; break;
+      case XRT_INPUT_TOUCH_THUMBSTICK_TOUCH: input.value.boolean = state.stick_touch; break;
+      case XRT_INPUT_WMR_TRACKPAD_CLICK: input.value.boolean = state.trackpad_click; break;
+      case XRT_INPUT_WMR_TRACKPAD_TOUCH: input.value.boolean = state.trackpad_touch; break;
       case XRT_INPUT_WMR_MENU_CLICK:
-        input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_MENU | xr_runtime::CONTROLLER_BUTTON_SYSTEM); break;
-      case XRT_INPUT_TOUCH_MENU_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_MENU); break;
-      case XRT_INPUT_TOUCH_SYSTEM_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_SYSTEM); break;
-      case XRT_INPUT_TOUCH_TRIGGER_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_TRIGGER); break;
-      case XRT_INPUT_TOUCH_A_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_A); break;
-      case XRT_INPUT_TOUCH_A_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_A); break;
-      case XRT_INPUT_TOUCH_B_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_B); break;
-      case XRT_INPUT_TOUCH_B_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_B); break;
-      case XRT_INPUT_TOUCH_X_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_X); break;
-      case XRT_INPUT_TOUCH_X_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_X); break;
-      case XRT_INPUT_TOUCH_Y_CLICK: input.value.boolean = pressed(xr_runtime::CONTROLLER_BUTTON_Y); break;
-      case XRT_INPUT_TOUCH_Y_TOUCH: input.value.boolean = touched(xr_runtime::CONTROLLER_BUTTON_Y); break;
+      case XRT_INPUT_TOUCH_MENU_CLICK: input.value.boolean = state.menu; break;
+      case XRT_INPUT_TOUCH_SYSTEM_CLICK: input.value.boolean = state.system; break;
+      case XRT_INPUT_TOUCH_TRIGGER_TOUCH: input.value.boolean = state.trigger_touch; break;
+      case XRT_INPUT_TOUCH_A_CLICK: input.value.boolean = state.a; break;
+      case XRT_INPUT_TOUCH_A_TOUCH: input.value.boolean = state.a_touch; break;
+      case XRT_INPUT_TOUCH_B_CLICK: input.value.boolean = state.b; break;
+      case XRT_INPUT_TOUCH_B_TOUCH: input.value.boolean = state.b_touch; break;
+      case XRT_INPUT_TOUCH_X_CLICK: input.value.boolean = state.x_button; break;
+      case XRT_INPUT_TOUCH_X_TOUCH: input.value.boolean = state.x_touch; break;
+      case XRT_INPUT_TOUCH_Y_CLICK: input.value.boolean = state.y_button; break;
+      case XRT_INPUT_TOUCH_Y_TOUCH: input.value.boolean = state.y_touch; break;
       default: break;  // Pose inputs have no scalar/button value.
     }
   }
@@ -999,6 +1048,8 @@ xrt_result_t xrtd_update_inputs(struct xrt_device* xdev) {
     const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
     if (runtime_hand_side_is_valid(io.last_hand.frame, side, dev->left)) {
       xr_runtime::RuntimeControllerSideStateV1 input{};
+      input.flags = xr_runtime::RUNTIME_CONTROLLER_CONNECTED | xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID;
+      input.role = dev->left ? xr_runtime::CONTROLLER_SIDE_LEFT : xr_runtime::CONTROLLER_SIDE_RIGHT;
       input.buttons = side.reserved0 & xr_runtime::CONTROLLER_BUTTON_KNOWN_MASK;
       if ((side.flags & xr_tracking::HAND_PINCH_VALID) != 0u) {
         input.trigger = side.pinch_strength;
@@ -1240,6 +1291,7 @@ extern "C" struct xrt_device* xr_tracking_runtime_controller_create(struct xrt_d
   dev->is_controller = true;
   dev->left = left;
   dev->hand_tracking_enabled = hand_tracking_enabled;
+  dev->input_cfg = load_controller_input_config();
   dev->io = io;
   dev->owns_io = owns_io;
 
@@ -1250,8 +1302,7 @@ extern "C" struct xrt_device* xr_tracking_runtime_controller_create(struct xrt_d
   xdev->supported.orientation_tracking = true;
   xdev->supported.position_tracking = true;
   xdev->supported.hand_tracking = hand_tracking_enabled;
-  xdev->binding_profiles = controller_binding_profiles;
-  xdev->binding_profile_count = ARRAY_SIZE(controller_binding_profiles);
+  configure_controller_binding_profiles(dev);
 
   std::snprintf(xdev->str, sizeof(xdev->str), "%s %s controller", kDriverName, left ? "left" : "right");
   std::snprintf(xdev->serial, sizeof(xdev->serial), "xr-tracking-monado-%s-controller-001", left ? "left" : "right");
@@ -1274,6 +1325,9 @@ extern "C" struct xrt_device* xr_tracking_runtime_controller_create(struct xrt_d
   }
   std::fprintf(stderr, "[xr_tracking_monado] %s controller profile=touch hand_tracking=%s\n",
                left ? "left" : "right", hand_tracking_enabled ? "enabled" : "disabled");
+  std::fprintf(stderr, "[xr_tracking_monado] controller input left_ab_xy_alias=%d trackpad_click_from_touch=%d axis_threshold=%.3f click_threshold=%.3f\n",
+               dev->input_cfg.left_ab_xy_alias, dev->input_cfg.trackpad_click_from_touch,
+               dev->input_cfg.axis_activity_threshold, dev->input_cfg.analog_click_threshold);
   u_var_add_root(dev, left ? "XR Tracking Runtime Left Controller" : "XR Tracking Runtime Right Controller", true);
   return xdev;
 }

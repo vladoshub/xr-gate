@@ -145,6 +145,234 @@ xrt_input& input(xrt_device* device, xrt_input_name name) {
   std::abort();
 }
 
+struct ScopedEnv {
+  std::string name, previous;
+  bool present;
+  ScopedEnv(const char* key, const char* value) : name(key), present(std::getenv(key) != nullptr) {
+    if (present) previous = std::getenv(key);
+    if (value) setenv(key, value, 1); else unsetenv(key);
+  }
+  ~ScopedEnv() {
+    if (present) setenv(name.c_str(), previous.c_str(), 1); else unsetenv(name.c_str());
+  }
+};
+
+xrt_input& profile_input(xrt_device* device, xrt_device_name profile, xrt_input_name name) {
+  for (uint32_t i = 0; i < device->binding_profile_count; ++i) {
+    auto& binding = device->binding_profiles[i];
+    if (binding.name != profile) continue;
+    for (size_t j = 0; j < binding.input_count; ++j) {
+      if (binding.inputs[j].from == name) return input(device, binding.inputs[j].device);
+    }
+  }
+  std::abort();
+}
+
+void test_touch_directions_and_clicks() {
+  Fixture f;
+  for (auto* device : {f.left, f.right}) {
+    auto& side = device == f.left ? f.controller->sample.frame.left : f.controller->sample.frame.right;
+    for (float axis : {0.0f, -1.0f, -0.5f, 0.5f, 1.0f}) {
+      side.buttons = 0;
+      side.touches = xr_runtime::CONTROLLER_BUTTON_THUMBSTICK;
+      side.thumbstick_x = axis;
+      side.thumbstick_y = -axis;
+      device->update_inputs(device);
+      assert(input(device, XRT_INPUT_WMR_TRACKPAD_TOUCH).value.boolean);
+      assert(input(device, XRT_INPUT_TOUCH_THUMBSTICK_TOUCH).value.boolean);
+      assert(!input(device, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+      assert(!input(device, XRT_INPUT_TOUCH_THUMBSTICK_CLICK).value.boolean);
+      assert(input(device, XRT_INPUT_WMR_TRACKPAD).value.vec2.x == axis);
+      assert(input(device, XRT_INPUT_TOUCH_THUMBSTICK).value.vec2.y == -axis);
+    }
+    side.thumbstick_x = side.thumbstick_y = 0;
+    side.touches = 0;
+    for (auto direction : {xr_runtime::CONTROLLER_BUTTON_DPAD_LEFT, xr_runtime::CONTROLLER_BUTTON_DPAD_RIGHT,
+                           xr_runtime::CONTROLLER_BUTTON_DPAD_UP, xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN}) {
+      side.buttons = direction;
+      device->update_inputs(device);
+      const auto axis = input(device, XRT_INPUT_TOUCH_THUMBSTICK).value.vec2;
+      assert(std::abs(axis.x) + std::abs(axis.y) == 1.0f);
+      assert(input(device, XRT_INPUT_WMR_TRACKPAD_TOUCH).value.boolean);
+      assert(!input(device, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+    }
+    for (auto click : {xr_runtime::CONTROLLER_BUTTON_THUMBSTICK, xr_runtime::CONTROLLER_BUTTON_DPAD_CENTER}) {
+      side.buttons = click;
+      device->update_inputs(device);
+      assert(input(device, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+      assert(input(device, XRT_INPUT_TOUCH_THUMBSTICK_CLICK).value.boolean);
+      assert(input(device, XRT_INPUT_INDEX_TRACKPAD_FORCE).value.vec1.x == 1.0f);
+    }
+    side.buttons = 0;
+    device->update_inputs(device);
+    assert(!input(device, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+    assert(!input(device, XRT_INPUT_WMR_TRACKPAD_TOUCH).value.boolean);
+    assert(input(device, XRT_INPUT_INDEX_TRACKPAD_FORCE).value.vec1.x == 0.0f);
+  }
+}
+
+void test_left_face_alias_and_independent_buttons() {
+  {
+    Fixture f;
+    auto& left = f.controller->sample.frame.left;
+    left.buttons = xr_runtime::CONTROLLER_BUTTON_A;
+    f.left->update_inputs(f.left);
+    assert(input(f.left, XRT_INPUT_TOUCH_A_CLICK).value.boolean);
+    assert(input(f.left, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+    assert(!input(f.left, XRT_INPUT_TOUCH_B_CLICK).value.boolean);
+    left.buttons = xr_runtime::CONTROLLER_BUTTON_Y;
+    f.left->update_inputs(f.left);
+    assert(input(f.left, XRT_INPUT_TOUCH_B_CLICK).value.boolean);
+    assert(input(f.left, XRT_INPUT_TOUCH_Y_CLICK).value.boolean);
+    assert(!input(f.left, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+    left.buttons = 0;
+    left.touches = xr_runtime::CONTROLLER_BUTTON_A;
+    f.left->update_inputs(f.left);
+    assert(input(f.left, XRT_INPUT_TOUCH_X_TOUCH).value.boolean);
+    assert(!input(f.left, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+    f.controller->sample.frame.right.buttons = xr_runtime::CONTROLLER_BUTTON_A | xr_runtime::CONTROLLER_BUTTON_B;
+    f.right->update_inputs(f.right);
+    assert(input(f.right, XRT_INPUT_TOUCH_A_CLICK).value.boolean);
+    assert(input(f.right, XRT_INPUT_TOUCH_B_CLICK).value.boolean);
+    assert(!input(f.right, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+    assert(!input(f.right, XRT_INPUT_TOUCH_Y_CLICK).value.boolean);
+  }
+  ScopedEnv alias("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", "0");
+  Fixture f;
+  const uint64_t bits[] = {xr_runtime::CONTROLLER_BUTTON_A, xr_runtime::CONTROLLER_BUTTON_B,
+                           xr_runtime::CONTROLLER_BUTTON_X, xr_runtime::CONTROLLER_BUTTON_Y};
+  const xrt_input_name names[] = {XRT_INPUT_TOUCH_A_CLICK, XRT_INPUT_TOUCH_B_CLICK,
+                                  XRT_INPUT_TOUCH_X_CLICK, XRT_INPUT_TOUCH_Y_CLICK};
+  for (size_t i = 0; i < 4; ++i) {
+    f.controller->sample.frame.left.buttons = bits[i];
+    f.left->update_inputs(f.left);
+    for (size_t j = 0; j < 4; ++j) assert(input(f.left, names[j]).value.boolean == (i == j));
+  }
+}
+
+void test_input_policy_settings() {
+  ScopedEnv legacy("XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH", "1");
+  ScopedEnv axis("XR_MONADO_CONTROLLER_AXIS_THRESHOLD", "0.2");
+  ScopedEnv click("XR_MONADO_CONTROLLER_CLICK_THRESHOLD", "0.8");
+  ScopedEnv system("XR_MONADO_CONTROLLER_EXPOSE_SYSTEM_BUTTON", "0");
+  Fixture f;
+  auto& side = f.controller->sample.frame.left;
+  side.thumbstick_x = 0.1f;
+  side.trigger = side.grip = 0.7f;
+  side.buttons = xr_runtime::CONTROLLER_BUTTON_SYSTEM;
+  f.left->update_inputs(f.left);
+  assert(input(f.left, XRT_INPUT_TOUCH_THUMBSTICK).value.vec2.x == 0.0f);
+  assert(!input(f.left, XRT_INPUT_INDEX_TRIGGER_CLICK).value.boolean);
+  assert(!profile_input(f.left, XRT_DEVICE_VIVE_WAND, XRT_INPUT_VIVE_TRIGGER_CLICK).value.boolean);
+  assert(!profile_input(f.left, XRT_DEVICE_SIMPLE_CONTROLLER, XRT_INPUT_SIMPLE_SELECT_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_WMR_SQUEEZE_CLICK).value.boolean);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_TOUCH).value.boolean);
+  assert(!input(f.left, XRT_INPUT_TOUCH_SYSTEM_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_WMR_MENU_CLICK).value.boolean);
+  side.trigger = side.grip = 0.9f;
+  side.touches = xr_runtime::CONTROLLER_BUTTON_THUMBSTICK;
+  f.left->update_inputs(f.left);
+  assert(input(f.left, XRT_INPUT_INDEX_TRIGGER_CLICK).value.boolean);
+  assert(profile_input(f.left, XRT_DEVICE_VIVE_WAND, XRT_INPUT_VIVE_TRIGGER_CLICK).value.boolean);
+  assert(profile_input(f.left, XRT_DEVICE_SIMPLE_CONTROLLER, XRT_INPUT_SIMPLE_SELECT_CLICK).value.boolean);
+  assert(input(f.left, XRT_INPUT_WMR_SQUEEZE_CLICK).value.boolean);
+  assert(input(f.left, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_TOUCH_THUMBSTICK_CLICK).value.boolean);
+  assert(input(f.left, XRT_INPUT_INDEX_TRACKPAD_FORCE).value.vec1.x == 0.0f);
+}
+
+void test_profile_order_and_index_bindings() {
+  {
+    Fixture f;
+    for (auto* device : {f.left, f.right}) {
+      assert(device->binding_profile_count == 4);
+      assert(device->binding_profiles[0].name == XRT_DEVICE_INDEX_CONTROLLER);
+      assert(device->binding_profiles[1].name == XRT_DEVICE_WMR_CONTROLLER);
+      assert(device->binding_profiles[2].name == XRT_DEVICE_VIVE_WAND);
+      assert(device->binding_profiles[3].name == XRT_DEVICE_SIMPLE_CONTROLLER);
+      for (uint32_t i = 0; i < device->binding_profile_count; ++i) {
+        for (size_t j = 0; j < device->binding_profiles[i].input_count; ++j)
+          input(device, device->binding_profiles[i].inputs[j].device);
+      }
+      auto& side = device == f.left ? f.controller->sample.frame.left : f.controller->sample.frame.right;
+      side.trigger = 0.8f; side.grip = 0.6f;
+      side.buttons = xr_runtime::CONTROLLER_BUTTON_A | xr_runtime::CONTROLLER_BUTTON_THUMBSTICK;
+      device->update_inputs(device);
+      assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_A_CLICK).value.boolean);
+      assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_TRIGGER_CLICK).value.boolean);
+      assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_SQUEEZE_FORCE).value.vec1.x == 0.6f);
+      assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_TRACKPAD_FORCE).value.vec1.x == 1.0f);
+      auto& grip = profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_GRIP_POSE);
+      xrt_space_relation relation{};
+      assert(grip.active);
+      assert(device->get_tracked_pose(device, grip.name, 0, &relation) == XRT_SUCCESS);
+      assert(relation.pose.position.x == 0.4f);
+    }
+  }
+  {
+    ScopedEnv order("XR_MONADO_CONTROLLER_PROFILE_ORDER", " Vive, index, simple ");
+    Fixture f;
+    assert(f.left->binding_profile_count == 3);
+    assert(f.left->binding_profiles[0].name == XRT_DEVICE_VIVE_WAND);
+    assert(f.right->binding_profiles[1].name == XRT_DEVICE_INDEX_CONTROLLER);
+    assert(f.left->binding_profiles[2].name == XRT_DEVICE_SIMPLE_CONTROLLER);
+    assert(f.left->binding_profiles != f.right->binding_profiles);
+  }
+  for (const char* invalid : {"index,index", "unknown", "vive,", ",wmr"}) {
+    ScopedEnv order("XR_MONADO_CONTROLLER_PROFILE_ORDER", invalid);
+    Fixture f;
+    assert(f.left->binding_profile_count == 4);
+    assert(f.left->binding_profiles[0].name == XRT_DEVICE_INDEX_CONTROLLER);
+    assert(f.left->binding_profiles[3].name == XRT_DEVICE_SIMPLE_CONTROLLER);
+  }
+}
+
+void test_input_release_independent_of_pose() {
+  Fixture f;
+  for (auto* device : {f.left, f.right}) {
+    auto& side = device == f.left ? f.controller->sample.frame.left : f.controller->sample.frame.right;
+    const uint32_t valid = xr_runtime::RUNTIME_CONTROLLER_CONNECTED | xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID;
+    side.buttons = side.touches = xr_runtime::CONTROLLER_BUTTON_KNOWN_MASK;
+    side.flags = valid;  // Optical/controller pose is absent, buttons are valid.
+    device->update_inputs(device);
+    assert(input(device, XRT_INPUT_TOUCH_A_CLICK).active);
+    assert(input(device, XRT_INPUT_TOUCH_A_CLICK).value.boolean);
+    assert(!input(device, XRT_INPUT_TOUCH_GRIP_POSE).active);
+    for (uint32_t flags : {uint32_t{0}, valid | xr_runtime::RUNTIME_CONTROLLER_INPUT_STALE,
+                            uint32_t{xr_runtime::RUNTIME_CONTROLLER_CONNECTED}}) {
+      side.flags = flags;
+      device->update_inputs(device);
+      for (uint32_t i = 0; i < device->input_count; ++i) {
+        auto& value = device->inputs[i];
+        if (controller_pose_input_name(value.name)) continue;
+        assert(!value.active);
+        xrt_input_value zero{};
+        std::memset(&zero, 0, sizeof(zero));
+        assert(std::memcmp(&value.value, &zero, sizeof(zero)) == 0);
+      }
+    }
+  }
+}
+
+void test_hand_gesture_input_fallback() {
+  Fixture f;
+  f.controller->available = false;
+  auto& hand = f.hand->sample.frame.left;
+  hand.flags |= xr_tracking::HAND_PINCH_VALID | xr_tracking::HAND_GRAB_VALID;
+  hand.pinch_strength = 0.65f;
+  hand.grab_strength = 0.75f;
+  hand.reserved0 = xr_runtime::CONTROLLER_BUTTON_A;
+  f.left->update_inputs(f.left);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).active);
+  assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).value.vec1.x == 0.65f);
+  assert(input(f.left, XRT_INPUT_TOUCH_SQUEEZE_VALUE).value.vec1.x == 0.75f);
+  assert(input(f.left, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+  f.hand->available = false;
+  f.left->update_inputs(f.left);
+  assert(!input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).active);
+  assert(!input(f.left, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+}
+
 void test_default_and_opt_in() {
   {
     Fixture f;
@@ -191,7 +419,7 @@ void test_buttons_analog_and_touchpad() {
     assert(input(f.left, name).value.boolean);
   }
   assert(input(f.left, XRT_INPUT_WMR_TRACKPAD_TOUCH).value.boolean);
-  assert(input(f.left, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
   assert(!input(f.left, XRT_INPUT_TOUCH_THUMBSTICK_CLICK).value.boolean);
   assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).timestamp == static_cast<int64_t>(f.controller->sample.frame.timestamp_ns));
   side.trigger = side.grip = side.thumbstick_x = 0.0f;
@@ -199,9 +427,10 @@ void test_buttons_analog_and_touchpad() {
   side.buttons = xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN | xr_runtime::CONTROLLER_BUTTON_SYSTEM;
   f.left->update_inputs(f.left);
   assert(input(f.left, XRT_INPUT_TOUCH_THUMBSTICK).value.vec2.y == -1.0f);
-  assert(input(f.left, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_WMR_TRACKPAD_CLICK).value.boolean);
   assert(input(f.left, XRT_INPUT_TOUCH_SYSTEM_CLICK).value.boolean);
   assert(!input(f.left, XRT_INPUT_TOUCH_MENU_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_WMR_MENU_CLICK).value.boolean);
   side.buttons = xr_runtime::CONTROLLER_BUTTON_TRIGGER;
   f.left->update_inputs(f.left);
   assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).value.vec1.x == 1.0f);
@@ -416,13 +645,25 @@ void test_parallel_callbacks() {
 }
 
 int main() {
+  ScopedEnv alias("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", nullptr);
+  ScopedEnv legacy("XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH", nullptr);
+  ScopedEnv axis("XR_MONADO_CONTROLLER_AXIS_THRESHOLD", nullptr);
+  ScopedEnv click("XR_MONADO_CONTROLLER_CLICK_THRESHOLD", nullptr);
+  ScopedEnv system("XR_MONADO_CONTROLLER_EXPOSE_SYSTEM_BUTTON", nullptr);
+  ScopedEnv order("XR_MONADO_CONTROLLER_PROFILE_ORDER", nullptr);
   test_default_and_opt_in();
   test_buttons_analog_and_touchpad();
+  test_touch_directions_and_clicks();
+  test_left_face_alias_and_independent_buttons();
+  test_input_policy_settings();
+  test_profile_order_and_index_bindings();
+  test_input_release_independent_of_pose();
+  test_hand_gesture_input_fallback();
   test_absolute_pose_and_authoritative_invalid();
   test_skeleton_mapping_and_loss();
   test_palm_runtime_orientation();
   test_invalid_joints();
   test_stream_loss_and_resume();
   test_parallel_callbacks();
-  std::cout << "Monado driver: 8 test groups passed\n";
+  std::cout << "Monado driver: 14 test groups passed\n";
 }
