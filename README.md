@@ -195,27 +195,16 @@ Connect the adapters, stop XR Gate/controller capture, then run the selector fro
 ```bash
 python3 bin/scripts/override_controller/select_bluetooth_adapter.py
 ```
+Choose a number, MAC address or `hci` index; Enter cancels without changes.
 
-From a source checkout, use `python3 override_controller/scripts/linux/select_bluetooth_adapter.py` instead.
-The menu shows each adapter's hardware model (USB/sysfs and udev), `hci` index, MAC address, power state and USB VID:PID when available. Choose a number, MAC address or `hci` index; there is no need to unplug adapters to identify them. Enter cancels without changes.
 
 The selected adapter is powered on and verified **before** the other adapters are powered off. Switching disconnects devices using those other adapters. A failed switch attempts to restore the original power states. This does not change pairing records, firmware or service configuration. Pair controllers with the selected adapter if they were previously paired with another one.
-
-For inventory only, or to repeat a known selection without a menu:
-
-```bash
-python3 bin/scripts/override_controller/select_bluetooth_adapter.py --list
-python3 bin/scripts/override_controller/select_bluetooth_adapter.py --adapter AA:BB:CC:DD:EE:FF
-```
-
-Replace the example MAC with the adapter's actual address. `XR_BLUETOOTH_ADAPTER` can also supply the MAC or `hci` index; prefer a MAC because `hci` numbering can change. This is a one-time power switch, not a boot service: rerun after reboot/hotplug if needed. The script requires Python 3, BlueZ and systemd's `busctl`; `udevadm` improves model names when available. If permission is denied, rerun the same command with `sudo`. Every external command has a deadline (`--timeout`, default 5 seconds).
-
-
-**If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
 
 
 
 ## SUPPORTED BLUETOOTH CONTROLLERS (Recommended)
+
+**If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
 
 ### VR-PARK controllers (NO IMU):
 
@@ -266,13 +255,13 @@ sed -i '/"name": "override_controller"/,/"command":/ s/"start_on_launch": false/
 ### Samsung Gear VR controllers (IMU):
 
 1. Stop XR Gate/controller capture. If you use a separate Bluetooth adapter, select it first:
+**You can skip this step if the desired adapter is already the only powered adapter.**
 
 ```bash
 cd ~/xr-gate-release/xr-gate
 python3 bin/scripts/override_controller/select_bluetooth_adapter.py
 ```
 
-The selector shows hardware names and MAC addresses, enables the chosen adapter and disables the others. Devices using those other adapters will disconnect. You can skip this step if the desired adapter is already the only powered adapter.
 
 2. Put the Gear VR controllers in Bluetooth pairing mode and run:
 
@@ -282,13 +271,8 @@ python3 bin/scripts/override_controller/bluetooth_controllers.py \
   --template bin/override_controller/configs/empty_gearvr.json
 ```
 
-The script uses the **only powered adapter** automatically. If several are powered, it asks which one to use. It keeps that adapter selected for discovery, pairing, trust and connection; it does not power on other adapters.
+Choose the left and right controllers from the list of names and MAC addresses. Enter leaves a side unselected; at least one side is required
 
-Choose the left and right controllers from the list of names and MAC addresses. Enter leaves a side unselected; at least one side is required. An unselected side is removed from the saved controller config. The script performs `pair`, `trust` and `connect`, creates `gearvr.json` from the template if needed, and saves the selected controller identities. Existing configs are backed up before saving. Manual `bluetoothctl` commands, copying the template over an existing config, and a separate `--connect-devices` registration are not required.
-
-To choose a specific powered adapter without an adapter prompt, append `--adapter <ADAPTER_MAC>` (or set `XR_BLUETOOTH_ADAPTER`). `--scan` only lists devices and does not rewrite the config; when running without a terminal, specify an adapter if more than one is powered. For scripted assignment, use `--left <CONTROLLER_MAC>` and/or `--right <CONTROLLER_MAC>`; an omitted side is unselected.
-
-From a source checkout, use `override_controller/scripts/linux/select_bluetooth_adapter.py`, `override_controller/scripts/linux/bluetooth_controllers.py` and `override_controller/configs/empty_gearvr.json` instead of the packaged paths. Keep both Python helpers together when copying them to an older release. Bluetooth pairing/side assignment is separate from the IMU calibration performed at runtime startup.
 
 3. Enable auto-start for override_controller and Gear VR in the client:
 
