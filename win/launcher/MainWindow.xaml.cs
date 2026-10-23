@@ -21,7 +21,7 @@ public partial class MainWindow : Window
     private readonly ConcurrentQueue<string> pendingLog = new();
     private readonly DispatcherTimer logTimer;
     private readonly DispatcherTimer deviceTimer;
-    private readonly CancellationTokenSource deviceCancellation = new();
+    private CancellationTokenSource deviceCancellation = new();
     private Task? deviceObservation;
     private readonly StreamWriter? sessionLog;
     private LauncherSettings settings;
@@ -48,7 +48,9 @@ public partial class MainWindow : Window
         var configuration = SettingsRecovery.Open(root);
         settings = configuration.Settings;
         configurationProblem = configuration.Problem;
+        ControllerModeBox.ItemsSource = ControllerModeChoice.All;
         DataContext = settings;
+        InitializeHardwareUi();
         stateDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XR-Gate-WSL");
         if (!smoke)
         {
@@ -64,6 +66,8 @@ public partial class MainWindow : Window
         }
         keeper = new WslKeeper(Log);
         runner = new ProcessRunner(root, stateDirectory, Log);
+        audio = new AudioBridge(root, Log);
+        InitializeAudioUi();
         logTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         logTimer.Tick += (_, _) => FlushLog();
         logTimer.Start();
@@ -91,6 +95,7 @@ public partial class MainWindow : Window
             }
             if (configurationProblem is null && File.Exists(Path.Combine(stateDirectory, "state.json"))) await ExecuteAsync("Status", saveSettings: false);
             StartDeviceObservation();
+            StartAudioDeviceRefresh();
             deviceTimer.Start();
         };
     }
@@ -124,10 +129,14 @@ public partial class MainWindow : Window
         ActionPanel.IsEnabled = ConnectionPanel.IsEnabled = ToolsPanel.IsEnabled = !busy && !recovery;
         SettingsPanel.IsEnabled = !busy;
         SettingsFields.IsEnabled = !busy && (!runtimeMayBeRunning || recovery);
+        ControllersPanel.IsEnabled = !busy && !runtimeMayBeRunning && !recovery;
+        AudioFields.IsEnabled = !busy && !recovery;
+        RefreshAudioDevicesButton.IsEnabled = !busy && !recovery && audioRefreshTask is not { IsCompleted: false };
         SaveSettingsButton.IsEnabled = AdvancedSettingsButton.IsEnabled = !busy && !runtimeMayBeRunning && !recovery;
         RecoveryPanel.IsEnabled = !busy;
         Progress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        StopButton.IsEnabled = !recovery && (busy ? action == "Run" : installed || runtimeMayBeRunning);
+        StopButton.IsEnabled = busy ? action == "Run" : installed || runtimeMayBeRunning || resourcesMayBeOwned ||
+            (!smoke && File.Exists(Path.Combine(stateDirectory, "state.json")));
         NextStepButton.IsEnabled = !busy && !recovery;
         CancelDiagnosticsButton.Visibility = IsCancellableOperation(action) ? Visibility.Visible : Visibility.Collapsed;
         CancelDiagnosticsButton.Content = action is "Usb" or "Detach" ? "Cancel USB operation" :
@@ -138,7 +147,7 @@ public partial class MainWindow : Window
 
     private async Task<bool> ExecuteAsync(string action, bool steamVr = false, bool console = false, bool saveSettings = true)
     {
-        if (configurationProblem is not null) { UpdateRecoveryUi(); return false; }
+        if (configurationProblem is not null && action != "Stop") { UpdateRecoveryUi(); return false; }
         if (busyAction.Length > 0 || activeTask is { IsCompleted: false }) return false;
         activeTask = PerformAsync(action, steamVr, console, saveSettings);
         return await activeTask;
@@ -157,10 +166,11 @@ public partial class MainWindow : Window
         if (action == "Test") operationCancellation.CancelAfter(TimeSpan.FromSeconds(settings.StartTimeoutSeconds + 5));
         try
         {
+            if (action is "Stop" or "Detach") await StopAudioAsync(required: true);
             bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop");
             if (writesSettings) settings.Save(root);
-            var actionSettings = writesSettings || smokeAction is not null ? settings : LauncherSettings.Load(root);
-            if (smokeAction is null) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
+            var actionSettings = writesSettings || smokeAction is not null || action == "Stop" ? settings : LauncherSettings.Load(root);
+            if (smokeAction is null && action != "Stop") await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
             if (action == "Run") runtimeMayBeRunning = true;
             if (action is "Run" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,
@@ -185,9 +195,17 @@ public partial class MainWindow : Window
                 catch (OperationCanceledException) { throw; }
                 catch (Exception error) { Log("Status: " + error.Message); }
             }
+            if (action == "Run")
+            {
+                // A console-only start can return before the Linux supervisor
+                // acquires its lock. Keep observing it until Status confirms exit.
+                if (result.Success) runtimeMayBeRunning = true;
+                await UpdateAudioAsync(result.Success);
+            }
+            else if (action == "Status" && result.Success) await UpdateAudioAsync(runtimeMayBeRunning);
             StatusTitle.Text = result.Success ? action switch
             {
-                "Run" => steamVr ? "VR is ready" : "Tracking console opened",
+                "Run" => steamVr ? "VR is ready" : "Tracking started",
                 "Stop" => "Tracking stopped",
                 "Install" => "Installation complete",
                 "Status" => runtimeMayBeRunning ? "Tracking is running" : installed ? "Ready to start" : "Install to get started",
@@ -196,7 +214,8 @@ public partial class MainWindow : Window
             StatusDetail.Text = result.Instruction.Length > 0 ? result.Instruction : action == "Status"
                 ? (installed ? "Use Start VR to connect devices and open SteamVR." : "Click Install / continue to set up XR Gate.")
                 : action == "Stop" ? "The managed runtime stopped and its USB devices were returned to Windows."
-                : "Complete any startup or calibration prompts in the tracking console.";
+                : settings.ShowCommandPrompt ? "Complete any startup or calibration prompts in the tracking console."
+                : "Tracking runs in the background. For console commands, stop tracking, enable Show command prompt in Settings, then start again.";
             if (result.Warnings.Length > 0)
             {
                 WarningText.Text = string.Join("\n", result.Warnings);
@@ -251,6 +270,7 @@ public partial class MainWindow : Window
             operationCancellation.Dispose();
             operationCancellation = null;
             SetBusy("");
+            if (action is "Usb" or "Install" or "Run") StartAudioDeviceRefresh();
         }
     }
 
@@ -316,7 +336,7 @@ public partial class MainWindow : Window
     private async void Pair_Click(object sender, RoutedEventArgs e)
     {
         if (runtimeMayBeRunning) { StatusDetail.Text = "Stop tracking before changing the controller selection."; return; }
-        if (!settings.BluetoothEnabled) { StatusDetail.Text = "Enable Bluetooth in Settings first."; return; }
+        if (!settings.BluetoothEnabled) { StatusDetail.Text = "Enable Bluetooth in Controllers first."; return; }
         BluetoothControllersPanel.Visibility = Visibility.Visible;
         await ExecuteAsync("BluetoothScan");
     }
@@ -362,9 +382,21 @@ public partial class MainWindow : Window
     {
         try
         {
+            await DetectHardwareAsync();
+            if (closing) return;
             var result = await runner.RunAsync("DeviceStatus", cancellation: deviceCancellation.Token);
             if (result.Success && !closing) ApplyDeviceObservation(result.Data);
             else if (!closing) { DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = result.Instruction; }
+            if (runtimeMayBeRunning && !closing)
+            {
+                var runtime = await runner.RunAsync("Status", cancellation: deviceCancellation.Token, timeLimit: TimeSpan.FromSeconds(15));
+                if (runtime.Success && runtime.Data.TryGetProperty("running", out var running) && !running.GetBoolean())
+                {
+                    runtimeMayBeRunning = false; await StopAudioAsync(); SetBusy(busyAction);
+                    Log("[Launcher] Tracking exited; audio stopped. Use Stop tracking & return USB to return devices.");
+                }
+            }
+            if (MainTabs.SelectedItem == AudioTab && !closing) StartAudioDeviceRefresh();
         }
         catch (OperationCanceledException) { }
         catch (Exception error) { if (!closing) { DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = error.Message; } }
@@ -509,25 +541,11 @@ public partial class MainWindow : Window
     {
         if (closeApproved || smoke) { ReleaseResources(); return; }
         if (closing) { e.Cancel = true; return; }
-        if (configurationProblem is not null) { ReleaseResources(); return; }
-        if (busyAction.Length > 0 && busyAction is not ("Run" or "Stop") && !IsCancellableOperation(busyAction))
-        {
-            e.Cancel = true;
-            StatusDetail.Text = "Finish the current action (or quit its interactive console) before closing XR Gate.";
-            return;
-        }
         e.Cancel = true;
         closing = true;
         try
         {
-            deviceTimer.Stop();
-            deviceCancellation.Cancel();
-            if (deviceObservation is not null) await deviceObservation;
-            if (IsCancellableOperation(busyAction)) await CancelActiveOperationAsync();
-            bool stopped = true;
-            if (busyAction == "Stop" && activeTask is not null) stopped = await activeTask;
-            else if (runtimeMayBeRunning || resourcesMayBeOwned || File.Exists(Path.Combine(stateDirectory, "state.json")))
-                stopped = await StopSessionAsync();
+            bool stopped = await ShutdownSessionAsync();
             if (!stopped)
             {
                 StatusTitle.Text = "Shutdown needs attention";
@@ -537,7 +555,43 @@ public partial class MainWindow : Window
             closeApproved = true;
             Close();
         }
-        finally { closing = false; }
+        catch (Exception error)
+        {
+            StatusTitle.Text = "Shutdown needs attention";
+            StatusDetail.Text = error.Message + " Retry Stop tracking & return USB.";
+            Log("[Launcher] Shutdown: " + error.Message);
+        }
+        finally
+        {
+            closing = false;
+            if (!closeApproved)
+            {
+                deviceCancellation.Dispose();
+                deviceCancellation = new CancellationTokenSource();
+                deviceTimer.Start();
+            }
+        }
+    }
+
+    private async Task<bool> ShutdownSessionAsync()
+    {
+        deviceTimer.Stop();
+        deviceCancellation.Cancel();
+        await StopAudioAsync(required: true);
+        if (deviceObservation is not null) await deviceObservation;
+        if (audioRefreshTask is not null) await audioRefreshTask;
+        if (IsCancellableOperation(busyAction)) await CancelActiveOperationAsync();
+        if (busyAction == "Stop" && activeTask is not null) return await activeTask;
+        // Let installation/driver setup finish before cleanup; interrupting apt
+        // halfway through would leave the next installation unable to continue.
+        if (busyAction.Length > 0 && busyAction != "Run" && activeTask is not null)
+        {
+            StatusDetail.Text = "Finishing the current setup step, then stopping tracking and returning USB…";
+            await activeTask;
+        }
+        if (runtimeMayBeRunning || resourcesMayBeOwned || (!smoke && File.Exists(Path.Combine(stateDirectory, "state.json"))))
+            return await StopSessionAsync();
+        return true;
     }
 
     private void ReleaseResources()
@@ -545,6 +599,7 @@ public partial class MainWindow : Window
         if (resourcesReleased) return;
         deviceTimer.Stop();
         deviceCancellation.Cancel();
+        audio.Cancel();
         keeper.Dispose();
         logTimer.Stop();
         lock (pendingLog) { resourcesReleased = true; sessionLog?.Dispose(); }

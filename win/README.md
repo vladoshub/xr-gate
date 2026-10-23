@@ -6,29 +6,33 @@
 
 Extract the complete **xr-gate-windows-wsl-usbip.zip** and open **XR-Gate.exe**. The launcher is a Windows x64 WPF application with .NET 10 included; users do not need to install .NET or its SDK. Keep the executable with the supplied scripts and subfolders.
 
-1. Open **Settings**. Select the hardware preset and enable Bluetooth if using BLE controllers. The supplied preset selects ASUS USB-BT500 by VID:PID when Bluetooth BUSID is empty; use **List USB devices** for manual selection or another adapter. The list appears directly below the button in Settings; select and copy the required BUSID. If usbipd is missing, run **Install / continue** first. Device identifiers, Linux modules, geometry, optics, controller templates and display matching remain in `hardware/*.env`, with overrides in `.env`.
+1. Open **Settings**. Review the automatically detected **Hardware preset**, or choose any preset manually. Select **Gear VR Controllers** or **Gestures** in **Controllers** and enable Bluetooth there if using BLE controllers. The supplied preset selects ASUS USB-BT500 by VID:PID when Bluetooth BUSID is empty; use **List USB devices** for manual selection or another adapter. The list appears directly below the button in Settings; select and copy the required BUSID. If usbipd is missing, run **Install / continue** first. Device identifiers, Linux modules, geometry, optics, controller templates and display matching remain in `hardware/*.env`, with overrides in `.env`.
 2. Click **Install / continue**. Follow the displayed Windows restart, first Ubuntu login or Ubuntu restart instructions, then continue installation. Administrator rights are requested only for prerequisite installation and initial USB binding.
 3. For desktop SBS output, enable SBS on the glasses and **Extend these displays** in Windows. Close SteamVR and use **Select glasses display** if the glasses have not been identified automatically.
-4. Click **Start VR**. Complete startup/calibration prompts in the tracking console; SteamVR opens after fresh valid head poses arrive. The launcher keeps the selected WSL distribution running.
+4. Click **Start VR**. For console calibration commands, enable **Settings → Show command prompt** before starting; SteamVR opens after fresh valid head poses arrive. The launcher keeps the selected WSL distribution running.
 5. Use **Stop tracking & return USB** to cleanly stop the managed runtime and return its devices to Windows. Closing the launcher also requests a clean stop; it does not terminate the entire WSL distribution or unrelated applications.
 
 **Automatic driver frequency** is enabled by default (`XR_AUTO_DRIVER_FREQUENCY=1`). Installation and Start VR select/register the driver matching the glasses' current Windows refresh rate. If there is no matching variant, the launcher selects **60 Hz** and shows a warning. When the glasses output is unambiguous, it also tests and applies 60 Hz to that output without changing resolution. If Windows cannot apply it, startup stops with instructions. An unknown/ambiguous output uses the 60 Hz driver with a warning and requires explicit display selection before desktop VR; the main monitor is never guessed. Display identification uses an explicit output name in `.env`, the saved display identity, or a unique `XR_DISPLAY_MATCH` from the hardware preset. Resolution alone is never used to identify the glasses. Direct Mode may hide the output, in which case 60 Hz is the fallback. Disable automatic selection to force a manual frequency.
 
 **Diagnostics** and **Refresh status** can be cancelled and have a 60-second time limit. Individual Linux diagnostic commands have a 10-second limit; a stalled probe is reported and the remaining checks continue. Status reports the configured driver frequency separately from the current Windows mode of the identified glasses output. If no output is identified, its current refresh rate remains unknown.
 
-**Run** contains USB attachment, Bluetooth discovery and left/right controller selection. **tools** contains Diagnostics, controller/driver registration and head-tracking checks. Display selection and controller training open interactive consoles. **Diagnostics** and **Save log** provide troubleshooting output. Advanced `.env` settings and comments are preserved when saving the GUI settings; reopen the launcher after editing `.env` externally.
+**Run** contains startup, USB attachment and activity. **Controllers** contains input mode, Bluetooth settings, pairing and controller training. **Audio** contains the WASAPI source/output selection. **Tools** contains Diagnostics, driver registration and head-tracking checks. Display selection and controller training open interactive consoles. **Diagnostics** and **Save log** provide troubleshooting output. Advanced `.env` settings and comments are preserved when saving the GUI settings; reopen the launcher after editing `.env` externally.
 
 **Attach USB devices** has a **Cancel USB operation** button. Closing the window also cancels the current USB operation and its transient child processes. Each `usbipd` command has a 30-second limit (`XR_USB_COMMAND_TIMEOUT`, 5–120 seconds, in `.env`); the desktop USB action has a three-minute overall limit. Cancellation or a timeout may leave devices attached by earlier steps: check **List USB devices**, reconnect the selected adapter if necessary, and retry. BUSIDs are refreshed from the selected Windows instance before attach. With automatic Bluetooth selection, leave its BUSID empty so a reboot or port change can be resolved through VID:PID.
 
-Use **Browse…** to change the hardware preset. Inherited fields and the controller label update immediately; deliberate overrides are retained. The launcher saves changed fields instead of pinning every inherited default in `.env`. **List USB devices** remains available while tracking is active. **Check live head tracking** and USB listing have a Cancel button; partial TCP messages cannot extend the configured startup timeout.
+The **Hardware preset** list reads `hardware/*.env`; **Browse…** also accepts a custom file. Automatic detection matches all `XR_USB_IDS` of a preset against connected Windows USB devices. Multiple matches require manual selection. Choosing a preset disables automatic selection and remains editable; enable **Detect hardware automatically** to resume detection. Save settings to keep the choice. Inherited fields and the controller label update immediately; deliberate overrides are retained. The launcher saves changed fields instead of pinning every inherited default in `.env`. **List USB devices** remains available while tracking is active. **Check live head tracking** and USB listing have a Cancel button; partial TCP messages cannot extend the configured startup timeout.
 
-If settings cannot load, the launcher opens **configuration recovery** with the problem file and repair/reload controls. **Back up & reset this file** preserves the original `.env` or saved-state file under a unique backup name. Hardware preset files are repaired or reselected. Recovery does not stop an existing runtime or return USB; stop its console with Ctrl+C before reinstalling after a state reset.
+If settings cannot load, the launcher opens **configuration recovery** with the problem file and repair/reload controls. **Back up & reset this file** preserves the original `.env` or saved-state file under a unique backup name. Hardware preset files are repaired or reselected. Opening recovery does not stop an existing session. Use **Stop tracking & return USB** before resetting installation state; a saved session snapshot allows cleanup when only `.env` is damaged. If state ownership is lost, stop the old console before reinstalling.
 
 Bluetooth preparation now requires a real HCI controller when Bluetooth is enabled. `XR_BLUETOOTH_READY_TIMEOUT` controls the readiness wait (1–120 seconds); `XR_CONTROLLER_INITIAL_SCAN_MS` controls the initial controller scan (1–600000 ms). Both can be overridden in the hardware env or `.env`.
 
 When updating the launcher, close it and replace the **whole archive**, including scripts and `windows/DeadlineLineReader.cs`. Keep your `.env`; run Install / continue when changing the release or driver variant. See [CHANGELOG.md](CHANGELOG.md) for launcher changes.
 
-If installation reports an unavailable drive while locating SteamVR, check **Settings > SteamVR folder** (`XR_STEAMVR_PATH`). Clear it for automatic detection or enter the installed SteamVR folder. Old OpenVR/library paths on missing drives are skipped. The Linux installation can finish with a warning if registration must be deferred; afterward use **tools > Register SteamVR driver**.
+If installation reports an unavailable drive while locating SteamVR, check **Settings > SteamVR folder** (`XR_STEAMVR_PATH`). Clear it for automatic detection or enter the installed SteamVR folder. Old OpenVR/library paths on missing drives are skipped. The Linux installation can finish with a warning if registration must be deferred; afterward use **Tools > Register SteamVR driver**.
+
+**Controller input** in **Controllers** offers **Gear VR Controllers** and **Gestures**. Gestures does not start the physical controller publisher, including with a previously paired controller or custom runtime profile. Gear VR Controllers starts it using the configured template/providers and preserves saved pairing and button mappings. Save the choice or start VR to persist it.
+
+**Show command prompt** in **Settings** is off by default. Enable it before starting if you need the tracking console for calibration/manual commands. It controls only the tracking console; display selection and controller training remain interactive. Closing via × cancels pending startup, stops audio and managed Linux services, closes the owned tracking console and verifies USB detach. If cleanup fails, the window remains open for retry. During installation it waits for the current setup to finish first.
 
 ### CI builds
 
@@ -169,7 +173,7 @@ With Bluetooth enabled, **Install / continue** installs the configured Ubuntu fi
 .\USB.cmd
 ~~~
 
-2. Stop tracking, put the controllers into pairing mode and click **Run > Pair Bluetooth controllers**.
+2. Stop tracking, put the controllers into pairing mode and click **Controllers > Pair Bluetooth controllers**.
 3. Choose **Left controller** and **Right controller** by name. MAC addresses distinguish identical names. **Not selected** disables that side in the saved configuration. Choose at least one side and use different devices for the two hands.
 4. Click **Connect & save**. Pairing, trust and connect run automatically, and MAC addresses/device fingerprints are saved to `~/xr-gate-wsl/config/override_controller.json`. Existing button mappings and settings are retained for selected sides. The previous configuration is backed up; connection failure leaves it unchanged.
 5. Click **Start VR**. The supplied GearVR profile needs no separate registration afterward. **Register / train controllers** remains available for changing mappings and other profiles.
@@ -189,6 +193,21 @@ python3 bin/scripts/override_controller/bluetooth_controllers.py \
 ~~~
 
 Automatic identity assignment currently supports the `gearvr_ble` backend selected in the controller config. Other backends use registration/training. Button mappings, optics and USB identities remain configurable.
+
+## Audio (optional)
+
+The desktop launcher can copy sound from a Windows output to an ALSA playback device in Ubuntu. It detects audio capabilities without a headset preset or a fixed sound-card number.
+
+1. After updating the complete Windows package, run **Install / continue** once to install the audio dependency and grant the Linux user audio access. A new Ubuntu release is not required.
+2. Attach the USB devices, open **Audio** and click **Refresh audio devices**.
+3. Choose **Windows audio source**: **Default Windows output** follows the Windows multimedia default, or select a specific output.
+4. Choose **Audio output in Ubuntu**, then use **Start VR** or **Start tracking**. Keep the launcher open.
+
+Selections save immediately and can change while VR is running. **No audio** in either list disables playback and reconnect attempts. Disconnected devices remain listed with their saved names; reconnect resumes the same selection, including when ALSA card numbers change. An absent selection is never replaced with another output. Reattach USB first if Windows has not yet returned the device to WSL.
+
+This copies the selected Windows output, which may also continue playing locally. Only real ALSA playback devices are destinations; WSLg/PulseAudio loopback is excluded. The WSL kernel must support the audio device. If identical USB devices have no distinguishable serial/identity, the bridge waits rather than guessing; disconnect the other identical device to resolve this.
+
+Audio stops before USB is returned, when the runtime console stops, or when the launcher closes. A disconnected audio device does not stop tracking. Audio is off by default (`XR_AUDIO_OUTPUT=none`); `XR_AUDIO_SOURCE=default` follows the Windows default. Saved names are cached in `%LOCALAPPDATA%/XR-Gate-WSL/audio-devices.json`, with selections in `.env`. This feature runs in the desktop launcher; standalone `.cmd` sessions do not start the Windows audio bridge.
 
 ## 7. Stop or change settings
 
@@ -220,7 +239,7 @@ If SteamVR reports an invalid desktop display, close SteamVR, check **Extend**, 
 
 ## Device status and shutdown
 
-`XR_DEVICE_NAME` in the selected hardware env supplies the readable name beside XR Gate. The XREAL profile uses `Device: XREAL ULTRA`. **CONNECTED** means the selected USB device is available to Windows; **SHARED** means it is attached to WSL through USB/IP; **NOT CONNECTED** means it was not found. Polling does not bind or attach USB devices. The header also links to the project repository.
+`XR_DEVICE_NAME` in the selected hardware env supplies the readable name beside XR Gate. The XREAL profile uses `Device: XREAL ULTRA`. **CONNECTED** means the selected USB device is available to Windows; **TRACKING** means it is attached to WSL through USB/IP; **NOT CONNECTED** means it was not found. Polling does not bind or attach USB devices. The header also links to the project repository.
 
 Closing the launcher stops owned Linux services and verifies USB detach, including an Attach-only session. A failed detach does not skip the other owned devices. Incomplete shutdown keeps the window open for inspection and retry. The Linux supervisor owns a unique session token and verifies PID start time and boot identity before signalling processes.
 

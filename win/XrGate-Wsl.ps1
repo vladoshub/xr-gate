@@ -28,6 +28,7 @@ param(
     [string]$SteamVR = '',
     [switch]$StartSteamVR,
     [switch]$Launcher,
+    [string]$RuntimeLaunchToken = '',
     [string]$ResultPath = '',
     [ValidateRange(0,600)][int]$TimeoutSeconds = 0,
     [ValidateSet('Prerequisites','Bind')][string]$AdminTask = 'Prerequisites',
@@ -43,7 +44,8 @@ $ErrorActionPreference = 'Stop'
 $script:Repo = 'vladoshub/xr-gate'
 $script:Self = $PSCommandPath
 . (Join-Path $PSScriptRoot 'windows\Environment.ps1')
-Initialize-XrSettings $PSScriptRoot
+if ($Action -eq 'Stop') { Initialize-XrStopSettings $PSScriptRoot }
+else { Initialize-XrSettings $PSScriptRoot }
 if (!$ReleaseTag) { $ReleaseTag = Get-XrSetting 'XR_RELEASE_TAG' 'latest' }
 if (!$TimeoutSeconds) { $TimeoutSeconds = Get-XrInteger 'XR_START_TIMEOUT' 5 600 }
 if (!$SteamVR) { $SteamVR = Get-XrSetting 'XR_STEAMVR_PATH' }
@@ -61,6 +63,7 @@ $script:StateFile = Join-Path $script:StateDir 'state.json'
 $script:State = [ordered]@{
     Distribution = (Get-XrSetting 'XR_DISTRIBUTION'); LinuxUser = ''; ReleaseTag = ''
     UsbInstanceIds = @(); BluetoothInstanceId = ''; AttachedUsbInstanceIds = @()
+    CleanupSettings = $null
     FrequencyHz = (Get-XrInteger 'XR_DISPLAY_FREQUENCY_HZ' 1 1000)
     DisplayMode = (Get-XrSetting 'XR_DISPLAY_MODE'); DisplayOption = (Get-XrSetting 'XR_DISPLAY_OPTION')
     GearVR = $false; DriverPath = ''; RegisteredDriver = ''
@@ -75,6 +78,7 @@ $script:ActionData = $null
 . (Join-Path $PSScriptRoot 'windows\DeviceStatus.ps1')
 . (Join-Path $PSScriptRoot 'windows\Driver.ps1')
 . (Join-Path $PSScriptRoot 'windows\Usb.ps1')
+. (Join-Path $PSScriptRoot 'windows\RuntimeWindow.ps1')
 
 function Write-Step([string]$Message) { Write-Host ("[XR Gate] " + $Message) -ForegroundColor Cyan }
 function Write-XrWarning([string]$Message) {
@@ -129,6 +133,8 @@ function Load-State {
     if ($DisplayOption) { $script:State.DisplayOption = $DisplayOption }
     $gearVrSetting = Get-XrSetting 'XR_GEARVR'
     if ($gearVrSetting -ne '') { $script:State.GearVR = ($gearVrSetting -eq '1') }
+    $controllerMode = Get-XrSetting 'XR_CONTROLLER_MODE'
+    if ($controllerMode) { $script:State.GearVR = ($controllerMode -eq 'gearvr') }
     if ((Get-XrSetting 'XR_BLUETOOTH') -eq '0') { $script:WithoutBluetooth = $true }
     $bluetoothInstance = Get-XrSetting 'XR_BLUETOOTH_INSTANCE_ID'
     if ($bluetoothInstance -and !$BluetoothBusId) { $script:State.BluetoothInstanceId = $bluetoothInstance }
@@ -192,13 +198,19 @@ function New-LinuxRequest {
     $bluetoothId = ''
     $identity = [regex]::Match([string]$script:State.BluetoothInstanceId, '(?i)^USB\\VID_([0-9a-f]{4})&PID_([0-9a-f]{4})(?:&[^\\]+)?\\')
     if ($identity.Success) { $bluetoothId = $identity.Groups[1].Value.ToLowerInvariant() + ':' + $identity.Groups[2].Value.ToLowerInvariant() }
-    return @{
+    $request = @{
         user = [string]$script:State.LinuxUser; gearvr = [bool]$script:State.GearVR
         bluetooth = [bool]$script:State.BluetoothInstanceId
         bluetooth_usb_id = $bluetoothId
         display_option = [string]$script:State.DisplayOption
         settings = $script:Settings
     }
+    if ($RuntimeLaunchToken) {
+        if ($RuntimeLaunchToken -notmatch '^[a-f0-9]{32}$') { throw 'Invalid runtime launch token.' }
+        Wait-RuntimeWindowRegistration $RuntimeLaunchToken
+        $request.runtime_guard = @{path=(ConvertTo-WslPath (Get-RuntimeWindowPath)); token=$RuntimeLaunchToken}
+    }
+    return $request
 }
 function Invoke-Elevated([string]$Task, [string[]]$BusIds = @()) {
     New-Item -ItemType Directory -Force -Path $script:StateDir | Out-Null
@@ -487,7 +499,7 @@ function Select-BluetoothDevice([object[]]$Devices, [string]$ExplicitBusId = '',
         if ($UsbId -notmatch '^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})$') { throw 'XR_BLUETOOTH_USB_ID must be one VID:PID pair, for example 1234:abcd.' }
         $pattern = '^USB\\VID_' + $Matches[1] + '&PID_' + $Matches[2] + '(?:&[^\\]+)?\\'
         $candidates = @($Devices | Where-Object { $_.InstanceId -match $pattern })
-        if (!$candidates.Count) { throw "Bluetooth adapter $UsbId was not found. Connect the configured adapter, change Bluetooth VID:PID / BUSID in Settings, or disable Bluetooth. The system adapter is not selected automatically." }
+        if (!$candidates.Count) { throw "Bluetooth adapter $UsbId was not found. Connect the configured adapter, change Bluetooth VID:PID / BUSID in Controllers, or disable Bluetooth. The system adapter is not selected automatically." }
         if ($candidates.Count -gt 1) {
             $saved = @($candidates | Where-Object { $_.InstanceId -eq $SavedInstanceId })
             if ($saved.Count -eq 1) { $candidates = $saved }
@@ -495,7 +507,7 @@ function Select-BluetoothDevice([object[]]$Devices, [string]$ExplicitBusId = '',
         }
     } elseif ($SavedInstanceId) {
         $candidates = @($Devices | Where-Object { $_.InstanceId -eq $SavedInstanceId })
-        if ($candidates.Count -ne 1) { throw 'Saved Bluetooth dongle not found. Set Bluetooth VID:PID / BUSID in Settings or disable Bluetooth.' }
+        if ($candidates.Count -ne 1) { throw 'Saved Bluetooth dongle not found. Set Bluetooth VID:PID / BUSID in Controllers or disable Bluetooth.' }
     } else { return $null }
     return $candidates[0]
 }
@@ -527,6 +539,8 @@ function Get-SelectedUsb([object[]]$Devices) {
     Save-State; return $selected
 }
 function Connect-SelectedUsb {
+    $script:State['CleanupSettings'] = $script:Settings.Clone()
+    Save-State
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = Get-Tool 'wsl.exe'
     $info.Arguments = '--distribution ' + [string]$script:State.Distribution + ' --user root --exec cat'
@@ -709,11 +723,21 @@ function Wait-XrStream([int]$Seconds) {
     throw "XR Gate TCP is not ready: $lastError Check the xr_client console and WSL localhost forwarding."
 }
 function Start-RuntimeWindow {
-    $body = '& ' + (Quote-PsLiteral $script:Self) + ' -Action Runtime'
+    $old = Get-RuntimeWindowProcess (Read-RuntimeWindow)
+    if ($old) { $old.Dispose(); throw 'A tracking console is still starting or stopping. Click Stop before retrying.' }
+    $token = [Guid]::NewGuid().ToString('N')
+    $body = '& ' + (Quote-PsLiteral $script:Self) + ' -Action Runtime -RuntimeLaunchToken ' + (Quote-PsLiteral $token)
+    if ($Launcher) { $body += ' -Launcher' }
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))
     $arguments = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
     if (!$Launcher) { $arguments = @('-NoExit') + $arguments }
-    Start-Process 'powershell.exe' -ArgumentList $arguments | Out-Null
+    $style = 'Normal'
+    if ($Launcher -and (Get-XrSetting 'XR_SHOW_COMMAND_PROMPT' '0') -ne '1') { $style = 'Hidden' }
+    $process = Start-Process 'powershell.exe' -ArgumentList $arguments -WindowStyle $style -PassThru
+    try {
+        Write-RuntimeWindow @{Bundle=[IO.Path]::GetFullPath($PSScriptRoot); ProcessId=$process.Id;
+            StartTicks=$process.StartTime.ToUniversalTime().Ticks.ToString(); Token=$token; Stopping=$false}
+    } finally { $process.Dispose() }
 }
 function Disconnect-SelectedUsb {
     $owned = @((@($script:State.AttachedUsbInstanceIds) + @($script:State.UsbInstanceIds) +
@@ -849,7 +873,9 @@ try {
         Complete-XrAction 0
     }
     if ($Action -eq 'Stop') {
+        Request-RuntimeWindowStop
         if ($script:State.LinuxUser) { Invoke-Linux -Operation stop -Request (New-LinuxRequest) }
+        Stop-RuntimeWindow
         Disconnect-SelectedUsb
         Complete-XrAction 0 'All managed runtime services stopped and selected USB devices returned to Windows.'
     }
@@ -866,7 +892,9 @@ try {
             if ($status.PSObject.Properties['busy'] -and $status.busy -and !$status.running) { throw 'Controller setup is still running. Finish it or click Stop before starting VR.' }
             if (!$status.running) {
                 Connect-SelectedUsb; Save-State; Start-RuntimeWindow
-                Write-Step 'xr_client opened in a separate console. Complete its startup prompts there.'
+                if (!$Launcher -or (Get-XrSetting 'XR_SHOW_COMMAND_PROMPT') -eq '1') {
+                    Write-Step 'xr_client opened in a separate console. Complete its startup prompts there.'
+                } else { Write-Step 'xr_client started in the background. Use Show command prompt before starting when console calibration is needed.' }
             } else { Write-Step 'The managed xr_client is already running.' }
             if ($StartSteamVR) {
                 Ensure-XrDriverRegistration
@@ -895,12 +923,12 @@ try {
         'Driver' { Register-XrDriver }
         'Display' { Choose-SbsDisplay }
         'BluetoothScan' {
-            if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Settings first.' }
+            if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Controllers first.' }
             Connect-SelectedUsb
             $script:ActionData = (Invoke-Linux -Operation bluetooth_scan -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
         }
         'Pair' {
-            if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Settings first.' }
+            if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Controllers first.' }
             Connect-SelectedUsb
             $request = New-LinuxRequest
             if ($LeftControllerMac -or $RightControllerMac) {

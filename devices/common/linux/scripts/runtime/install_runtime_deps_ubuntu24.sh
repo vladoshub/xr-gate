@@ -131,7 +131,7 @@ if [[ "$INSTALL_APT" == "1" ]]; then
     libxcb1 libxcb-randr0 libxcb-present0 libxcb-dri3-0 libxcb-xfixes0 libxcb-keysyms1
     libxcb-shm0 libxcb-xinput0 libxcb-xkb1
     libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libxkbcommon-x11-0
-    libsdl2-2.0-0 libpipewire-0.3-0 libpulse0
+    libsdl2-2.0-0 libpipewire-0.3-0 libpulse0 libasound2t64
 
     # Common native runtime libraries frequently needed by packaged C++ binaries.
     libdbus-1-3 libsystemd0 libstdc++6 zlib1g libgcc-s1 libgomp1

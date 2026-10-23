@@ -46,11 +46,33 @@ function Initialize-XrSettings([string]$Root) {
             throw "$key must be empty, 0 or 1."
         }
     }
+    if ($script:Settings.ContainsKey('XR_CONTROLLER_MODE') -and $script:Settings['XR_CONTROLLER_MODE'] -notin @('','gearvr','gestures')) {
+        throw 'XR_CONTROLLER_MODE must be gearvr or gestures, or empty for legacy settings.'
+    }
     $script:SettingOverrides = $overrides
 }
 function Get-XrSetting([string]$Key, [string]$Fallback = '') {
     if ($script:Settings.ContainsKey($Key)) { return [string]$script:Settings[$Key] }
     return $Fallback
+}
+function Initialize-XrStopSettings([string]$Root, [string]$StateFile = '') {
+    # Cleanup uses the configuration which attached the devices, even if .env
+    # was later damaged or changed to a different Linux root/distribution.
+    $path = $StateFile
+    if (!$path) { $path = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'XR-Gate-WSL\state.json' }
+    if (Test-Path -LiteralPath $path) {
+        $saved = Get-Content -Raw -Encoding UTF8 -LiteralPath $path | ConvertFrom-Json
+        if ($saved.PSObject.Properties['CleanupSettings'] -and $saved.CleanupSettings) {
+            $script:Settings = @{}
+            foreach ($property in $saved.CleanupSettings.PSObject.Properties) {
+                if ($property.Name -notmatch '^XR_[A-Za-z0-9_]+$' -or $property.Value -isnot [string]) { throw 'Invalid cleanup settings in state.json.' }
+                $script:Settings[$property.Name] = [string]$property.Value
+            }
+            $script:SettingOverrides = @{}
+            return
+        }
+    }
+    Initialize-XrSettings $Root # Compatibility with state saved by older versions.
 }
 function Get-XrList([string]$Key) {
     return @((Get-XrSetting $Key) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })

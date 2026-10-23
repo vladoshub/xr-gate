@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
-using System.Windows.Input;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using XrGate.Launcher.Core;
 
@@ -29,8 +29,11 @@ public partial class MainWindow
     {
         var session = SettingsRecovery.Open(root, hardwareOverride: hardware);
         settings = session.Settings;
+        if (hardware is not null) settings.AutoDetectHardware = false;
         configurationProblem = session.Problem;
         DataContext = settings;
+        InitializeHardwareUi();
+        BindAudioChoices();
         UpdateRecoveryUi();
         if (configurationProblem is null)
         {
@@ -39,13 +42,17 @@ public partial class MainWindow
         }
     }
 
-    private void HardwarePreset_Changed(object sender, KeyboardFocusChangedEventArgs e)
+    private void HardwarePreset_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (busyAction.Length > 0) return;
+        if (bindingHardwareChoices || busyAction.Length > 0 || HardwarePresetBox.SelectedValue is not string selected) return;
         try
         {
+            settings.AutoDetectHardware = false;
+            settings.HardwareEnv = selected;
             if (configurationProblem is null) settings.ApplyHardwarePreset(root);
             else if (!string.IsNullOrWhiteSpace(settings.HardwareEnv) && settings.HardwareEnv != recoveryHardware) ReloadConfiguration(settings.HardwareEnv);
+            AutoDetectHardwareBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
+            HardwareDetectionStatus.Text = "Manual preset selected. Automatic detection will not replace it.";
         }
         catch (Exception error) { StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
     }
@@ -59,7 +66,7 @@ public partial class MainWindow
             string relative = Path.GetRelativePath(root, dialog.FileName);
             string hardware = relative.StartsWith(".." + Path.DirectorySeparatorChar) ? dialog.FileName : relative;
             if (configurationProblem is not null) ReloadConfiguration(hardware);
-            else { settings.HardwareEnv = hardware; settings.ApplyHardwarePreset(root); }
+            else { settings.AutoDetectHardware = false; settings.HardwareEnv = hardware; settings.ApplyHardwarePreset(root); InitializeHardwareUi(); }
         }
         catch (Exception error) { StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
     }

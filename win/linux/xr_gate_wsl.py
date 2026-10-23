@@ -53,6 +53,17 @@ def log(message):
     print("[XR Gate WSL] " + message, flush=True)
 
 
+def check_runtime_guard(request):
+    guard = request.get("runtime_guard")
+    if guard is None:
+        return  # Existing CLI sessions do not have a Windows window owner.
+    if not isinstance(guard, dict) or not re.fullmatch(r"[a-f0-9]{32}", guard.get("token", "")):
+        raise ValueError("Invalid runtime startup guard.")
+    record = json.loads(Path(guard["path"]).read_text(encoding="utf-8-sig"))
+    if record.get("Token") != guard["token"] or record.get("Stopping") is not False:
+        raise RuntimeError("Runtime startup was cancelled by the launcher.")
+
+
 def run(args, *, env=None, check=True, timeout=None):
     return subprocess.run([str(x) for x in args], env=env, check=check, timeout=timeout)
 
@@ -429,7 +440,7 @@ class Runtime:
             env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
             run(["apt-get", "update"], env=env)
             packages = ["ca-certificates", "python3", "python3-venv", "util-linux", "kmod",
-                        "acl", "usbutils", "v4l-utils", "udev", "bluez", "rfkill"]
+                        "acl", "usbutils", "v4l-utils", "udev", "bluez", "rfkill", "libasound2t64"]
             run(["apt-get", "install", "-y", "--no-install-recommends", *packages], env=env)
             if self.cfg.get("bluetooth") or self.cfg.get("gearvr"):
                 self.firmware("install")
@@ -468,7 +479,7 @@ class Runtime:
             else:
                 installer_args.append("--no-device-access")
             run(installer_args, env=env)
-            for group in ("video", "input", "plugdev", "bluetooth"):
+            for group in ("video", "input", "plugdev", "bluetooth", "audio"):
                 run(["groupadd", "-f", group])
                 run(["usermod", "-aG", group, self.user])
             # The upstream dependency installer creates the thin venv as root.
@@ -543,6 +554,9 @@ class Runtime:
         for node in (sysroot / "class/tty").glob("*"):
             if re.fullmatch(r"tty(?:ACM|USB)[0-9]+", node.name) and self.selected_usb(node):
                 nodes.append(devroot / node.name)
+        for node in (sysroot / "class/sound").glob("*"):
+            if re.fullmatch(r"(?:controlC\d+|pcmC\d+D\d+p)", node.name) and self.selected_usb(node):
+                nodes.append(devroot / "snd" / node.name)
         for device in (sysroot / "bus/usb/devices").glob("*"):
             if self.selected_usb(device):
                 try:
@@ -555,6 +569,8 @@ class Runtime:
 
     def prepare(self):
         self.root_required()
+        if self.settings.get("XR_AUDIO_OUTPUT", "none") not in ("", "none"):
+            run(["modprobe", "snd_usb_audio"], check=False)
         for module in csv_setting(self.settings, "XR_KERNEL_MODULES"):
             if not re.fullmatch(r"[A-Za-z0-9_-]+", module):
                 raise ValueError("Invalid kernel module: " + module)
@@ -563,7 +579,7 @@ class Runtime:
             run(["systemctl", "start", "bluetooth"])
             run(["rfkill", "unblock", "bluetooth"], check=False)
         run(["udevadm", "control", "--reload-rules"], check=False)
-        for subsystem in ("video4linux", "hidraw", "tty", "input"):
+        for subsystem in ("video4linux", "hidraw", "tty", "input", "sound"):
             run(["udevadm", "trigger", "--subsystem-match=" + subsystem], check=False)
         deadline = time.monotonic() + 8
         while True:
@@ -621,7 +637,7 @@ class Runtime:
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
         raise RuntimeError(f"Bluetooth is enabled but no controller became ready in {seconds}s. "
                            f"{last_error} Check the selected USB dongle, kernel module, firmware and bluetooth.service. "
-                           "If Bluetooth is not needed, disable it in Settings (XR_BLUETOOTH=0).")
+                           "If Bluetooth is not needed, disable it in Controllers (XR_BLUETOOTH=0).")
 
     def controller_template(self, package):
         name = self.settings.get("XR_GEARVR_TEMPLATE", "")
@@ -631,24 +647,50 @@ class Runtime:
 
     def generate_profile(self):
         custom = self.config / "xr_client.json"
-        if custom.is_file():
+        mode = self.settings.get("XR_CONTROLLER_MODE", "")
+        if mode not in ("", "gearvr", "gestures"):
+            raise ValueError("XR_CONTROLLER_MODE must be gearvr or gestures.")
+        if custom.is_file() and not mode:
             return custom
         package = self.current.resolve()
-        profile = self.settings.get("XR_PROFILE", "")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in (".", ".."):
-            raise ValueError("Select XR_PROFILE in the hardware env or provide config/xr_client.json.")
-        filename = profile if profile.endswith(".json") else profile + ".json"
-        data = json.loads(package_path(package, "bin/python/xr_client/configs/" + filename).read_text())
-        data["root_project"] = str(package)
-        data["log_dir"] = str(self.base / "logs")
+        if custom.is_file():
+            # Apply the selected mode to a copy, never rewrite a user profile.
+            data = json.loads(custom.read_text())
+            data.setdefault("root_project", str(package))
+            data.setdefault("log_dir", str(self.base / "logs"))
+        else:
+            profile = self.settings.get("XR_PROFILE", "")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in (".", ".."):
+                raise ValueError("Select XR_PROFILE in the hardware env or provide config/xr_client.json.")
+            filename = profile if profile.endswith(".json") else profile + ".json"
+            data = json.loads(package_path(package, "bin/python/xr_client/configs/" + filename).read_text())
+            data["root_project"] = str(package)
+            data["log_dir"] = str(self.base / "logs")
         controllers = self.config / "override_controller.json"
-        for service in data.get("post_gate_services", []):
-            if service.get("name") == "override_controller":
-                service["start_on_launch"] = (self.config / "controllers-ready").is_file()
-                service.setdefault("env", {}).update({
-                    "CONFIG_PATH": str(controllers),
-                    "PROVIDERS": self.settings.get("XR_GEARVR_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
-                })
+        if mode == "gearvr" and not controllers.is_file():
+            self.write(controllers, self.controller_template(package).read_text())
+        found_controller = False
+        for group in ("pre_gate_services", "post_gate_services", "foreground_services"):
+            if group not in data:
+                continue  # Preserve xr_client defaults for omitted custom sections.
+            if mode == "gestures":
+                # Removing these also prevents gesture/manual toggle actions or
+                # inherited RUN_OVERRIDE_CONTROLLER=1 from starting the publisher.
+                data[group] = [service for service in data.get(group, [])
+                               if service.get("name") not in ("override_controller", "override_controller_service")]
+            for service in data.get(group, []):
+                if service.get("name") == "override_controller":
+                    found_controller = True
+                    service["start_on_launch"] = True if mode == "gearvr" else (self.config / "controllers-ready").is_file()
+                    if mode == "gearvr":
+                        service["enabled"] = True
+                        service["enable_env"] = "XR_GATE_CONTROLLER_INPUT"
+                    service.setdefault("env", {}).update({
+                        "CONFIG_PATH": str(controllers),
+                        "PROVIDERS": self.settings.get("XR_GEARVR_PROVIDERS" if mode == "gearvr" or self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
+                    })
+        if mode == "gearvr" and not found_controller:
+            raise ValueError("The selected xr_client profile has no override_controller service for Gear VR Controllers.")
         path = self.base / "generated/profile.json"
         self.write(path, json.dumps(data, indent=2) + "\n")
         return path
@@ -657,7 +699,12 @@ class Runtime:
         self.user_required()
         if not self.status()["installed"]:
             raise RuntimeError("Run -Action Install first.")
-        handle = self.acquire_lock()
+        with self.acquire_lock() as handle:
+            self._start_locked(handle)
+
+    def _start_locked(self, handle):
+        # Lock before checking Stop's token, preventing late launches after detach.
+        check_runtime_guard(self.cfg)
         try:
             host = self.settings.get("XR_TCP_HOST", "127.0.0.1")
             port = integer_setting(self.settings, "XR_TCP_PORT")
@@ -676,6 +723,12 @@ class Runtime:
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+        if self.settings.get("XR_CONTROLLER_MODE") == "gearvr":
+            env["XR_GATE_CONTROLLER_INPUT"] = "1"
+        elif self.settings.get("XR_CONTROLLER_MODE") == "gestures":
+            # Omitted custom sections inherit xr_client defaults. Disable their
+            # publishers too, while retaining the default capture/hand services.
+            env.update(RUN_OVERRIDE_CONTROLLER="0", RUN_OVERRIDE_CONTROLLER_SERVICE="0")
         if self.settings.get("XR_HMD_MAX_AGE_MS"):
             age_ms = integer_setting(self.settings, "XR_HMD_MAX_AGE_MS", maximum=5000)
             env["MAX_HMD_AGE_MS"] = str(age_ms)
@@ -685,6 +738,7 @@ class Runtime:
         os.chdir(package)
         log(f"Application TCP: {host}:{port}")
         log("Stop with Ctrl+C in this console. Startup gate and calibration stay enabled.")
+        check_runtime_guard(self.cfg)
         self.run_managed(args, env, handle=handle)
 
     def run_managed(self, args, env, *, handle=None, kind="runtime"):
@@ -712,6 +766,15 @@ class Runtime:
         if not status.get("busy", status["running"]):
             log("The managed XR Gate runtime is already stopped.")
             return
+        if not session.is_file():
+            # A newly acquired runtime lock can precede session metadata while
+            # the profile is being generated. Do not mistake it for an old build.
+            deadline = time.monotonic() + 5
+            while self._lock_held() and not session.is_file() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not self._lock_held() and not session.is_file():
+                log("Runtime startup was cancelled before services were launched.")
+                return
         if not session.is_file():
             raise RuntimeError("This runtime was started by an older launcher. Stop it with Ctrl+C in its console.")
         saved = json.loads(session.read_text())

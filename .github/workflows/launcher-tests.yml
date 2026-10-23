@@ -20,6 +20,10 @@ jobs:
       - run: python -m unittest discover -s xr_client/tests -p 'test_startup_rules.py'
       - run: python -m unittest discover -s xr_client/tests -p 'test_prestart_confirmation.py'
       - run: python -m unittest discover -s docker/tests -p 'test*.py'
+      - name: ALSA runtime for hardware-free audio playback tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2t64
       - run: python -m unittest discover -s win/tests -p 'test*.py'
       - run: python -m unittest discover -s override_controller/tests -p 'test*.py'
   windows-launcher:
@@ -57,6 +61,12 @@ jobs:
       - name: Device observation and scoped partial USB cleanup
         shell: powershell
         run: '& ./win/tests/verify-device-lifecycle.ps1'
+      - name: Runtime console ownership and cancellation of delayed WSL startup
+        shell: powershell
+        run: '& ./win/tests/verify-runtime-window.ps1'
+      - name: Session cleanup ignores damaged or changed settings
+        shell: powershell
+        run: '& ./win/tests/verify-cleanup-settings.ps1'
       - name: Independent platform releases and latest runtime selection
         shell: powershell
         run: '& ./win/tests/verify-release-platforms.ps1'

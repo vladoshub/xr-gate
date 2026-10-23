@@ -50,7 +50,7 @@ class HardwareTest(unittest.TestCase):
                 usb.mkdir(parents=True)
                 (usb / "idVendor").write_text(vendor)
                 (usb / "idProduct").write_text("abcd")
-                for category, prefix in (("video4linux", "video"), ("hidraw", "hidraw"), ("tty", "ttyACM")):
+                for category, prefix in (("video4linux", "video"), ("hidraw", "hidraw"), ("tty", "ttyACM"), ("sound", "controlC")):
                     actual = usb / category / (prefix + number)
                     actual.mkdir(parents=True)
                     link = sysroot / "class" / category / actual.name
@@ -60,6 +60,7 @@ class HardwareTest(unittest.TestCase):
             self.assertEqual(cameras, [devroot / "video11"])
             self.assertEqual(hids, [devroot / "hidraw11"])
             self.assertIn(devroot / "ttyACM11", nodes)
+            self.assertIn(devroot / "snd/controlC11", nodes)
             self.assertFalse(any("12" in str(node) for node in nodes))
             runtime.settings = {"XR_USB_IDS": "", "XR_CAMERA_DEVICE": str(devroot / "video12")}
             self.assertEqual(runtime.device_nodes(sysroot, devroot)[1], [devroot / "video12"])
@@ -145,6 +146,7 @@ class PackageTest(unittest.TestCase):
                 self.assertFalse(any("/launcher/" in name or "/obj/" in name for name in package.namelist()))
                 self.assertEqual(package.read("xr-gate-windows-wsl-usbip/XR-Gate.exe"), executable.read_bytes())
                 self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows-wsl-usbip/.env.example"))
+                self.assertEqual(package.read("xr-gate-windows-wsl-usbip/linux/xr_gate_audio.py"), (WIN / "linux/xr_gate_audio.py").read_bytes())
                 for hz, mode in packager.selections("60 90", "direct extended_sbs"):
                     relative = packager.variant_path(hz, mode)
                     original = root / "drivers" / f"{hz}Hz-{mode}" / "xr_tracking"

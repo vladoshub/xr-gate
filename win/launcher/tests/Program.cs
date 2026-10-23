@@ -10,6 +10,31 @@ static void MustReject(Action action, string message)
     throw new Exception(message);
 }
 
+if (args.Length > 0 && args[0] == "--audio-receiver-fixture")
+{
+    Console.OutputEncoding = new UTF8Encoding(false);
+    Console.WriteLine("ready");
+    if (args[1] == "hang") await Task.Delay(Timeout.Infinite);
+    using var input = Console.OpenStandardInput();
+    if (args[1] is "ack" or "badack")
+    {
+        using var output = Console.OpenStandardOutput();
+        var prefix = new byte[4];
+        while (await input.ReadAsync(prefix.AsMemory(0, 1)) > 0)
+        {
+            await input.ReadExactlyAsync(prefix.AsMemory(1));
+            int length = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(prefix);
+            await input.ReadExactlyAsync(new byte[length]);
+            if (args[1] == "badack") Array.Clear(prefix);
+            await output.WriteAsync(prefix); await output.FlushAsync();
+        }
+        return;
+    }
+    var block = new byte[4096]; int size, total = 0;
+    while ((size = await input.ReadAsync(block)) > 0) total += size;
+    Console.WriteLine(total);
+    return;
+}
 string source = args.Length > 0 ? Path.GetFullPath(args[0]) : throw new ArgumentException("Pass the win source directory.");
 string folder = Path.Combine(Path.GetTempPath(), "xr-gate-launcher-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(folder);
@@ -50,6 +75,8 @@ try
     Check(staleRejected, "Stale success/setup metadata masked a crashed process.");
     AuditTests.Run(source, folder);
     BluetoothSettingsTests.Run(source, folder);
+    HardwareControllerTests.Run(source, folder);
+    await AudioTests.RunAsync(source, folder);
     string encoded = ScriptCommand.Encode(@"C:\O'Brien\XR Gate\XrGate-Wsl.ps1", "Run", @"C:\result.json", true, false);
     string command = Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
     Check(command.Contains("O''Brien") && command.Contains("-StartSteamVR") && command.Contains("-ResultPath 'C:\\result.json'"), "Paths or action arguments were not passed literally.");

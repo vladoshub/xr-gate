@@ -1,0 +1,62 @@
+using System.Windows;
+using XrGate.Launcher.Core;
+using XrGate.Launcher.Services;
+
+namespace XrGate.Launcher;
+
+public partial class MainWindow
+{
+    private bool bindingHardwareChoices;
+    private List<HardwarePresetChoice> hardwareChoices = [];
+    private void InitializeHardwareUi()
+    {
+        bindingHardwareChoices = true;
+        try
+        {
+            hardwareChoices = HardwarePresetChoice.Load(root, settings.HardwareEnv, message => pendingLog.Enqueue("[Hardware] " + message));
+            HardwarePresetBox.ItemsSource = hardwareChoices;
+            HardwarePresetBox.SelectedValue = hardwareChoices.FirstOrDefault(choice => HardwarePresetChoice.SamePath(root, choice.Path, settings.HardwareEnv))?.Path;
+        }
+        finally { bindingHardwareChoices = false; }
+    }
+
+    private async void AutoDetectHardware_Click(object sender, RoutedEventArgs e)
+    {
+        if (settings.AutoDetectHardware) await DetectHardwareAsync();
+        else HardwareDetectionStatus.Text = "Manual selection: choose a preset from the list.";
+    }
+
+    private async Task DetectHardwareAsync()
+    {
+        if (smoke || closing || runtimeMayBeRunning || resourcesMayBeOwned || configurationProblem is not null || !settings.AutoDetectHardware) return;
+        try
+        {
+            var ids = await Task.Run(HardwareDiscovery.ConnectedUsbIds, deviceCancellation.Token);
+            if (closing || runtimeMayBeRunning || resourcesMayBeOwned || busyAction.Length > 0 || !settings.AutoDetectHardware) return;
+            ApplyHardwareDetection(ids);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { HardwareDetectionStatus.Text = error.Message + " You can choose a preset manually."; }
+    }
+
+    private void ApplyHardwareDetection(IReadOnlySet<string> ids)
+    {
+        if (!settings.AutoDetectHardware) return;
+        var matches = HardwarePresetChoice.Matches(hardwareChoices, ids);
+        if (matches.Count != 1)
+        {
+            HardwareDetectionStatus.Text = matches.Count == 0 ? "No matching connected device. Choose any preset manually, or connect the device."
+                : "Multiple presets match: " + string.Join(", ", matches.Select(choice => choice.Label)) + ". Choose one manually.";
+            return;
+        }
+        var selected = matches[0];
+        if (!HardwarePresetChoice.SamePath(root, selected.Path, settings.HardwareEnv))
+        {
+            settings.HardwareEnv = selected.Path;
+            settings.ApplyHardwarePreset(root);
+            InitializeHardwareUi();
+            Log("[Hardware] Detected " + selected.Label + " from XR_USB_IDS.");
+        }
+        HardwareDetectionStatus.Text = "Detected: " + selected.Label + ". Choose another preset to keep a manual selection.";
+    }
+}
