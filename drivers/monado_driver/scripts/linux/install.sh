@@ -153,7 +153,7 @@ maybe_install_apt_deps() {
     libx11-dev libxrandr-dev libxext-dev libxfixes-dev libxxf86vm-dev \
     libxcb1-dev libxcb-randr0-dev libxcb-present-dev libxcb-dri3-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
     libudev-dev libhidapi-dev libwayland-dev wayland-protocols libxkbcommon-dev \
-    libeigen3-dev libopencv-dev libssl-dev libsystemd-dev libdbus-1-dev
+    nlohmann-json3-dev libeigen3-dev libopencv-dev libssl-dev libsystemd-dev libdbus-1-dev
 }
 
 ensure_monado_checkout() {
@@ -259,59 +259,8 @@ import sys
 cmake = Path(sys.argv[1])
 header = Path(sys.argv[2])
 
-cmake.write_text(r'''# Intended to be included from inside a Monado checkout, after Monado has set up
-# include paths for xrt/ and util/. This is not a standalone project.
-
-add_library(drv_xr_tracking_runtime STATIC
-  src/runtime_readers.cpp
-  src/posix_runtime_readers.cpp
-  src/windows_runtime_readers.cpp
-  src/xr_monado_driver.cpp
-)
-
-if(NOT DEFINED XR_TRACKING_ROOT)
-  if(DEFINED ENV{XR_TRACKING_ROOT})
-    set(XR_TRACKING_ROOT "$ENV{XR_TRACKING_ROOT}")
-  else()
-    # Case A: project-owned source at drivers/monado_driver.
-    get_filename_component(_xr_tracking_root_from_project "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-    # Case B: copied source inside third_party/monado_driver/src/xrt/drivers/xr_tracking_runtime.
-    get_filename_component(_xr_tracking_root_from_monado_copy "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../.." ABSOLUTE)
-
-    if(EXISTS "${_xr_tracking_root_from_project}/shared/include/xr_runtime/contracts/runtime_pose_stream.hpp")
-      set(XR_TRACKING_ROOT "${_xr_tracking_root_from_project}")
-    elseif(EXISTS "${_xr_tracking_root_from_monado_copy}/shared/include/xr_runtime/contracts/runtime_pose_stream.hpp")
-      set(XR_TRACKING_ROOT "${_xr_tracking_root_from_monado_copy}")
-    endif()
-  endif()
-endif()
-
-set(_xr_tracking_shared_include "${XR_TRACKING_ROOT}/shared/include")
-set(_xr_tracking_runtime_pose_header "${_xr_tracking_shared_include}/xr_runtime/contracts/runtime_pose_stream.hpp")
-set(_xr_tracking_controller_state_header "${_xr_tracking_shared_include}/xr_runtime/contracts/runtime_controller_state_contract.hpp")
-set(_xr_tracking_legacy_hand_header "${_xr_tracking_shared_include}/xr_tracking/publishers/hand_tracking_shm_publisher.hpp")
-
-if(NOT DEFINED XR_TRACKING_ROOT
-   OR NOT EXISTS "${_xr_tracking_runtime_pose_header}"
-   OR NOT EXISTS "${_xr_tracking_controller_state_header}"
-   OR NOT EXISTS "${_xr_tracking_legacy_hand_header}")
-  message(FATAL_ERROR
-    "XR_TRACKING_ROOT is not set correctly; expected shared headers under ${XR_TRACKING_ROOT}/shared/include. "
-    "Missing one of: ${_xr_tracking_runtime_pose_header}, ${_xr_tracking_controller_state_header}, ${_xr_tracking_legacy_hand_header}")
-endif()
-
-target_include_directories(drv_xr_tracking_runtime PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${_xr_tracking_shared_include}
-)
-
-target_compile_features(drv_xr_tracking_runtime PRIVATE cxx_std_17)
-target_link_libraries(drv_xr_tracking_runtime PRIVATE xrt-interfaces aux_util)
-
-if(UNIX AND NOT APPLE)
-  target_link_libraries(drv_xr_tracking_runtime PRIVATE rt)
-endif()
-''')
+# CMakeLists.txt is project-owned and copied verbatim by rsync. Keep it as the
+# single source of truth when adding transport/OpenXR modules.
 
 s = header.read_text()
 s = s.replace('#include <xr_tracking/contracts/hand_tracking_contract.hpp>',
@@ -388,6 +337,9 @@ apply_monado_integration_patch() {
     "src/xrt/targets/common/target_builder_legacy.c" \
     "XR_TRACKING_RUNTIME_ENABLE|xr_tracking_runtime_hmd_create" \
     "Monado legacy builder integration"
+  apply_git_patch_once "$MONADO_DIR" "$PATCH_DIR/monado/0002-openxr-spatial-video.patch" \
+    "src/xrt/state_trackers/oxr/oxr_api_negotiate.c" \
+    "xr_gate_get_proc_addr" "XR Gate OpenXR spatial/video integration"
   # Upgrade already-patched checkouts as well (RESET_MONADO_CHECKOUT=0).
   python3 - "$MONADO_DIR/src/xrt/targets/common/target_builder_legacy.c" <<'PY_ROLES'
 from pathlib import Path
@@ -569,7 +521,7 @@ configure_and_build_monado() {
     fi
   fi
 
-  local cmake_args=(-S "$MONADO_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DXR_TRACKING_ROOT="$ROOT_PROJECT")
+  local cmake_args=(-DXRT_FEATURE_OPENXR_FUTURE_EXT=ON -S "$MONADO_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DXR_TRACKING_ROOT="$ROOT_PROJECT")
   if [[ -n "${XR_OPENCV_PREFIX:-}" ]]; then
     cmake_args+=("-DOpenCV_DIR=$XR_OPENCV_PREFIX/lib/cmake/opencv4")
   fi
@@ -674,6 +626,11 @@ EOF
 # Source this file to force OpenXR applications to use the packaged XR Gate Monado runtime.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
+XR_MONADO_DATA_CONFIG="${XR_MONADO_DATA_CONFIG:-$SCRIPT_DIR/profiles/runtime_data.env}"
+if [[ -f "$XR_MONADO_DATA_CONFIG" ]]; then
+  source "$XR_MONADO_DATA_CONFIG"
+  export XR_MONADO_DATA_CONFIG
+fi
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
   chmod 0755 "$canonical_env_script"
@@ -718,11 +675,15 @@ EOF
 
     cat > "$device_env_script" <<'EOF'
 #!/usr/bin/env bash
-# Compatibility path. New callers should source:
-#   bin/drivers/monado_driver/openxr_runtime_env.sh
+# Compatibility path delegates to the canonical helper, including data settings.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
-echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
+XR_GATE_CANONICAL_ENV="$SCRIPT_DIR/../../../../../bin/drivers/monado_driver/openxr_runtime_env.sh"
+if [[ -f "$XR_GATE_CANONICAL_ENV" ]]; then
+  source "$XR_GATE_CANONICAL_ENV"
+else
+  export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
+  echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
+fi
 EOF
     chmod 0755 "$device_env_script"
     [[ -f "$device_manifest" ]] || fail "Device compatibility manifest was not generated: $device_manifest"
@@ -742,6 +703,7 @@ install_monado_legal_files() {
   rm -rf "$license_dir"
   mkdir -p "$license_dir/monado"
   cp -a "$MONADO_DIR/LICENSES" "$license_dir/monado/LICENSES"
+  cp "$ROOT_PROJECT/LICENSES/OpenXR-MIT.txt" "$license_dir/OpenXR-MIT.txt"
 
   resolved_commit="$(git -C "$MONADO_DIR" rev-parse HEAD)"
   cat > "$license_dir/SOURCE_INFO.txt" <<EOF_MONADO_SOURCE
@@ -788,6 +750,15 @@ install_runtime_binaries() {
     log "installed Monado display/optics configs: $BIN_DIR/configs"
   fi
 
+  mkdir -p "$BIN_DIR/include"
+  cp "$DRIVER_DIR/openxr/xr_gate_data.h" "$DRIVER_DIR/openxr/spatial_compat.h" "$BIN_DIR/include/"
+  mkdir -p "$BIN_DIR/include/xr_video/contracts" "$BIN_DIR/include/xr_spatial/contracts"
+  cp "$ROOT_PROJECT/shared/include/xr_video/contracts/stereo_video_contract.hpp" "$BIN_DIR/include/xr_video/contracts/"
+  cp "$ROOT_PROJECT/shared/include/xr_spatial/contracts/runtime_spatial_proxy_mesh_contract.hpp" "$BIN_DIR/include/xr_spatial/contracts/"
+  if [[ -d "$DRIVER_DIR/examples" ]]; then
+    mkdir -p "$BIN_DIR/examples"
+    cp -a "$DRIVER_DIR/examples/." "$BIN_DIR/examples/"
+  fi
   if [[ -d "$DRIVER_DIR/profiles" ]]; then
     rm -rf "$BIN_DIR/profiles.tmp"
     mkdir -p "$BIN_DIR/profiles.tmp"
@@ -805,6 +776,8 @@ install_runtime_binaries() {
 export XR_TRACKING_ROOT="$ROOT_PROJECT"
 export XR_TRACKING_RUNTIME_ENABLE=1
 export XR_MONADO_HAND_TRACKING="\${XR_MONADO_HAND_TRACKING:-0}"
+export XR_MONADO_DATA_CONFIG="\${XR_MONADO_DATA_CONFIG:-$BIN_DIR/profiles/runtime_data.env}"
+if [[ -f "\$XR_MONADO_DATA_CONFIG" ]]; then source "\$XR_MONADO_DATA_CONFIG"; fi
 export XR_MONADO_DEVICE="$XR_MONADO_DEVICE"
 export XR_MONADO_DISPLAY_PROFILE="\${XR_MONADO_DISPLAY_PROFILE:-$XR_MONADO_DEVICE}"
 export XR_MONADO_DISPLAY_CONFIG="\${XR_MONADO_DISPLAY_CONFIG:-$BIN_DIR/configs/display/default.yaml}"

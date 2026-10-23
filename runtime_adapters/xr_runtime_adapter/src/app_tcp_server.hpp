@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <xr_spatial/contracts/runtime_spatial_proxy_mesh_contract.hpp>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,11 +18,13 @@ struct AppTcpServerConfig {
   double rate_hz = 60.0;
   int max_clients = 8;
   std::string runtime_frame = "runtime_local";
+  bool spatial_mesh = false; // Optional v1 spatial_mesh messages; off for older clients.
 };
 
 // A copy of the outputs from one runtime tick, after transforms and prediction.
 // No SHM output needs to be enabled to use the application server.
 struct AppTcpFrame {
+  std::shared_ptr<const xr_spatial::RuntimeSpatialProxyMeshF32V1> spatial;
   int64_t read_timestamp_ns = 0;
   std::optional<xr_runtime::RuntimeHmdPoseF64V1> hmd;
   std::optional<xr_tracking::HandTrackingFrameF32V2> hands;

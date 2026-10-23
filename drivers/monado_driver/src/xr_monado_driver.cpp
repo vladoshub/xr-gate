@@ -1221,15 +1221,29 @@ void setup_hmd_display(struct xrt_device* xdev) {
 
 XrRuntimeIo* create_runtime_io() {
   auto* io = new XrRuntimeIo();
-  io->hmd_cfg.shm_name = "runtime_hmd_pose";
+  const auto transport = env_string("XR_MONADO_TRANSPORT", "shm");
+  xr::openvr_driver::RuntimeTcpConfig tcp;
+  tcp.host = env_string("XR_MONADO_TCP_HOST", "127.0.0.1");
+  tcp.port = static_cast<uint16_t>(env_u32("XR_MONADO_TCP_PORT", 45810, 1, 65535));
+  tcp.reconnect_ms = env_u32("XR_MONADO_TCP_RECONNECT_MS", 500, 10, 60000);
+  tcp.timeout_ms = env_u32("XR_MONADO_TCP_TIMEOUT_MS", 1000, 50, 60000);
+  io->hmd_cfg.transport = io->controller_cfg.transport = io->hand_cfg.transport = transport;
+  io->hmd_cfg.tcp = io->controller_cfg.tcp = io->hand_cfg.tcp = tcp;
+  io->hmd_cfg.shm_name = env_string("XR_MONADO_HMD_SHM", "runtime_hmd_pose");
   io->hmd_cfg.max_age_ms = kDefaultPoseMaxAgeMs;
-  io->controller_cfg.shm_name = "runtime_controller_state";
+  io->controller_cfg.shm_name = env_string("XR_MONADO_CONTROLLER_SHM", "runtime_controller_state");
   io->controller_cfg.max_age_ms = kDefaultControllerMaxAgeMs;
-  io->hand_cfg.shm_name = "runtime_hand_tracking";
+  io->hand_cfg.shm_name = env_string("XR_MONADO_HAND_SHM", "runtime_hand_tracking");
   io->hand_cfg.max_age_ms = kDefaultHandMaxAgeMs;
   io->hmd_reader = create_runtime_pose_reader(io->hmd_cfg);
   io->controller_reader = create_runtime_controller_state_reader(io->controller_cfg);
   io->hand_reader = create_runtime_hand_reader(io->hand_cfg);
+  if (!io->hmd_reader || !io->controller_reader || !io->hand_reader) {
+    delete io;
+    throw std::runtime_error("unsupported XR_MONADO_TRANSPORT: " + transport);
+  }
+  std::fprintf(stderr, "[xr_tracking_monado] transport=%s endpoint=%s:%u\n",
+               transport.c_str(), tcp.host.c_str(), unsigned(tcp.port));
   return io;
 }
 

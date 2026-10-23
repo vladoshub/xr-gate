@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <xr_spatial/contracts/runtime_spatial_proxy_mesh_contract.hpp>
 #include <optional>
 #include <string>
 
@@ -11,6 +12,9 @@
 namespace xr::openvr_driver {
 
 struct RuntimeTcpSnapshot {
+  std::shared_ptr<const xr_spatial::RuntimeSpatialProxyMeshF32V1> spatial;
+  int64_t spatial_received_ns = 0;
+  int64_t spatial_age_ns = 0;
   uint64_t sequence = 0;
   uint64_t connection_epoch = 0;
   int64_t received_ns = 0;

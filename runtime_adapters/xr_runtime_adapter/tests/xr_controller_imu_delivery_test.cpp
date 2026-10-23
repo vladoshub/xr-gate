@@ -99,29 +99,59 @@ void serial_gravity_reference_controls_orientation_validity() {
   const std::array<float, 3> gravity{0, 8.492808f, -4.903325f};
   serial->enqueue("left", 0, 1'000'000, receive_ns, 1, 1, 1.0f, gravity);
   provider.wait_event(devices, 5, false);
-  const auto moving = provider.imu_state(devices[0]);
+  const auto moving = provider.consume_imu_state(devices[0]);
   require((moving.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
           "serial moving startup advertised an uninitialized gravity reference");
   require(moving.sample_count == 1 && moving.latest_device_timestamp_ticks == 1'000'000,
           "serial gravity gate discarded timed raw measurements");
   serial->enqueue("left", 1, 1'004'808, receive_ns + 4'808'000, 1, 1, 0, gravity);
   provider.wait_event(devices, 5, false);
-  const auto quiet = provider.imu_state(devices[0]);
+  auto quiet = provider.consume_imu_state(devices[0]);
+  require((quiet.data_flags & (CONTROLLER_IMU_ORIENTATION_VALID |
+                              CONTROLLER_IMU_GYROSCOPE_CALIBRATED)) == 0u,
+          "serial single quiet sample bypassed gyro startup confirmation");
+  // Advance simulated acquisition time through the default 1500 ms window.
+  // 312 intervals of 4808 us span 1500.096 ms; no wall-clock wait is needed.
+  constexpr uint32_t last_sequence = 313;
+  for (uint32_t sequence = 2; sequence <= last_sequence; ++sequence) {
+    serial->enqueue("left", sequence, 1'000'000 + uint64_t(sequence) * 4808,
+                    receive_ns + uint64_t(sequence) * 4'808'000, 1, 1, 0, gravity);
+    provider.wait_event(devices, 0, false);
+    require(provider.has_pending_imu(devices[0]),
+            "serial gyro warmup discarded timed raw measurements");
+    quiet = provider.consume_imu_state(devices[0]);
+    require(quiet.latest_device_timestamp_ticks == 1'000'000 + uint64_t(sequence) * 4808 &&
+            quiet.reserved[CONTROLLER_IMU_DIAG_EPOCH] == moving.reserved[CONTROLLER_IMU_DIAG_EPOCH],
+            "serial gyro warmup changed acquisition timing");
+    if (sequence < last_sequence) {
+      require((quiet.data_flags & (CONTROLLER_IMU_ORIENTATION_VALID |
+                                  CONTROLLER_IMU_GYROSCOPE_CALIBRATED)) == 0u,
+              "serial partial stationary window advertised calibrated orientation");
+    }
+  }
+  require((quiet.data_flags & CONTROLLER_IMU_GYROSCOPE_CALIBRATED) != 0u,
+          "serial stationary window did not calibrate gyro");
   require((quiet.data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0u,
           "serial quiet gravity did not initialize orientation");
   require(std::abs(quiet.orientation_xyzw[0] - 0.8660254f) < 0.0001f &&
           std::abs(quiet.orientation_xyzw[3] - 0.5f) < 0.0001f,
           "serial tilted startup uses an arbitrary orientation");
-  require(quiet.latest_device_timestamp_ticks == 1'004'808 &&
+  require(quiet.latest_device_timestamp_ticks == 1'000'000 + uint64_t(last_sequence) * 4808 &&
           quiet.reserved[CONTROLLER_IMU_DIAG_EPOCH] == moving.reserved[CONTROLLER_IMU_DIAG_EPOCH],
           "serial orientation initialization changed acquisition timing");
   serial->snapshots[0].connected = false;
   provider.wait_event(devices, 5, false);
   serial->snapshots[0].connected = true;
-  serial->enqueue("left", 0, 0, receive_ns + 10'000'000, 1, 1, 1.0f, gravity);
+  const uint64_t reconnect_ns = receive_ns + uint64_t(last_sequence) * 4'808'000 + 10'000'000;
+  serial->enqueue("left", 0, 0, reconnect_ns, 1, 1, 1.0f, gravity);
   provider.wait_event(devices, 5, false);
   require((provider.imu_state(devices[0]).data_flags & CONTROLLER_IMU_ORIENTATION_VALID) == 0u,
           "serial reconnect retained an initialized old gravity reference");
+  serial->enqueue("left", 1, 4808, reconnect_ns + 4'808'000, 1, 1, 0, gravity);
+  provider.wait_event(devices, 0, false);
+  require((provider.imu_state(devices[0]).data_flags &
+           (CONTROLLER_IMU_ORIENTATION_VALID | CONTROLLER_IMU_GYROSCOPE_CALIBRATED)) == 0u,
+          "serial reconnect retained the old gyro calibration");
 }
 
 void serial_config_calibration_resets_once_and_reaches_native_samples() {
@@ -172,11 +202,25 @@ int main() {
   serial_config_calibration_resets_once_and_reaches_native_samples();
   serial_gravity_reference_controls_orientation_validity();
   static_assert(sizeof(ControllerInputV3) == 1432, "controller ABI changed");
-  ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"}});
+  // Transport/integration starts with calibrated controllers. The full default
+  // startup window is exercised separately above.
+  ctl::XiaoNrf54l15InputProvider provider({{"initial_scan_ms", "0"}, {"madgwick_beta", "0"},
+                                        {"gyro_bias.stable_ms", "1"},
+                                        {"gyro_bias.min_samples", "2"}});
   auto devices = provider.scan_devices(true);
   require(devices.size() == 2, "two serial controllers not found");
   const uint64_t rx = test_now_ns() - 20'000'000;
   const uint64_t device_us = rx / 1000 + 10'000'000;
+  // Each read's receive time belongs to its newest packet. Warmup ends one
+  // interval before sequence 10/40, the oldest packets of the next reads.
+  serial->enqueue("left", 8, device_us - 2 * 4808, rx - 3 * 4'808'000, 2);
+  serial->enqueue("right", 38, device_us + 1'000'000 - 2 * 4808, rx - 3 * 4'808'000, 2);
+  provider.wait_event(devices, 0, false);
+  for (const auto& device : devices) {
+    require((provider.imu_state(device).data_flags & CONTROLLER_IMU_ORIENTATION_VALID) != 0u,
+            "serial transport test started before gyro calibration completed");
+  }
+  provider.flush_events(devices);
   serial->enqueue("left", 10, device_us, rx);
   serial->enqueue("right", 40, device_us + 1'000'000, rx);
   provider.wait_event(devices, 5, false);

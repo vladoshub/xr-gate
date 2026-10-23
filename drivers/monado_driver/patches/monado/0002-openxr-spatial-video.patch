@@ -1,0 +1,205 @@
+diff --git a/src/xrt/include/xrt/xrt_openxr_includes.h b/src/xrt/include/xrt/xrt_openxr_includes.h
+index e92948f..04faf9a 100644
+--- a/src/xrt/include/xrt/xrt_openxr_includes.h
++++ b/src/xrt/include/xrt/xrt_openxr_includes.h
+@@ -75,3 +75,7 @@ typedef __eglMustCastToProperFunctionPointerType (*PFNEGLGETPROCADDRESSPROC)(con
+ #include "openxr/XR_MNDX_flipvr.h"
+ #include "openxr/XR_MND_query_egl_device.h"
+ #include "openxr/XR_MND_contactglove2_interaction.h"
++
++// Project-owned experimental and supplemental spatial API declarations.
++#include "spatial_compat.h"
++#include "xr_gate_data.h"
+diff --git a/src/xrt/state_trackers/oxr/CMakeLists.txt b/src/xrt/state_trackers/oxr/CMakeLists.txt
+index 74d2afb..3425f3b 100644
+--- a/src/xrt/state_trackers/oxr/CMakeLists.txt
++++ b/src/xrt/state_trackers/oxr/CMakeLists.txt
+@@ -204,3 +204,33 @@ target_include_directories(
+ 	PRIVATE ${CMAKE_CURRENT_BINARY_DIR}
+ 	INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/..
+ 	)
++
++# Project-owned XR Gate optional spatial/video OpenXR interface.
++if(NOT XR_TRACKING_ROOT)
++  message(FATAL_ERROR "XR_TRACKING_ROOT is required for XR Gate OpenXR data support")
++endif()
++set(_xr_gate_driver "${XR_TRACKING_ROOT}/drivers/monado_driver")
++target_sources(st_oxr PRIVATE
++  ${_xr_gate_driver}/openxr/monado_bridge.c
++  ${_xr_gate_driver}/openxr/spatial_api.cpp
++  ${_xr_gate_driver}/openxr/sensor_source.cpp
++  ${_xr_gate_driver}/src/runtime_readers.cpp
++  ${_xr_gate_driver}/src/posix_runtime_readers.cpp
++  ${_xr_gate_driver}/src/windows_runtime_readers.cpp
++  ${XR_TRACKING_ROOT}/drivers/openvr_driver/src/runtime_tcp_client.cpp
++  ${XR_TRACKING_ROOT}/drivers/openvr_driver/src/runtime_tcp_readers.cpp)
++target_include_directories(st_oxr PRIVATE
++  ${_xr_gate_driver}/include
++  ${_xr_gate_driver}/openxr
++  ${XR_TRACKING_ROOT}/drivers/openvr_driver/src
++  ${XR_TRACKING_ROOT}/shared/include)
++target_include_directories(xrt-interfaces INTERFACE ${_xr_gate_driver}/openxr)
++target_compile_features(st_oxr PRIVATE cxx_std_17)
++target_compile_definitions(st_oxr PRIVATE XR_GATE_USE_SHARED_HAND_CONTRACT=1)
++find_package(Threads REQUIRED)
++target_link_libraries(st_oxr PRIVATE Threads::Threads)
++if(WIN32)
++  target_link_libraries(st_oxr PRIVATE ws2_32)
++elseif(UNIX AND NOT APPLE)
++  target_link_libraries(st_oxr PRIVATE rt)
++endif()
+diff --git a/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py b/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py
+index c725385..d3ab77f 100644
+--- a/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py
++++ b/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py
+@@ -84,6 +84,10 @@ EXTENSIONS = (
+     ['XR_EXT_plane_detection', 'XRT_FEATURE_OPENXR_PLANE_DETECTION'],
+     ['XR_EXT_samsung_odyssey_controller', 'XRT_FEATURE_OPENXR_INTERACTION_WINMR'],
+     ['XR_EXT_user_presence', 'XRT_FEATURE_OPENXR_USER_PRESENCE'],
++    ['XR_EXT_spatial_entity'],
++    ['XR_EXT_spatial_mesh_tracking'],
++    ['XR_EXT_spatial_entity_archetypes'],
++    ['XR_MNDX_xr_gate_data'],
+     # Vendor extensions, sorted alphabetically.
+     ['XR_ANDROID_face_tracking', 'XRT_FEATURE_OPENXR_FACE_TRACKING_ANDROID'],
+     ['XR_BD_body_tracking', 'XRT_FEATURE_OPENXR_BODY_TRACKING_BD'],
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_future.c b/src/xrt/state_trackers/oxr/oxr_api_future.c
+index c01d05f..3a3c0d3 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_future.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_future.c
+@@ -28,6 +28,7 @@ oxr_xrPollFutureEXT(XrInstance instance, const XrFuturePollInfoEXT *pollInfo, Xr
+ 	OXR_VERIFY_EXTENSION(&log, inst, EXT_future);
+ 	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, pollInfo, XR_TYPE_FUTURE_POLL_INFO_EXT);
+ 	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, pollResult, XR_TYPE_FUTURE_POLL_RESULT_EXT);
++	if (xr_gate_owns_future(pollInfo->future)) return xr_gate_poll_future(instance, pollInfo, pollResult);
+ 	OXR_VERIFY_FUTURE_AND_INIT_LOG(&log, pollInfo->future, oxr_future, "xrPollFutureEXT");
+ 	return oxr_future_ext_poll(&log, oxr_future, pollResult);
+ }
+@@ -40,6 +41,8 @@ oxr_xrCancelFutureEXT(XrInstance instance, const XrFutureCancelInfoEXT *cancelIn
+ 	struct oxr_future_ext *oxr_future = NULL;
+ 	OXR_VERIFY_INSTANCE_AND_INIT_LOG(&log, instance, inst, "xrCancelFutureEXT");
+ 	OXR_VERIFY_EXTENSION(&log, inst, EXT_future);
++	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, cancelInfo, XR_TYPE_FUTURE_CANCEL_INFO_EXT);
++	if (xr_gate_owns_future(cancelInfo->future)) return xr_gate_cancel_future(instance, cancelInfo);
+ 	OXR_VERIFY_FUTURE_AND_INIT_LOG(&log, cancelInfo->future, oxr_future, "xrCancelFutureEXT");
+ 	return oxr_future_ext_cancel(&log, oxr_future);
+ }
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_instance.c b/src/xrt/state_trackers/oxr/oxr_api_instance.c
+index 6c0d475..c6cb69b 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_instance.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_instance.c
+@@ -51,8 +51,16 @@ oxr_xrEnumerateInstanceExtensionProperties(const char *layerName,
+ 	struct oxr_logger log;
+ 	oxr_log_init(&log, "xrEnumerateInstanceExtensionProperties");
+ 
++	// XR Gate data extensions are opt-in independently of tracking transport.
++	XrExtensionProperties available[ARRAY_SIZE(extension_properties)];
++	uint32_t count = 0;
++	for (uint32_t i = 0; i < ARRAY_SIZE(extension_properties); ++i) {
++		if (xr_gate_extension_available(extension_properties[i].extensionName)) {
++			available[count++] = extension_properties[i];
++		}
++	}
+ 	OXR_TWO_CALL_HELPER(&log, propertyCapacityInput, propertyCountOutput, properties,
+-	                    ARRAY_SIZE(extension_properties), extension_properties, XR_SUCCESS);
++	                    count, available, XR_SUCCESS);
+ }
+ 
+ #ifdef OXR_HAVE_KHR_loader_init
+@@ -181,6 +189,9 @@ oxr_xrCreateInstance(const XrInstanceCreateInfo *createInfo, XrInstance *out_ins
+ 		continue;                                                                                              \
+ 	}
+ 	for (uint32_t i = 0; i < createInfo->enabledExtensionCount; ++i) {
++		if (!xr_gate_extension_available(createInfo->enabledExtensionNames[i])) {
++			return XR_ERROR_EXTENSION_NOT_PRESENT;
++		}
+ 		OXR_EXTENSION_SUPPORT_GENERATE(CHECK_EXT_NAME)
+ 
+ 		return oxr_error(&log, XR_ERROR_EXTENSION_NOT_PRESENT,
+@@ -188,6 +199,10 @@ oxr_xrCreateInstance(const XrInstanceCreateInfo *createInfo, XrInstance *out_ins
+ 		                 createInfo->enabledExtensionNames[i]);
+ 	}
+ 
++	if ((extensions.EXT_spatial_entity && !extensions.EXT_future) ||
++	    ((extensions.EXT_spatial_mesh_tracking || extensions.EXT_spatial_entity_archetypes) && !extensions.EXT_spatial_entity)) {
++		return XR_ERROR_EXTENSION_DEPENDENCY_NOT_ENABLED;
++	}
+ 	ret = oxr_verify_extensions(&log, &extensions);
+ 	if (ret != XR_SUCCESS) {
+ 		return ret;
+@@ -245,6 +260,7 @@ oxr_xrPollEvent(XrInstance instance, XrEventDataBuffer *eventData)
+ 	OXR_VERIFY_INSTANCE_AND_INIT_LOG(&log, instance, inst, "xrPollEvent");
+ 	OXR_VERIFY_ARG_NOT_NULL(&log, eventData);
+ 
++	if (xr_gate_poll_event(instance, eventData)) return XR_SUCCESS;
+ 	return oxr_poll_event(&log, inst, eventData);
+ }
+ 
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_negotiate.c b/src/xrt/state_trackers/oxr/oxr_api_negotiate.c
+index b6c7a9a..09c64bd 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_negotiate.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_negotiate.c
+@@ -185,6 +185,8 @@ oxr_xrEnumerateApiLayerProperties(uint32_t propertyCapacityInput,
+ static XrResult
+ handle_non_null(struct oxr_instance *inst, struct oxr_logger *log, const char *name, PFN_xrVoidFunction *out_function)
+ {
++	XrResult xr_gate_result = xr_gate_get_proc_addr(oxr_instance_to_openxr(inst), name, out_function);
++	if (xr_gate_result != XR_ERROR_FUNCTION_UNSUPPORTED) return xr_gate_result;
+ 	ENTRY(xrGetInstanceProcAddr);
+ 	ENTRY(xrEnumerateInstanceExtensionProperties);
+ 	ENTRY(xrCreateInstance);
+diff --git a/src/xrt/state_trackers/oxr/oxr_api_session.c b/src/xrt/state_trackers/oxr/oxr_api_session.c
+index ac9282a..c038bce 100644
+--- a/src/xrt/state_trackers/oxr/oxr_api_session.c
++++ b/src/xrt/state_trackers/oxr/oxr_api_session.c
+@@ -140,6 +140,14 @@ oxr_xrWaitFrame(XrSession session, const XrFrameWaitInfo *frameWaitInfo, XrFrame
+ 	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, frameState, XR_TYPE_FRAME_STATE);
+ 	OXR_VERIFY_ARG_NOT_NULL(&log, frameState);
+ 
++	// Use the incoming runtime pose's invalid -> valid edge, not a jump in
++	// position/reset_counter and not the driver's finite identity fallback.
++	// Recenter via the overseer so controllers, hands, spatial geometry and
++	// reference-space-change events use the same transformation.
++	if (xr_gate_reacquired(session)) {
++		xrt_space_overseer_recenter_local_spaces(sess->sys->xso);
++	}
++
+ 	return oxr_session_frame_wait(&log, sess, frameState);
+ }
+ 
+diff --git a/src/xrt/state_trackers/oxr/oxr_instance.c b/src/xrt/state_trackers/oxr/oxr_instance.c
+index a1f4f8d..c1e3cd0 100644
+--- a/src/xrt/state_trackers/oxr/oxr_instance.c
++++ b/src/xrt/state_trackers/oxr/oxr_instance.c
+@@ -75,6 +75,7 @@ static XrResult
+ oxr_instance_destroy(struct oxr_logger *log, struct oxr_handle_base *hb)
+ {
+ 	struct oxr_instance *inst = (struct oxr_instance *)hb;
++	xr_gate_destroy_instance(oxr_instance_to_openxr(inst));
+ 
+ 	// Does a null-ptr check.
+ 	xrt_syscomp_destroy(&inst->system.xsysc);
+diff --git a/src/xrt/state_trackers/oxr/oxr_objects.h b/src/xrt/state_trackers/oxr/oxr_objects.h
+index 7ead144..f0f3fec 100644
+--- a/src/xrt/state_trackers/oxr/oxr_objects.h
++++ b/src/xrt/state_trackers/oxr/oxr_objects.h
+@@ -32,6 +32,7 @@
+ #include "util/u_hashmap.h"
+ #include "util/u_device.h"
+ 
++#include "oxr_bridge.h"
+ #include "oxr_extension_support.h"
+ #include "oxr_defines.h"
+ #include "oxr_handle_base.h"
+diff --git a/src/xrt/state_trackers/oxr/oxr_session.c b/src/xrt/state_trackers/oxr/oxr_session.c
+index 9eb077c..2462dc6 100644
+--- a/src/xrt/state_trackers/oxr/oxr_session.c
++++ b/src/xrt/state_trackers/oxr/oxr_session.c
+@@ -1065,6 +1065,7 @@ static XrResult
+ oxr_session_destroy(struct oxr_logger *log, struct oxr_handle_base *hb)
+ {
+ 	struct oxr_session *sess = (struct oxr_session *)hb;
++	xr_gate_destroy_session(oxr_session_to_openxr(sess));
+ 
+ 	XrResult ret = oxr_event_remove_session_events(log, sess);
+ 

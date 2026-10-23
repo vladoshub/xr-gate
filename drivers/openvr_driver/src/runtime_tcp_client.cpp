@@ -1,4 +1,5 @@
 #include "runtime_tcp_client.hpp"
+#include <xr_spatial/contracts/spatial_mesh_wire.hpp>
 
 #include <algorithm>
 #include <array>
@@ -330,12 +331,29 @@ struct RuntimeTcpClient::Impl {
             throw std::runtime_error("TCP incompatible hello");
           hello = true; progress = Clock::now(); continue;
         }
+        if (value.at("type") == "spatial_mesh") {
+          if (value.at("format") != xr_spatial::RUNTIME_SPATIAL_PROXY_MESH_FORMAT_NAME ||
+              value.at("byte_order") != "little_endian")
+            throw std::runtime_error("TCP incompatible spatial mesh contract");
+          std::shared_ptr<const xr_spatial::RuntimeSpatialProxyMeshF32V1> mesh;
+          int64_t initial_age = 0;
+          if (!value.at("mesh_hex").is_null()) {
+            auto decoded = xr_spatial::mesh_from_hex(value.at("mesh_hex").get<std::string>());
+            initial_age = server_age(integer(value.at("read_timestamp_ns")), decoded.timestamp_ns);
+            mesh = std::make_shared<const xr_spatial::RuntimeSpatialProxyMeshF32V1>(std::move(decoded));
+          }
+          std::lock_guard<std::mutex> guard(mutex);
+          latest.spatial = std::move(mesh);
+          latest.spatial_received_ns = now_ns(); latest.spatial_age_ns = initial_age;
+          continue;
+        }
         auto frame = decode_frame(value);
         frame.connection_epoch = epoch;
         // Replayed snapshots must not keep a frozen pose or held button alive.
         if (frame.sequence <= last_sequence) continue;
         last_sequence = frame.sequence;
-        { std::lock_guard<std::mutex> guard(mutex); latest = std::move(frame); connected = true; error.clear(); }
+        { std::lock_guard<std::mutex> guard(mutex); frame.spatial=latest.spatial; frame.spatial_received_ns=latest.spatial_received_ns;
+          frame.spatial_age_ns=latest.spatial_age_ns; latest = std::move(frame); connected = true; error.clear(); }
         progress = Clock::now();
       }
       buffer.erase(0, consumed);

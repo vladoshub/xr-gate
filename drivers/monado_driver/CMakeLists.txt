@@ -50,3 +50,17 @@ target_link_libraries(drv_xr_tracking_runtime PRIVATE xrt-interfaces aux_util)
 if(UNIX AND NOT APPLE)
   target_link_libraries(drv_xr_tracking_runtime PRIVATE rt)
 endif()
+
+# Reuse the SteamVR application's tested JSON TCP client without the OpenVR SDK.
+target_sources(drv_xr_tracking_runtime PRIVATE
+  ${XR_TRACKING_ROOT}/drivers/openvr_driver/src/runtime_tcp_client.cpp
+  ${XR_TRACKING_ROOT}/drivers/openvr_driver/src/runtime_tcp_readers.cpp)
+target_include_directories(drv_xr_tracking_runtime PRIVATE
+  ${XR_TRACKING_ROOT}/drivers/openvr_driver/src)
+find_package(Threads REQUIRED)
+target_link_libraries(drv_xr_tracking_runtime PRIVATE Threads::Threads)
+if(WIN32)
+  target_link_libraries(drv_xr_tracking_runtime PRIVATE ws2_32)
+endif()
+
+target_compile_definitions(drv_xr_tracking_runtime PRIVATE XR_GATE_USE_SHARED_HAND_CONTRACT=1)

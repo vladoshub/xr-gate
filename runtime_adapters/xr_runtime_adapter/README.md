@@ -64,6 +64,21 @@ runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.s
 
 The script is controlled mostly through environment variables, so individual runtime features can be enabled without changing code.
 
+## Optional spatial and video for Monado
+
+The application TCP server accepts `--app-tcp-spatial` to send lossless optional
+`spatial_mesh` messages in addition to tracking frames. It defaults to off.
+Mesh updates are cached and sent only when changed or a client connects; tracking
+and mesh use alternating bounded latest-message queues. The updated shared
+SteamVR/Monado TCP client recognizes both message types. Older clients need an
+update before enabling these extra messages on their endpoint.
+
+`--publish-runtime-video-tcp --runtime-video-tcp-host 127.0.0.1
+--runtime-video-tcp-port 45812` forwards the selected `--video-input` as the existing
+binary `XR_STEREO_VIDEO_V1` protocol on a separate optional endpoint. Its sequence
+continues across video backend restarts. SHM/video output flags are independent.
+See [the Monado spatial/video setup guide](../../drivers/monado_driver/docs/SPATIAL_VIDEO_TCP.ru.md).
+
 ## Application TCP / UDP access
 
 Export `RUNTIME_APP_TCP=1` before launching to enable the read-only application
