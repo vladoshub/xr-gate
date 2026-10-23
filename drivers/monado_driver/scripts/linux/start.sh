@@ -371,6 +371,16 @@ load_display_config
 load_display_profile
 load_controller_input_config
 
+# One hardware-independent settings file shared with application launch helpers.
+for data_config in "${XR_MONADO_DATA_CONFIG:-}" "$BIN_DIR/profiles/runtime_data.env" "$ROOT_PROJECT/drivers/monado_driver/profiles/runtime_data.env"; do
+  [[ -n "$data_config" ]] || continue
+  if [[ -f "$data_config" ]]; then
+    source "$data_config"
+    export XR_MONADO_DATA_CONFIG="$data_config"
+    break
+  fi
+done
+
 # Prefer explicit binary override, then installed binary, then build tree binary.
 CANDIDATES=()
 if [[ -n "${XR_MONADO_SERVICE_BIN:-}" ]]; then
@@ -460,6 +470,8 @@ log "XR_MONADO_DISPLAY_PROFILE_FILE=${XR_MONADO_DISPLAY_PROFILE_FILE:-<none>}"
 log "XR_MONADO_DISPLAY_CONFIG=${XR_MONADO_DISPLAY_CONFIG:-<none>}"
 log "XR_TRACKING_RUNTIME_ENABLE=$XR_TRACKING_RUNTIME_ENABLE"
 log "XR_MONADO_HAND_TRACKING=$XR_MONADO_HAND_TRACKING"
+log "XR_MONADO_TRANSPORT=${XR_MONADO_TRANSPORT:-shm} TCP=${XR_MONADO_TCP_HOST:-127.0.0.1}:${XR_MONADO_TCP_PORT:-45810}"
+log "XR_MONADO_SPATIAL=${XR_MONADO_SPATIAL:-0} XR_MONADO_VIDEO=${XR_MONADO_VIDEO:-0} RECENTER_ON_REACQUIRE=${XR_MONADO_RECENTER_ON_REACQUIRE:-1}"
 log "XR_TRACKING_MONADO_COMPOSITOR_MODE=$XR_TRACKING_MONADO_COMPOSITOR_MODE"
 if [[ -n "${XRT_COMPOSITOR_FORCE_XCB:-}" ]]; then
   log "XRT_COMPOSITOR_FORCE_XCB=$XRT_COMPOSITOR_FORCE_XCB"

@@ -146,3 +146,12 @@ metadata rather than assigning a single guessed license to the whole package.
 documentation as references. A reference alone does not import their source
 license into XR Gate. Any future copied or adapted file must retain its own
 upstream notice and be added to this inventory before release.
+
+### OpenXR SDK supplemental declarations
+
+- Project: KhronosGroup/OpenXR-SDK.
+- Source: https://github.com/KhronosGroup/OpenXR-SDK/blob/main/include/openxr/openxr.h
+- Use: supplemental mesh tracking / archetype declarations in
+  `drivers/monado_driver/openxr/spatial_compat.h` for the pinned Monado SDK.
+- License: MIT (selected from Apache-2.0 OR MIT).
+- Baseline text: `LICENSES/OpenXR-MIT.txt`. Copyright 2017-2026 The Khronos Group Inc.

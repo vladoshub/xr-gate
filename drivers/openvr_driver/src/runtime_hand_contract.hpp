@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(XR_GATE_USE_SHARED_HAND_CONTRACT)
+#include <xr_tracking/publishers/hand_tracking_shm_publisher.hpp>
+#else
+
 #include <cstdint>
 
 namespace xr_tracking {
@@ -145,3 +149,5 @@ static_assert(sizeof(HandSideF32V2) == 1072, "HAND_TRACKING_21_JOINT_F32_V2 side
 static_assert(sizeof(HandTrackingFrameF32V2) == 2200, "HAND_TRACKING_21_JOINT_F32_V2 frame must be 2200 bytes");
 
 }  // namespace xr_tracking
+
+#endif // XR_GATE_USE_SHARED_HAND_CONTRACT

@@ -1336,6 +1336,9 @@ class SpatialProxyMeshInputThread {
   }
 
   SpatialProxyMeshInputSnapshot snapshot() const { std::lock_guard<std::mutex> lock(mu_); return snapshot_; }
+  std::shared_ptr<const xr_spatial::RuntimeSpatialProxyMeshF32V1> latest_mesh() const {
+    std::lock_guard<std::mutex> lock(mu_); return snapshot_.connected ? latest_mesh_ : nullptr;
+  }
 
   void set_origin_snapshot(RuntimeOriginSnapshot origin) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -1517,6 +1520,7 @@ class SpatialProxyMeshInputThread {
     snapshot_.last_error.clear();
     snapshot_.last_sequence = mesh.sequence;
     snapshot_.age_ms = age_ms;
+    latest_mesh_ = std::make_shared<const xr_spatial::RuntimeSpatialProxyMeshF32V1>(mesh);
     snapshot_.vertices = mesh.vertex_count;
     snapshot_.triangles = mesh.triangle_count;
     snapshot_.triangle_winding_flipped = should_swap_triangle_winding();
@@ -1697,6 +1701,7 @@ class SpatialProxyMeshInputThread {
   std::thread thread_;
   mutable std::mutex mu_;
   SpatialProxyMeshInputSnapshot snapshot_;
+  std::shared_ptr<const xr_spatial::RuntimeSpatialProxyMeshF32V1> latest_mesh_;
   RuntimeOriginSnapshot origin_snapshot_;
   RuntimeHmdPoseSnapshot runtime_hmd_snapshot_;
   std::unique_ptr<xr_spatial::RuntimeSpatialProxyMeshShmPublisher> publisher_;
@@ -1714,6 +1719,9 @@ struct VideoInputHealthConfig {
   double reattach_on_stale_ms = 1000.0;
 
   bool publish_runtime_video_shm = false;
+  bool publish_runtime_video_tcp = false;
+  std::string runtime_tcp_host = "127.0.0.1";
+  int runtime_tcp_port = 45812;
   std::string runtime_registry = "/tmp/runtime_video_streams.json";
   std::string runtime_stream = "runtime_stereo_video";
   std::string runtime_shm_name = "runtime_stereo_video";
@@ -1755,11 +1763,14 @@ class VideoInputHealthThread {
   void start() {
     if (cfg_.input == "none") return;
     stop_ = false;
+    if (cfg_.publish_runtime_video_tcp) {
+      runtime_video_tcp_ = std::make_unique<xr_video::StereoVideoTcpServer>(cfg_.runtime_tcp_host, cfg_.runtime_tcp_port);
+    }
     {
       std::lock_guard<std::mutex> lock(mu_);
       snapshot_ = {};
       snapshot_.enabled = true;
-      snapshot_.runtime_output_enabled = cfg_.publish_runtime_video_shm;
+      snapshot_.runtime_output_enabled = cfg_.publish_runtime_video_shm || cfg_.publish_runtime_video_tcp;
     }
     thread_ = std::thread([this] { run(); });
   }
@@ -1834,11 +1845,17 @@ class VideoInputHealthThread {
     if (cfg_.publish_runtime_video_shm) {
       publish_runtime_video(f, now_ns);
     }
+    if (runtime_video_tcp_) {
+      auto copy = f;
+      copy.header.sequence = ++runtime_video_tcp_sequence_;
+      copy.header.timestamp_ns = copy.header.publish_timestamp_ns = now_ns;
+      runtime_video_tcp_->publish(std::move(copy));
+    }
 
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
     snapshot_.connected = true;
-    snapshot_.runtime_output_enabled = cfg_.publish_runtime_video_shm;
+    snapshot_.runtime_output_enabled = cfg_.publish_runtime_video_shm || cfg_.publish_runtime_video_tcp;
     snapshot_.last_error.clear();
     if (snapshot_.frames == 0) {
       first_observe_ns_ = now_ns;
@@ -1910,7 +1927,7 @@ class VideoInputHealthThread {
   void set_connected(bool connected, const std::string& error) {
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
-    snapshot_.runtime_output_enabled = cfg_.publish_runtime_video_shm;
+    snapshot_.runtime_output_enabled = cfg_.publish_runtime_video_shm || cfg_.publish_runtime_video_tcp;
     snapshot_.connected = connected;
     snapshot_.last_error = error;
   }
@@ -1950,6 +1967,8 @@ class VideoInputHealthThread {
   int64_t last_source_ts_ns_ = 0;
 
   std::unique_ptr<xr_video::StereoVideoShmPublisher> runtime_video_publisher_;
+  std::unique_ptr<xr_video::StereoVideoTcpServer> runtime_video_tcp_;
+  uint64_t runtime_video_tcp_sequence_ = 0;
   uint32_t runtime_video_width_ = 0;
   uint32_t runtime_video_height_ = 0;
   uint32_t runtime_video_pixel_format_ = 0;
@@ -2940,6 +2959,9 @@ int main(int argc, char** argv) {
 
   bool publish_runtime_video_shm = false;
   bool no_runtime_video_unlink = false;
+  bool publish_runtime_video_tcp = false;
+  std::string runtime_video_tcp_host = "127.0.0.1";
+  int runtime_video_tcp_port = 45812;
   std::string runtime_video_registry = "/tmp/runtime_video_streams.json";
   std::string runtime_video_stream = "runtime_stereo_video";
   std::string runtime_video_shm_name = "runtime_stereo_video";
@@ -3102,6 +3124,7 @@ int main(int argc, char** argv) {
   app.add_option("--input", input, "tracking input: shm or udp");
   app.add_flag("--app-tcp", app_tcp_enabled,
                "Enable read-only JSON Lines TCP server for applications (off by default)");
+  app.add_flag("--app-tcp-spatial", app_tcp_config.spatial_mesh, "Send optional spatial mesh messages to application TCP clients");
   app.add_option("--app-tcp-host", app_tcp_config.host, "Application TCP bind host (default 127.0.0.1)");
   app.add_option("--app-tcp-port", app_tcp_config.port, "Application TCP port (default 45810)");
   app.add_option("--app-tcp-rate", app_tcp_config.rate_hz, "Maximum application frame rate, 1..240 Hz (default 60)");
@@ -3477,6 +3500,10 @@ int main(int argc, char** argv) {
   app.add_option("--video-reattach-on-stale-ms", video_reattach_on_stale_ms,
                  "XR stereo video SHM reader reattach interval while stale/missing; <=0 disables");
 
+  app.add_flag("--publish-runtime-video-tcp", publish_runtime_video_tcp,
+               "Forward xr_video through an optional runtime-owned binary TCP server");
+  app.add_option("--runtime-video-tcp-host", runtime_video_tcp_host, "Runtime video TCP bind address (default 127.0.0.1)");
+  app.add_option("--runtime-video-tcp-port", runtime_video_tcp_port, "Runtime video TCP port (default 45812)")->check(CLI::Range(1, 65535));
   app.add_flag("--publish-runtime-video-shm", publish_runtime_video_shm,
                "Publish runtime-owned XR_STEREO_VIDEO_V1 output");
   app.add_option("--runtime-video-registry", runtime_video_registry,
@@ -4798,6 +4825,9 @@ int main(int argc, char** argv) {
       cfg.stream = video_stream;
       cfg.reattach_on_stale_ms = video_reattach_on_stale_ms;
       cfg.publish_runtime_video_shm = publish_runtime_video_shm;
+      cfg.publish_runtime_video_tcp = publish_runtime_video_tcp;
+      cfg.runtime_tcp_host = runtime_video_tcp_host;
+      cfg.runtime_tcp_port = runtime_video_tcp_port;
       cfg.runtime_registry = runtime_video_registry;
       cfg.runtime_stream = runtime_video_stream;
       cfg.runtime_shm_name = runtime_video_shm_name;
@@ -6462,7 +6492,10 @@ int main(int argc, char** argv) {
           if (app_tcp_frame) app_tcp_frame->hands = runtime_hand;
           ++runtime_hand_published;
         }
-        if (app_tcp_frame) app_tcp_server->publish(*app_tcp_frame);
+        if (app_tcp_frame) {
+          if (spatial_proxy_mesh_thread) app_tcp_frame->spatial = spatial_proxy_mesh_thread->latest_mesh();
+          app_tcp_server->publish(*app_tcp_frame);
+        }
         if (mode == "event") {
           ++event_consumed;
         } else {

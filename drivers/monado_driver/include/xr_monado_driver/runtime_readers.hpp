@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "runtime_tcp_config.hpp"
 #include <memory>
 #include <string>
 
@@ -16,6 +17,7 @@ struct RuntimePoseReaderConfig {
   std::string stream_id = "runtime_hmd_pose";
   std::string shm_name = "runtime_hmd_pose";
   uint32_t max_age_ms = 250;
+  xr::openvr_driver::RuntimeTcpConfig tcp;
 };
 
 struct RuntimePoseSample {
@@ -37,6 +39,7 @@ struct RuntimeControllerStateReaderConfig {
   std::string stream_id = "runtime_controller_state";
   std::string shm_name = "runtime_controller_state";
   uint32_t max_age_ms = 250;
+  xr::openvr_driver::RuntimeTcpConfig tcp;
 };
 
 struct RuntimeControllerStateSample {
@@ -58,6 +61,7 @@ struct RuntimeHandReaderConfig {
   std::string stream_id = "runtime_hand_tracking";
   std::string shm_name = "runtime_hand_tracking";
   uint32_t max_age_ms = 250;
+  xr::openvr_driver::RuntimeTcpConfig tcp;
 };
 
 struct RuntimeHandSample {

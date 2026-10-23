@@ -295,6 +295,10 @@ RUNTIME_POSE_SHM_NAME="${RUNTIME_POSE_SHM_NAME:-runtime_hmd_pose}" # runtime HMD
 RUNTIME_HAND_STREAM="${RUNTIME_HAND_STREAM:-runtime_hand_tracking}" # runtime hand output stream name
 RUNTIME_HAND_SHM_NAME="${RUNTIME_HAND_SHM_NAME:-runtime_hand_tracking}" # runtime hand SHM object name
 
+RUNTIME_APP_TCP_SPATIAL="${RUNTIME_APP_TCP_SPATIAL:-0}" # optional mesh messages on application TCP
+PUBLISH_RUNTIME_VIDEO_TCP="${PUBLISH_RUNTIME_VIDEO_TCP:-0}" # separate binary video endpoint
+RUNTIME_VIDEO_TCP_HOST="${RUNTIME_VIDEO_TCP_HOST:-127.0.0.1}"
+RUNTIME_VIDEO_TCP_PORT="${RUNTIME_VIDEO_TCP_PORT:-45812}"
 VIDEO_INPUT="${VIDEO_INPUT:-shm}"   # stereo video input transport;  none, shm, tcp
 VIDEO_REGISTRY="${VIDEO_REGISTRY:-/tmp/xr_video_streams.json}" # stereo video source registry path
 VIDEO_STREAM="${VIDEO_STREAM:-stereo_video}" # stereo video source stream name
@@ -535,6 +539,7 @@ if [[ "$RUNTIME_APP_TCP" == "1" ]]; then
     --app-tcp-port "$RUNTIME_APP_TCP_PORT"
     --app-tcp-rate "$RUNTIME_APP_TCP_RATE"
     --app-tcp-max-clients "$RUNTIME_APP_TCP_MAX_CLIENTS")
+  if [[ "$RUNTIME_APP_TCP_SPATIAL" == "1" ]]; then args+=(--app-tcp-spatial); fi
 fi
 if [[ "$RUNTIME_HMD_POSE_STABILITY_FILTER" == "1" ]]; then
   args+=(--runtime-hmd-pose-stability-filter)
@@ -585,6 +590,9 @@ if [[ "$PUBLISH_RUNTIME_BODY_TRACKERS" == "1" ]]; then
   )
 fi
 
+if [[ "$PUBLISH_RUNTIME_VIDEO_TCP" == "1" ]]; then
+  args+=(--publish-runtime-video-tcp --runtime-video-tcp-host "$RUNTIME_VIDEO_TCP_HOST" --runtime-video-tcp-port "$RUNTIME_VIDEO_TCP_PORT")
+fi
 if [[ "$PUBLISH_RUNTIME_VIDEO" == "1" ]]; then
   args+=(
     --publish-runtime-video-shm

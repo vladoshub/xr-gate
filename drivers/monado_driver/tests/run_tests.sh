@@ -9,8 +9,8 @@ if [[ ! -f "$MONADO_DIR/src/xrt/include/xrt/xrt_device.h" ]]; then
 fi
 TEST_BUILD_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_BUILD_DIR"' EXIT
-args=(-std=c++17 -O1 -g -Wall -Wextra -pthread
-  -I"$ROOT/drivers/monado_driver/include" -I"$ROOT/shared/include"
+args=(-DXR_GATE_USE_SHARED_HAND_CONTRACT=1 -std=c++17 -O1 -g -Wall -Wextra -pthread
+  -I"$ROOT/drivers/monado_driver/include" -I"$ROOT/drivers/openvr_driver/src" -I"$ROOT/shared/include"
   -I"$MONADO_DIR/src/xrt/include" -I"$MONADO_DIR/src/xrt/auxiliary")
 if [[ -n "${NLOHMANN_JSON_INCLUDE_DIR:-}" ]]; then
   args+=(-I"$NLOHMANN_JSON_INCLUDE_DIR")
@@ -22,5 +22,7 @@ fi
   "$ROOT/drivers/monado_driver/tests/monado_driver_test.cpp" \
   "$ROOT/drivers/monado_driver/src/runtime_readers.cpp" \
   "$ROOT/drivers/monado_driver/src/posix_runtime_readers.cpp" \
+  "$ROOT/drivers/openvr_driver/src/runtime_tcp_client.cpp" \
+  "$ROOT/drivers/openvr_driver/src/runtime_tcp_readers.cpp" \
   -lrt -o "$TEST_BUILD_DIR/monado_driver_test"
 "$TEST_BUILD_DIR/monado_driver_test"

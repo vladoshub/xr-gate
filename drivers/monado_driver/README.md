@@ -6,6 +6,21 @@ Project-owned Monado driver integration for consuming runtime streams from
 The driver does not talk directly to capture, Basalt, Mercury, or device
 hardware. It consumes runtime-normalized streams only.
 
+## Optional spatial, video and TCP
+
+See [the setup and API guide](docs/SPATIAL_VIDEO_TCP.ru.md).
+SHM remains the default. `XR_MONADO_TRANSPORT=tcp` selects the application's
+existing runtime TCP protocol with reconnect. `XR_MONADO_SPATIAL=1` enables
+`XR_EXT_spatial_entity`, mesh tracking and archetypes; `XR_MONADO_VIDEO=1`
+enables exact stereo CPU frame access through the experimental
+`XR_MNDX_xr_gate_data` extension. Both optional data paths default to off.
+The app and service must receive the same transport/data settings.
+
+HMD invalid-to-valid transitions trigger native Monado LOCAL/LOCAL_FLOOR
+recenter on the next `xrWaitFrame` by default. Set
+`XR_MONADO_RECENTER_ON_REACQUIRE=0` to disable it. A continuously valid pose's
+`reset_counter` change alone does not trigger recenter.
+
 ## Expected runtime streams
 
 ```text
@@ -30,8 +45,8 @@ stale poses and inputs: reconnecting never refreshes their timestamps.
 
 While tracking is unavailable, controllers and optical hands become inactive;
 the HMD keeps the existing identity-pose fallback. Restored tracking resumes on
-the existing devices. A full VIO restart can reset the tracking origin, so the
-application may need recentering. Reconnection does not preserve the previous
+the existing devices. A full VIO restart can reset the tracking origin. The default
+invalid-to-valid recenter above handles reacquisition in LOCAL/LOCAL_FLOOR. Reconnection does not preserve the previous
 world map or controller IMU alignment state. If Monado itself is stopped by
 your launcher, its OpenXR session must still be started again.
 

@@ -232,6 +232,63 @@ class AppTcpTest(unittest.TestCase):
 
 
 class VideoClientTest(unittest.TestCase):
+    def test_runtime_forwards_video_and_survives_source_restart(self):
+        spec = importlib.util.spec_from_file_location("video_forward_client", ROOT / "tools/xr_video_tcp_client.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(6)
+        output_port = free_port()
+        errors = []
+        def source():
+            try:
+                for epoch in (1, 3):
+                    peer, _ = listener.accept()
+                    with peer:
+                        for seq in range(1, 8):
+                            stamp = time.monotonic_ns()
+                            net = module.NET_HEADER.pack(b"XSVNET1\0", 1, 56, 96, 8, 8, 0, seq, stamp, stamp)
+                            header = module.FRAME_HEADER.pack(1, 96, seq, stamp, stamp, stamp, stamp, stamp,
+                                                              4, 2, 4, 4, 1, 1, 8, 8, 1, 0)
+                            peer.sendall(net + header + bytes([epoch])*8 + bytes([epoch+1])*8)
+                            time.sleep(0.04)
+                    # Closing the producer connection resets its sequence to 1.
+            except (BrokenPipeError, ConnectionResetError):
+                # The runtime context closes after the consumer verifies epoch 2.
+                pass
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                listener.close()
+        worker = threading.Thread(target=source, daemon=True)
+        worker.start()
+        try:
+            with runtime(extra=("--video-input", "tcp", "--video-tcp-host", "127.0.0.1",
+                                "--video-tcp-port", str(listener.getsockname()[1]),
+                                "--publish-runtime-video-tcp", "--runtime-video-tcp-port", str(output_port))):
+                with socket.create_connection(("127.0.0.1", output_port), timeout=4) as client:
+                    client.settimeout(4)
+                    first = None
+                    for _ in range(20):
+                        meta, left, right = module.read_frame(client)
+                        self.assertEqual(meta["width"], 4)
+                        self.assertEqual(len(left), 8)
+                        if left == b"\x01"*8:
+                            first = meta["sequence"]
+                        if left == b"\x03"*8:
+                            self.assertEqual(right, b"\x04"*8)
+                            self.assertIsNotNone(first)
+                            self.assertGreater(meta["sequence"], first)
+                            break
+                    else:
+                        self.fail("runtime did not forward video after backend restart")
+        finally:
+            worker.join(timeout=6)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+
     def test_binary_frame_with_fragmented_tcp_reads(self):
         spec = importlib.util.spec_from_file_location("video_client", ROOT / "tools/xr_video_tcp_client.py")
         module = importlib.util.module_from_spec(spec)

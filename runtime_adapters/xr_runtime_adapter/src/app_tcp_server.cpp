@@ -1,4 +1,5 @@
 #include "app_tcp_server.hpp"
+#include <xr_spatial/contracts/spatial_mesh_wire.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -198,6 +199,8 @@ struct Client {
   Socket fd;
   std::shared_ptr<const std::string> current;
   std::shared_ptr<const std::string> next;
+  std::shared_ptr<const std::string> spatial_next;
+  bool last_was_spatial = false;
   size_t offset = 0;
   Clock::time_point started = Clock::now();
 };
@@ -263,7 +266,7 @@ class AppTcpServer::Impl {
       ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
 #endif
-      clients_.push_back(Client{fd, hello_, nullptr});
+      clients_.push_back(Client{fd, hello_, nullptr, spatial_packet_});
     }
     client_count_.store(clients_.size(), std::memory_order_relaxed);
   }
@@ -275,7 +278,11 @@ class AppTcpServer::Impl {
     if (received >= 0 || !retry_socket_error()) return false;
     for (int attempt = 0; attempt < 2; ++attempt) {
       if (!client.current) {
-        client.current = std::move(client.next);
+        // Alternate the two bounded latest-message queues. A high-rate mesh
+        // source must never starve tracking, nor should tracking starve mesh.
+        const bool spatial = client.spatial_next && (!client.next || !client.last_was_spatial);
+        client.current = spatial ? std::move(client.spatial_next) : std::move(client.next);
+        client.last_was_spatial = spatial;
         client.offset = 0;
         client.started = now;
       }
@@ -316,6 +323,15 @@ class AppTcpServer::Impl {
           }
           if (snapshot) {
             auto packet = std::make_shared<const std::string>(frame_json(*snapshot, generation));
+            if (config_.spatial_mesh && (snapshot->spatial != last_mesh_ || !spatial_packet_)) {
+              Json message{{"type", "spatial_mesh"}, {"read_timestamp_ns", std::to_string(snapshot->read_timestamp_ns)},
+                           {"mesh_hex", nullptr}, {"byte_order", "little_endian"},
+                           {"format", xr_spatial::RUNTIME_SPATIAL_PROXY_MESH_FORMAT_NAME}};
+              if (snapshot->spatial) message["mesh_hex"] = xr_spatial::mesh_hex(*snapshot->spatial);
+              spatial_packet_ = std::make_shared<const std::string>(message.dump()+'\n');
+              for (auto& client : clients_) client.spatial_next = spatial_packet_;
+              last_mesh_ = snapshot->spatial;
+            }
             for (auto& client : clients_) client.next = packet;
             serialized_generation = generation;
             next_frame = Clock::now() + period;
@@ -337,6 +353,8 @@ class AppTcpServer::Impl {
     }
   }
 
+  std::shared_ptr<const xr_spatial::RuntimeSpatialProxyMeshF32V1> last_mesh_;
+  std::shared_ptr<const std::string> spatial_packet_;
   AppTcpServerConfig config_;
   SocketOwner listener_;
   std::shared_ptr<const std::string> hello_;

@@ -35,7 +35,9 @@ jobs:
           git -C "$MONADO_DIR" fetch --depth 1 origin "$MONADO_REF"
           git -C "$MONADO_DIR" checkout --detach FETCH_HEAD
       - name: Test Monado input, profile mappings, pose and stream recovery
-        run: bash drivers/monado_driver/tests/run_tests.sh
+        run: |
+          bash drivers/monado_driver/tests/run_tests.sh
+          bash drivers/monado_driver/tests/run_data_tests.sh
 
   openvr-controller:
     runs-on: ubuntu-24.04
