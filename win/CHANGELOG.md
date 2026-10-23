@@ -1,3 +1,9 @@
+## Background WSL startup
+
+- Leave simple native arguments unquoted so WSL recognizes its distribution, user and exec options.
+- Keep quotes and escaping for paths with spaces, empty values and literal quotes.
+- Return runtime log tails as plain JSON strings in Windows PowerShell 5.1.
+
 ## Controller settings autosave
 
 - Save Controllers fields automatically; text fields wait briefly after typing.

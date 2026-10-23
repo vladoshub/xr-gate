@@ -43,7 +43,11 @@ function Get-RuntimeExitObservation($Record) {
         } catch { }
         foreach ($file in @($files.Output,$files.Error)) {
             try {
-                if (Test-Path -LiteralPath $file) { $lines += @(Get-Content -Tail 30 -Encoding UTF8 -LiteralPath $file) }
+                # Get-Content attaches provider metadata to strings. Strip it
+                # before Windows PowerShell 5.1 serializes the status as JSON.
+                if (Test-Path -LiteralPath $file) {
+                    $lines += @(Get-Content -Tail 30 -Encoding UTF8 -LiteralPath $file | ForEach-Object { $_.ToString() })
+                }
             } catch { }
         }
     }

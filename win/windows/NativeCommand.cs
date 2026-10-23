@@ -98,10 +98,13 @@ namespace XrGateWsl
             finally { process.Dispose(); }
         }
 
-        // Windows command-line quoting: protect whitespace, literal quotes and
-        // backslashes immediately before a closing quote. Do not invoke a shell.
+        // Quote only when needed. WSL parses its own options from the raw
+        // command line: quoted --distribution/--user/--exec are not options.
+        // Protect whitespace, literal quotes and trailing backslashes without a shell.
         public static string QuoteArgument(string value)
         {
+            if (value == null) throw new ArgumentNullException("value");
+            if (value.Length > 0 && value.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '\v', '"' }) < 0) return value;
             var quoted = new StringBuilder("\"");
             int backslashes = 0;
             foreach (char c in value)
