@@ -47,7 +47,7 @@ public sealed record ActionResult
 
 public static class ScriptCommand
 {
-    private static readonly HashSet<string> Actions = ["Install", "Run", "Stop", "Status", "DeviceStatus", "BluetoothScan", "Usb", "Detach", "Doctor", "Test", "Driver", "Display", "Pair", "Controllers"];
+    private static readonly HashSet<string> Actions = ["Install", "Run", "Stop", "Delete", "Status", "DeviceStatus", "BluetoothScan", "Usb", "Detach", "Doctor", "Test", "Driver", "Display", "Pair", "Controllers"];
     public static string Literal(string value) => "'" + value.Replace("'", "''") + "'";
     public static string Encode(string script, string action, string resultPath, bool steamVr, bool console)
     {

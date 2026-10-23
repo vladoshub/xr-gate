@@ -133,7 +133,68 @@ public partial class MainWindow
         configurationProblem = null;
         smokeAction = null;
         UpdateRecoveryUi();
+        await VerifyDeleteUiAsync();
+        await VerifyAudioStartUiAsync();
         await VerifyControllerAutoSaveAsync();
+    }
+
+    private async Task VerifyDeleteUiAsync()
+    {
+        int deletes = 0;
+        installed = readiness.Installed = true; readiness.Known = true;
+        readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = true;
+        UpdateReadinessUi();
+        smokeConfirmation = message =>
+        {
+            if (!message.Contains("Ubuntu-24.04") || !message.Contains("ALL files") || !message.Contains("cannot be undone"))
+                throw new InvalidOperationException("Delete confirmation omitted the distribution or full data-loss explanation.");
+            return false;
+        };
+        bool fail = true;
+        smokeAction = (action, _) =>
+        {
+            if (action != "Delete" || deleteDistribution != "Ubuntu-24.04")
+                throw new InvalidOperationException("Delete targeted another action or an unconfirmed distribution.");
+            deletes++;
+            return Task.FromResult(new ActionResult { ExitCode = fail ? 1 : 0, Data = JsonSerializer.SerializeToElement(new { deleted = !fail }) });
+        };
+        if (await DeleteInstallationAsync() || deletes != 0)
+            throw new InvalidOperationException("Canceling deletion invoked the backend.");
+        smokeConfirmation = _ => true;
+        if (await DeleteInstallationAsync() || deletes != 1 || !installed)
+            throw new InvalidOperationException("A failed deletion erased installation readiness.");
+        fail = false;
+        if (!await DeleteInstallationAsync() || deletes != 2 || installed || StartButton.IsEnabled || DeleteButton.IsEnabled ||
+            InstallButton.Content as string != "Install" || setupProgress.Pending)
+            throw new InvalidOperationException("Deletion did not reset installation controls and continuation state.");
+        smokeAction = null; smokeConfirmation = null;
+    }
+
+    private async Task VerifyAudioStartUiAsync()
+    {
+        bool enabled = settings.AudioEnabled;
+        string output = settings.AudioOutputId;
+        try
+        {
+            MainTabs.SelectedItem = AudioTab;
+            string first = "alsa:" + new string('a', 64), second = "alsa:" + new string('b', 64);
+            settings.AudioEnabled = true; settings.AudioOutputId = "none";
+            ApplyAudioDevices([], [new(first, "First output"), new(second, "Second output")]);
+            await SelectAudioOutputOnStartAsync(CancellationToken.None);
+            if (settings.AudioOutputId != first || WslAudioOutput.SelectedValue as string != first)
+                throw new InvalidOperationException("Start VR did not select the first available Ubuntu output in the UI.");
+            settings.AudioOutputId = second; BindAudioChoices();
+            await SelectAudioOutputOnStartAsync(CancellationToken.None);
+            if (settings.AudioOutputId != second) throw new InvalidOperationException("Start VR replaced an available saved output.");
+            AudioEnabledBox.SetCurrentValue(CheckBox.IsCheckedProperty, false);
+            AudioEnabledBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateSource();
+            AudioEnabledBox.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            await SelectAudioOutputOnStartAsync(CancellationToken.None);
+            if (settings.AudioEnabled || AudioDeviceFields.IsEnabled || settings.AudioOutputId != second)
+                throw new InvalidOperationException("Disabling audio lost its selection, kept controls enabled or auto-selected another device.");
+        }
+        finally { settings.AudioEnabled = enabled; settings.AudioOutputId = output; BindAudioChoices(); }
     }
 
     private async Task VerifyControllerAutoSaveAsync()

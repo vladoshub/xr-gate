@@ -165,11 +165,17 @@ public partial class MainWindow : Window
         if (action == "Test") operationCancellation.CancelAfter(TimeSpan.FromSeconds(settings.StartTimeoutSeconds + 5));
         try
         {
-            if (action is "Stop" or "Detach") { await StopCalibrationProgressAsync(); await StopAudioAsync(required: true); }
-            bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop");
+            if (action is "Stop" or "Detach" or "Delete") { await StopCalibrationProgressAsync(); await StopAudioAsync(required: true); }
+            if (action == "Delete")
+            {
+                if (audioRefreshTask is not null) await audioRefreshTask;
+                if (deviceObservation is not null) await deviceObservation;
+                keeper.Dispose();
+            }
+            bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop" or "Delete");
             if (writesSettings && !smoke) { settings.Save(root); ControllerSettingsSaved(); }
-            var actionSettings = writesSettings || smokeAction is not null || action == "Stop" ? settings : LauncherSettings.Load(root);
-            if (smokeAction is null && action is not ("Stop" or "Status" or "Doctor" or "Display")) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
+            var actionSettings = writesSettings || smokeAction is not null || action is "Stop" or "Delete" ? settings : LauncherSettings.Load(root);
+            if (smokeAction is null && action is not ("Stop" or "Delete" or "Status" or "Doctor" or "Display")) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
             if (action == "Run") { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
             if (action is "Run" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,
@@ -180,6 +186,7 @@ public partial class MainWindow : Window
                 ? distro.GetString() ?? settings.Distribution : settings.Distribution;
             if (nextStep == "restart_ubuntu") keeper.Dispose();
 
+            if (action == "Delete" && result.Success) ApplyDeletedInstallation();
             if (result.Success && action == "Stop") runtimeMayBeRunning = false;
             if (result.Success && action is "Stop" or "Detach") resourcesMayBeOwned = false;
             if (result.Success && action == "BluetoothScan") ApplyBluetoothDevices(result.Data);
@@ -200,6 +207,7 @@ public partial class MainWindow : Window
                 // A console-only start can return before the Linux supervisor
                 // acquires its lock. Keep observing it until Status confirms exit.
                 if (result.Success) runtimeMayBeRunning = true;
+                if (result.Success && steamVr) await SelectAudioOutputOnStartAsync(operationCancellation.Token);
                 await UpdateAudioAsync(result.Success);
                 if (!runtimeMayBeRunning) await StopCalibrationProgressAsync();
             }
@@ -208,6 +216,7 @@ public partial class MainWindow : Window
             {
                 "Run" => steamVr ? "VR is ready" : "Tracking started",
                 "Stop" => "Tracking stopped",
+                "Delete" => "Ubuntu deleted",
                 "Install" => installed ? "Installation complete" : "Finish setup",
                 "Status" => runtimeMayBeRunning ? "Tracking is running" : readiness.CanStart ? "Ready to start" : "Next setup step",
                 _ => action + " complete"
@@ -282,6 +291,7 @@ public partial class MainWindow : Window
         installed = data.TryGetProperty("setup_complete", out var complete) && complete.ValueKind == JsonValueKind.True;
         readiness.Known = true;
         readiness.Installed = installed;
+        canDeleteInstallation = data.TryGetProperty("can_delete", out var deletable) ? deletable.ValueKind == JsonValueKind.True : installed;
         if (data.TryGetProperty("install_pending", out var pending) && pending.ValueKind == JsonValueKind.True)
         {
             string step = data.TryGetProperty("install_next_step", out var selectedStep) ? selectedStep.GetString() ?? "" : "";
@@ -310,11 +320,16 @@ public partial class MainWindow : Window
 
     private Task<ActionResult> RunActionAsync(string action, bool steamVr = false, bool console = false, CancellationToken cancellation = default, TimeSpan? timeLimit = null, bool quiet = false)
     {
-        IReadOnlyDictionary<string, string>? parameters = action == "Pair" ? new Dictionary<string, string>
+        IReadOnlyDictionary<string, string>? parameters = action switch
         {
-            ["LeftControllerMac"] = LeftBluetoothController.SelectedValue as string ?? "none",
-            ["RightControllerMac"] = RightBluetoothController.SelectedValue as string ?? "none"
-        } : null;
+            "Pair" => new Dictionary<string, string>
+            {
+                ["LeftControllerMac"] = LeftBluetoothController.SelectedValue as string ?? "none",
+                ["RightControllerMac"] = RightBluetoothController.SelectedValue as string ?? "none"
+            },
+            "Delete" => new Dictionary<string, string> { ["DeleteDistributionName"] = deleteDistribution },
+            _ => null
+        };
         return smokeAction is not null ? smokeAction(action, cancellation) : runner.RunAsync(action, steamVr, console, cancellation, timeLimit, parameters, quiet);
     }
 

@@ -109,6 +109,12 @@ try
         int beforeQuiet = logs.Count;
         Check((await runner.RunAsync("Status", quiet: true)).Success && logs.Count == beforeQuiet,
             "Read-only background status flooded the activity log or lost its structured result.");
+        string deletionFixture = "param([string]$Action,[switch]$Launcher,[string]$ResultPath,[string]$DeleteDistributionName)\n" +
+            "if ($Action -ne 'Delete' -or $DeleteDistributionName -cne 'Ubuntu-24.04') { throw 'Wrong confirmed distribution' }\n" +
+            "[IO.File]::WriteAllText($ResultPath, '{\"exit_code\":0,\"next_step\":\"\",\"message\":\"fixture only\",\"warnings\":[],\"data\":{\"deleted\":true}}')\nexit 0\n";
+        File.WriteAllText(Path.Combine(bridge, "XrGate-Wsl.ps1"), deletionFixture, new UTF8Encoding(true));
+        Check((await runner.RunAsync("Delete", parameters: new Dictionary<string, string> { ["DeleteDistributionName"] = "Ubuntu-24.04" })).Data.GetProperty("deleted").GetBoolean(),
+            "The process bridge lost the exact confirmed Ubuntu deletion target.");
         File.WriteAllText(Path.Combine(bridge, "XrGate-Wsl.ps1"), script.Replace("exit 0", "Start-Sleep -Seconds 30\nexit 0"), new UTF8Encoding(true));
         bool timedOut = false;
         try { await runner.RunAsync("Doctor", timeLimit: TimeSpan.FromSeconds(2)).WaitAsync(TimeSpan.FromSeconds(8)); }

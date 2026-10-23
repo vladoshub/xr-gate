@@ -1,3 +1,4 @@
+using System.Text.Json;
 using XrGate.Launcher.Core;
 
 internal static class SetupTests
@@ -30,6 +31,25 @@ internal static class SetupTests
         Check(notices.Observe("unrelated") is null, "An unrelated log produced calibration instructions.");
         notices.Reset();
         Check(notices.Observe("zeroing") is not null, "A new tracking run did not reset calibration instructions.");
+        string removalState = Path.Combine(folder, "removal-state.json");
+        File.WriteAllText(removalState, JsonSerializer.Serialize(new { Distribution = "Ubuntu-24.04", LinuxUser = "saved-user" }));
+        var removal = DistributionRemoval.Load(removalState);
+        Check(removal.Distribution == "Ubuntu-24.04" && removal.Confirmation.Contains("ALL files") &&
+            removal.Confirmation.Contains("cannot be undone") && removal.Confirmation.Contains("Ubuntu-24.04"),
+            "The deletion confirmation lost its saved distribution or permanent-data-loss warning.");
+        foreach (string name in new[] { "docker-desktop", "docker-desktop-data", "", "Ubuntu;bad" })
+        {
+            File.WriteAllText(removalState, JsonSerializer.Serialize(new { Distribution = name, LinuxUser = "saved-user" }));
+            bool rejected = false;
+            try { DistributionRemoval.Load(removalState); } catch (InvalidDataException) { rejected = true; }
+            Check(rejected, "An invalid/system distribution became an XR Gate deletion target.");
+        }
+        File.WriteAllText(removalState, JsonSerializer.Serialize(new { Distribution = "Ubuntu-24.04", InstallPending = true }));
+        Check(DistributionRemoval.Load(removalState).Distribution == "Ubuntu-24.04", "An unfinished Ubuntu installation could not be selected for deletion.");
+        File.WriteAllText(removalState, JsonSerializer.Serialize(new { Distribution = "Ubuntu-24.04", LinuxUser = "", InstallPending = false }));
+        bool emptyRejected = false;
+        try { DistributionRemoval.Load(removalState); } catch (InvalidDataException) { emptyRejected = true; }
+        Check(emptyRejected, "A display-only or deleted installation could unregister Ubuntu.");
         Console.WriteLine("OK: display-before-install gating, complete Start VR prerequisites, resumed setup and calibration notices.");
     }
 }

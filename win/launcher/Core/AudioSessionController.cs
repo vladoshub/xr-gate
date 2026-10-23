@@ -1,8 +1,8 @@
 namespace XrGate.Launcher.Core;
 
-public sealed record AudioRoute(string Distribution, string LinuxUser, string SourceId, string OutputId)
+public sealed record AudioRoute(string Distribution, string LinuxUser, string SourceId, string OutputId, bool PlaybackEnabled = true)
 {
-    public bool Enabled => SourceId.Length > 0 && OutputId.Length > 0 && SourceId != "none" && OutputId != "none";
+    public bool Enabled => PlaybackEnabled && SourceId.Length > 0 && OutputId.Length > 0 && SourceId != "none" && OutputId != "none";
 }
 
 public sealed class AudioSessionController(Func<AudioRoute, CancellationToken, Task> run)

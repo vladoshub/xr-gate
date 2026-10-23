@@ -1,3 +1,10 @@
+## Delete Ubuntu and automatic audio selection
+
+- Add Delete in Run with confirmation naming the saved XR Gate Ubuntu distribution and explaining permanent loss of all its Linux data.
+- Stop audio/tracking and release selected USB before unregistering Ubuntu; retain setup state on failure and reset readiness after deletion.
+- Add Audio Enable, on by default, with immediate persistence and preserved source/output choices when disabled.
+- After Start VR attaches USB, refresh audio outputs and keep an available saved output or select the first available one.
+
 ## Background WSL startup
 
 - Leave simple native arguments unquoted so WSL recognizes its distribution, user and exec options.

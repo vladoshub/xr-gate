@@ -32,6 +32,7 @@ public partial class MainWindow
         bindingAudioChoices = true;
         try
         {
+            AudioEnabledBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
             audioCatalog.Sources = AudioDeviceCatalog.Merge(audioCatalog.Sources, audioCatalog.Sources, settings.AudioSourceId, source: true);
             audioCatalog.Outputs = AudioDeviceCatalog.Merge(audioCatalog.Outputs, audioCatalog.Outputs, settings.AudioOutputId, source: false);
             WindowsAudioSource.ItemsSource = audioCatalog.Sources; WslAudioOutput.ItemsSource = audioCatalog.Outputs;
@@ -77,7 +78,7 @@ public partial class MainWindow
             ApplyAudioDevices(sources, outputs);
             try { audioCatalog.Save(AudioCatalogFile); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Log("[Audio] Could not save device names: " + error.Message); }
-            AudioStatus.Text = detail.Length > 0 ? detail : outputs.Count == 0
+            AudioStatus.Text = !settings.AudioEnabled ? "Audio disabled. Your device selections are kept." : detail.Length > 0 ? detail : outputs.Count == 0
                 ? "No ALSA playback outputs found. Attach a USB device with audio, then refresh."
                 : "Device list refreshed. Selections are saved automatically; disconnected selections are kept.";
         }
@@ -86,6 +87,49 @@ public partial class MainWindow
         finally { if (!closing) RefreshAudioDevicesButton.IsEnabled = busyAction.Length == 0 && configurationProblem is null; }
     }
     private void RefreshAudioDevices_Click(object sender, RoutedEventArgs e) => StartAudioDeviceRefresh();
+    private async void AudioEnabled_Click(object sender, RoutedEventArgs e)
+    {
+        if (bindingAudioChoices || closing || configurationProblem is not null) return;
+        bool enabled = settings.AudioEnabled;
+        try
+        {
+            if (!smoke) settings.SaveAudioSelection(root);
+            await UpdateAudioAsync(runtimeMayBeRunning);
+            AudioStatus.Text = enabled ? "Audio enabled. Start VR selects an available Ubuntu output automatically."
+                : "Audio disabled. Your device selections are kept.";
+        }
+        catch (Exception error)
+        {
+            settings.AudioEnabled = !enabled; BindAudioChoices();
+            AudioStatus.Text = error.Message; Log("[Audio] " + error.Message);
+        }
+    }
+
+    private async Task SelectAudioOutputOnStartAsync(CancellationToken cancellation)
+    {
+        if (!settings.AudioEnabled || closing) return;
+        try
+        {
+            // USB audio appears only after Run has attached the device. Do not
+            // choose from an earlier refresh or the remembered offline catalog.
+            if (audioRefreshTask is not null) await audioRefreshTask.WaitAsync(cancellation);
+            if (!smoke)
+            {
+                audioRefreshTask = RefreshAudioDevicesAsync();
+                await audioRefreshTask.WaitAsync(cancellation);
+            }
+            string selected = AudioDeviceCatalog.OutputForStart(settings.AudioEnabled, settings.AudioOutputId, audioCatalog.Outputs);
+            if (selected == settings.AudioOutputId) return;
+            string previous = settings.AudioOutputId;
+            settings.AudioOutputId = selected;
+            try { if (!smoke) settings.SaveAudioSelection(root); }
+            catch { settings.AudioOutputId = previous; throw; }
+            BindAudioChoices();
+            Log("[Audio] Selected Ubuntu output: " + audioCatalog.Outputs.First(item => item.Id == selected).Name);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error) { AudioStatus.Text = error.Message; Log("[Audio] " + error.Message); }
+    }
     private async void AudioSelection_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (bindingAudioChoices || smoke || closing || configurationProblem is not null) return;
@@ -115,7 +159,7 @@ public partial class MainWindow
         {
             var loaded = LauncherSettings.Load(root);
             await audio.ConfigureAsync(new AudioRoute(loaded.Distribution, loaded.LinuxUser,
-                loaded.AudioSourceId, loaded.AudioOutputId), deviceCancellation.Token);
+                loaded.AudioSourceId, loaded.AudioOutputId, loaded.AudioEnabled), deviceCancellation.Token);
         }
         catch (OperationCanceledException) when (closing) { }
         catch (Exception error) { Log("[Audio] " + error.Message); AudioStatus.Text = error.Message; }

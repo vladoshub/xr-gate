@@ -44,6 +44,7 @@ public partial class MainWindow
         InstallButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanInstall;
         InstallButton.ToolTip = readiness.CanInstall ? "Install or update XR Gate for the selected display." : "Select the glasses display number first.";
         DisplayButton.IsEnabled = available && !runtimeMayBeRunning;
+        DeleteButton.IsEnabled = available && (canDeleteInstallation || installed || setupProgress.Pending);
         Pulse(InstallButton, available && !installed);
         Pulse(DisplayButton, available && (!readiness.DisplaySelected || !readiness.DisplayConnected));
         if (!available || !readiness.Known) return;

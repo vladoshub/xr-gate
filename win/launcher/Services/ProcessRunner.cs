@@ -45,7 +45,8 @@ public sealed class ProcessRunner(string root, string stateDirectory, Action<str
             if (parameters is not null)
                 foreach (var parameter in parameters)
                 {
-                    if (parameter.Key is not ("LeftControllerMac" or "RightControllerMac")) throw new ArgumentException("Unsupported launcher parameter.");
+                    if (!(action == "Pair" && parameter.Key is "LeftControllerMac" or "RightControllerMac") &&
+                        !(action == "Delete" && parameter.Key == "DeleteDistributionName")) throw new ArgumentException("Unsupported launcher parameter.");
                     info.ArgumentList.Add("-" + parameter.Key);
                     info.ArgumentList.Add(parameter.Value);
                 }

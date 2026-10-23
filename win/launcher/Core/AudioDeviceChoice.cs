@@ -12,6 +12,13 @@ public sealed record AudioDeviceChoice(string Id, string Name, bool Available = 
 
 public sealed class AudioDeviceCatalog
 {
+    public static string OutputForStart(bool enabled, string saved, IEnumerable<AudioDeviceChoice> outputs)
+    {
+        if (!enabled) return saved;
+        var available = outputs.Where(item => item.Available && item.Id.StartsWith("alsa:", StringComparison.Ordinal)).ToList();
+        return available.Any(item => item.Id == saved) ? saved : available.FirstOrDefault()?.Id ?? saved;
+    }
+
     public List<AudioDeviceChoice> Sources { get; set; } = [];
     public List<AudioDeviceChoice> Outputs { get; set; } = [];
     public static AudioDeviceCatalog Load(string path)

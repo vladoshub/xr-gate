@@ -72,6 +72,7 @@
         <Button Content="Refresh status" Click="Refresh_Click" Background="#18253A" />
        </StackPanel>
        <Button x:Name="StopButton" Content="Stop tracking &amp; return USB" Click="Stop_Click" Background="#4A2932" Margin="0,4,0,15" />
+       <Button x:Name="DeleteButton" Content="Delete" Click="Delete_Click" Background="#4A2932" ToolTip="Delete the saved XR Gate Ubuntu distribution and all its Linux data." Margin="0,0,0,15" />
        <TextBlock Text="STARTUP" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
        <TextBlock Text="Tracking runs in the background. Enable Show command prompt in Settings before starting to use console calibration and manual controls." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,16" />
        <TextBlock Text="REFRESH RATE" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
@@ -130,7 +131,9 @@
       <Border x:Name="AudioFields" Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
        <StackPanel>
         <TextBlock Text="Audio" FontSize="18" FontWeight="SemiBold" />
-        <TextBlock Text="Send sound from a Windows output to an audio device attached to Ubuntu. Select No audio to disable it. Choices are saved automatically and kept after reconnecting." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,6,0,14" />
+        <CheckBox x:Name="AudioEnabledBox" Content="Enable" IsChecked="{Binding AudioEnabled, UpdateSourceTrigger=PropertyChanged}" Click="AudioEnabled_Click" Margin="0,10,0,6" />
+        <TextBlock Text="Send sound from a Windows output to an audio device attached to Ubuntu. Start VR keeps an available saved output or selects the first available Ubuntu output. Disable Enable to keep audio off. Choices are saved automatically." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,6,0,14" />
+        <StackPanel x:Name="AudioDeviceFields" IsEnabled="{Binding IsChecked, ElementName=AudioEnabledBox}">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
          <StackPanel><TextBlock Text="Windows audio source" />
           <ComboBox x:Name="WindowsAudioSource" SelectedValuePath="Id" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="AudioSelection_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" ToolTip="{Binding SelectedItem.Id, RelativeSource={RelativeSource Self}}" />
@@ -140,7 +143,8 @@
          </StackPanel>
         </Grid>
         <Button x:Name="RefreshAudioDevicesButton" Content="Refresh audio devices" Click="RefreshAudioDevices_Click" HorizontalAlignment="Left" />
-        <TextBlock x:Name="AudioStatus" Text="Audio is off until an Ubuntu output is selected. The source Windows output may also play the sound locally." Foreground="#ACBED5" TextWrapping="Wrap" />
+        </StackPanel>
+        <TextBlock x:Name="AudioStatus" Text="Audio output is selected automatically at Start VR when available. The source Windows output may also play the sound locally." Foreground="#ACBED5" TextWrapping="Wrap" />
        </StackPanel>
       </Border>
     </ScrollViewer>

@@ -9,7 +9,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Run
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Install','Run','Runtime','Stop','Status','DeviceStatus','BluetoothScan','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
+    [ValidateSet('Install','Run','Runtime','Stop','Delete','Status','DeviceStatus','BluetoothScan','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
     [string]$Action = 'Help',
     [string]$Distribution = '',
     [string]$ReleaseTag = '',
@@ -28,6 +28,7 @@ param(
     [string]$SteamVR = '',
     [switch]$StartSteamVR,
     [switch]$Launcher,
+    [string]$DeleteDistributionName = '',
     [string]$RuntimeLaunchToken = '',
     [string]$ResultPath = '',
     [ValidateRange(0,600)][int]$TimeoutSeconds = 0,
@@ -44,7 +45,7 @@ $ErrorActionPreference = 'Stop'
 $script:Repo = 'vladoshub/xr-gate'
 $script:Self = $PSCommandPath
 . (Join-Path $PSScriptRoot 'windows\Environment.ps1')
-if ($Action -eq 'Stop') { Initialize-XrStopSettings $PSScriptRoot }
+if ($Action -in @('Stop','Delete')) { Initialize-XrStopSettings $PSScriptRoot }
 else { Initialize-XrSettings $PSScriptRoot }
 if (!$ReleaseTag) { $ReleaseTag = Get-XrSetting 'XR_RELEASE_TAG' 'latest' }
 if (!$TimeoutSeconds) { $TimeoutSeconds = Get-XrInteger 'XR_START_TIMEOUT' 5 600 }
@@ -80,6 +81,7 @@ $script:ActionData = $null
 . (Join-Path $PSScriptRoot 'windows\Driver.ps1')
 . (Join-Path $PSScriptRoot 'windows\Usb.ps1')
 . (Join-Path $PSScriptRoot 'windows\RuntimeWindow.ps1')
+. (Join-Path $PSScriptRoot 'windows\Delete.ps1')
 . (Join-Path $PSScriptRoot 'windows\SetupStatus.ps1')
 
 function Write-Step([string]$Message) { Write-Host ("[XR Gate] " + $Message) -ForegroundColor Cyan }
@@ -798,6 +800,7 @@ XR Gate / WSL2 / no Docker
   -Action Install                 Install Ubuntu runtime and Windows driver.
   -Action Run [-StartSteamVR]      Attach USB, open xr_client; optionally start SteamVR.
   -Action Stop                    Stop this managed runtime, then return its USB devices.
+  -Action Delete -DeleteDistributionName NAME  Permanently delete the saved Ubuntu and ALL its Linux data.
   -Action Status                  Report installed/running state as JSON.
   -Action Usb                     Attach devices selected in the hardware env.
   -Action Usb -BluetoothBusId 1-4  Also attach your dedicated USB Bluetooth dongle.
@@ -829,7 +832,15 @@ try {
     if (![Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { throw 'Windows x64 is required.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if ($Action -eq 'Admin') { $result = Invoke-AdminTask; Complete-XrAction ([int]$result) }
+    if ($Action -eq 'Delete') {
+        if (!$DeleteDistributionName) { throw 'Deletion requires the exact Ubuntu distribution name confirmed in the launcher.' }
+        $Distribution = $DeleteDistributionName
+    }
     Load-State
+    if ($Action -eq 'Delete') {
+        Remove-XrDistribution $DeleteDistributionName
+        Complete-XrAction 0 ('Ubuntu distribution ' + $DeleteDistributionName + ' and its Linux data were deleted. Click Install to set up XR Gate again.')
+    }
     if ($Action -eq 'DeviceStatus') {
         $script:ActionData = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
         $setup = Get-XrSetupObservation $false
@@ -844,7 +855,8 @@ try {
         }
         $script:ActionData = @{installed=[bool]$status.installed; running=[bool]$status.running;
             distribution=[string]$script:State.Distribution; release=[string]$script:State.ReleaseTag;
-            frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode}
+            frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode;
+            can_delete=([bool]$script:State.LinuxUser -or [bool]$script:State.InstallPending)}
         $setup = Get-XrSetupObservation ([bool]$status.installed)
         foreach ($key in $setup.Keys) { $script:ActionData[$key] = $setup[$key] }
         $script:ActionData['starting'] = $false

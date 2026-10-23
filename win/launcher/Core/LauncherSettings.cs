@@ -48,6 +48,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     public string DisplayName { get; set; } = "";
     public string SteamVrPath { get; set; } = "";
     public string ControllerConfig { get; set; } = "";
+    public bool AudioEnabled { get; set; } = true;
     public string AudioSourceId { get; set; } = "default";
     public string AudioOutputId { get; set; } = "none";
     public string LinuxUser { get; private set; } = "";
@@ -145,6 +146,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             FrequencyHz = Choice("XR_DISPLAY_FREQUENCY_HZ", "FrequencyHz", "60"),
             DisplayMode = Choice("XR_DISPLAY_MODE", "DisplayMode", "extended_sbs"),
             DisplayName = Get("XR_DISPLAY_NAME"), SteamVrPath = Get("XR_STEAMVR_PATH"), ControllerConfig = Get("XR_CONTROLLER_CONFIG"),
+            AudioEnabled = Flag("XR_AUDIO_ENABLED", true),
             AudioSourceId = Get("XR_AUDIO_SOURCE", "default"), AudioOutputId = Get("XR_AUDIO_OUTPUT", "none"),
             LinuxUser = Get("XR_LINUX_USER", saved.GetValueOrDefault("Distribution") == Choice("XR_DISTRIBUTION", "Distribution", "Ubuntu-24.04")
                 ? saved.GetValueOrDefault("LinuxUser", "") : ""),
@@ -183,6 +185,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             ["XR_DISPLAY_FREQUENCY_HZ"] = FrequencyHz.Trim(), ["XR_DISPLAY_MODE"] = DisplayMode.Trim(),
             ["XR_DISPLAY_NAME"] = DisplayName.Trim(), ["XR_STEAMVR_PATH"] = SteamVrPath.Trim(),
             ["XR_CONTROLLER_CONFIG"] = ControllerConfig.Trim(),
+            ["XR_AUDIO_ENABLED"] = AudioEnabled ? "1" : "0",
             ["XR_AUDIO_SOURCE"] = AudioSourceId.Trim(), ["XR_AUDIO_OUTPUT"] = AudioOutputId.Trim()
     };
 
@@ -312,7 +315,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     {
         ValidateAudioSelection();
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        { ["XR_AUDIO_SOURCE"] = AudioSourceId, ["XR_AUDIO_OUTPUT"] = AudioOutputId };
+        { ["XR_AUDIO_ENABLED"] = AudioEnabled ? "1" : "0", ["XR_AUDIO_SOURCE"] = AudioSourceId, ["XR_AUDIO_OUTPUT"] = AudioOutputId };
         string path = Path.Combine(root, ".env");
         string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
         string temporary = path + ".audio-" + Guid.NewGuid().ToString("N");

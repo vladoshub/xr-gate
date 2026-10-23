@@ -24,7 +24,7 @@ internal static class AudioTests
         File.WriteAllText(state, JsonSerializer.Serialize(new { Distribution = "Ubuntu-24.04", LinuxUser = "audio-user" }));
         File.WriteAllText(env, "# Keep my settings\nXR_TCP_PORT=45999\n");
         var settings = LauncherSettings.Load(root, state);
-        Check(settings.AudioOutputId == "none" && settings.AudioSourceId == "default", "Audio must initially be off.");
+        Check(settings.AudioEnabled && settings.AudioOutputId == "none" && settings.AudioSourceId == "default", "Audio must initially be enabled with automatic output selection at Start VR.");
         string output = "alsa:" + new string('a', 64);
         settings.AudioSourceId = "{0.0.0.00000000}.{ab12}"; settings.AudioOutputId = output;
         settings.ReleaseTag = "Unfinished invalid field $";
@@ -34,6 +34,12 @@ internal static class AudioTests
             "Audio/user selections did not survive restart.");
         Check(File.ReadAllText(env).Contains("# Keep my settings\nXR_TCP_PORT=45999") && loaded.ReleaseTag == "latest",
             "Saving audio changed advanced settings or saved another unfinished form field.");
+        loaded.AudioEnabled = false; loaded.SaveAudioSelection(root); loaded.Save(root);
+        loaded = LauncherSettings.Load(root, state);
+        Check(!loaded.AudioEnabled && loaded.AudioOutputId == output && loaded.AudioSourceId == settings.AudioSourceId,
+            "Disabling audio lost device identities or did not survive a general save/restart.");
+        loaded.AudioEnabled = true; loaded.SaveAudioSelection(root);
+        Check(LauncherSettings.Load(root, state).AudioEnabled, "Enabling audio was not saved.");
         loaded.AudioOutputId = "none"; loaded.SaveAudioSelection(root); loaded.Save(root);
         Check(LauncherSettings.Load(root, state).AudioOutputId == "none", "A general save or restart undid No audio.");
         byte[] before = File.ReadAllBytes(env);
@@ -41,6 +47,13 @@ internal static class AudioTests
         try { loaded.SaveAudioSelection(root); throw new Exception("Invalid audio identity was accepted."); } catch (FormatException) { }
         Check(File.ReadAllBytes(env).SequenceEqual(before), "Invalid audio modified the settings file.");
         var known = new[] { new AudioDeviceChoice(output, "Headset"), new AudioDeviceChoice("alsa:" + new string('b', 64), "Headset") };
+        Check(AudioDeviceCatalog.OutputForStart(true, "none", [AudioDeviceChoice.None, known[0] with { Available = false }, known[1]]) == known[1].Id,
+            "Start VR failed to choose the first available Ubuntu audio output.");
+        Check(AudioDeviceCatalog.OutputForStart(true, known[1].Id, known) == known[1].Id,
+            "Start VR replaced an available saved output.");
+        Check(AudioDeviceCatalog.OutputForStart(false, "none", known) == "none" &&
+            AudioDeviceCatalog.OutputForStart(true, output, []) == output,
+            "Disabled audio or missing devices changed a saved selection.");
         var absent = AudioDeviceCatalog.Merge(known, [], output, source: false);
         Check(absent.Count == 3 && !absent.Single(item => item.Id == output).Available,
             "Disconnect forgot the identity/name or merged duplicate friendly names.");
@@ -78,6 +91,8 @@ internal static class AudioTests
         Check(!starts.Reader.TryRead(out _) && stops == 0, "Status restarted an unchanged audio session.");
         await controller.ConfigureAsync(selected with { OutputId = "none" });
         Check(!controller.Enabled && stops == 1, "No audio did not cancel playback/reconnect.");
+        await controller.ConfigureAsync(selected with { PlaybackEnabled = false });
+        Check(!controller.Enabled && !starts.Reader.TryRead(out _) && stops == 1, "Disabled audio started capture/playback despite a selected output.");
         using var lifetime = new CancellationTokenSource();
         await controller.ConfigureAsync(selected, lifetime.Token);
         await starts.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));

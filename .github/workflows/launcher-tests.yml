@@ -73,6 +73,9 @@ jobs:
       - name: Session cleanup ignores damaged or changed settings
         shell: powershell
         run: '& ./win/tests/verify-cleanup-settings.ps1'
+      - name: Confirmed Ubuntu deletion and cleanup before unregistering
+        shell: powershell
+        run: '& ./win/tests/verify-delete.ps1'
       - name: Independent platform releases and latest runtime selection
         shell: powershell
         run: '& ./win/tests/verify-release-platforms.ps1'
