@@ -13,6 +13,9 @@ namespace XrGateWsl {
         private readonly byte[] buffer = new byte[8192];
         private int start, end;
         private const int MaxLineBytes = 1024 * 1024;
+        private long lastValidation = -1000;
+        // Called on the PowerShell runspace, never a background timer thread.
+        public Action Validate { get; set; }
 
         public DeadlineLineReader(Stream stream, Stopwatch clock, int limitMilliseconds) {
             this.stream = stream;
@@ -25,6 +28,10 @@ namespace XrGateWsl {
                 while (true) {
                     int remaining = limitMilliseconds - (int)clock.ElapsedMilliseconds;
                     if (remaining <= 0) throw new TimeoutException("XR Gate TCP deadline reached.");
+                    if (Validate != null && clock.ElapsedMilliseconds - lastValidation >= 500) {
+                        Validate();
+                        lastValidation = clock.ElapsedMilliseconds;
+                    }
                     for (int i = start; i < end; i++) {
                         if (buffer[i] != 10) continue;
                         Append(line, start, i - start);
@@ -32,9 +39,15 @@ namespace XrGateWsl {
                         return new UTF8Encoding(false, true).GetString(line.ToArray()).TrimEnd('\r');
                     }
                     Append(line, start, end - start);
-                    stream.ReadTimeout = remaining;
+                    stream.ReadTimeout = Validate == null ? remaining : Math.Min(500, remaining);
                     start = 0;
-                    end = stream.Read(buffer, 0, buffer.Length);
+                    end = 0;
+                    try { end = stream.Read(buffer, 0, buffer.Length); }
+                    catch (IOException error) {
+                        var socketError = error.InnerException as System.Net.Sockets.SocketException;
+                        if (Validate != null && socketError != null && socketError.SocketErrorCode == System.Net.Sockets.SocketError.TimedOut) continue;
+                        throw;
+                    }
                     if (end == 0) {
                         if (line.Length != 0) throw new IOException("XR Gate TCP closed during a frame.");
                         return null;

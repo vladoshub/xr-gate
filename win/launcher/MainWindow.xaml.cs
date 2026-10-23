@@ -200,6 +200,7 @@ public partial class MainWindow : Window
                 // acquires its lock. Keep observing it until Status confirms exit.
                 if (result.Success) runtimeMayBeRunning = true;
                 await UpdateAudioAsync(result.Success);
+                if (!runtimeMayBeRunning) await StopCalibrationProgressAsync();
             }
             else if (action == "Status" && result.Success) await UpdateAudioAsync(runtimeMayBeRunning);
             StatusTitle.Text = result.Success ? action switch
@@ -209,7 +210,7 @@ public partial class MainWindow : Window
                 "Install" => installed ? "Installation complete" : "Finish setup",
                 "Status" => runtimeMayBeRunning ? "Tracking is running" : readiness.CanStart ? "Ready to start" : "Next setup step",
                 _ => action + " complete"
-            } : result.ExitCode == 20 ? "One more setup step" : "Action needs attention";
+            } : result.ExitCode == 20 ? "One more setup step" : action == "Run" && !runtimeMayBeRunning ? "Tracking stopped during startup" : "Action needs attention";
             StatusDetail.Text = result.Instruction.Length > 0 ? result.Instruction : action == "Status"
                 ? readiness.NextStep
                 : action == "Stop" ? "The managed runtime stopped and its USB devices were returned to Windows."
@@ -306,14 +307,14 @@ public partial class MainWindow : Window
         if (activeTask is not null) await activeTask;
     }
 
-    private Task<ActionResult> RunActionAsync(string action, bool steamVr = false, bool console = false, CancellationToken cancellation = default, TimeSpan? timeLimit = null)
+    private Task<ActionResult> RunActionAsync(string action, bool steamVr = false, bool console = false, CancellationToken cancellation = default, TimeSpan? timeLimit = null, bool quiet = false)
     {
         IReadOnlyDictionary<string, string>? parameters = action == "Pair" ? new Dictionary<string, string>
         {
             ["LeftControllerMac"] = LeftBluetoothController.SelectedValue as string ?? "none",
             ["RightControllerMac"] = RightBluetoothController.SelectedValue as string ?? "none"
         } : null;
-        return smokeAction is not null ? smokeAction(action, cancellation) : runner.RunAsync(action, steamVr, console, cancellation, timeLimit, parameters);
+        return smokeAction is not null ? smokeAction(action, cancellation) : runner.RunAsync(action, steamVr, console, cancellation, timeLimit, parameters, quiet);
     }
 
     private Task<bool> StopSessionAsync() => stopTask is { IsCompleted: false } ? stopTask : stopTask = StopSessionCoreAsync();
@@ -387,7 +388,7 @@ public partial class MainWindow : Window
 
     private void StartDeviceObservation()
     {
-        if (smoke || closing || resourcesReleased || busyAction.Length > 0 || configurationProblem is not null || deviceObservation is { IsCompleted: false }) return;
+        if (smoke || closing || resourcesReleased || busyAction is not ("" or "Run") || configurationProblem is not null || deviceObservation is { IsCompleted: false }) return;
         deviceObservation = ObserveDeviceAsync();
     }
 
@@ -397,16 +398,25 @@ public partial class MainWindow : Window
         {
             await DetectHardwareAsync();
             if (closing) return;
-            var result = await runner.RunAsync("DeviceStatus", cancellation: deviceCancellation.Token);
+            var result = await RunActionAsync("DeviceStatus", cancellation: deviceCancellation.Token, quiet: true);
             if (result.Success && !closing) ApplyDeviceObservation(result.Data);
             else if (!closing) { readiness.DeviceConnected = false; UpdateReadinessUi(); DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = result.Instruction; }
-            if (!closing && (runtimeMayBeRunning || !readiness.Known))
+            // Startup owns its process watch. Do not race a just-created console
+            // with a Status poll before it can acquire the Linux runtime lock.
+            if (!closing && busyAction.Length == 0 && (runtimeMayBeRunning || !readiness.Known))
             {
-                var runtime = await runner.RunAsync("Status", cancellation: deviceCancellation.Token, timeLimit: TimeSpan.FromSeconds(15));
+                bool wasRunning = runtimeMayBeRunning;
+                var runtime = await RunActionAsync("Status", cancellation: deviceCancellation.Token, timeLimit: TimeSpan.FromSeconds(15), quiet: true);
+                if (closing || busyAction.Length > 0) return;
                 if (runtime.Success) { ApplyStatus(runtime.Data, diagnosticLog: false); UpdateReadinessUi(); }
-                if (runtime.Success && !runtimeMayBeRunning)
+                if (runtime.Success && wasRunning && !runtimeMayBeRunning)
                 {
                     await StopCalibrationProgressAsync(); await StopAudioAsync(); SetBusy(busyAction);
+                    StatusTitle.Text = "Tracking stopped";
+                    StatusDetail.Text = runtime.Data.TryGetProperty("runtime_exit_message", out var reason) && reason.ValueKind == JsonValueKind.String
+                        ? reason.GetString() : "XR Gate exited in Ubuntu. See the activity log; use Stop tracking & return USB before retrying.";
+                    if (runtime.Data.TryGetProperty("runtime_log_tail", out var lines) && lines.ValueKind == JsonValueKind.Array)
+                        foreach (var line in lines.EnumerateArray()) Log("[Runtime] " + line.GetString());
                     Log("[Launcher] Tracking exited; audio stopped. Use Stop tracking & return USB to return devices.");
                 }
             }

@@ -197,6 +197,15 @@ function Invoke-Linux([string]$Operation, $Request, [switch]$AsRoot, [switch]$Ca
     if ($AsRoot) { $a += @('--user', 'root') }
     else { $a += @('--user', [string]$script:State.LinuxUser) }
     $a += @('--exec', 'python3', $script:LinuxHelperPath, $Operation, (To-Base64Json $Request))
+    if ($Operation -eq 'run' -and $Launcher -and (Get-XrSetting 'XR_SHOW_COMMAND_PROMPT' '0') -ne '1') {
+        # The long-lived Runtime process owns both the WSL client and log files.
+        # Redirecting from the transient Run process would lose its pipe readers
+        # when Start VR returns. Visible consoles keep their interactive stdin.
+        $files = Get-RuntimeWindowFiles (Read-RuntimeWindow)
+        $script:LinuxExitCode = Invoke-LoggedRuntime -Arguments $a -Files $files
+        if ($script:LinuxExitCode -notin @(0,20)) { throw "Linux helper '$Operation' failed (exit $script:LinuxExitCode). See the runtime log above." }
+        return
+    }
     if ($Capture) { $output = @(& (Get-Tool 'wsl.exe') @a) } else { & (Get-Tool 'wsl.exe') @a }
     $script:LinuxExitCode = $LASTEXITCODE
     if ($LASTEXITCODE -notin @(0,20)) { throw "Linux helper '$Operation' failed (exit $LASTEXITCODE). See the message above." }
@@ -685,57 +694,72 @@ function Register-XrDriver([switch]$AllowDeferred) {
     Invoke-Native $reg @('show')
     $script:State.RegisteredDriver = $script:State.DriverPath; Save-State
 }
-function Wait-XrStream([int]$Seconds) {
+function Wait-XrStream([int]$Seconds, $RuntimeWindow = $null) {
     if (!('XrGateWsl.DeadlineLineReader' -as [type])) {
         Add-Type -Path (Join-Path $PSScriptRoot 'windows/DeadlineLineReader.cs')
     }
     $clock = [Diagnostics.Stopwatch]::StartNew(); $lastError = 'No connection.'; $sawFrames = $false
-    while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
-        $client = New-Object Net.Sockets.TcpClient
-        try {
-            $pending = $client.BeginConnect($script:TcpHost,$script:TcpPort,$null,$null)
-            try {
-                $remaining = [Math]::Max(1, [Math]::Min(1500, ($Seconds * 1000 - [int]$clock.ElapsedMilliseconds)))
-                if (!$pending.AsyncWaitHandle.WaitOne([int]$remaining)) { throw 'Connection timeout.' }
-                $client.EndConnect($pending)
-            } finally { $pending.AsyncWaitHandle.Close() }
-            $reader = New-Object XrGateWsl.DeadlineLineReader($client.GetStream(), $clock, ($Seconds * 1000))
-            $helloLine = $reader.ReadLine()
-            if (!$helloLine) { throw 'No XR Gate hello.' }
-            $hello = $helloLine | ConvertFrom-Json
-            if ($hello.protocol -ne 'xr_gate_app_v1') { throw 'The configured TCP endpoint is serving a different protocol.' }
-            $lastSequence = ''; $lastPoseSource = ''; $valid = 0
-            while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
-                $line = $reader.ReadLine(); if (!$line) { throw 'TCP stream closed.' }
-                $frame = $line | ConvertFrom-Json
-                if ($frame.type -ne 'frame') { continue }
-                $sawFrames = $true; $sequence = [string]$frame.sequence
-                if ($sequence -eq $lastSequence) { $valid = 0; continue }
-                $lastSequence = $sequence
-                if ($frame.hmd -and $frame.hmd.pose_valid -eq $true) {
-                    $source = [string]$frame.hmd.source_timestamp_ns
-                    if ($source -and $source -ne '0' -and $source -ne $lastPoseSource) {
-                        $valid++; $lastPoseSource = $source
-                    }
-                } else { $valid = 0; $lastPoseSource = '' }
-                if ($valid -ge 3) {
-                    Write-Host 'OK: xr_gate_app_v1, updating sequence, HMD pose_valid=true.' -ForegroundColor Green; return
-                }
-            }
-        } catch { $lastError = $_.Exception.Message }
-        finally { $client.Close() }
-        $remaining = $Seconds * 1000 - [int]$clock.ElapsedMilliseconds
-        if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(400, $remaining)) }
+    $owner = $null
+    if ($RuntimeWindow) {
+        $owner = Get-RuntimeWindowProcess $RuntimeWindow
+        if (!$owner) { Show-RuntimeExit $RuntimeWindow }
     }
-    if ($sawFrames) { throw 'TCP frames arrived, but fresh valid HMD poses were not observed. Check the xr_client console/startup gate.' }
-    throw "XR Gate TCP is not ready: $lastError Check the xr_client console and WSL localhost forwarding."
+    try {
+        while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
+            if ($owner -and $owner.HasExited) { Show-RuntimeExit $RuntimeWindow }
+            $client = New-Object Net.Sockets.TcpClient
+            try {
+                $pending = $client.BeginConnect($script:TcpHost,$script:TcpPort,$null,$null)
+                try {
+                    $remaining = [Math]::Max(1, [Math]::Min(1500, ($Seconds * 1000 - [int]$clock.ElapsedMilliseconds)))
+                    if (!$pending.AsyncWaitHandle.WaitOne([int]$remaining)) { throw 'Connection timeout.' }
+                    $client.EndConnect($pending)
+                } finally { $pending.AsyncWaitHandle.Close() }
+                $reader = New-Object XrGateWsl.DeadlineLineReader($client.GetStream(), $clock, ($Seconds * 1000))
+                if ($owner) {
+                    $reader.Validate = [Action]({ if ($owner.HasExited) { throw 'The managed XR Gate process exited.' } }.GetNewClosure())
+                }
+                $helloLine = $reader.ReadLine()
+                if (!$helloLine) { throw 'No XR Gate hello.' }
+                $hello = $helloLine | ConvertFrom-Json
+                if ($hello.protocol -ne 'xr_gate_app_v1') { throw 'The configured TCP endpoint is serving a different protocol.' }
+                $lastSequence = ''; $lastPoseSource = ''; $valid = 0
+                while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
+                    $line = $reader.ReadLine(); if (!$line) { throw 'TCP stream closed.' }
+                    $frame = $line | ConvertFrom-Json
+                    if ($frame.type -ne 'frame') { continue }
+                    $sawFrames = $true; $sequence = [string]$frame.sequence
+                    if ($sequence -eq $lastSequence) { $valid = 0; continue }
+                    $lastSequence = $sequence
+                    if ($frame.hmd -and $frame.hmd.pose_valid -eq $true) {
+                        $source = [string]$frame.hmd.source_timestamp_ns
+                        if ($source -and $source -ne '0' -and $source -ne $lastPoseSource) {
+                            $valid++; $lastPoseSource = $source
+                        }
+                    } else { $valid = 0; $lastPoseSource = '' }
+                    if ($valid -ge 3) {
+                        Write-Host 'OK: xr_gate_app_v1, updating sequence, HMD pose_valid=true.' -ForegroundColor Green; return
+                    }
+                }
+            } catch { $lastError = $_.Exception.Message }
+            finally { $client.Close() }
+            if ($owner -and $owner.HasExited) { Show-RuntimeExit $RuntimeWindow }
+            $remaining = $Seconds * 1000 - [int]$clock.ElapsedMilliseconds
+            if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(400, $remaining)) }
+        }
+        if ($sawFrames) { throw 'TCP frames arrived, but fresh valid HMD poses were not observed. Check the xr_client console/startup gate.' }
+        throw "XR Gate TCP is not ready: $lastError Check the xr_client console and WSL localhost forwarding."
+    } finally { if ($owner) { $owner.Dispose() } }
 }
 function Start-RuntimeWindow {
     $old = Get-RuntimeWindowProcess (Read-RuntimeWindow)
     if ($old) { $old.Dispose(); throw 'A tracking console is still starting or stopping. Click Stop before retrying.' }
     $token = [Guid]::NewGuid().ToString('N')
+    $files = Get-RuntimeWindowFiles ([pscustomobject]@{Token=$token})
     $body = '& ' + (Quote-PsLiteral $script:Self) + ' -Action Runtime -RuntimeLaunchToken ' + (Quote-PsLiteral $token)
+    $body += ' -ResultPath ' + (Quote-PsLiteral $files.Result)
     if ($Launcher) { $body += ' -Launcher' }
+    $body += '; exit $LASTEXITCODE'
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))
     $arguments = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
     if (!$Launcher) { $arguments = @('-NoExit') + $arguments }
@@ -829,6 +853,11 @@ try {
         if ($window) {
             try { $script:ActionData['starting'] = !$status.running -and !$windowRecord.Stopping }
             finally { $window.Dispose() }
+        }
+        if (!$status.running -and !$script:ActionData['starting'] -and $windowRecord -and !$windowRecord.Stopping) {
+            $exit = Get-RuntimeExitObservation $windowRecord
+            $script:ActionData['runtime_exit_message'] = $exit.message
+            $script:ActionData['runtime_log_tail'] = $exit.log_tail
         }
         $displayObservation = Get-XrDisplayObservation
         $script:ActionData['display_frequency_hz'] = $displayObservation.frequency_hz
@@ -924,16 +953,23 @@ try {
             $status = (Invoke-Linux -Operation status -Request (New-LinuxRequest) -Capture) | ConvertFrom-Json
             if (!$status.installed) { throw 'Linux runtime is not installed. Run -Action Install.' }
             if ($status.PSObject.Properties['busy'] -and $status.busy -and !$status.running) { throw 'Controller setup is still running. Finish it or click Stop before starting VR.' }
+            $runtimeWindow = $null
             if (!$status.running) {
                 Connect-SelectedUsb; Save-State; Start-RuntimeWindow
+                $runtimeWindow = Read-RuntimeWindow
                 if (!$Launcher -or (Get-XrSetting 'XR_SHOW_COMMAND_PROMPT') -eq '1') {
                     Write-Step 'xr_client opened in a separate console. Complete its startup prompts there.'
                 } else { Write-Step 'xr_client started in the background. Use Show command prompt before starting when console calibration is needed.' }
-            } else { Write-Step 'The managed xr_client is already running.' }
+            } else {
+                Write-Step 'The managed xr_client is already running.'
+                $record = Read-RuntimeWindow
+                $owner = Get-RuntimeWindowProcess $record
+                if ($owner) { $runtimeWindow = $record; $owner.Dispose() }
+            }
             if ($StartSteamVR) {
                 Ensure-XrDriverRegistration
                 Write-Step 'Waiting for valid updating HMD poses before starting SteamVR...'
-                Wait-XrStream $TimeoutSeconds; Start-Process 'steam://rungameid/250820'
+                Wait-XrStream $TimeoutSeconds -RuntimeWindow $runtimeWindow; Start-Process 'steam://rungameid/250820'
             }
         }
         'Runtime' { Invoke-Linux -Operation run -Request (New-LinuxRequest) }

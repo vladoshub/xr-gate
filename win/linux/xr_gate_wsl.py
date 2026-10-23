@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import struct
 import sys
 import tarfile
 import tempfile
@@ -51,6 +52,20 @@ def package_path(package, relative):
 
 def log(message):
     print("[XR Gate WSL] " + message, flush=True)
+
+
+def is_video_capture(path):
+    """QUERYCAP does not start streaming or consume a camera frame."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        capability = bytearray(104)  # struct v4l2_capability from videodev2.h
+        fcntl.ioctl(descriptor, 0x80685600, capability, True)  # VIDIOC_QUERYCAP
+        flags = struct.unpack_from("=I", capability, 84)[0]
+        if flags & 0x80000000:  # V4L2_CAP_DEVICE_CAPS
+            flags = struct.unpack_from("=I", capability, 88)[0]
+        return bool(flags & (0x00000001 | 0x00001000))  # capture / capture mplane
+    finally:
+        os.close(descriptor)
 
 
 def check_runtime_guard(request):
@@ -582,22 +597,52 @@ class Runtime:
         for subsystem in ("video4linux", "hidraw", "tty", "input", "sound"):
             run(["udevadm", "trigger", "--subsystem-match=" + subsystem], check=False)
         deadline = time.monotonic() + 8
+        waiting_reported = False
         while True:
             nodes, cameras, hids = self.device_nodes()
             missing_camera = self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras
             missing_hid = self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids
-            if not (missing_camera or missing_hid):
+            pending = [str(node) for node in nodes if not node.is_char_device()]
+            if not (missing_camera or missing_hid or pending):
                 break
             if time.monotonic() >= deadline:
-                raise RuntimeError("Selected camera/HID was not found. Check the hardware env, USB attach and -Action Doctor.")
+                detail = ", ".join(pending) or ("camera" if missing_camera else "HID")
+                raise RuntimeError("Selected USB camera/HID is not ready: " + detail +
+                                   ". lsusb alone does not confirm the Linux device nodes. Check the hardware preset and Diagnostics.")
+            if not waiting_reported:
+                log("Waiting for the selected USB camera/HID device nodes...")
+                waiting_reported = True
             time.sleep(0.25)
         for node in nodes:
             if not node.is_char_device():
                 raise RuntimeError("Device is missing or is not a character device: " + str(node))
             run(["setfacl", "-m", f"u:{self.user}:rw", node])
         log("Selected USB/input device access granted to " + self.user)
+        camera = self.capture_device()
+        if camera:
+            log("Capture camera: " + camera + " (V4L2 video capture, not metadata).")
         if self.cfg.get("bluetooth"):
             self.wait_for_bluetooth()
+
+    def capture_device(self):
+        requested = self.settings.get("XR_CAMERA_DEVICE", "")
+        if not requested and self.settings.get("XR_CAMERA_AUTO_SELECT", "0") != "1":
+            return ""  # Custom/dual-camera profiles may own their selection.
+        candidates = [Path(requested)] if requested else self.device_nodes()[1]
+        capture, errors = [], []
+        for candidate in candidates:
+            try:
+                if is_video_capture(candidate):
+                    capture.append(candidate)
+            except OSError as error:
+                errors.append(str(candidate) + ": " + str(error))
+        if len(capture) == 1:
+            return str(capture[0])
+        if len(capture) > 1:
+            raise RuntimeError("Multiple video capture nodes match the configured USB device: " +
+                               ", ".join(map(str, capture)) + ". Select XR_CAMERA_DEVICE explicitly; no unrelated camera was selected.")
+        detail = "; ".join(errors) or ", ".join(map(str, candidates)) or "no video nodes for the configured USB IDs"
+        raise RuntimeError("USB enumeration alone does not provide a working camera. No usable V4L2 capture node: " + detail)
 
     def firmware(self, operation, *, capture=False, timeout=None):
         helper = Path(__file__).with_name("wsl_firmware.py")
@@ -723,6 +768,12 @@ class Runtime:
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+        camera = self.capture_device()
+        if camera:
+            # This is the capture binary's existing environment override. Do not
+            # edit release YAML or assume /dev/video0 remains the same device.
+            env["CPP_CAPTURE_VIDEO_DEVICE"] = camera
+            log("Capture will open " + camera)
         if self.settings.get("XR_CONTROLLER_MODE") == "gearvr":
             env["XR_GATE_CONTROLLER_INPUT"] = "1"
         elif self.settings.get("XR_CONTROLLER_MODE") == "gestures":
@@ -751,6 +802,8 @@ class Runtime:
         try:
             code = supervise_runtime(args, env, session, graceful_seconds=30 if kind == "runtime" else 2)
             if code and (kind != "runtime" or code not in (-signal.SIGTERM, -signal.SIGINT, 130, 143)):
+                if kind == "runtime":
+                    self.failure_logs(session["started_ns"])
                 raise RuntimeError("xr_client exited with code " + str(code))
             return code
         finally:
@@ -759,6 +812,33 @@ class Runtime:
             if not owned_processes(session):
                 session_path.unlink(missing_ok=True)
             handle.close()
+
+    def failure_logs(self, started_ns):
+        """Bounded current-run service errors also reach the hidden runtime log."""
+        try:
+            paths = sorted((self.base / "logs").glob("*.log"), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        except OSError:
+            return
+        emitted = 0
+        for path in paths:
+            try:
+                if path.stat().st_mtime_ns < started_ns:
+                    continue
+                with path.open("rb") as stream:
+                    stream.seek(max(0, path.stat().st_size - 32768))
+                    lines = stream.read(32768).decode("utf-8", errors="replace").splitlines()
+                errors = [line for line in lines if re.search(r"error|failed|denied|not found|timeout", line, re.I)]
+                selected = (errors or lines)[-8:]
+                if not selected:
+                    continue
+                log("Last service output: " + path.name)
+                for line in selected:
+                    print(line[:1500], flush=True)
+                emitted += 1
+                if emitted >= 4:
+                    break
+            except OSError:
+                continue
 
     def stop(self):
         self.user_required()

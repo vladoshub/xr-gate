@@ -14,6 +14,7 @@ public partial class MainWindow
         configurationProblem = null;
         UpdateRecoveryUi();
         await VerifySetupUiAsync();
+        await VerifyRuntimeObservationAsync();
         if (!MainTabs.Items.Cast<TabItem>().Select(tab => tab.Header?.ToString()).SequenceEqual(new[] { "Run", "Controllers", "Audio", "Settings", "Tools" }) || Icon is null)
             throw new InvalidOperationException("The tab order, labels or application icon is missing.");
         MainTabs.SelectedItem = ControllersTab;
@@ -195,5 +196,44 @@ public partial class MainWindow
             notices[0].Foreground.ToString() != "#FFFF6666" || notices[2].Foreground != System.Windows.Media.Brushes.LightGreen)
             throw new InvalidOperationException("Calibration log must show two red stages and one green confirmation without repeats.");
         smokeConfirmation = null; smokeAction = null;
+    }
+
+    private async Task VerifyRuntimeObservationAsync()
+    {
+        var releaseStartup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int statusCalls = 0;
+        JsonElement stopped = JsonSerializer.SerializeToElement(new
+        {
+            installed = true, setup_complete = true, running = false, starting = false,
+            display_selected = true, display_connected = true, device_status = "SHARED",
+            runtime_exit_message = "fixture camera unavailable", runtime_log_tail = new[] { "capture failed" }
+        });
+        smokeAction = async (action, cancellation) =>
+        {
+            if (action == "Run")
+            {
+                await releaseStartup.Task.WaitAsync(cancellation);
+                return new ActionResult { ExitCode = 1, Message = "fixture camera unavailable" };
+            }
+            if (action == "Status") statusCalls++;
+            return new ActionResult { ExitCode = 0, Data = stopped };
+        };
+        Task<bool> pending = ExecuteAsync("Run", steamVr: true, saveSettings: false);
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        await ObserveDeviceAsync();
+        if (DeviceConnectionStatus.Text != "TRACKING" || statusCalls != 0 || StartButton.IsEnabled)
+            throw new InvalidOperationException("Startup must refresh USB status without racing the Linux startup lock.");
+        releaseStartup.SetResult();
+        if (await pending || busyAction.Length != 0 || StatusTitle.Text != "Tracking stopped during startup")
+            throw new InvalidOperationException("Runtime failure left startup busy or failed to show a stopped state.");
+        runtimeMayBeRunning = resourcesMayBeOwned = true;
+        await ObserveDeviceAsync();
+        if (runtimeMayBeRunning || StatusTitle.Text != "Tracking stopped" || StatusDetail.Text != "fixture camera unavailable" || !StopButton.IsEnabled)
+            throw new InvalidOperationException("Unexpected runtime exit did not update the banner and retain USB cleanup.");
+        int previousCalls = statusCalls;
+        await ObserveDeviceAsync();
+        if (statusCalls != previousCalls) throw new InvalidOperationException("A stopped runtime kept repeating its exit notifications.");
+        resourcesMayBeOwned = false;
+        smokeAction = null; SetBusy("");
     }
 }

@@ -106,6 +106,9 @@ try
               logs.Any(line => line.Contains("Проверка предупреждения")) &&
               logs.Any(line => line.Contains("Проверка сообщения об ошибке")), "A PowerShell host/warning/error message was lost or its Cyrillic text was corrupted.");
         Check(!logs.Any(line => line.Contains("CLIXML") || line.Contains("<Objs") || line.Contains("<ToString>")), "Raw PowerShell CLIXML was displayed in the activity log.");
+        int beforeQuiet = logs.Count;
+        Check((await runner.RunAsync("Status", quiet: true)).Success && logs.Count == beforeQuiet,
+            "Read-only background status flooded the activity log or lost its structured result.");
         File.WriteAllText(Path.Combine(bridge, "XrGate-Wsl.ps1"), script.Replace("exit 0", "Start-Sleep -Seconds 30\nexit 0"), new UTF8Encoding(true));
         bool timedOut = false;
         try { await runner.RunAsync("Doctor", timeLimit: TimeSpan.FromSeconds(2)).WaitAsync(TimeSpan.FromSeconds(8)); }

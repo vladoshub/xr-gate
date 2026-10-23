@@ -27,3 +27,5 @@ Bluetooth was tested with ASUS USB-BT500. Use a separate adapter to keep Windows
 Hardware presets are in hardware/*.env; Advanced settings opens .env. The supplied PowerShell and Linux helpers are required by the launcher. Separate .cmd/.bat launchers are no longer included.
 
 If startup is blocked, follow [Next] in Activity Log. For problems, use Tools → Diagnostics and Save log in Run.
+
+For custom hardware, `XR_CAMERA_DEVICE` selects the primary camera; `XR_CAMERA_AUTO_SELECT=1` discovers a unique capture node using `XR_USB_IDS`. Keep automatic selection off for profiles that select their own cameras, such as dual-camera layouts.

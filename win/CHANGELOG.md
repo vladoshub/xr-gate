@@ -1,3 +1,10 @@
+## Runtime exit and camera selection
+
+- Stop waiting for TCP when the owned runtime exits; keep device status live during startup.
+- Report unexpected exits and current-session startup errors in Activity Log, including with a hidden console.
+- Pass XR_CAMERA_DEVICE to capture and optionally discover the actual capture node using configured USB IDs.
+- Wait for Linux device nodes after attachment, exclude V4L2 metadata nodes and require HID for the supplied XREAL preset.
+
 ## Guided Windows setup
 
 - Select the connected glasses display before Install; block Start VR until setup, display and device are ready.
