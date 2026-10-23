@@ -10,11 +10,11 @@ import tempfile
 from zipfile import ZipFile, ZIP_DEFLATED
 
 ROOT_NAME = "xr-gate-windows-wsl-usbip"
-REQUIRED = ("XR-Gate.exe", "INSTALL.cmd", "RUN.cmd", "STOP.cmd", "DISPLAY.cmd", "USB.cmd", "XrGate-Wsl.ps1",
+REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             ".env.example", "windows/Environment.ps1",
             "windows/Display.ps1", "windows/Driver.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
-            "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1",
-            "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
+            "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1",
+            "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/runtime_progress.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
             "README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html")
 
 
@@ -53,7 +53,7 @@ def copy_installer(source, bundle, launcher, release_tag):
         if not path.is_file() or any(part.startswith(".") or part == "__pycache__" for part in relative.parts):
             continue
         if relative.parts[0] not in ("windows", "linux", "hardware") and not (
-            len(relative.parts) == 1 and path.suffix in (".cmd", ".ps1", ".md", ".html")
+            len(relative.parts) == 1 and path.suffix in (".ps1", ".md", ".html")
         ):
             continue
         target = bundle / relative
@@ -184,7 +184,7 @@ def build(source, drivers, output, frequencies, modes, release_tag="latest", *, 
                 raise FileNotFoundError("Selected Windows driver was not built: " + str(package))
             target = bundle / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(package, target)
+            shutil.copytree(package, target, ignore=shutil.ignore_patterns("*.cmd", "*.bat"))
             entries.append({"frequency_hz": hz, "display_mode": mode, "path": relative})
         (bundle / "bundle.json").write_text(json.dumps({
             "schema": 1, "release_tag": release_tag, "variants": entries, "launcher": launcher_metadata,

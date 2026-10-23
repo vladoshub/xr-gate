@@ -139,7 +139,7 @@ class Firmware:
 
     def apply_locked(self):
         if not self.source.is_dir():
-            raise FileNotFoundError("Firmware directory not found: " + str(self.source) + ". Run Install / continue with Bluetooth enabled.")
+            raise FileNotFoundError("Firmware directory not found: " + str(self.source) + ". Click Install with Bluetooth enabled.")
         for name in self.requested_files():
             self.materialize(name)
         self.destination.mkdir(parents=True, exist_ok=True)

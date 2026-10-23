@@ -9,19 +9,19 @@ function Select-DesktopDisplay([object[]]$Displays, [string]$Name = '', [string]
         $matches = @($Displays | Where-Object { $_.DeviceName -eq $Name })
     } elseif ($SavedId) {
         $matches = @($Displays | Where-Object { $_.DeviceId -eq $SavedId })
-    } else { throw 'Select the glasses with DISPLAY.cmd first.' }
+    } else { throw 'Click Select glasses display first.' }
     if ($matches.Count -ne 1) {
-        throw 'The selected display is missing or duplicated. Use Extend in Windows, enable SBS, then run DISPLAY.cmd.'
+        throw 'The selected display is missing or duplicated. Use Extend in Windows, enable SBS, then click Select glasses display.'
     }
     # Cloned monitors share the same GDI device; an independent output is needed.
     if (@($Displays | Where-Object { $_.DeviceName -eq $matches[0].DeviceName }).Count -ne 1) {
-        throw 'Use Extend these displays in Windows instead of Duplicate, then run DISPLAY.cmd.'
+        throw 'Use Extend these displays in Windows instead of Duplicate, then click Select glasses display.'
     }
     return $matches[0]
 }
 function Assert-SbsDisplay($Display) {
     if ($Display.Width -ne (Get-XrInteger 'XR_WINDOW_WIDTH') -or $Display.Height -ne (Get-XrInteger 'XR_WINDOW_HEIGHT')) {
-        throw ('Select the resolution from your hardware env in Windows Display settings, then run DISPLAY.cmd. Current: ' + $Display.Width + 'x' + $Display.Height)
+        throw ('Select the resolution from your hardware env in Windows Display settings, then click Select glasses display. Current: ' + $Display.Width + 'x' + $Display.Height)
     }
     if ([Math]::Abs($Display.Frequency - [int]$script:State.FrequencyHz) -gt 1) {
         throw ('Select ' + $script:State.FrequencyHz + ' Hz for the glasses in Windows, or install the matching -FrequencyHz driver.')
@@ -29,12 +29,12 @@ function Assert-SbsDisplay($Display) {
 }
 function Get-SteamVrSettingsPath {
     $vpath = Join-Path $env:LOCALAPPDATA 'openvr\openvrpaths.vrpath'
-    if (!(Test-Path -LiteralPath $vpath)) { throw 'Open SteamVR once, close it, then run DISPLAY.cmd.' }
+    if (!(Test-Path -LiteralPath $vpath)) { throw 'Open SteamVR once, close it, then click Select glasses display.' }
     $paths = Get-Content -Encoding UTF8 -Raw -LiteralPath $vpath | ConvertFrom-Json
-    if (!$paths.PSObject.Properties['config']) { throw 'OpenVR has no config path. Open SteamVR once, close it, then run DISPLAY.cmd.' }
+    if (!$paths.PSObject.Properties['config']) { throw 'OpenVR has no config path. Open SteamVR once, close it, then click Select glasses display.' }
     $folders = @($paths.config | Where-Object { $_ })
     if (!$folders.Count -or !(Test-Path -LiteralPath $folders[0] -PathType Container)) {
-        throw 'The SteamVR configuration folder was not found. Open SteamVR once, close it, then run DISPLAY.cmd.'
+        throw 'The SteamVR configuration folder was not found. Open SteamVR once, close it, then click Select glasses display.'
     }
     return Join-Path $folders[0] 'steamvr.vrsettings'
 }
@@ -46,7 +46,7 @@ function Assert-SteamVrStopped {
 function Set-XrDisplaySettings([int]$X, [int]$Y, [string]$Mode) {
     Assert-SteamVrStopped
     $settings = Join-Path $script:State.DriverPath 'resources\settings\default.vrsettings'
-    if (!(Test-Path -LiteralPath $settings -PathType Leaf)) { throw 'Run INSTALL.cmd before DISPLAY.cmd.' }
+    if (!(Test-Path -LiteralPath $settings -PathType Leaf)) { throw 'Click Install before starting VR.' }
     $steamSettings = Get-SteamVrSettingsPath
     $request = New-LinuxRequest
     $request.driver_settings = ConvertTo-WslPath $settings
@@ -66,7 +66,7 @@ function Set-SbsDisplay($Display) {
     Save-State
     Write-Step ('SBS output: ' + $Display.DeviceName + ', ' + $Display.Width + 'x' + $Display.Height + ' @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
 }
-function Choose-SbsDisplay {
+function Choose-SbsDisplay([switch]$SelectOnly) {
     Assert-SteamVrStopped
     $displays = @(Get-DesktopDisplays)
     if (!$displays.Count) { throw 'No desktop monitor found. Disable Direct Mode in SteamVR, close SteamVR, enable SBS, and choose Extend in Windows.' }
@@ -83,7 +83,13 @@ function Choose-SbsDisplay {
         if (![int]::TryParse($answer, [ref]$number) -or $number -lt 1 -or $number -gt $displays.Count) { throw 'Invalid display selection.' }
         $selected = Select-DesktopDisplay -Displays $displays -Name $displays[$number - 1].DeviceName
     }
-    Set-SbsDisplay $selected
+    if ($SelectOnly) {
+        $script:State.DisplayDeviceId = [string]$selected.DeviceId
+        $script:State.DisplayDeviceName = [string]$selected.DeviceName
+        if ([int]$selected.Frequency -gt 1) { $script:State.FrequencyHz = [int]$selected.Frequency }
+        Save-State
+        Write-Step ('Selected glasses display: ' + $selected.DeviceName + ' @ ' + $selected.Frequency + ' Hz.')
+    } else { Set-SbsDisplay $selected }
 }
 function Update-SavedSbsDisplay {
     if ($DisplayName) {

@@ -13,7 +13,7 @@ public partial class MainWindow
         bindingHardwareChoices = true;
         try
         {
-            hardwareChoices = HardwarePresetChoice.Load(root, settings.HardwareEnv, message => pendingLog.Enqueue("[Hardware] " + message));
+            hardwareChoices = HardwarePresetChoice.Load(root, settings.HardwareEnv, message => pendingLog.Enqueue(new("[Hardware] " + message)));
             HardwarePresetBox.ItemsSource = hardwareChoices;
             HardwarePresetBox.SelectedValue = hardwareChoices.FirstOrDefault(choice => HardwarePresetChoice.SamePath(root, choice.Path, settings.HardwareEnv))?.Path;
         }

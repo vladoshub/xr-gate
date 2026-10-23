@@ -1,121 +1,26 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XR Gate — Windows</title><style>body{margin:0;background:#f2f5f8;color:#162438;font:16px/1.65 "Segoe UI",Arial,sans-serif}article{max-width:940px;margin:32px auto;background:#fff;padding:36px 54px 48px;border-radius:14px;box-shadow:0 6px 26px #1624380d}h1{font-size:30px;line-height:1.25;margin-top:26px}h2{margin-top:38px;border-top:1px solid #e0e7ee;padding-top:22px;font-size:23px}h3{font-size:18px;margin-top:28px}pre{background:#101d2f;color:#edf5ff;padding:17px 20px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 Consolas,monospace}a{color:#075eb4;overflow-wrap:anywhere}li{margin:8px 0}strong{font-weight:650}.languages{display:flex;gap:8px}.languages a{padding:6px 16px;border-radius:7px;text-decoration:none;background:#edf2f7}.languages a[aria-current=page]{background:#163e69;color:white}@media(max-width:650px){article{margin:0;padding:24px 18px;border-radius:0}h1{font-size:26px}}@media print{body{background:white}article{box-shadow:none;padding:0;margin:0}.languages{display:none}pre{background:#edf1f5;color:black}h2{break-after:avoid}pre,li{break-inside:avoid}}</style></head><body><article>
-<nav class="languages" aria-label="Language"><a href="START-HERE.html" lang="en" aria-current="page">English</a><a href="START-HERE.ru.html" lang="ru">Русский</a></nav>
-<h1>XR Gate on Windows</h1>
-<h2>Desktop launcher</h2>
-<p>The app header links to the <a href="https://github.com/vladoshub/xr-gate">project</a> and displays the name from <code>XR_DEVICE_NAME</code> (<strong>Device: XREAL ULTRA</strong> in the XREAL preset). USB states are <strong>CONNECTED</strong> (available to Windows), <strong>TRACKING</strong> (attached to WSL) and <strong>NOT CONNECTED</strong> (not found).</p><p><strong>Attach USB devices</strong> supports <strong>Cancel USB operation</strong>; closing the window also cancels it. Each usbipd command stops after 30 seconds (<code>XR_USB_COMMAND_TIMEOUT</code> in <code>.env</code>, 5–120 seconds); the desktop USB action stops after three minutes. Some selected devices may already be attached after cancellation: check <strong>List USB devices</strong>, reconnect the selected adapter if necessary, and retry. Leave Bluetooth BUSID empty for automatic VID:PID selection after a reboot or port change.</p>
-<p>Extract the complete Windows ZIP and open <strong>XR-Gate.exe</strong>. .NET 10 is included; no separate .NET installation is needed. Keep the supplied scripts and subfolders next to the executable.</p>
-<ol>
-<li>In <strong>Settings</strong>, review the detected hardware preset or select one manually. Bluetooth and controller input are in <strong>Controllers</strong>. Hardware identifiers, modules, paths, geometry and controller profiles stay in <code>hardware/*.env</code> and <code>.env</code>.</li>
-<li>Click <strong>Install / continue</strong>. Follow the displayed Windows restart, first Ubuntu login or Ubuntu restart instructions, then continue installation.</li>
-<li>Enable SBS and <strong>Extend these displays</strong> in Windows. Close SteamVR and use <strong>Select glasses display</strong> if automatic identification is unavailable.</li>
-<li>Click <strong>Start VR</strong>. Enable <strong>Settings → Show command prompt</strong> before starting if console calibration commands are needed. SteamVR starts after fresh valid head poses arrive; WSL stays active while the launcher is open.</li>
-<li>Use <strong>Stop tracking &amp; return USB</strong> to stop the managed session. Closing the launcher also requests a clean stop.</li>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XR Gate for Windows</title><style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:850px;margin:32px auto;padding:0 22px;background:#101b2a;color:#e8eff8}
+a{color:#8acaff}li{margin:10px 0}h1,h2{line-height:1.25}strong{color:white}
+</style></head><body>
+<h1>XR Gate for Windows</h1>
+<p>XR Gate runs through the Windows Subsystem for Linux (WSL 2). The Windows launcher includes .NET.</p>
+<p><a href="START-HERE.html">English</a> · <a href="START-HERE.ru.html">Русский</a> · <a href="https://github.com/vladoshub/xr-gate">GitHub</a></p>
+<p>Install SteamVR, open it once and close it. Extract the complete xr-gate-windows-wsl-usbip.zip and open XR-Gate.exe. Keep the supplied folders together.</p>
+<h2>Start</h2><ol>
+<li><strong>Select glasses display</strong> — Connect the glasses. In Windows choose Extend these displays and enable the glasses’ SBS mode. In Run, click Select glasses display and choose their display number. Install stays disabled until the selected display is connected.</li>
+<li><strong>Install</strong> — Confirm installation of WSL, Ubuntu and XR Gate. Follow the Ubuntu first-login prompts if shown. Accept a restart when ready; after reboot, open XR Gate to continue unfinished setup. Install becomes Update when setup is complete.</li>
+<li><strong>Start VR</strong> — Available after installation, display selection and device connection. USB connects automatically. Stop tracking &amp; return USB, or close the launcher, to stop the session and return the devices.</li>
 </ol>
-<p>The driver follows the current glasses refresh rate. An unsupported or unknown frequency selects <strong>60 Hz with a warning</strong>. For an unambiguously identified output, XR Gate tests and applies 60 Hz without changing resolution; otherwise it asks for display selection. The main monitor is not guessed. Disable <code>XR_AUTO_DRIVER_FREQUENCY</code> for manual selection. Display matching uses saved selection, <code>XR_DISPLAY_NAME</code>, a unique <code>XR_DISPLAY_MATCH</code> from the hardware preset. Resolution alone does not identify the glasses.</p>
-<p><strong>Diagnostics</strong> and <strong>Refresh status</strong> can be cancelled and stop after 60 seconds. Linux diagnostic commands stop after 10 seconds. Status separates the configured driver frequency from the current glasses display mode; an unidentified display has an unknown refresh rate.</p>
-<p><strong>Diagnostics</strong> and <strong>Save log</strong> collect troubleshooting output. <strong>Run</strong> provides startup, USB attachment and activity; <strong>Controllers</strong> provides Bluetooth settings, pairing and input selection; <strong>Audio</strong> provides sound settings; <strong>Tools</strong> provides Diagnostics, driver registration and tracking checks. The <strong>Launcher configuration tests</strong> workflow publishes a portable <strong>xr-gate-windows-wsl-usbip-launcher</strong> artifact; the full Windows build includes the launcher and driver variants in <strong>xr-gate-windows-wsl-usbip.zip</strong>, with a 60 Hz fallback always included.</p>
-<p><strong>Hardware preset</strong> lists <code>hardware/*.env</code> and matches connected devices using <code>XR_USB_IDS</code>. Picking a preset disables detection; <strong>Detect hardware automatically</strong> resumes it. Ambiguous matches require manual selection. In <strong>Controllers</strong>, <strong>Gestures</strong> uses optical hands without <code>override_controller</code>; <strong>Gear VR Controllers</strong> starts physical controllers. <strong>Settings → Show command prompt</strong> is off by default; enable it before Start VR for console calibration commands. Closing via × stops audio, cancels delayed startup, stops the managed runtime and its console, then returns USB. Incomplete cleanup leaves the window open for another Stop.</p>
-<p>The command-line instructions below remain available.</p>
-<h2>1. Download and prepare</h2>
-<ol start="1">
-<li>Use Windows 11 x64 and an AVX2-capable CPU.</li>
-<li>Install Steam and SteamVR. Open SteamVR once, then close it.</li>
-<li>Download <strong>xr-gate-windows-wsl-usbip.zip</strong> from <a href="https://github.com/vladoshub/xr-gate/releases">Releases</a>, or the <strong>xr-gate-windows-wsl-usbip</strong> artifact from your CI run.</li>
-<li>Extract the ZIP to a permanent folder. Open its <code>xr-gate-windows-wsl-usbip</code> folder. Keep the <code>drivers</code>, <code>hardware</code>, <code>linux</code> and <code>windows</code> subfolders together.</li>
-<li>Open a regular Windows PowerShell in this folder. Run all commands below there.</li>
-</ol>
-<h3 id="bluetooth-adapter-for-wsl2">Bluetooth adapter for WSL2</h3>
-<p><strong>Tested adapter: ASUS USB-BT500</strong> (<code>0b05:190e</code>), with Ubuntu 24.04 in WSL2 and kernel <code>6.18.54.1-microsoft-standard-WSL2</code>.</p>
-<p><strong>Use a dedicated USB Bluetooth adapter for XR Gate and leave the system adapter with Windows.</strong> USB forwarding transfers the whole adapter to WSL; while attached, Windows cannot use it for Bluetooth keyboards, mice, headphones or other devices. Returning the adapter to Windows makes it available there again. See the <a href="https://github.com/dorssel/usbipd-win/wiki/WSL-support">usbipd WSL documentation</a>.</p>
-<p>In the desktop launcher, enable <strong>Enable Bluetooth</strong>. For ASUS USB-BT500, clear <strong>Bluetooth USB BUSID</strong> and keep <strong>Bluetooth VID:PID</strong> at <code>0b05:190e</code>, as supplied by the XREAL preset. Save settings, then use <strong>Attach USB devices</strong>. The adapter's current BUSID is resolved automatically, including after changing USB ports.</p>
-<p>For the scripts, set <code>XR_BLUETOOTH=1</code> and <code>XR_BLUETOOTH_USB_ID=0b05:190e</code> in <code>.env</code>, with <code>XR_BLUETOOTH_BUS_ID</code> empty. You can also pass <code>-BluetoothUsbId 0b05:190e</code> explicitly. The generic hardware template leaves VID:PID empty so another adapter can be configured.</p>
-<p><strong>Selection priority:</strong> explicit BUSID, explicit <code>XR_BLUETOOTH_INSTANCE_ID</code>, configured VID:PID, then the saved adapter when both selectors are empty. An explicit BUSID must exist; it never silently falls back to VID:PID. A configured VID:PID never falls back to an unrelated system adapter. If several devices match, the saved matching instance is used; otherwise select one by BUSID. Bluetooth must be enabled; setting a default VID:PID alone does not attach a device.</p>
-<p><strong>MediaTek limitation in the tested kernel:</strong> the built-in MT7922 (<code>0489:e0e2</code>) did not initialize because the stock WSL <code>6.18.54.1</code> configuration has <code>CONFIG_BT_HCIBTUSB_MTK</code> disabled. Installing firmware or seeing the adapter in <code>lsusb</code> does not add the missing kernel driver support. Switching the Ubuntu distribution to 26.04 inside WSL does not enable it either. See the <a href="https://github.com/microsoft/WSL2-Linux-Kernel/blob/linux-msft-wsl-6.18.54.1/arch/x86/configs/config-wsl">configuration for that kernel version</a>. Other adapters may work if their driver and firmware are supported by the running WSL kernel; ASUS USB-BT500 is the verified option for this setup.</p>
-<h2>2. Configure your hardware (skip for XREAL Ultra)</h2>
-<p>For XREAL Air 2 Ultra, the supplied preset is ready to use. Create your settings file once:</p>
-<pre><code>if (!(Test-Path .env)) { Copy-Item .env.example .env }
-</code></pre>
-<p>For another device, copy the generic template:</p>
-<pre><code>Copy-Item hardware\generic.env.example hardware\my-device.env
-</code></pre>
-<p>Edit <code>hardware/my-device.env</code>, then set <code>XR_HARDWARE_ENV=hardware/my-device.env</code> in <code>.env</code>.</p>
-<ol start="1">
-<li>Set <code>XR_PROFILE</code> to the runtime profile and <code>XR_TARGET_DEVICE</code> to its device name.</li>
-<li>Set <code>XR_USB_IDS</code> to the camera/IMU VID:PID pairs. For a manual selection, run <code>usbipd list</code> and set <code>XR_USB_BUS_IDS</code> in <code>.env</code>. For multiple devices, separate the IDs with commas. <code>XR_USB_INSTANCE_IDS</code> accepts stable Windows USB instance paths instead.</li>
-<li>Set Linux camera, HID, serial and input paths when needed: <code>XR_CAMERA_DEVICE</code>, <code>XR_HIDRAW_DEVICES</code>, <code>XR_SERIAL_DEVICES</code>, <code>XR_INPUT_DEVICES</code>. Enable <code>XR_REQUIRE_CAMERA=1</code> if the profile uses a camera.</li>
-<li>Set <code>XR_DEVICE_ACCESS_SCRIPT</code> to the matching setup script inside the release, or leave it empty. List the required Linux modules in <code>XR_KERNEL_MODULES</code>.</li>
-<li>Set <code>XR_WINDOW_WIDTH</code>, <code>XR_WINDOW_HEIGHT</code>, <code>XR_RENDER_WIDTH</code>, <code>XR_RENDER_HEIGHT</code>, <code>XR_DISPLAY_FREQUENCY_HZ</code> and the optical settings for your display.</li>
-</ol>
-<p>To override saved choices, put the setting directly in <code>.env</code>. Select a frequency and <code>XR_DISPLAY_MODE</code> (<code>direct</code> or <code>extended_sbs</code>) included in the archive. For a dedicated Bluetooth adapter, set <code>XR_BLUETOOTH_USB_ID</code> to its VID:PID for automatic selection, or <code>XR_BLUETOOTH_BUS_ID</code> for an explicit port selection. Set <code>XR_BLUETOOTH=0</code> to disable a saved dongle, or <code>XR_GEARVR=0</code> to disable Gear VR. Set <code>XR_STEAMVR_PATH</code> if SteamVR is not found automatically.</p>
-<h2>3. Install</h2>
-<ol start="1">
-<li>Double-click <strong>INSTALL.cmd</strong>, or run:</li>
-</ol>
-<pre><code>.\INSTALL.cmd
-</code></pre>
-<p>For Gear VR controllers, use:</p>
-<pre><code>.\INSTALL.cmd -GearVR
-</code></pre>
-<ol start="2">
-<li>Approve the administrator prompt. Restart Windows and run the same command again.</li>
-<li>If Ubuntu opens for the first time, create a Linux username and password, enter <code>exit</code>, then run the installation command again.</li>
-<li>If asked to restart Ubuntu, save your work in it and run:</li>
-</ol>
-<pre><code>wsl --terminate Ubuntu-24.04
-.\INSTALL.cmd
-</code></pre>
-<p>Use the distribution name from <code>XR_DISTRIBUTION</code> if you changed it. Repeat <code>-GearVR</code> if used.</p>
-<ol start="5">
-<li>If driver registration was deferred, close SteamVR and run:</li>
-</ol>
-<pre><code>.\DRIVER.cmd
-</code></pre>
-<h2>4. Select the display</h2>
-<p>For <strong>extended_sbs</strong>:</p>
-<ol start="1">
-<li>Connect the glasses' video input to the Windows GPU and enable SBS on the glasses.</li>
-<li>In Windows display settings, choose <strong>Extend these displays</strong>. Set the glasses' resolution and frequency to the values in your hardware env.</li>
-<li>Disable SteamVR Direct Mode, then close SteamVR.</li>
-<li>Run:</li>
-</ol>
-<pre><code>.\DISPLAY.cmd
-</code></pre>
-<ol start="5">
-<li>Select the glasses' row using Windows <strong>Identify</strong>. To save a fixed output name instead, set <code>XR_DISPLAY_NAME</code> in <code>.env</code> and run the command again.</li>
-</ol>
-<p>For <strong>direct</strong>, use <code>Direct-Mode-Guide.bat</code> in the selected <code>drivers/&lt;frequency&gt;Hz-direct/xr_tracking</code> folder.</p>
-<h2>5. Start</h2>
-<ol start="1">
-<li>Connect the devices. Place IMU controllers on a flat surface and keep them still.</li>
-<li>Run:</li>
-</ol>
-<pre><code>.\RUN.cmd
-</code></pre>
-<ol start="3">
-<li>Complete the startup prompts and calibration in the opened console. Keep it open and wait for SteamVR.</li>
-<li>Enable the XR Gate add-on in SteamVR if prompted. Check the headset, then start your game.</li>
-</ol>
-<p>For the next session, connect the devices and run <strong>RUN.cmd</strong> again. After changing display ports, close SteamVR and repeat <strong>DISPLAY.cmd</strong>.</p>
-<p>To start the runtime without opening SteamVR:</p>
-<pre><code>.\CONSOLE.cmd
-</code></pre>
-<h2>6. Pair Gear VR controllers</h2>
-<ol><li>Enable <strong>Enable Bluetooth</strong> in Controllers and choose its USB adapter.</li><li>Stop tracking and put controllers into pairing mode.</li><li>Click <strong>Controllers → Pair Bluetooth controllers</strong> and choose left/right devices by name. MAC addresses distinguish identical names. Either side can remain <strong>Not selected</strong> to disable it in the saved config.</li><li>Click <strong>Connect &amp; save</strong>. Pairing, trust and connect run automatically and MAC addresses are saved to <code>~/xr-gate-wsl/config/override_controller.json</code>. The previous config is backed up; connection failure leaves it unchanged.</li><li>Click <strong>Start VR</strong>. The supplied GearVR profile needs no separate registration afterward. Use <strong>Register / train controllers</strong> to change button mappings or configure other profiles.</li></ol><p>The PowerShell operation also provides interactive name selection:</p><pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Pair</code></pre><p>The Ubuntu package includes <code>bin/scripts/override_controller/bluetooth_controllers.py</code> beside <code>start_override_controller.sh</code>. Automatic identity assignment supports the <code>gearvr_ble</code> backend selected in the controller configuration.</p><h2>Audio (optional)</h2><ol><li>After updating the complete Windows package, run <strong>Install / continue</strong> once for audio dependencies/access.</li><li>Attach USB devices, then open <strong>Audio → Refresh audio devices</strong>.</li><li>Select the Windows source and Ubuntu output, then click <strong>Start VR</strong>. Keep the launcher open.</li></ol><p>Choices save immediately. <strong>No audio</strong> disables playback. Disconnected selections remain listed and resume on reconnect; another output is never selected automatically. The source Windows output may also play locally. Audio stops with the runtime or launcher. Only playback is supported.</p><h2>7. Stop or change settings</h2>
-<p><strong>Stop tracking &amp; return USB</strong> and window closing wait for every owned runtime service before verifying USB detach, including an Attach-only session. A failure on one device does not skip the other selected devices. Incomplete cleanup keeps the window open for log inspection and another Stop attempt.</p><ol start="1">
-<li>Close SteamVR.</li>
-<li>Press <strong>Ctrl+C</strong> in the runtime console and wait for it to stop.</li>
-<li>To return USB devices to Windows, run:</li>
-</ol>
-<pre><code>.\DETACH.cmd
-</code></pre>
-<p>After changing hardware settings, attach the devices and start again. After changing the release, driver frequency or display mode in <code>.env</code>, repeat <strong>INSTALL.cmd</strong> and the display setup.</p>
-<h2>8. If startup fails</h2>
-<p>Run:</p>
-<pre><code>.\DOCTOR.cmd
-</code></pre>
-<p>With the runtime console still open, test tracking:</p>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Test
-</code></pre>
-<p>If SteamVR reports an invalid desktop display, close SteamVR, check <strong>Extend</strong>, the resolution and frequency in Windows, then repeat <strong>DISPLAY.cmd</strong> and <strong>RUN.cmd</strong>.</p>
-<h2>CI platform selection</h2><p><strong>XR Gate split build → Run workflow</strong> offers independent <strong>Build ubuntu release</strong> and <strong>Build windows release (includes SteamVR driver)</strong> switches. Build either or both. <strong>xr-gate-windows-wsl-usbip.zip</strong> includes the self-contained WPF app and SteamVR drivers.</p><p>A Windows-only installer pins an existing Ubuntu runtime/models release. It needs no Linux rebuild. If no usable runtime release is found or GitHub lookup is unavailable, Windows still builds with <code>XR_RELEASE_TAG=latest</code> and a warning. Before installing, publish an Ubuntu runtime/models release or select an available runtime tag in launcher Settings. Publishing uploads only selected platforms.</p></article></body></html>
+<h2>Tabs</h2><ul>
+<li><strong>Run</strong> — Display selection, Install / Update, Start VR, Stop, status and Activity Log. Blinking buttons show the next setup step.</li>
+<li><strong>Controllers</strong> — Gestures is the default; Bluetooth is off. For Gear VR Controllers, enable Bluetooth, pair and select the left and/or right controller, then Connect &amp; save. Calibration instructions appear once per stage in Activity Log.</li>
+<li><strong>Audio</strong> — Choose the Windows sound source and Ubuntu output, or No audio. Choices are remembered after reconnection. Playback only; no microphone.</li>
+<li><strong>Settings</strong> — Hardware preset, display and launch settings. Show command prompt is off by default; enable it before starting for console calibration commands.</li>
+<li><strong>Tools</strong> — Diagnostics, driver registration and tracking checks. List USB devices stays in Settings.</li>
+</ul>
+<p>Bluetooth was tested with ASUS USB-BT500. Use a separate adapter to keep Windows Bluetooth devices available. A built-in MediaTek adapter requires support in the WSL kernel; changing the Ubuntu release alone does not add it.</p>
+<p>Hardware presets are in hardware/*.env; Advanced settings opens .env. The supplied PowerShell and Linux helpers are required by the launcher. Separate .cmd/.bat launchers are no longer included.</p>
+<p>If startup is blocked, follow [Next] in Activity Log. For problems, use Tools → Diagnostics and Save log in Run.</p>
+</body></html>

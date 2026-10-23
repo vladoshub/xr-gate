@@ -64,6 +64,9 @@ jobs:
       - name: Runtime console ownership and cancellation of delayed WSL startup
         shell: powershell
         run: '& ./win/tests/verify-runtime-window.ps1'
+      - name: Display selection before installation and setup readiness
+        shell: powershell
+        run: '& ./win/tests/verify-setup-display.ps1'
       - name: Session cleanup ignores damaged or changed settings
         shell: powershell
         run: '& ./win/tests/verify-cleanup-settings.ps1'

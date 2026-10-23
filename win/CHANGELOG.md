@@ -1,3 +1,12 @@
+## Guided Windows setup
+
+- Select the connected glasses display before Install; block Start VR until setup, display and device are ready.
+- Confirm WSL installation, offer required restarts and resume unfinished setup after reopening.
+- Highlight the next setup button and show concise Activity Log instructions.
+- Default to Gestures with Bluetooth off; attach USB automatically on Start VR.
+- Show controller calibration stages once, including completion, with a hidden tracking console.
+- Remove standalone batch wrappers from the GUI package and shorten English/Russian guides.
+
 # Windows Launcher 1.1.0
 
 - Keep expected administrator-fixture failures out of the CI shell's LASTEXITCODE, and keep firmware contract tests independent of real WSL distributions.

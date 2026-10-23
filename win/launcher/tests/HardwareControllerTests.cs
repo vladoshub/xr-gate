@@ -11,9 +11,9 @@ internal static class HardwareControllerTests
         File.Copy(Path.Combine(source, ".env.example"), Path.Combine(root, ".env.example"));
         File.Copy(Path.Combine(source, "hardware/xreal_ultra.env"), Path.Combine(root, "hardware/xreal_ultra.env"));
         string env = Path.Combine(root, ".env"), state = Path.Combine(root, "state.json");
-        File.WriteAllText(state, JsonSerializer.Serialize(new { GearVR = true }));
+        File.WriteAllText(state, JsonSerializer.Serialize(new { GearVR = true, BluetoothInstanceId = "saved-system-adapter" }));
         var settings = LauncherSettings.Load(root, state);
-        Check(settings.ControllerMode == "gearvr" && !settings.ShowCommandPrompt, "Legacy GearVR or hidden-console default was lost.");
+        Check(settings.ControllerMode == "gestures" && !settings.BluetoothEnabled && !settings.ShowCommandPrompt, "Gestures, Bluetooth-off or hidden-console defaults were lost.");
         settings.ControllerMode = "gestures";
         settings.ShowCommandPrompt = true;
         settings.Save(root);
@@ -21,10 +21,14 @@ internal static class HardwareControllerTests
         Check(settings.ControllerMode == "gestures" && !settings.GearVr && settings.ShowCommandPrompt,
             "The selected input/console mode did not survive save/reload.");
         Check(File.ReadAllText(env).Contains("XR_GEARVR=0"), "Gestures did not replace the legacy controller flag.");
+        Check(File.ReadAllText(env).Contains("XR_BLUETOOTH=0"), "An inherited adapter could re-enable Bluetooth in the PowerShell backend.");
         settings.ControllerMode = "gearvr"; settings.ShowCommandPrompt = false; settings.Save(root);
         Check(LauncherSettings.Load(root, state).GearVr && !LauncherSettings.Load(root, state).ShowCommandPrompt, "Gear VR mode or console-off could not be restored.");
         File.WriteAllText(env, "XR_CONTROLLER_MODE=gestures\nXR_GEARVR=1\n");
         Check(!LauncherSettings.Load(root, state).GearVr, "A legacy flag overrode the explicit Gestures mode.");
+        File.WriteAllText(env, "XR_GEARVR=1\nXR_BLUETOOTH=1\n");
+        settings = LauncherSettings.Load(root, state);
+        Check(settings.GearVr && settings.BluetoothEnabled, "Explicit existing controller/Bluetooth preferences were lost.");
 
         File.WriteAllText(Path.Combine(root, "hardware/fixture.env"), "XR_DEVICE_NAME=Fixture XR\nXR_USB_IDS=ABCD:0123\n");
         File.WriteAllText(Path.Combine(root, "hardware/multiple.env"), "XR_DEVICE_NAME=Two USB interfaces\nXR_USB_IDS=ABCD:0123,5678:0001\n");

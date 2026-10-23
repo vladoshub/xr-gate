@@ -18,7 +18,7 @@ public partial class MainWindow : Window
     private readonly bool smoke;
     private readonly WslKeeper keeper;
     private readonly ProcessRunner runner;
-    private readonly ConcurrentQueue<string> pendingLog = new();
+    private readonly ConcurrentQueue<ActivityEntry> pendingLog = new();
     private readonly DispatcherTimer logTimer;
     private readonly DispatcherTimer deviceTimer;
     private CancellationTokenSource deviceCancellation = new();
@@ -62,7 +62,7 @@ public partial class MainWindow : Window
                 sessionLog = new StreamWriter(path, false, new UTF8Encoding(false)) { AutoFlush = true };
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            { pendingLog.Enqueue("Session log is unavailable: " + error.Message); }
+            { pendingLog.Enqueue(new("Session log is unavailable: " + error.Message)); }
         }
         keeper = new WslKeeper(Log);
         runner = new ProcessRunner(root, stateDirectory, Log);
@@ -77,6 +77,11 @@ public partial class MainWindow : Window
         Log("XR Gate Launcher " + typeof(MainWindow).Assembly.GetName().Version);
         Log("Bundle: " + root);
         Log("Windows: " + Environment.OSVersion);
+        if (!smoke)
+        {
+            try { setupProgress = SetupProgress.Load(SetupProgressPath); }
+            catch (Exception error) { Log("Could not read unfinished setup: " + error.Message); }
+        }
         UpdateRecoveryUi();
         Loaded += async (_, _) =>
         {
@@ -93,7 +98,9 @@ public partial class MainWindow : Window
                 Close();
                 return;
             }
-            if (configurationProblem is null && File.Exists(Path.Combine(stateDirectory, "state.json"))) await ExecuteAsync("Status", saveSettings: false);
+            await DetectHardwareAsync();
+            if (configurationProblem is null) await ExecuteAsync("Status", saveSettings: false);
+            await OfferResumeAsync();
             StartDeviceObservation();
             StartAudioDeviceRefresh();
             deviceTimer.Start();
@@ -107,18 +114,8 @@ public partial class MainWindow : Window
         {
             if (resourcesReleased) return;
             sessionLog?.WriteLine(line);
-            pendingLog.Enqueue(line);
+            pendingLog.Enqueue(new(line));
         }
-    }
-
-    private void FlushLog()
-    {
-        var text = new StringBuilder();
-        while (pendingLog.TryDequeue(out string? line)) text.AppendLine(line);
-        if (text.Length == 0) return;
-        LogBox.AppendText(text.ToString());
-        if (LogBox.Text.Length > 180_000) LogBox.Text = LogBox.Text[^140_000..];
-        LogBox.ScrollToEnd();
     }
 
     private void SetBusy(string action)
@@ -126,7 +123,7 @@ public partial class MainWindow : Window
         busyAction = action;
         bool busy = action.Length > 0;
         bool recovery = configurationProblem is not null;
-        ActionPanel.IsEnabled = ConnectionPanel.IsEnabled = ToolsPanel.IsEnabled = !busy && !recovery;
+        ActionPanel.IsEnabled = ToolsPanel.IsEnabled = !busy && !recovery;
         SettingsPanel.IsEnabled = !busy;
         SettingsFields.IsEnabled = !busy && (!runtimeMayBeRunning || recovery);
         ControllersPanel.IsEnabled = !busy && !runtimeMayBeRunning && !recovery;
@@ -143,6 +140,7 @@ public partial class MainWindow : Window
             action is "BluetoothScan" ? "Cancel scan" : action is "Pair" or "Controllers" ? "Cancel controller setup" :
             action is "Doctor" or "Status" ? "Cancel diagnostics" : "Cancel check";
         CancelDiagnosticsButton.IsEnabled = true;
+        UpdateReadinessUi();
     }
 
     private async Task<bool> ExecuteAsync(string action, bool steamVr = false, bool console = false, bool saveSettings = true)
@@ -166,25 +164,26 @@ public partial class MainWindow : Window
         if (action == "Test") operationCancellation.CancelAfter(TimeSpan.FromSeconds(settings.StartTimeoutSeconds + 5));
         try
         {
-            if (action is "Stop" or "Detach") await StopAudioAsync(required: true);
+            if (action is "Stop" or "Detach") { await StopCalibrationProgressAsync(); await StopAudioAsync(required: true); }
             bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop");
-            if (writesSettings) settings.Save(root);
+            if (writesSettings && !smoke) settings.Save(root);
             var actionSettings = writesSettings || smokeAction is not null || action == "Stop" ? settings : LauncherSettings.Load(root);
-            if (smokeAction is null && action != "Stop") await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
-            if (action == "Run") runtimeMayBeRunning = true;
+            if (smokeAction is null && action is not ("Stop" or "Status" or "Doctor" or "Display")) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
+            if (action == "Run") { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
             if (action is "Run" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,
                 timeLimit: action == "Test" ? TimeSpan.FromSeconds(actionSettings.StartTimeoutSeconds + 5) : null);
             nextStep = result.NextStep;
+            if (action == "Install") SaveSetupProgress(new(!result.Success, settings.Distribution, nextStep));
             pausedDistribution = result.Data.ValueKind == JsonValueKind.Object && result.Data.TryGetProperty("distribution", out var distro)
                 ? distro.GetString() ?? settings.Distribution : settings.Distribution;
             if (nextStep == "restart_ubuntu") keeper.Dispose();
-            if (result.Success && action == "Install") installed = true;
+
             if (result.Success && action == "Stop") runtimeMayBeRunning = false;
             if (result.Success && action is "Stop" or "Detach") resourcesMayBeOwned = false;
             if (result.Success && action == "BluetoothScan") ApplyBluetoothDevices(result.Data);
             if (action == "Status" && result.Success) ApplyStatus(result.Data);
-            else if (action == "Run" || ((action is "Stop" or "Install") && result.Success))
+            else if (action is "Run" or "Install" || ((action is "Stop" or "Display" or "Driver") && result.Success))
             {
                 try
                 {
@@ -207,12 +206,12 @@ public partial class MainWindow : Window
             {
                 "Run" => steamVr ? "VR is ready" : "Tracking started",
                 "Stop" => "Tracking stopped",
-                "Install" => "Installation complete",
-                "Status" => runtimeMayBeRunning ? "Tracking is running" : installed ? "Ready to start" : "Install to get started",
+                "Install" => installed ? "Installation complete" : "Finish setup",
+                "Status" => runtimeMayBeRunning ? "Tracking is running" : readiness.CanStart ? "Ready to start" : "Next setup step",
                 _ => action + " complete"
             } : result.ExitCode == 20 ? "One more setup step" : "Action needs attention";
             StatusDetail.Text = result.Instruction.Length > 0 ? result.Instruction : action == "Status"
-                ? (installed ? "Use Start VR to connect devices and open SteamVR." : "Click Install / continue to set up XR Gate.")
+                ? readiness.NextStep
                 : action == "Stop" ? "The managed runtime stopped and its USB devices were returned to Windows."
                 : settings.ShowCommandPrompt ? "Complete any startup or calibration prompts in the tracking console."
                 : "Tracking runs in the background. For console commands, stop tracking, enable Show command prompt in Settings, then start again.";
@@ -221,9 +220,9 @@ public partial class MainWindow : Window
                 WarningText.Text = string.Join("\n", result.Warnings);
                 WarningText.Visibility = Visibility.Visible;
             }
-            if (nextStep is "ubuntu_first_login" or "restart_ubuntu")
+            if (nextStep is "ubuntu_first_login" or "restart_ubuntu" or "restart_windows")
             {
-                NextStepButton.Content = nextStep == "restart_ubuntu" ? "Restart Ubuntu & continue" : "Open Ubuntu";
+                NextStepButton.Content = nextStep == "restart_windows" ? "Restart Windows" : nextStep == "restart_ubuntu" ? "Restart Ubuntu & continue" : "Open Ubuntu";
                 NextStepButton.Visibility = Visibility.Visible;
             }
             Log(result.Success ? "[Launcher] " + action + " complete." : "[Launcher] " + result.Instruction);
@@ -274,12 +273,23 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ApplyStatus(JsonElement data)
+    private void ApplyStatus(JsonElement data, bool diagnosticLog = true)
     {
         if (data.ValueKind != JsonValueKind.Object) return;
         ApplyDeviceObservation(data);
-        installed = data.TryGetProperty("installed", out var value) && value.GetBoolean();
+        installed = data.TryGetProperty("setup_complete", out var complete) && complete.ValueKind == JsonValueKind.True;
+        readiness.Known = true;
+        readiness.Installed = installed;
+        if (data.TryGetProperty("install_pending", out var pending) && pending.ValueKind == JsonValueKind.True)
+        {
+            string step = data.TryGetProperty("install_next_step", out var selectedStep) ? selectedStep.GetString() ?? "" : "";
+            SaveSetupProgress(new(true, settings.Distribution, step));
+        }
+        else if (installed) SaveSetupProgress(new());
+        var value = default(JsonElement);
         runtimeMayBeRunning = data.TryGetProperty("running", out value) && value.GetBoolean();
+        runtimeMayBeRunning |= data.TryGetProperty("starting", out var starting) && starting.ValueKind == JsonValueKind.True;
+        if (!diagnosticLog) return;
         if (data.TryGetProperty("frequency_hz", out value)) Log("[Launcher] Configured driver: " + value + " Hz.");
         if (data.TryGetProperty("display_frequency_hz", out value) && value.ValueKind == JsonValueKind.Number)
             Log("[Launcher] Glasses display current mode: " + value + " Hz.");
@@ -319,9 +329,13 @@ public partial class MainWindow : Window
         return await ExecuteAsync("Stop", saveSettings: false);
     }
 
-    private async void Start_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Run", steamVr: true);
+    private async void Start_Click(object sender, RoutedEventArgs e)
+    {
+        if (!readiness.CanStart) { UpdateReadinessUi(); return; }
+        await ExecuteAsync("Run", steamVr: true);
+    }
     private async void Tracking_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Run");
-    private async void Install_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Install");
+    private async void Install_Click(object sender, RoutedEventArgs e) => await BeginInstallationAsync();
     private async void Display_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Display", console: true);
     private async void Doctor_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Doctor");
     private void CancelDiagnostics_Click(object sender, RoutedEventArgs e)
@@ -332,7 +346,6 @@ public partial class MainWindow : Window
         operationCancellation?.Cancel();
     }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Status", saveSettings: false);
-    private async void Usb_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Usb");
     private async void Pair_Click(object sender, RoutedEventArgs e)
     {
         if (runtimeMayBeRunning) { StatusDetail.Text = "Stop tracking before changing the controller selection."; return; }
@@ -386,20 +399,21 @@ public partial class MainWindow : Window
             if (closing) return;
             var result = await runner.RunAsync("DeviceStatus", cancellation: deviceCancellation.Token);
             if (result.Success && !closing) ApplyDeviceObservation(result.Data);
-            else if (!closing) { DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = result.Instruction; }
-            if (runtimeMayBeRunning && !closing)
+            else if (!closing) { readiness.DeviceConnected = false; UpdateReadinessUi(); DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = result.Instruction; }
+            if (!closing && (runtimeMayBeRunning || !readiness.Known))
             {
                 var runtime = await runner.RunAsync("Status", cancellation: deviceCancellation.Token, timeLimit: TimeSpan.FromSeconds(15));
-                if (runtime.Success && runtime.Data.TryGetProperty("running", out var running) && !running.GetBoolean())
+                if (runtime.Success) { ApplyStatus(runtime.Data, diagnosticLog: false); UpdateReadinessUi(); }
+                if (runtime.Success && !runtimeMayBeRunning)
                 {
-                    runtimeMayBeRunning = false; await StopAudioAsync(); SetBusy(busyAction);
+                    await StopCalibrationProgressAsync(); await StopAudioAsync(); SetBusy(busyAction);
                     Log("[Launcher] Tracking exited; audio stopped. Use Stop tracking & return USB to return devices.");
                 }
             }
             if (MainTabs.SelectedItem == AudioTab && !closing) StartAudioDeviceRefresh();
         }
         catch (OperationCanceledException) { }
-        catch (Exception error) { if (!closing) { DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = error.Message; } }
+        catch (Exception error) { if (!closing) { readiness.DeviceConnected = false; UpdateReadinessUi(); DeviceConnectionStatus.Text = "—"; DeviceConnectionStatus.ToolTip = error.Message; } }
     }
 
     private void ApplyDeviceObservation(JsonElement data)
@@ -408,10 +422,17 @@ public partial class MainWindow : Window
         {
             // Keep compatibility with helpers that report USB attachment as SHARED.
             string? value = status.GetString();
+            readiness.DeviceConnected = value is "CONNECTED" or "SHARED" or "TRACKING";
             DeviceConnectionStatus.Text = value == "SHARED" ? "TRACKING" : value;
             DeviceConnectionStatus.ToolTip = data.TryGetProperty("device_status_message", out var message)
                 ? message.GetString()?.Replace("SHARED:", "TRACKING:") : null;
         }
+        if (data.ValueKind == JsonValueKind.Object)
+        {
+            if (data.TryGetProperty("display_selected", out var selected)) readiness.DisplaySelected = selected.ValueKind == JsonValueKind.True;
+            if (data.TryGetProperty("display_connected", out var connected)) readiness.DisplayConnected = connected.ValueKind == JsonValueKind.True;
+        }
+        UpdateReadinessUi();
     }
     private async void Controllers_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Controllers", console: true);
     private async void Driver_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Driver");
@@ -454,7 +475,7 @@ public partial class MainWindow : Window
             StatusDetail.Text = result.Code == 0
                 ? result.Output.Length > 0 ? "Copy a BUSID into the matching USB setting, or use the Bluetooth VID:PID and leave its BUSID empty."
                     : "usbipd returned an empty device list. Reconnect the device and click List USB devices again."
-                : "usbipd list failed (exit code " + result.Code + "). See its output below. Run Install / continue if usbipd needs setup.";
+                : "usbipd list failed (exit code " + result.Code + "). See its output below. Run Install if usbipd needs setup.";
             return result.Code == 0;
         }
         catch (OperationCanceledException) { StatusTitle.Text = "USB listing cancelled"; StatusDetail.Text = "You can start another action."; return false; }
@@ -462,7 +483,7 @@ public partial class MainWindow : Window
         {
             StatusTitle.Text = "Could not list USB devices";
             StatusDetail.Text = exception is Win32Exception { NativeErrorCode: 2 or 3 }
-                ? "usbipd was not found. Run Install / continue, then click List USB devices again."
+                ? "usbipd was not found. Run Install, then click List USB devices again."
                 : exception.Message;
             Log("ERROR: " + StatusDetail.Text);
             return false;
@@ -492,15 +513,17 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (nextStep == "restart_windows") { await OfferWindowsRestartAsync(); return; }
             if (nextStep == "ubuntu_first_login") { OpenUbuntu(pausedDistribution); return; }
             if (nextStep != "restart_ubuntu" || busyAction.Length > 0) return;
+            if (!Confirm("Restart the selected Ubuntu distribution? Save any work in it before continuing.")) return;
             SetBusy("Restart Ubuntu");
             keeper.Dispose();
             var result = await ProcessRunner.NativeAsync(Path.Combine(Environment.SystemDirectory, "wsl.exe"), ["--terminate", pausedDistribution]);
             Log(result.Output);
             SetBusy("");
             if (result.Code != 0) throw new IOException("Ubuntu could not restart. Check the activity log.");
-            await ExecuteAsync("Install");
+            await BeginInstallationAsync(confirmed: true);
         }
         catch (Exception exception) { SetBusy(""); StatusDetail.Text = exception.Message; Log(exception.Message); }
     }
@@ -532,7 +555,7 @@ public partial class MainWindow : Window
         {
             FlushLog();
             var dialog = new SaveFileDialog { FileName = "xr-gate-diagnostics-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt", Filter = "Text files (*.txt)|*.txt" };
-            if (dialog.ShowDialog(this) == true) File.WriteAllText(dialog.FileName, LogBox.Text, new UTF8Encoding(false));
+            if (dialog.ShowDialog(this) == true) File.WriteAllText(dialog.FileName, ActivityText(), new UTF8Encoding(false));
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }
@@ -577,6 +600,7 @@ public partial class MainWindow : Window
     {
         deviceTimer.Stop();
         deviceCancellation.Cancel();
+        await StopCalibrationProgressAsync();
         await StopAudioAsync(required: true);
         if (deviceObservation is not null) await deviceObservation;
         if (audioRefreshTask is not null) await audioRefreshTask;
@@ -600,6 +624,7 @@ public partial class MainWindow : Window
         deviceTimer.Stop();
         deviceCancellation.Cancel();
         audio.Cancel();
+        calibrationCancellation?.Cancel();
         keeper.Dispose();
         logTimer.Stop();
         lock (pendingLog) { resourcesReleased = true; sessionLog?.Dispose(); }

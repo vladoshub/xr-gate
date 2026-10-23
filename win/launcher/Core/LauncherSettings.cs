@@ -51,6 +51,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     public string AudioSourceId { get; set; } = "default";
     public string AudioOutputId { get; set; } = "none";
     public string LinuxUser { get; private set; } = "";
+    public string LinuxRoot { get; private set; } = "~/xr-gate-wsl";
     public string SavedBluetoothInstance { get; private set; } = "";
     public int StartTimeoutSeconds { get; private set; } = 180;
 
@@ -120,7 +121,10 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         string Choice(string key, string name, string fallback) => overrides.ContainsKey(key)
             ? Get(key, fallback) : saved.GetValueOrDefault(name, Get(key, fallback));
         bool Flag(string key, bool fallback) => Get(key) switch { "1" => true, "0" => false, _ => fallback };
-        if (Get("XR_CONTROLLER_MODE") is not ("" or "gearvr" or "gestures"))
+        string controllerMode = Get("XR_CONTROLLER_MODE");
+        if (!overrides.ContainsKey("XR_CONTROLLER_MODE") && overrides.GetValueOrDefault("XR_GEARVR") is "0" or "1")
+            controllerMode = overrides["XR_GEARVR"] == "1" ? "gearvr" : "gestures";
+        if (controllerMode is not ("" or "gearvr" or "gestures"))
             throw new SettingsReadException(Path.Combine(root, ".env"), "XR_CONTROLLER_MODE must be gearvr or gestures, or empty for legacy settings.");
         string bluetoothInstance = Get("XR_BLUETOOTH_INSTANCE_ID", saved.GetValueOrDefault("BluetoothInstanceId", ""));
         if (bluetoothInstance.Length == 0) bluetoothInstance = saved.GetValueOrDefault("BluetoothInstanceId", "");
@@ -133,8 +137,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             ReleaseTag = Get("XR_RELEASE_TAG", "latest"), UsbBusIds = Get("XR_USB_BUS_IDS"),
             BluetoothBusId = Get("XR_BLUETOOTH_BUS_ID"), SavedBluetoothInstance = bluetoothInstance,
             BluetoothUsbId = Get("XR_BLUETOOTH_USB_ID"),
-            BluetoothEnabled = Flag("XR_BLUETOOTH", bluetoothInstance.Length > 0 || Get("XR_BLUETOOTH_BUS_ID").Length > 0),
-            GearVr = Get("XR_CONTROLLER_MODE") is "gearvr" || (Get("XR_CONTROLLER_MODE") != "gestures" &&
+            BluetoothEnabled = Flag("XR_BLUETOOTH", false),
+            GearVr = controllerMode is "gearvr" || (controllerMode != "gestures" &&
                 Flag("XR_GEARVR", saved.GetValueOrDefault("GearVR", "False").Equals("True", StringComparison.OrdinalIgnoreCase))),
             ShowCommandPrompt = Flag("XR_SHOW_COMMAND_PROMPT", false),
             AutoDriverFrequency = Flag("XR_AUTO_DRIVER_FREQUENCY", true),
@@ -144,6 +148,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             AudioSourceId = Get("XR_AUDIO_SOURCE", "default"), AudioOutputId = Get("XR_AUDIO_OUTPUT", "none"),
             LinuxUser = Get("XR_LINUX_USER", saved.GetValueOrDefault("Distribution") == Choice("XR_DISTRIBUTION", "Distribution", "Ubuntu-24.04")
                 ? saved.GetValueOrDefault("LinuxUser", "") : ""),
+            LinuxRoot = Get("XR_LINUX_ROOT", "~/xr-gate-wsl"),
             StartTimeoutSeconds = int.TryParse(Get("XR_START_TIMEOUT"), out int seconds) && seconds is >= 5 and <= 600 ? seconds : 180
         };
         settings.loadedHardware = hardware;
@@ -240,7 +245,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         // Persist these even when they equal the defaults: a chosen preset must
         // stay manual, and Gestures must override the legacy controllers-ready marker.
-        foreach (string key in new[] { "XR_AUTO_DETECT_HARDWARE", "XR_CONTROLLER_MODE", "XR_GEARVR", "XR_SHOW_COMMAND_PROMPT" }) persisted[key] = values[key];
+        foreach (string key in new[] { "XR_AUTO_DETECT_HARDWARE", "XR_CONTROLLER_MODE", "XR_GEARVR", "XR_BLUETOOTH", "XR_SHOW_COMMAND_PROMPT" }) persisted[key] = values[key];
         var removed = values.Keys.Where(key => !persisted.ContainsKey(key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string updated = UpdateEnv(original, persisted, removed);
         if (updated == original) return;

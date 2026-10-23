@@ -64,6 +64,7 @@ $script:State = [ordered]@{
     Distribution = (Get-XrSetting 'XR_DISTRIBUTION'); LinuxUser = ''; ReleaseTag = ''
     UsbInstanceIds = @(); BluetoothInstanceId = ''; AttachedUsbInstanceIds = @()
     CleanupSettings = $null
+    InstallPending = $false; InstallNextStep = ''
     FrequencyHz = (Get-XrInteger 'XR_DISPLAY_FREQUENCY_HZ' 1 1000)
     DisplayMode = (Get-XrSetting 'XR_DISPLAY_MODE'); DisplayOption = (Get-XrSetting 'XR_DISPLAY_OPTION')
     GearVR = $false; DriverPath = ''; RegisteredDriver = ''
@@ -79,6 +80,7 @@ $script:ActionData = $null
 . (Join-Path $PSScriptRoot 'windows\Driver.ps1')
 . (Join-Path $PSScriptRoot 'windows\Usb.ps1')
 . (Join-Path $PSScriptRoot 'windows\RuntimeWindow.ps1')
+. (Join-Path $PSScriptRoot 'windows\SetupStatus.ps1')
 
 function Write-Step([string]$Message) { Write-Host ("[XR Gate] " + $Message) -ForegroundColor Cyan }
 function Write-XrWarning([string]$Message) {
@@ -86,6 +88,11 @@ function Write-XrWarning([string]$Message) {
     Write-Warning $Message
 }
 function Complete-XrAction([int]$Code, [string]$Message = '') {
+    if ($Action -eq 'Install') {
+        $script:State.InstallPending = $Code -ne 0
+        $script:State.InstallNextStep = $script:NextStep
+        Save-State
+    }
     if ($ResultPath) {
         if ($null -eq $script:ActionData) { $script:ActionData = @{distribution=[string]$script:State.Distribution} }
         $payload = @{exit_code=$Code; next_step=$script:NextStep; message=$Message;
@@ -139,6 +146,7 @@ function Load-State {
     $bluetoothInstance = Get-XrSetting 'XR_BLUETOOTH_INSTANCE_ID'
     if ($bluetoothInstance -and !$BluetoothBusId) { $script:State.BluetoothInstanceId = $bluetoothInstance }
     if ($GearVR) { $script:State.GearVR = $true }
+    if ($GearVR) { $script:Settings['XR_CONTROLLER_MODE'] = 'gearvr' }
     if ($WithoutBluetooth) { $script:State.BluetoothInstanceId = '' }
     if ([int]$script:State.FrequencyHz -lt 1 -or [int]$script:State.FrequencyHz -gt 1000) { throw 'Invalid display frequency.' }
     if ($script:State.DisplayMode -notin @('direct','extended_sbs')) { throw 'Invalid XR_DISPLAY_MODE.' }
@@ -800,6 +808,8 @@ try {
     Load-State
     if ($Action -eq 'DeviceStatus') {
         $script:ActionData = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
+        $setup = Get-XrSetupObservation $false
+        foreach ($key in @('display_selected','display_connected','display_number')) { $script:ActionData[$key] = $setup[$key] }
         $script:ActionData | ConvertTo-Json -Compress
         Complete-XrAction 0
     }
@@ -811,6 +821,15 @@ try {
         $script:ActionData = @{installed=[bool]$status.installed; running=[bool]$status.running;
             distribution=[string]$script:State.Distribution; release=[string]$script:State.ReleaseTag;
             frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode}
+        $setup = Get-XrSetupObservation ([bool]$status.installed)
+        foreach ($key in $setup.Keys) { $script:ActionData[$key] = $setup[$key] }
+        $script:ActionData['starting'] = $false
+        $windowRecord = Read-RuntimeWindow
+        $window = Get-RuntimeWindowProcess $windowRecord
+        if ($window) {
+            try { $script:ActionData['starting'] = !$status.running -and !$windowRecord.Stopping }
+            finally { $window.Dispose() }
+        }
         $displayObservation = Get-XrDisplayObservation
         $script:ActionData['display_frequency_hz'] = $displayObservation.frequency_hz
         $script:ActionData['display_name'] = $displayObservation.display_name
@@ -823,6 +842,12 @@ try {
         Complete-XrAction 0
     }
     if ($Action -eq 'Install') {
+        $displaySetup = Get-XrSetupObservation $false
+        if (!$displaySetup.display_selected -or !$displaySetup.display_connected) {
+            throw 'Select the connected glasses display number before Install.'
+        }
+        $script:State.InstallPending = $true
+        $script:State.InstallNextStep = ''
         Save-State
         $rc = Invoke-Elevated -Task Prerequisites
         if ($rc -eq 20) {
@@ -861,15 +886,19 @@ try {
         }
         Install-SelectedWindowsDriver $driverPackage ([string]$release.tag_name)
         Register-XrDriver -AllowDeferred
-        Write-Host 'Installation complete. Next: enable SBS, select the matching Hz in Windows, then DISPLAY.cmd and RUN.cmd. See START-HERE.html.' -ForegroundColor Green
-        Complete-XrAction 0 'Installation complete. Select the glasses display, then start VR.'
+        Write-Host 'Installation complete. Next: enable SBS, select the matching Hz in Windows, then click Start VR. See START-HERE.html.' -ForegroundColor Green
+        Complete-XrAction 0 'Installation complete. Click Start VR.'
+    }
+    if ($Action -eq 'Display') {
+        Choose-SbsDisplay -SelectOnly
+        Complete-XrAction 0 'Display selected. Click Install if setup is unfinished; otherwise click Start VR.'
     }
     if (!$script:State.LinuxUser -and $Action -eq 'Doctor') {
         foreach ($tool in @('wsl.exe','usbipd.exe')) {
             try { Invoke-Native (Get-Tool $tool) @('--version') }
             catch { Write-XrWarning $_.Exception.Message }
         }
-        Write-Host 'Linux setup is not complete. Run Install / continue first.'
+        Write-Host 'Linux setup is not complete. Click Install first.'
         Complete-XrAction 0
     }
     if ($Action -eq 'Stop') {
@@ -882,6 +911,11 @@ try {
     if (!$script:State.LinuxUser) { throw 'Run -Action Install first.' }
     switch ($Action) {
         'Run' {
+            if ($Launcher -and $StartSteamVR) {
+                $setup = Get-XrSetupObservation $true
+                if (!$setup.setup_complete) { throw 'Finish Install before starting VR.' }
+                if (!$setup.display_selected -or !$setup.display_connected) { throw 'Select the connected glasses display before starting VR.' }
+            }
             if ((Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { Update-AutomaticWindowsDriver }
             if ($StartSteamVR -and !(Get-Process vrserver,vrcompositor -ErrorAction SilentlyContinue)) {
                 if ($script:State.DisplayMode -eq 'extended_sbs') { Update-SavedSbsDisplay }
@@ -921,7 +955,6 @@ try {
         }
         'Test' { Wait-XrStream $TimeoutSeconds }
         'Driver' { Register-XrDriver }
-        'Display' { Choose-SbsDisplay }
         'BluetoothScan' {
             if (!(Test-BluetoothSelectionRequested)) { throw 'Enable Bluetooth in Controllers first.' }
             Connect-SelectedUsb

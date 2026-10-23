@@ -72,7 +72,7 @@ public partial class MainWindow
                 }
                 catch (Exception error) when (error is not OperationCanceledException) { detail = "WSL audio: " + error.Message; }
             }
-            else detail = "Run Install / continue, attach USB devices, then refresh this list.";
+            else detail = "Install XR Gate, start tracking, then refresh this list.";
             if (closing || distribution != settings.Distribution) return;
             ApplyAudioDevices(sources, outputs);
             try { audioCatalog.Save(AudioCatalogFile); }

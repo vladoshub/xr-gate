@@ -12,12 +12,12 @@ function Get-XrDriverConfiguration([string]$Path) {
         $data = $parser.DeserializeObject($text)
     }
     if ($data -isnot [Collections.IDictionary] -or !$data.ContainsKey('xr_tracking')) {
-        throw 'The installed driver settings have no xr_tracking section. Run Install / continue.'
+        throw 'The installed driver settings have no xr_tracking section. Run Install.'
     }
     $current = $data['xr_tracking']
     if ($current -isnot [Collections.IDictionary] -or !$current.ContainsKey('displayFrequency') -or
         !$current.ContainsKey('isDisplayOnDesktop') -or $current['isDisplayOnDesktop'] -isnot [bool]) {
-        throw 'The installed driver frequency/display settings are invalid. Run Install / continue.'
+        throw 'The installed driver frequency/display settings are invalid. Run Install.'
     }
     return @{FrequencyHz=[int]$current['displayFrequency']; OnDesktop=[bool]$current['isDisplayOnDesktop']}
 }

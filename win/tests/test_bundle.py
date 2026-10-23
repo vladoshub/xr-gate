@@ -119,7 +119,7 @@ class PackageTest(unittest.TestCase):
         for hz, mode in packager.selections(frequencies, modes):
             package = root / f"{hz}Hz-{mode}" / "xr_tracking"
             for name in ("driver.vrdrivermanifest", "bin/win64/driver_xr_tracking.dll", "bin/win64/openvr_api.dll",
-                         "LICENSE", "THIRD_PARTY_NOTICES.md"):
+                         "LICENSE", "THIRD_PARTY_NOTICES.md", "Install-Driver.bat", "Uninstall-Driver.cmd"):
                 path = package / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture")
@@ -143,6 +143,7 @@ class PackageTest(unittest.TestCase):
             self.assertEqual(len(manifest["variants"]), 4)
             with ZipFile(archive) as package:
                 self.assertNotIn("xr-gate-windows-wsl-usbip/.env", package.namelist())
+                self.assertFalse(any(name.lower().endswith((".cmd", ".bat")) for name in package.namelist()))
                 self.assertFalse(any("/launcher/" in name or "/obj/" in name for name in package.namelist()))
                 self.assertEqual(package.read("xr-gate-windows-wsl-usbip/XR-Gate.exe"), executable.read_bytes())
                 self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows-wsl-usbip/.env.example"))
@@ -151,7 +152,7 @@ class PackageTest(unittest.TestCase):
                     relative = packager.variant_path(hz, mode)
                     original = root / "drivers" / f"{hz}Hz-{mode}" / "xr_tracking"
                     for source_file in original.rglob("*"):
-                        if source_file.is_file():
+                        if source_file.is_file() and source_file.suffix.lower() not in (".bat", ".cmd"):
                             entry = f"{packager.ROOT_NAME}/{relative}/{source_file.relative_to(original).as_posix()}"
                             self.assertEqual(package.read(entry), source_file.read_bytes())
             self.assertTrue(archive.with_suffix(".zip.sha256").is_file())
@@ -182,7 +183,7 @@ class PackageTest(unittest.TestCase):
             with ZipFile(archive) as package:
                 self.assertNotIn("xr-gate-windows-wsl-usbip/bundle.json", package.namelist())
                 self.assertIn("xr-gate-windows-wsl-usbip/windows/Driver.ps1", package.namelist())
-                self.assertIn("xr-gate-windows-wsl-usbip/STOP.cmd", package.namelist())
+                self.assertFalse(any(name.lower().endswith((".bat", ".cmd")) for name in package.namelist()))
                 self.assertFalse(any("/launcher/" in name for name in package.namelist()))
                 metadata = json.loads(package.read("xr-gate-windows-wsl-usbip/launcher.json"))["launcher"]
                 packager.verify_launcher_metadata(metadata, packager.verify_installer(package))

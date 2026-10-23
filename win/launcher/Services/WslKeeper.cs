@@ -16,13 +16,13 @@ public sealed class WslKeeper(Action<string> log) : IDisposable
         if (!File.Exists(wsl))
         {
             if (allowMissing) return;
-            throw new IOException("WSL is not installed. Click Install / continue first.");
+            throw new IOException("WSL is not installed. Click Install first.");
         }
         var (code, output) = await ProcessRunner.NativeAsync(wsl, ["--list", "--quiet"], cancellation: cancellation);
         if (code != 0 || !output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Contains(selected))
         {
             if (allowMissing) return;
-            throw new IOException("The selected Ubuntu distribution is not ready. Click Install / continue.");
+            throw new IOException("The selected Ubuntu distribution is not ready. Click Install.");
         }
         var info = new ProcessStartInfo(wsl) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true };
         // Explicit root avoids triggering first-login username prompts in a hidden

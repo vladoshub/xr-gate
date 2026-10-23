@@ -123,7 +123,7 @@ class AlsaPlayback:
         try:
             self.lib = ctypes.CDLL("libasound.so.2")
         except OSError as error:
-            raise RuntimeError("ALSA is unavailable. Run Install / continue to install the Ubuntu audio dependency.") from error
+            raise RuntimeError("ALSA is unavailable. Click Install to install the Ubuntu audio dependency.") from error
         lib = self.lib
         lib.snd_pcm_open.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
         lib.snd_pcm_set_params.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_uint,

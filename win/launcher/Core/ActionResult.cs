@@ -14,10 +14,10 @@ public sealed record ActionResult
     public bool Success => ExitCode == 0;
     public string Instruction => NextStep switch
     {
-        "restart_windows" => "Restart Windows, reopen XR Gate, then click Install / continue.",
-        "ubuntu_first_login" => "In the Ubuntu window, create your Linux username and password, type exit, then click Install / continue.",
+        "restart_windows" => "Restart Windows, reopen XR Gate, then continue installation.",
+        "ubuntu_first_login" => "In the Ubuntu window, create your Linux username and password, type exit, then click Install.",
         "restart_ubuntu" => "Save your work in the selected Ubuntu distribution, then click Restart Ubuntu & continue.",
-        _ when ExitCode == 20 => "Installation is paused. Follow the last instructions in the activity log, then click Install / continue.",
+        _ when ExitCode == 20 => "Installation is paused. Follow the instructions in the activity log, then click Install.",
         _ when !Success => Message.Length > 0 ? Message : "The action failed. Check the activity log or run Diagnostics.",
         _ => Message
     };

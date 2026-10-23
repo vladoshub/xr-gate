@@ -40,12 +40,13 @@ string folder = Path.Combine(Path.GetTempPath(), "xr-gate-launcher-tests-" + Gui
 Directory.CreateDirectory(folder);
 try
 {
+    SetupTests.Run(folder);
     Directory.CreateDirectory(Path.Combine(folder, "hardware"));
     File.Copy(Path.Combine(source, ".env.example"), Path.Combine(folder, ".env.example"));
     File.Copy(Path.Combine(source, "hardware/xreal_ultra.env"), Path.Combine(folder, "hardware/xreal_ultra.env"));
     string env = Path.Combine(folder, ".env"), state = Path.Combine(folder, "state.json");
     File.WriteAllText(state, JsonSerializer.Serialize(new { FrequencyHz = 90, GearVR = true, BluetoothInstanceId = "saved-dongle", Distribution = "Ubuntu-24.04" }));
-    File.WriteAllText(env, "# My advanced configuration\nXR_TCP_PORT=45999\nXR_STEAMVR_PATH=\"D:\\Games O'Brien\\SteamVR\"\n");
+    File.WriteAllText(env, "# My advanced configuration\nXR_TCP_PORT=45999\nXR_GEARVR=1\nXR_BLUETOOTH=1\nXR_STEAMVR_PATH=\"D:\\Games O'Brien\\SteamVR\"\n");
     var settings = LauncherSettings.Load(folder, state);
     Check(settings.FrequencyHz == "90" && settings.GearVr && settings.BluetoothEnabled, "Saved hardware/controller selections were lost.");
     Check(settings.SteamVrPath == @"D:\Games O'Brien\SteamVR", "Quoted Windows path did not survive parsing.");

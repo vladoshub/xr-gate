@@ -744,7 +744,8 @@ class Runtime:
     def run_managed(self, args, env, *, handle=None, kind="runtime"):
         if handle is None:
             handle = self.acquire_lock()
-        session = dict(process_identity(os.getpid()), session_id=uuid.uuid4().hex, session_kind=kind)
+        session = dict(process_identity(os.getpid()), session_id=uuid.uuid4().hex, session_kind=kind,
+                       started_ns=time.time_ns(), launch_token=self.cfg.get("runtime_guard", {}).get("token", ""))
         session_path = self.base / "runtime-session.json"
         self.write(session_path, json.dumps(session) + "\n")
         try:

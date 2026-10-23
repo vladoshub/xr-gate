@@ -13,6 +13,12 @@ Assert ((Get-XrDeviceObservation @($glasses,$other)).device_status -eq 'CONNECTE
 $glasses.ClientIPAddress = '172.0.0.1'
 $observation = Get-XrDeviceObservation @($glasses,$other)
 Assert ($observation.device_status -eq 'SHARED' -and $observation.device_name -eq 'Fixture glasses') 'WSL attachment or the configured readable name was lost.'
+$script:Settings.XR_USB_IDS = '1234:abcd,1111:2222'
+Assert ((Get-XrDeviceObservation @($glasses)).device_status -eq 'NOT CONNECTED') 'Only one of two required USB devices enabled startup.'
+$script:Settings.XR_USB_IDS = '1234:abcd'
+$script:Settings.XR_USB_BUS_IDS = '1-2,9-9'
+Assert ((Get-XrDeviceObservation @($glasses)).device_status -eq 'NOT CONNECTED') 'A missing explicitly selected BUSID enabled startup.'
+$script:Settings.XR_USB_BUS_IDS = ''
 
 $dongle = Device 'USB\VID_1111&PID_2222\DONGLE' '4-7' '172.0.0.1'
 # Desired Bluetooth is now disabled, but Stop still owns the earlier attachment.

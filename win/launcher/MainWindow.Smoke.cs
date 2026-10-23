@@ -13,6 +13,7 @@ public partial class MainWindow
         if (!smoke) throw new InvalidOperationException("UI fixture is only available in smoke mode.");
         configurationProblem = null;
         UpdateRecoveryUi();
+        await VerifySetupUiAsync();
         if (!MainTabs.Items.Cast<TabItem>().Select(tab => tab.Header?.ToString()).SequenceEqual(new[] { "Run", "Controllers", "Audio", "Settings", "Tools" }) || Icon is null)
             throw new InvalidOperationException("The tab order, labels or application icon is missing.");
         MainTabs.SelectedItem = ControllersTab;
@@ -89,7 +90,7 @@ public partial class MainWindow
             CancelDiagnosticsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             if (await pending.WaitAsync(TimeSpan.FromSeconds(5)))
                 throw new InvalidOperationException("Cancelled check reported success.");
-            if (!ActionPanel.IsEnabled || !ConnectionPanel.IsEnabled || !SettingsPanel.IsEnabled)
+            if (!ActionPanel.IsEnabled || !SettingsPanel.IsEnabled)
                 throw new InvalidOperationException("Cancellation left the UI blocked.");
             if (!await ExecuteAsync("Status", saveSettings: false))
                 throw new InvalidOperationException("The UI could not start an action after cancellation.");
@@ -99,7 +100,7 @@ public partial class MainWindow
         // The close handler uses this same cancellation-and-wait path.
         if (!IsCancellableOperation(busyAction)) throw new InvalidOperationException("USB attach still blocks window closing.");
         await CancelActiveOperationAsync().WaitAsync(TimeSpan.FromSeconds(5));
-        if (await closingUsb || busyAction.Length != 0 || !ActionPanel.IsEnabled || !ConnectionPanel.IsEnabled)
+        if (await closingUsb || busyAction.Length != 0 || !ActionPanel.IsEnabled)
             throw new InvalidOperationException("Closing during USB attach left an active operation.");
         foreach (bool duringStartup in new[] { false, true })
         {
@@ -125,11 +126,74 @@ public partial class MainWindow
         smokeAction = (_, _) => { calls++; throw new InvalidOperationException("Recovery invoked a backend action."); };
         configurationProblem = new ConfigurationProblem(Path.Combine(root, ".env"), "fixture configuration error", true);
         UpdateRecoveryUi();
-        if (RecoveryPanel.Visibility != Visibility.Visible || !SettingsFields.IsEnabled || ActionPanel.IsEnabled || ConnectionPanel.IsEnabled || AudioFields.IsEnabled ||
+        if (RecoveryPanel.Visibility != Visibility.Visible || !SettingsFields.IsEnabled || ActionPanel.IsEnabled || AudioFields.IsEnabled ||
             await ExecuteAsync("Doctor", saveSettings: false) || calls != 0)
             throw new InvalidOperationException("Configuration recovery did not keep the repair UI available and actions blocked.");
         configurationProblem = null;
         smokeAction = null;
         UpdateRecoveryUi();
+    }
+
+    private async Task VerifySetupUiAsync()
+    {
+        int installs = 0, prompts = 0;
+        bool setupComplete = false;
+        readiness.Known = true; readiness.Installed = installed = false;
+        readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = false;
+        UpdateReadinessUi();
+        if (InstallButton.IsEnabled || StartButton.IsEnabled || !DisplayButton.IsEnabled || !Equals(DisplayButton.Tag, true))
+            throw new InvalidOperationException("Fresh setup must allow display selection and block Install/Start VR.");
+        smokeConfirmation = _ => { prompts++; return true; };
+        smokeAction = (action, _) =>
+        {
+            if (action == "Install")
+            {
+                installs++;
+                return Task.FromResult(new ActionResult { ExitCode = 20, NextStep = "restart_windows" });
+            }
+            return Task.FromResult(new ActionResult { ExitCode = 0, Data = JsonSerializer.SerializeToElement(new
+            {
+                installed = setupComplete, setup_complete = setupComplete, running = false,
+                install_pending = !setupComplete, install_next_step = "restart_windows",
+                display_selected = true, display_connected = true, device_status = "CONNECTED"
+            }) });
+        };
+        await BeginInstallationAsync();
+        if (installs != 0 || prompts != 0) throw new InvalidOperationException("Install ignored the missing display.");
+        readiness.DisplaySelected = readiness.DisplayConnected = true;
+        UpdateReadinessUi();
+        if (!InstallButton.IsEnabled || StartButton.IsEnabled || !Equals(InstallButton.Tag, true) || Equals(DisplayButton.Tag, true))
+            throw new InvalidOperationException("Choosing a display must enable Install before WSL is installed.");
+        smokeConfirmation = _ => { prompts++; return false; };
+        await BeginInstallationAsync();
+        if (installs != 0 || prompts != 1) throw new InvalidOperationException("Install bypassed the WSL confirmation.");
+        smokeConfirmation = message => { prompts++; return message.StartsWith("XR Gate will install"); };
+        await BeginInstallationAsync();
+        if (installs != 1 || !setupProgress.Pending || setupProgress.NextStep != "restart_windows" ||
+            NextStepButton.Content as string != "Restart Windows" || StartButton.IsEnabled)
+            throw new InvalidOperationException("A required reboot lost continuation state or enabled Start VR.");
+        smokeConfirmation = _ => { prompts++; return false; };
+        int previousPrompts = prompts;
+        await OfferResumeAsync();
+        if (prompts != previousPrompts + 1 || installs != 1)
+            throw new InvalidOperationException("Reopening unfinished setup did not offer continuation with confirmation.");
+        setupComplete = true;
+        await ExecuteAsync("Status", saveSettings: false);
+        if (!StartButton.IsEnabled || InstallButton.Content as string != "Update" || setupProgress.Pending)
+            throw new InvalidOperationException("Complete setup did not enable Start VR and change Install to Update.");
+        ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "NOT CONNECTED", display_selected = true, display_connected = false }));
+        if (StartButton.IsEnabled || InstallButton.IsEnabled || !DisplayButton.IsEnabled)
+            throw new InvalidOperationException("Disconnect left Start VR or Install enabled.");
+        FlushLog();
+        var before = LogBox.Document.Blocks.Count;
+        calibrationNotices.Reset();
+        foreach (string stage in new[] { "zeroing", "zeroing", "optical", "optical", "complete", "complete" })
+            if (calibrationNotices.Observe(stage) is { } notice) LogCalibration(notice);
+        FlushLog();
+        var notices = LogBox.Document.Blocks.Skip(before).Cast<System.Windows.Documents.Paragraph>().ToArray();
+        if (notices.Length != 3 || notices.Any(item => item.FontSize < 18 || item.FontWeight != FontWeights.Bold) ||
+            notices[0].Foreground.ToString() != "#FFFF6666" || notices[2].Foreground != System.Windows.Media.Brushes.LightGreen)
+            throw new InvalidOperationException("Calibration log must show two red stages and one green confirmation without repeats.");
+        smokeConfirmation = null; smokeAction = null;
     }
 }
