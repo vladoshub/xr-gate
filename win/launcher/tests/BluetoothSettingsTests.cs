@@ -41,5 +41,70 @@ internal static class BluetoothSettingsTests
         settings.Save(root);
         settings = LauncherSettings.Load(root, state);
         Check(settings.BluetoothBusId == "" && settings.BluetoothUsbId == "0b05:190e", "Clearing a manual BUSID did not retain the configured automatic identity.");
+        VerifyControllerAutoSave(root, state, env);
+    }
+
+    private static void VerifyControllerAutoSave(string root, string state, string env)
+    {
+        File.WriteAllText(env, "# Preserve advanced choices\nXR_TCP_PORT=45999\nXR_DISTRIBUTION=Ubuntu-24.04\nXR_AUDIO_OUTPUT=none\nXR_BLUETOOTH_BUS_ID=4-16\nXR_CONTROLLER_CONFIG=old.json\n");
+        var settings = LauncherSettings.Load(root, state);
+        settings.Distribution = "unfinished distribution";
+        settings.FrequencyHz = "";
+        settings.AudioOutputId = "unfinished audio output";
+        settings.SteamVrPath = "unsaved SteamVR path";
+        settings.ControllerMode = "gearvr";
+        settings.BluetoothEnabled = true;
+        settings.BluetoothBusId = "3-13";
+        settings.BluetoothUsbId = "ABCD:0123";
+        settings.ControllerConfig = @"C:\Новая папка\O'Brien\controllers.json";
+        settings.SaveControllerSettings(root);
+        var saved = LauncherSettings.Load(root, state);
+        Check(saved.GearVr && saved.BluetoothEnabled && saved.BluetoothBusId == "3-13" &&
+            saved.BluetoothUsbId == "ABCD:0123" && saved.ControllerConfig == settings.ControllerConfig,
+            "Controller autosave did not persist all controller fields.");
+        Check(saved.Distribution == "Ubuntu-24.04" && saved.FrequencyHz == "60" && saved.AudioOutputId == "none" && saved.SteamVrPath == "",
+            "Controller autosave changed unrelated unfinished settings.");
+        Check(File.ReadAllText(env).Contains("# Preserve advanced choices\nXR_TCP_PORT=45999"),
+            "Controller autosave lost advanced settings or comments.");
+        byte[] before = File.ReadAllBytes(env);
+        foreach (string invalid in new[] { "3-", "3-13,4-16", "3-13\nXR_PRIVATE=1" })
+        {
+            settings.BluetoothBusId = invalid;
+            bool rejected = false;
+            try { settings.SaveControllerSettings(root); } catch (FormatException) { rejected = true; }
+            Check(rejected && before.SequenceEqual(File.ReadAllBytes(env)), "Incomplete or unsafe BUSID overwrote the last valid settings.");
+        }
+        settings.BluetoothBusId = "3-13";
+        settings.BluetoothUsbId = "abcd:";
+        bool identityRejected = false;
+        try { settings.SaveControllerSettings(root); } catch (FormatException) { identityRejected = true; }
+        Check(identityRejected && before.SequenceEqual(File.ReadAllBytes(env)), "Incomplete VID:PID overwrote the last valid settings.");
+        settings.BluetoothUsbId = "ABCD:0123";
+        settings.ControllerConfig = "controllers.json\nXR_PRIVATE=1";
+        bool pathRejected = false;
+        try { settings.SaveControllerSettings(root); } catch (FormatException) { pathRejected = true; }
+        Check(pathRejected && before.SequenceEqual(File.ReadAllBytes(env)), "Unsafe controller config overwrote saved settings.");
+        settings.ControllerMode = "gestures";
+        settings.BluetoothEnabled = false;
+        settings.BluetoothBusId = settings.BluetoothUsbId = settings.ControllerConfig = "";
+        settings.SaveControllerSettings(root);
+        saved = LauncherSettings.Load(root, state);
+        Check(!saved.GearVr && !saved.BluetoothEnabled && saved.BluetoothBusId == "" &&
+            saved.BluetoothUsbId == "" && saved.ControllerConfig == "", "Clearing controller selections was not saved.");
+        before = File.ReadAllBytes(env);
+        DateTime unchangedTime = new(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(env, unchangedTime);
+        settings.SaveControllerSettings(root);
+        Check(before.SequenceEqual(File.ReadAllBytes(env)) && File.GetLastWriteTimeUtc(env) == unchangedTime &&
+            Directory.GetFiles(root, ".env.controllers-*").Length == 0, "Unchanged controller autosave rewrote the file or left temporary files.");
+        File.WriteAllText(env, "# Inherit the adapter from the preset\n");
+        settings = LauncherSettings.Load(root, state);
+        settings.ControllerMode = "gearvr";
+        settings.SaveControllerSettings(root);
+        Check(!LauncherSettings.ReadEnv(env).ContainsKey("XR_BLUETOOTH_USB_ID"), "Autosaving the controller mode pinned an unchanged adapter default.");
+        settings = LauncherSettings.Load(root, state);
+        settings.HardwareEnv = "hardware/custom.env";
+        settings.Save(root);
+        Check(LauncherSettings.Load(root, state).BluetoothUsbId == "1234:abcd", "Controller autosave blocked adapter inheritance from a new preset.");
     }
 }

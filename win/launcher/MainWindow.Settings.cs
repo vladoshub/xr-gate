@@ -27,6 +27,8 @@ public partial class MainWindow
 
     private void ReloadConfiguration(string? hardware = null)
     {
+        FlushControllerSettings();
+        ResetControllerAutoSave();
         var session = SettingsRecovery.Open(root, hardwareOverride: hardware);
         settings = session.Settings;
         if (hardware is not null) settings.AutoDetectHardware = false;

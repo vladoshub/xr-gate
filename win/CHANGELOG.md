@@ -1,3 +1,9 @@
+## Controller settings autosave
+
+- Save Controllers fields automatically; text fields wait briefly after typing.
+- Keep the last valid settings when an adapter identifier is incomplete, with an inline message.
+- Save pending valid edits on close and preserve unrelated settings and preset defaults.
+
 ## Runtime exit and camera selection
 
 - Stop waiting for TCP when the owned runtime exits; keep device status live during startup.

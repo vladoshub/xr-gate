@@ -234,9 +234,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         if (!int.TryParse(FrequencyHz, out int hz) || hz < 1 || hz > 1000) throw new FormatException("Refresh rate must be 1–1000 Hz.");
         if (DisplayMode is not ("direct" or "extended_sbs")) throw new FormatException("Display mode must be direct or extended_sbs.");
         foreach (string id in UsbBusIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) ValidateBusId(id);
-        if (BluetoothBusId.Length > 0) ValidateBusId(BluetoothBusId.Trim());
-        if (BluetoothUsbId.Trim().Length > 0 && !Regex.IsMatch(BluetoothUsbId.Trim(), @"^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$"))
-            throw new FormatException("Bluetooth VID:PID must look like 1234:abcd, or be empty to use the saved adapter.");
+        ValidateControllerSettings();
         ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
         string path = Path.Combine(root, ".env");
         string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
@@ -257,6 +255,49 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         baseline = values;
+    }
+
+    private Dictionary<string, string> ControllerValues() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["XR_CONTROLLER_MODE"] = ControllerMode, ["XR_GEARVR"] = GearVr ? "1" : "0",
+        ["XR_BLUETOOTH"] = BluetoothEnabled ? "1" : "0",
+        ["XR_BLUETOOTH_BUS_ID"] = BluetoothBusId.Trim(), ["XR_BLUETOOTH_USB_ID"] = BluetoothUsbId.Trim(),
+        ["XR_CONTROLLER_CONFIG"] = ControllerConfig.Trim()
+    };
+
+    private void ValidateControllerSettings()
+    {
+        foreach (string value in ControllerValues().Values) ValidateLiteral(value);
+        if (BluetoothBusId.Trim().Length > 0) ValidateBusId(BluetoothBusId.Trim());
+        if (BluetoothUsbId.Trim().Length > 0 && !Regex.IsMatch(BluetoothUsbId.Trim(), @"^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$"))
+            throw new FormatException("Bluetooth VID:PID must look like 1234:abcd, or be empty to use the saved adapter.");
+    }
+
+    // Controller edits must not save or validate unfinished fields in other tabs.
+    public void SaveControllerSettings(string root)
+    {
+        ValidateControllerSettings();
+        var values = ControllerValues();
+        RememberEdits();
+        // Keep unchanged adapter/config defaults inherited from the hardware preset.
+        var persisted = values.Where(pair => explicitKeys.Contains(pair.Key) || profileChoices.Contains(pair.Key) ||
+            pair.Key is "XR_CONTROLLER_MODE" or "XR_GEARVR" or "XR_BLUETOOTH")
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        var removed = values.Keys.Where(key => !persisted.ContainsKey(key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string path = Path.Combine(root, ".env");
+        string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
+        string updated = UpdateEnv(original, persisted, removed);
+        if (updated != original)
+        {
+            string temporary = path + ".controllers-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                File.WriteAllText(temporary, updated, new UTF8Encoding(false));
+                File.Move(temporary, path, true);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+        foreach (var pair in values) baseline[pair.Key] = pair.Value;
     }
 
     private void ValidateAudioSelection()

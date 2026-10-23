@@ -15,7 +15,7 @@ XR Gate работает через подсистему Windows Subsystem for L
 ## Вкладки
 
 - **Run** — Выбор дисплея, Install / Update, Start VR, Stop, статус и Activity Log. Мигающие кнопки подсказывают следующий шаг.
-- **Controllers** — По умолчанию Gestures, Bluetooth выключен. Для Gear VR Controllers включите Bluetooth, выберите левый и/или правый контроллер и нажмите Connect & save. Подсказки к калибровке появляются в Activity Log один раз на этап.
+- **Controllers** — По умолчанию Gestures, Bluetooth выключен. Поля сохраняются автоматически. Для Gear VR Controllers включите Bluetooth, выберите левый и/или правый контроллер и нажмите Connect & save. Подсказки к калибровке появляются в Activity Log один раз на этап.
 - **Audio** — Источник звука Windows и выход Ubuntu либо No audio. Выбор сохраняется после переподключения. Только воспроизведение, без микрофона.
 - **Settings** — Hardware preset, параметры дисплея и запуска. Show command prompt по умолчанию выключен; включите перед запуском, если нужны команды калибровки в консоли.
 - **Tools** — Diagnostics, регистрация драйвера и проверки трекинга. List USB devices остаётся в Settings.

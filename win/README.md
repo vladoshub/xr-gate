@@ -15,7 +15,7 @@ Install SteamVR, open it once and close it. Extract the complete xr-gate-windows
 ## Tabs
 
 - **Run** — Display selection, Install / Update, Start VR, Stop, status and Activity Log. Blinking buttons show the next setup step.
-- **Controllers** — Gestures is the default; Bluetooth is off. For Gear VR Controllers, enable Bluetooth, pair and select the left and/or right controller, then Connect & save. Calibration instructions appear once per stage in Activity Log.
+- **Controllers** — Gestures is the default; Bluetooth is off. Fields save automatically. For Gear VR Controllers, enable Bluetooth, pair and select the left and/or right controller, then Connect & save. Calibration instructions appear once per stage in Activity Log.
 - **Audio** — Choose the Windows sound source and Ubuntu output, or No audio. Choices are remembered after reconnection. Playback only; no microphone.
 - **Settings** — Hardware preset, display and launch settings. Show command prompt is off by default; enable it before starting for console calibration commands.
 - **Tools** — Diagnostics, driver registration and tracking checks. List USB devices stays in Settings.

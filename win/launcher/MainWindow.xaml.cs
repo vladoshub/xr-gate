@@ -68,6 +68,7 @@ public partial class MainWindow : Window
         runner = new ProcessRunner(root, stateDirectory, Log);
         audio = new AudioBridge(root, Log);
         InitializeAudioUi();
+        InitializeControllerAutoSave();
         logTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         logTimer.Tick += (_, _) => FlushLog();
         logTimer.Start();
@@ -166,7 +167,7 @@ public partial class MainWindow : Window
         {
             if (action is "Stop" or "Detach") { await StopCalibrationProgressAsync(); await StopAudioAsync(required: true); }
             bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop");
-            if (writesSettings && !smoke) settings.Save(root);
+            if (writesSettings && !smoke) { settings.Save(root); ControllerSettingsSaved(); }
             var actionSettings = writesSettings || smokeAction is not null || action == "Stop" ? settings : LauncherSettings.Load(root);
             if (smokeAction is null && action is not ("Stop" or "Status" or "Doctor" or "Display")) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
             if (action == "Run") { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
@@ -452,7 +453,7 @@ public partial class MainWindow : Window
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
         if (configurationProblem is not null) { UpdateRecoveryUi(); return; }
-        try { settings.Save(root); StatusDetail.Text = "Settings saved. Advanced settings and device selections are preserved."; Log("Settings saved."); }
+        try { settings.Save(root); ControllerSettingsSaved(); StatusDetail.Text = "Settings saved. Advanced settings and device selections are preserved."; Log("Settings saved."); }
         catch (Exception exception) { StatusDetail.Text = exception.Message; Log("ERROR: " + exception.Message); }
     }
 
@@ -608,6 +609,8 @@ public partial class MainWindow : Window
 
     private async Task<bool> ShutdownSessionAsync()
     {
+        FlushControllerSettings();
+        if (controllerSettingsDirty) Log("[Launcher] " + ControllerSaveStatus.Text);
         deviceTimer.Stop();
         deviceCancellation.Cancel();
         await StopCalibrationProgressAsync();
@@ -631,6 +634,7 @@ public partial class MainWindow : Window
     private void ReleaseResources()
     {
         if (resourcesReleased) return;
+        controllerSaveTimer.Stop();
         deviceTimer.Stop();
         deviceCancellation.Cancel();
         audio.Cancel();

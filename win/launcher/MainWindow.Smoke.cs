@@ -133,6 +133,70 @@ public partial class MainWindow
         configurationProblem = null;
         smokeAction = null;
         UpdateRecoveryUi();
+        await VerifyControllerAutoSaveAsync();
+    }
+
+    private async Task VerifyControllerAutoSaveAsync()
+    {
+        string temporary = Path.Combine(Path.GetTempPath(), "xr-gate-controller-ui-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporary);
+        string originalMode = settings.ControllerMode, originalBusId = settings.BluetoothBusId,
+            originalUsbId = settings.BluetoothUsbId, originalConfig = settings.ControllerConfig;
+        bool originalBluetooth = settings.BluetoothEnabled;
+        int saves = 0;
+        try
+        {
+            ResetControllerAutoSave();
+            MainTabs.SelectedItem = ControllersTab;
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            smokeControllerSave = () => { settings.SaveControllerSettings(temporary); saves++; };
+            ControllerModeBox.SetCurrentValue(ComboBox.SelectedValueProperty, originalMode == "gestures" ? "gearvr" : "gestures");
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            if (saves != 1 || controllerSettingsDirty)
+                throw new InvalidOperationException("Changing controller mode did not save immediately.");
+            BluetoothEnabledBox.SetCurrentValue(CheckBox.IsCheckedProperty, !originalBluetooth);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            if (saves != 2 || controllerSettingsDirty)
+                throw new InvalidOperationException("Changing the Bluetooth checkbox did not save immediately.");
+            BluetoothBusIdBox.SetCurrentValue(TextBox.TextProperty, "9-");
+            BluetoothBusIdBox.SetCurrentValue(TextBox.TextProperty, "9-10");
+            BluetoothUsbIdBox.SetCurrentValue(TextBox.TextProperty, "abcd:0123");
+            ControllerConfigBox.SetCurrentValue(TextBox.TextProperty, @"C:\Новая папка\controllers.json");
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            if (!controllerSettingsDirty || !controllerSaveTimer.IsEnabled || saves != 2)
+                throw new InvalidOperationException("Typing did not defer and combine controller autosaves.");
+            await Task.Delay(750);
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            var values = LauncherSettings.ReadEnv(Path.Combine(temporary, ".env"), true);
+            if (saves != 3 || controllerSettingsDirty || values["XR_BLUETOOTH_BUS_ID"] != "9-10" ||
+                values["XR_BLUETOOTH_USB_ID"] != "abcd:0123" || values["XR_CONTROLLER_CONFIG"] != settings.ControllerConfig)
+                throw new InvalidOperationException("The debounced autosave did not persist the final text values.");
+            byte[] before = File.ReadAllBytes(Path.Combine(temporary, ".env"));
+            BluetoothUsbIdBox.SetCurrentValue(TextBox.TextProperty, "abcd:");
+            await Task.Delay(750);
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            if (!controllerSettingsDirty || !ControllerSaveStatus.Text.StartsWith("Not saved:") ||
+                !before.SequenceEqual(File.ReadAllBytes(Path.Combine(temporary, ".env"))))
+                throw new InvalidOperationException("An incomplete controller identifier was saved or had no inline explanation.");
+            BluetoothUsbIdBox.SetCurrentValue(TextBox.TextProperty, "abcd:0124");
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            if (!await ShutdownSessionAsync() || controllerSettingsDirty || saves != 4 ||
+                LauncherSettings.ReadEnv(Path.Combine(temporary, ".env"))["XR_BLUETOOTH_USB_ID"] != "abcd:0124")
+                throw new InvalidOperationException("Closing did not flush the last valid edit before its debounce elapsed.");
+        }
+        finally
+        {
+            smokeControllerSave = null;
+            ResetControllerAutoSave();
+            settings.ControllerMode = originalMode; settings.BluetoothEnabled = originalBluetooth;
+            settings.BluetoothBusId = originalBusId; settings.BluetoothUsbId = originalUsbId; settings.ControllerConfig = originalConfig;
+            ControllerModeBox.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateTarget();
+            BluetoothEnabledBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
+            BluetoothBusIdBox.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            BluetoothUsbIdBox.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            ControllerConfigBox.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            Directory.Delete(temporary, true);
+        }
     }
 
     private async Task VerifySetupUiAsync()
