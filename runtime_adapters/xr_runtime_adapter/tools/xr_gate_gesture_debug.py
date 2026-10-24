@@ -65,7 +65,23 @@ def make_followup_plan(hand="both"):
     return plan
 
 
-def make_plan(hand="both", full=False, follow_up=False):
+def make_plan(hand="both", full=False, follow_up=False, grip_only=False):
+    if grip_only:
+        poses = [
+            ("grip_closed", "Кисть ПРЯМО. Согни четыре пальца, большой отогни. Это отпущенный Grip."),
+            ("grip_open", "Кисть ПРЯМО. Выпрями только МИЗИНЕЦ, остальные три согни, большой отогни."),
+            ("grip_closed", "Снова СОГНИ МИЗИНЕЦ. Указательный/средний/безымянный остаются согнутыми."),
+            ("grip_open", "Ещё раз выпрями МИЗИНЕЦ. Держи его в поле зрения камер, остальные три согнуты."),
+            ("grip_open", "Мизинец остаётся ПРЯМЫМ, остальные три согнуты. Наклони кисть ВПЕРЁД, от себя."),
+            ("grip_closed", "Не меняя наклон вперёд, СОГНИ МИЗИНЕЦ. Все четыре согнуты."),
+            ("grip_open", "Снова выпрями МИЗИНЕЦ и наклони кисть НАЗАД, к себе. Остальные три согнуты."),
+            ("grip_closed", "При том же наклоне назад СОГНИ МИЗИНЕЦ. Все четыре согнуты."),
+            ("grip_open", "Кисть ПРЯМО, МИЗИНЕЦ прямой, остальные три согнуты. Теперь большой ПРИЖМИ к ладони."),
+            ("grip_closed", "Сожми обычный кулак, большой снаружи. Мизинец СОГНУТ: Grip отпущен."),
+        ]
+        sides = ("left", "right") if hand == "both" else (hand,)
+        return [dict(hand=side,label=label,instruction=instruction)
+                for side in sides for label,instruction in poses]
     if follow_up:
         return make_followup_plan(hand)
     poses = [
@@ -348,6 +364,7 @@ def main(argv=None):
         help="полная запись: D-pad и пальцы выбранных рук, Trigger/Grip при наклонах, A/B, V, двуручный Menu")
     session.add_argument("--follow-up", action="store_true",
         help="правая: новая калибровка D-pad; выбранные руки: Trigger при наклонах и V (левый D-pad не калибруется)")
+    session.add_argument("--grip", action="store_true", help="отдельная докалибровка Grip: мизинец разогнут/согнут, оси не калибруются")
     parser.add_argument("--no-beep", action="store_true", help="отключить сигнал терминала")
     parser.add_argument("--yes", action="store_true", help="начать без начального Enter")
     parser.add_argument("--plan-only", action="store_true", help="показать сценарий без подключения и записи")
@@ -360,7 +377,7 @@ def main(argv=None):
         parser.error("--hold: от 1 до 60 секунд")
     if not math.isfinite(args.prepare) or not 1 <= args.prepare <= 60:
         parser.error("--prepare: от 1 до 60 секунд")
-    plan = make_plan(args.hand, args.full, args.follow_up)
+    plan = make_plan(args.hand, args.full, args.follow_up, args.grip)
     duration = len(plan)*(args.hold+args.prepare)+5
     print(f"XR Gate: {len(plan)} поз, примерно {math.ceil(duration/60)} мин. Руки: {NAMES[args.hand]}.")
     if args.plan_only:
@@ -373,7 +390,7 @@ def main(argv=None):
         parser.error(f"Файл уже существует: {args.output}. Выбери другое имя.")
     metadata = {"schema": SCHEMA, "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "host": args.host, "port": args.port, "hand": args.hand, "hold_seconds": args.hold,
-        "session": "follow_up" if args.follow_up else "full" if args.full else "standard",
+        "session": "grip" if args.grip else "follow_up" if args.follow_up else "full" if args.full else "standard",
         "prepare_seconds": args.prepare, "plan": plan, "runtime_processes": runtime_options(),
         "joint_order": "0 wrist; 1..4 thumb; 5..8 index; 9..12 middle; 13..16 ring; 17..20 little"}
     if args.profile:
@@ -385,7 +402,9 @@ def main(argv=None):
     print("На время записи жестов отключи override_controller или поставь его блокировку жестов в 0.")
     print("Сними джойстики. Держи обе руки в поле зрения камер, без перемещения всего предплечья.")
     print("Когда проверяем одну руку, вторую держи спокойно: все пальцы, включая большой, согнуты.")
-    if args.follow_up:
+    if args.grip:
+        print("Отдельная запись Grip: меняй только мизинец; указательный, средний и безымянный остаются согнутыми.")
+    elif args.follow_up:
         print("Сценарий не калибрует левый D-pad. На выбранных руках проверяем Trigger и новый V.")
     elif args.full:
         print("Полная перекалибровка: нейтраль, четыре направления и пальцы каждой выбранной руки; A/B, V и Menu.")

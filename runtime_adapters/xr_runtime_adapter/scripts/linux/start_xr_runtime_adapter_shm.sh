@@ -537,6 +537,12 @@ if [[ "$HMD_3DOF_PRIORITY" == "1" ]]; then
 fi
 if [[ "$EMULATION_CONTROLLER" == "1" ]]; then
   args+=(--emulation-controller 1)
+  if [[ -z "$EMULATION_CONTROLLER_CONFIG" ]]; then
+    emulation_user_profile="$ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+    if [[ -f "$emulation_user_profile" ]]; then
+      EMULATION_CONTROLLER_CONFIG="$emulation_user_profile"
+    fi
+  fi
   if [[ -n "$EMULATION_CONTROLLER_CONFIG" ]]; then
     args+=(--emulation-controller-config "$(expand_tilde "$EMULATION_CONTROLLER_CONFIG")")
   fi

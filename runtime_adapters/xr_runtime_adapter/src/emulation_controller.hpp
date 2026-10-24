@@ -25,10 +25,15 @@ struct HandConfig {
   std::array<Vec3, 4> directions{};  // left, right, forward, back, relative to neutral
   double deadzone = -1;
   std::array<double, 4> open_curl{{0, 0, 0, 0}}, closed_curl{{1, 1, 1, 1}};
+  bool grip_calibrated = false;
+  double grip_open_curl = 0, grip_closed_curl = 1;
 };
 struct Config {
   HandConfig left, right;
   std::string dpad_mode = "four_way";
+  std::string profile_path;
+  bool wrist_filter_enabled = true;
+  double wrist_filter_degrees = 2;
   double range_degrees = 30, deadzone = 0.18, smoothing_ms = 40;
   double min_confidence = 0.3, max_age_ms = 120;
   double extension_on = 0.7, extension_off = 0.45;
@@ -70,6 +75,8 @@ class Controller {
     Vec3 neutral{}, axis_x{}, axis_y{};
     std::array<Finger, 4> fingers{};
     std::array<double, 4> extension{};
+    bool grip_extended = false;
+    double grip_extension = 0;
     Channel trigger_channel{}, grip_channel{};
     Pose candidate = Pose::None, active = Pose::None;
     uint64_t pose_since_ns = 0;

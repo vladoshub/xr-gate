@@ -1,4 +1,5 @@
 #include "emulation_controller.hpp"
+#include "emulation_wrist_filter.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,17 @@ xr_runtime::HandSideF32V2 side(const Json& j, uint32_t handedness) {
   out.handedness = handedness;
   out.status = j.value("status", 0u); out.flags = j.value("flags", 0u);
   out.confidence = j.value("confidence", 0.0f);
+  const auto pose = [&](const char* name, float& x, float& y, float& z,
+                         float& w, float& qx, float& qy, float& qz) {
+    if (!j.contains(name)) return;
+    const auto& p = j.at(name);
+    const auto xyz = p.at("position").get<std::array<float,3>>();
+    const auto q = p.at("orientation_xyzw").get<std::array<float,4>>();
+    x=xyz[0]; y=xyz[1]; z=xyz[2]; w=q[3]; qx=q[0]; qy=q[1]; qz=q[2];
+  };
+  pose("controller",out.controller_px,out.controller_py,out.controller_pz,out.controller_qw,out.controller_qx,out.controller_qy,out.controller_qz);
+  pose("palm",out.palm_px,out.palm_py,out.palm_pz,out.palm_qw,out.palm_qx,out.palm_qy,out.palm_qz);
+  pose("wrist",out.wrist_px,out.wrist_py,out.wrist_pz,out.wrist_qw,out.wrist_qx,out.wrist_qy,out.wrist_qz);
   if (!j.contains("joints")) return out;
   std::array<bool, 21> seen{};
   for (const auto& joint : j.at("joints")) {
@@ -30,6 +42,10 @@ xr_runtime::HandSideF32V2 side(const Json& j, uint32_t handedness) {
     o.joint_id = id; o.flags = joint.value("flags", 0u);
     o.confidence = joint.value("confidence", 0.0f);
     o.px = float(p[0]); o.py = float(p[1]); o.pz = float(p[2]);
+    if (joint.contains("orientation_xyzw")) {
+      const auto q=joint.at("orientation_xyzw").get<std::array<float,4>>();
+      o.qx=q[0]; o.qy=q[1]; o.qz=q[2]; o.qw=q[3];
+    }
     out.joint_count = std::max(out.joint_count, id+1);
   }
   return out;
@@ -110,15 +126,19 @@ Json controller_json(const xr_runtime::RuntimeControllerSideStateV1& c, const em
           {"thumb_straightness", m.thumb_straightness},
           {"pinch_ratio", m.pinch_ratio}, {"palm_valid", m.palm_valid},
           {"finger_order", {"index", "middle", "ring", "little"}},
-          {"finger_curl", m.curl}, {"finger_extension", extension}};
+          {"finger_curl", m.curl}, {"finger_extension", extension},
+          {"grip_extension", m.curl[3] < 0 ? -1 : config.grip_calibrated
+              ? 1-std::clamp((m.curl[3]-config.grip_open_curl) /
+                  (config.grip_closed_curl-config.grip_open_curl),0.0,1.0) : extension[3]}};
 }
 } // namespace
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 4 || (std::string(argv[1]) != "replay" && std::string(argv[1]) != "calibrate") ||
+    if (argc < 4 || (std::string(argv[1]) != "replay" && std::string(argv[1]) != "calibrate" &&
+                     std::string(argv[1]) != "calibrate-grip") ||
         (argc != 4 && argc != 6) || (argc == 6 && std::string(argv[4]) != "--config")) {
-      std::cerr << "Usage: xr_emulation_tool replay|calibrate INPUT.jsonl OUTPUT.json[l] [--config PROFILE.json]\n";
+      std::cerr << "Usage: xr_emulation_tool replay|calibrate|calibrate-grip INPUT.jsonl OUTPUT.json[l] [--config PROFILE.json]\n";
       return 2;
     }
     Json profile = Json::object();
@@ -127,8 +147,11 @@ int main(int argc, char** argv) {
     std::ifstream input(argv[2]);
     if (!input) throw std::runtime_error("cannot open input");
     { std::ifstream existing(argv[3]); if (existing.good()) throw std::runtime_error("output already exists; choose a new filename"); }
-    const bool calibrate = std::string(argv[1]) == "calibrate";
+    const bool grip_only = std::string(argv[1]) == "calibrate-grip";
+    if (grip_only && argc != 6) throw std::runtime_error("calibrate-grip requires --config CURRENT.json to preserve the other calibration");
+    const bool calibrate = std::string(argv[1]) != "replay";
     em::Controller controller(config);
+    em::WristPoseFilter wrist_filter;
     std::array<std::map<std::string, std::vector<em::HandMeasurement>>, 2> groups;
     std::array<uint64_t, 2> previous_stamp{};
     std::ofstream output;
@@ -141,7 +164,8 @@ int main(int argc, char** argv) {
       try {
         const auto frame = Json::parse(line);
         if (frame.value("type", "") != "frame") continue;
-        const auto h = hands(frame);
+        auto h = hands(frame);
+        if (!calibrate) wrist_filter.apply(h,config,number(frame.at("read_timestamp_ns")),0);
         std::array<em::HandMeasurement, 2> measurements{{
             em::measure_hand(h.left, config.min_confidence), em::measure_hand(h.right, config.min_confidence)}};
         if (calibrate) {
@@ -169,6 +193,36 @@ int main(int argc, char** argv) {
     }
     if (frames == 0) throw std::runtime_error("no frame records found");
     if (calibrate) {
+      if (grip_only) {
+        bool any = false;
+        for (size_t i=0;i<2;++i) {
+          const auto* name = i == 0 ? "left" : "right";
+          const auto& group = groups[i];
+          if (!group.count("grip_open") && !group.count("grip_closed")) continue;
+          std::array<double,2> ends{};
+          for (size_t k=0;k<2;++k) {
+            const auto* label = k == 0 ? "grip_open" : "grip_closed";
+            std::vector<double> values;
+            const auto found = group.find(label);
+            if (found != group.end()) for (const auto& h : found->second)
+              if (h.palm_valid && h.curl[3] >= 0) values.push_back(h.curl[3]);
+            if (values.size() < 10) throw std::runtime_error(std::string("need 10 valid unique frames for ")+name+"."+label);
+            std::sort(values.begin(),values.end());
+            // Admit normal variations of an extended little finger, while a
+            // genuine fist must still release. Overlapping poses are rejected.
+            ends[k] = values[k == 0 ? values.size()*9/10 : values.size()/10];
+          }
+          if (ends[1]-ends[0] < .15) throw std::runtime_error(std::string(name)+
+              ": Grip open/closed overlap in the tracked joints; keep the little finger visible and record again");
+          profile[name]["grip_calibration"] = {{"open_curl",ends[0]},{"closed_curl",ends[1]}};
+          any = true;
+        }
+        if (!any) throw std::runtime_error("no labelled grip_open/grip_closed samples");
+        (void)em::config_from_json(profile);
+        output.open(argv[3]);
+        if (!output) throw std::runtime_error("cannot open output");
+        output << profile.dump(2) << '\n';
+      } else {
       profile["version"] = 3;
       for (size_t i = 0; i < 2; ++i) {
         const auto* name = i == 0 ? "left" : "right";
@@ -210,6 +264,7 @@ int main(int argc, char** argv) {
       output.open(argv[3]);
       if (!output) throw std::runtime_error("cannot open output");
       output << profile.dump(2) << '\n';
+      }
     }
     output.flush();
     if (!output) throw std::runtime_error("output write failed");

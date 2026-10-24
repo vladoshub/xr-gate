@@ -86,6 +86,15 @@ void parse_hand(const nlohmann::json& j, HandConfig& c) {
   }
   c.open_curl = j.value("open_curl", c.open_curl);
   c.closed_curl = j.value("closed_curl", c.closed_curl);
+  if (j.contains("grip_calibration")) {
+    const auto& g = j.at("grip_calibration");
+    c.grip_open_curl = g.at("open_curl").get<double>();
+    c.grip_closed_curl = g.at("closed_curl").get<double>();
+    range(c.grip_open_curl, 0, 1, "grip_calibration.open_curl");
+    range(c.grip_closed_curl, 0, 1, "grip_calibration.closed_curl");
+    require(c.grip_closed_curl - c.grip_open_curl >= .15, "Grip calibration range too small");
+    c.grip_calibrated = true;
+  }
   for (size_t i = 0; i < 4; ++i) {
     range(c.open_curl[i], 0, 1, "open_curl");
     range(c.closed_curl[i], 0, 1, "closed_curl");
@@ -107,6 +116,8 @@ Config config_from_json(const nlohmann::json& j) {
                                        "; use emulation_controller.json version 3");
   Config c;
   c.dpad_mode = j.value("dpad_mode", c.dpad_mode);
+  c.wrist_filter_enabled = j.value("wrist_filter_enabled", c.wrist_filter_enabled);
+  c.wrist_filter_degrees = j.value("wrist_filter_degrees", c.wrist_filter_degrees);
   c.range_degrees = j.value("range_degrees", c.range_degrees);
   c.deadzone = j.value("deadzone", c.deadzone);
   c.smoothing_ms = j.value("smoothing_ms", c.smoothing_ms);
@@ -132,6 +143,7 @@ Config config_from_json(const nlohmann::json& j) {
   range(c.range_degrees, 5, 80, "range_degrees");
   range(c.deadzone, 0, 0.9, "deadzone");
   range(c.smoothing_ms, 0, 1000, "smoothing_ms");
+  range(c.wrist_filter_degrees, 0, 20, "wrist_filter_degrees");
   range(c.min_confidence, 0, 1, "min_confidence");
   range(c.max_age_ms, 10, 1000, "max_age_ms");
   range(c.extension_on, 0.55, 1, "extension_on");
@@ -159,7 +171,9 @@ Config load_config(const std::string& path) {
   require(bool(in), "cannot open " + path);
   nlohmann::json j;
   in >> j;
-  return config_from_json(j);
+  auto config = config_from_json(j);
+  config.profile_path = path;
+  return config;
 }
 HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
   HandMeasurement out;
@@ -303,6 +317,8 @@ void Controller::clear_input(SideState& s) {
   s.trigger = s.grip = 0;
   s.trigger_channel = {};
   s.grip_channel = {};
+  s.grip_extended = false;
+  s.grip_extension = 0;
 }
 void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t stamp) {
   const auto all = [&](Finger state) {
@@ -362,8 +378,9 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
   }
   // Middle/ring define the operating pose. Index, little and thumb stay independent.
   const bool operating = s.fingers[1] == Finger::Curled && s.fingers[2] == Finger::Curled;
-  const auto channel = [&](Channel& c, size_t finger, uint64_t bit, float& value) {
-    const bool raw = operating && s.fingers[finger] == Finger::Extended;
+  const auto channel = [&](Channel& c, bool extended, double extension, uint64_t bit,
+                           float& value) {
+    const bool raw = operating && extended;
     if (!raw) {
       c = {};
       return;
@@ -376,11 +393,12 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
     if (c.active) {
       s.buttons |= bit;
       s.touches |= bit;
-      value = std::max(0.55f, float(s.extension[finger]));
+      value = std::max(0.55f, float(extension));
     }
   };
-  channel(s.trigger_channel, 0, CONTROLLER_BUTTON_TRIGGER, s.trigger);
-  channel(s.grip_channel, 3, CONTROLLER_BUTTON_GRIP, s.grip);
+  channel(s.trigger_channel, s.fingers[0] == Finger::Extended, s.extension[0],
+          CONTROLLER_BUTTON_TRIGGER, s.trigger);
+  channel(s.grip_channel, s.grip_extended, s.grip_extension, CONTROLLER_BUTTON_GRIP, s.grip);
 }
 void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideState& s, double dt,
                             bool blocked) {
@@ -514,6 +532,15 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
     else
       s.fingers[i] = Finger::Unknown;
   }
+  s.grip_extension =
+      h.curl[3] < 0 ? 0
+      : c.grip_calibrated
+          ? 1 - std::clamp((h.curl[3] - c.grip_open_curl) / (c.grip_closed_curl - c.grip_open_curl),
+                           0.0, 1.0)
+          : s.extension[3];
+  s.grip_extended =
+      h.curl[3] >= 0 && s.grip_extension >= (s.grip_extended ? config_.little_extension_off
+                                                             : config_.little_extension_on);
   update_buttons(h, s, stamp);
   update_pad(h, c, s, dt, s.wait_for_neutral || s.candidate != Pose::None);
 }

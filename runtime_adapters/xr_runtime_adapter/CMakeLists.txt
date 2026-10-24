@@ -20,6 +20,7 @@ add_executable(xr_runtime_adapter
   src/coordinate_util.cpp
   src/gestures.cpp
   src/emulation_controller.cpp
+  src/emulation_wrist_filter.cpp
   src/hmd_pose_stability_filter.cpp
   src/jitter_filter.cpp
   src/body_tracker_stability_filter.cpp
@@ -61,7 +62,7 @@ endif()
 
 install(TARGETS xr_runtime_adapter RUNTIME DESTINATION bin/runtime_adapters/xr_runtime_adapter)
 
-add_executable(xr_emulation_tool tools/xr_emulation_tool.cpp src/emulation_controller.cpp)
+add_executable(xr_emulation_tool tools/xr_emulation_tool.cpp src/emulation_controller.cpp src/emulation_wrist_filter.cpp)
 target_compile_features(xr_emulation_tool PRIVATE cxx_std_17)
 target_include_directories(xr_emulation_tool PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${XR_SHARED_INCLUDE_DIR}")
 if(TARGET nlohmann_json::nlohmann_json)
@@ -83,6 +84,15 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
     target_include_directories(emulation_controller_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
   endif()
   add_test(NAME emulation_controller_test COMMAND emulation_controller_test)
+  add_executable(emulation_stability_test tests/emulation_stability_test.cpp src/emulation_controller.cpp src/emulation_wrist_filter.cpp)
+  target_compile_features(emulation_stability_test PRIVATE cxx_std_17)
+  target_include_directories(emulation_stability_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${XR_SHARED_INCLUDE_DIR}")
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(emulation_stability_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(emulation_stability_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  add_test(NAME emulation_stability_test COMMAND emulation_stability_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/emulation_stability_poses.json")
   add_executable(hmd_pose_stability_test tests/hmd_pose_stability_test.cpp src/hmd_pose_stability_filter.cpp)
   target_compile_features(hmd_pose_stability_test PRIVATE cxx_std_17)
   target_include_directories(hmd_pose_stability_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${XR_SHARED_INCLUDE_DIR}")
@@ -98,6 +108,10 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/emulation_integration_test.py"
         --adapter $<TARGET_FILE:xr_runtime_adapter> --tool $<TARGET_FILE:xr_emulation_tool>)
     set_tests_properties(emulation_integration_test PROPERTIES TIMEOUT 30)
+    add_test(NAME emulation_stability_integration_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/emulation_stability_integration_test.py"
+        --adapter $<TARGET_FILE:xr_runtime_adapter> --tool $<TARGET_FILE:xr_emulation_tool>)
+    set_tests_properties(emulation_stability_integration_test PROPERTIES TIMEOUT 30)
     add_test(NAME app_tcp_server_test
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/app_tcp_server_test.py"
         --adapter $<TARGET_FILE:xr_runtime_adapter>)

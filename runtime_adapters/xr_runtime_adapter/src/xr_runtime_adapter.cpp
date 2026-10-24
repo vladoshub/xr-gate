@@ -43,6 +43,7 @@
 
 #include "gestures.hpp"
 #include "emulation_controller.hpp"
+#include "emulation_wrist_filter.hpp"
 #include "app_tcp_server.hpp"
 #include "override_controller.hpp"
 #include "hand_tracking_freshness.hpp"
@@ -5490,11 +5491,16 @@ int main(int argc, char** argv) {
     gestures::RuntimeGestureHysteresisState runtime_gesture_hysteresis;
     gestures::RuntimeHandGestureSnapshot last_fresh_runtime_hand_gestures;
     std::optional<xr_runtime_adapter::emulation::Controller> emulation_controller;
+    xr_runtime_adapter::emulation::WristPoseFilter emulation_wrist_filter;
     if (emulation_controller_enabled) {
       emulation_controller.emplace(emulation_controller_config);
       std::cout << "[xr_runtime_adapter] emulation_controller enabled: left=" << emulation_left_enabled
                 << " right=" << emulation_right_enabled
                 << " dpad=wrist_tilt"
+                << " profile=" << (emulation_controller_config.profile_path.empty()
+                    ? "builtin" : emulation_controller_config.profile_path)
+                << " wrist_filter_deg=" << (emulation_controller_config.wrist_filter_enabled
+                    ? emulation_controller_config.wrist_filter_degrees : 0)
                 << "; hold a neutral raised thumb on first acquisition; thumb against palm stops movement\n";
     }
 
@@ -6397,6 +6403,10 @@ int main(int argc, char** argv) {
           // Emulation owns input only in runtime_controller_state, never pinch/grab.
           gestures::clear_runtime_hand_v2_backend_gestures_by_side(
               frame.hand_v2, emulation_left_enabled, emulation_right_enabled);
+          emulation_wrist_filter.apply(frame.hand_v2, emulation_controller_config,
+              static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
+              !runtime_only_gesture_input_blocked && !controller_left_connected,
+              !runtime_only_gesture_input_blocked && !controller_right_connected);
         }
 
         adapter->consume(frame);

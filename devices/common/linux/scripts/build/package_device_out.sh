@@ -618,6 +618,7 @@ copy_tools_runtime() {
   copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/record_emulation_hands.py" "$XR_OUT_BIN_ROOT/python/tools/record_emulation_hands.py"
   copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/xr_gate_gesture_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_gate_gesture_debug.py"
   copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation_controller.json" "$XR_OUT_ROOT/emulation_controller.json"
+  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
   copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/docs/emulation_controller.ru.md" "$XR_OUT_ROOT/EMULATION_CONTROLLER.ru.md"
   copy_file "$XR_ROOT_PROJECT/tools/debug/view_capture_service_shm.py" "$XR_OUT_BIN_ROOT/python/tools/debug/view_capture_service_shm.py"
   copy_runtime_py_dir "$XR_ROOT_PROJECT/tools/runtime_debug_viewer" "$XR_OUT_BIN_ROOT/python/tools/runtime_debug_viewer"
