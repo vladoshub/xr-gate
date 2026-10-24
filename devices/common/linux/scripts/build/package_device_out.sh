@@ -615,6 +615,10 @@ copy_tools_runtime() {
     "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/calibrate_hmd_orientation_offset.py" \
     "$XR_OUT_BIN_ROOT/python/tools/calibrate_hmd_orientation_offset.py"
   copy_file "$XR_ROOT_PROJECT/tools/xr_runtime_gesture_watch_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_runtime_gesture_watch_debug.py"
+  copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/record_emulation_hands.py" "$XR_OUT_BIN_ROOT/python/tools/record_emulation_hands.py"
+  copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/xr_gate_gesture_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_gate_gesture_debug.py"
+  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation_controller.json" "$XR_OUT_ROOT/emulation_controller.json"
+  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/docs/emulation_controller.ru.md" "$XR_OUT_ROOT/EMULATION_CONTROLLER.ru.md"
   copy_file "$XR_ROOT_PROJECT/tools/debug/view_capture_service_shm.py" "$XR_OUT_BIN_ROOT/python/tools/debug/view_capture_service_shm.py"
   copy_runtime_py_dir "$XR_ROOT_PROJECT/tools/runtime_debug_viewer" "$XR_OUT_BIN_ROOT/python/tools/runtime_debug_viewer"
 }
@@ -636,6 +640,9 @@ write_app_launchers() {
   write_root_launcher "run_app_client.sh" "bin/python/tools/xr_app_client.py"
   write_root_launcher "run_video_tcp_client.sh" "bin/python/tools/xr_video_tcp_client.py"
   write_root_launcher "calibrate_hmd_orientation_offset.sh" "bin/python/tools/calibrate_hmd_orientation_offset.py"
+  write_root_launcher "record_emulation_hands.sh" "bin/python/tools/record_emulation_hands.py"
+  write_root_launcher "gesture_debug.sh" "bin/python/tools/xr_gate_gesture_debug.py"
+  write_root_launcher "emulation_tool.sh" "bin/runtime_adapters/xr_runtime_adapter/xr_emulation_tool"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"

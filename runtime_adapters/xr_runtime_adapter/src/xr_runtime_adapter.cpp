@@ -42,6 +42,7 @@
 #include <chrono>
 
 #include "gestures.hpp"
+#include "emulation_controller.hpp"
 #include "app_tcp_server.hpp"
 #include "override_controller.hpp"
 #include "hand_tracking_freshness.hpp"
@@ -3030,6 +3031,8 @@ int main(int argc, char** argv) {
   bool runtime_ignore_backend_hand_gestures = false;
   bool runtime_left_hand_gestures_enabled = true;
   bool runtime_right_hand_gestures_enabled = true;
+  bool emulation_controller_enabled = false;
+  std::string emulation_controller_config_path;
   bool runtime_derive_extra_gesture_buttons = true;
   bool runtime_derive_extra_gesture_buttons_with_controller_input = false;
   bool override_controller_block_gestures_while_stream_present = true;
@@ -3277,7 +3280,7 @@ int main(int argc, char** argv) {
 
   app.add_option("--override-controller-block-gestures-while-stream-present",
                  override_controller_block_gestures_while_stream_present,
-                 "In controller_buttons_runtime_only, block hand gesture input while override_controller stream is fresh/recently seen; hand_plus_controller is unaffected");
+                 "In controller_buttons_runtime_only, block legacy and emulation hand gestures while override_controller stream is fresh/recently seen (default true); hand_plus_controller is unaffected");
 
   app.add_option("--override-controller-gesture-block-latch-ms",
                  override_controller_gesture_block_latch_ms,
@@ -3639,6 +3642,10 @@ int main(int argc, char** argv) {
                  "How long to keep the last fresh derived visual pinch/grab in ms after hand tracking stops being fresh; 0 clears immediately");
   app.add_option("--runtime-ignore-backend-hand-gestures", runtime_ignore_backend_hand_gestures,
                  "Ignore pinch/grab/button gesture values received from hand_tracking input before applying controller override or runtime-derived gestures");
+  app.add_option("--emulation-controller", emulation_controller_enabled,
+                 "Opt-in finger/wrist-tilt controller; replaces legacy hand gestures and combines with physical controller input for enabled sides (default false)");
+  app.add_option("--emulation-controller-config", emulation_controller_config_path,
+                 "Optional emulation controller JSON profile; enable explicitly with --emulation-controller 1");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
       app.add_option("--runtime-left-hand-gestures-enabled", runtime_left_hand_gestures_enabled,
                      "Enable visual hand-tracking gestures for the left hand. ControllerInputV3 override buttons are unaffected. Normally set in config controller_override.hand_gestures.left_enabled");
@@ -4053,10 +4060,15 @@ int main(int argc, char** argv) {
   const bool runtime_controller_buttons_only_mode =
       controller_input_config.mode == "controller_buttons_only" ||
       runtime_controller_mode_value == xr_runtime::RuntimeControllerMode::HAND_TRACKING_CONTROLLER_BUTTONS_ONLY;
+  const auto emulation_controller_config = emulation_controller_enabled
+      ? xr_runtime_adapter::emulation::load_config(emulation_controller_config_path)
+      : xr_runtime_adapter::emulation::Config{};
+  const bool emulation_left_enabled = emulation_controller_enabled && emulation_controller_config.left.enabled;
+  const bool emulation_right_enabled = emulation_controller_enabled && emulation_controller_config.right.enabled;
   const bool effective_runtime_left_hand_gestures_enabled =
-      runtime_left_hand_gestures_enabled && !runtime_controller_buttons_only_mode;
+      runtime_left_hand_gestures_enabled && !runtime_controller_buttons_only_mode && !emulation_left_enabled;
   const bool effective_runtime_right_hand_gestures_enabled =
-      runtime_right_hand_gestures_enabled && !runtime_controller_buttons_only_mode;
+      runtime_right_hand_gestures_enabled && !runtime_controller_buttons_only_mode && !emulation_right_enabled;
 
   const uint32_t derived_thumbs_up_button_mask =
       override_controller::parse_runtime_button_target(derived_thumbs_up_button, "--derived-thumbs-up-button");
@@ -5477,6 +5489,14 @@ int main(int argc, char** argv) {
     int64_t override_controller_gesture_block_until_ns = 0;
     gestures::RuntimeGestureHysteresisState runtime_gesture_hysteresis;
     gestures::RuntimeHandGestureSnapshot last_fresh_runtime_hand_gestures;
+    std::optional<xr_runtime_adapter::emulation::Controller> emulation_controller;
+    if (emulation_controller_enabled) {
+      emulation_controller.emplace(emulation_controller_config);
+      std::cout << "[xr_runtime_adapter] emulation_controller enabled: left=" << emulation_left_enabled
+                << " right=" << emulation_right_enabled
+                << " dpad=wrist_tilt"
+                << "; hold a neutral raised thumb on first acquisition; thumb against palm stops movement\n";
+    }
 
     std::optional<xr_runtime::HmdPoseF64V1> last_good_hmd;
     std::string last_good_hmd_frame_id = "tracking_world";
@@ -6372,6 +6392,13 @@ int main(int argc, char** argv) {
           }
         }
 
+        if (emulation_controller) {
+          // Also clear physical input copied into the legacy hand gesture fields.
+          // Emulation owns input only in runtime_controller_state, never pinch/grab.
+          gestures::clear_runtime_hand_v2_backend_gestures_by_side(
+              frame.hand_v2, emulation_left_enabled, emulation_right_enabled);
+        }
+
         adapter->consume(frame);
         ++consumed;
 
@@ -6434,6 +6461,12 @@ int main(int argc, char** argv) {
                   runtime_controller_imu_control_snapshot.gravity_magnitude),
               &runtime_controller_synthesis_state,
               &controller_imu_history);
+          if (emulation_controller) {
+            emulation_controller->apply(runtime_controller_state,
+                runtime_controller_hand ? &*runtime_controller_hand : nullptr,
+                static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
+                runtime_only_gesture_input_blocked);
+          }
           report_controller_imu_alignment_status();
           report_controller_imu_calibration_progress(
               static_cast<uint64_t>(frame.read_timestamp_ns), fresh_controller_input);
