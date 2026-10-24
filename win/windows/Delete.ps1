@@ -14,10 +14,14 @@ function Remove-XrDistribution([string]$ConfirmedDistribution) {
     }
     if (!$saved.LinuxUser -and !$saved.InstallPending) { throw 'No saved XR Gate installation is available to delete.' }
     $exists = $ConfirmedDistribution -in @(Get-XrRegisteredDistributions)
+    Stop-XrSteamVr
     Request-RuntimeWindowStop
     if ($exists -and $script:State.LinuxUser) { Invoke-Linux -Operation stop -Request (New-LinuxRequest) }
     Stop-RuntimeWindow
     Disconnect-SelectedUsb
+    if ($exists -and $script:State.LinuxUser) {
+        Invoke-Linux -Operation firmware_cleanup -Request (New-LinuxRequest) -AsRoot
+    }
     Write-Step ("Deleting Ubuntu distribution: " + $ConfirmedDistribution)
     if ($exists) { Invoke-Native (Get-Tool 'wsl.exe') @('--unregister', $ConfirmedDistribution) }
     $script:State.LinuxUser = ''; $script:State.ReleaseTag = ''

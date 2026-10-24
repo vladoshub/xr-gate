@@ -15,7 +15,7 @@ public sealed record ActionResult
     public string Instruction => NextStep switch
     {
         "restart_windows" => "Restart Windows, reopen XR Gate, then continue installation.",
-        "ubuntu_first_login" => "In the Ubuntu window, create your Linux username and password, type exit, then click Install.",
+        "ubuntu_first_login" => "In the Ubuntu window, create your Linux username and password, then type exit. Installation continues automatically; if it remains paused, click Install.",
         "restart_ubuntu" => "Save your work in the selected Ubuntu distribution, then click Restart Ubuntu & continue.",
         _ when ExitCode == 20 => "Installation is paused. Follow the instructions in the activity log, then click Install.",
         _ when !Success => Message.Length > 0 ? Message : "The action failed. Check the activity log or run Diagnostics.",
@@ -47,7 +47,7 @@ public sealed record ActionResult
 
 public static class ScriptCommand
 {
-    private static readonly HashSet<string> Actions = ["Install", "Run", "Stop", "Delete", "Status", "DeviceStatus", "BluetoothScan", "Usb", "Detach", "Doctor", "Test", "Driver", "Display", "Pair", "Controllers"];
+    private static readonly HashSet<string> Actions = ["Install", "Run", "Restart", "Stop", "Delete", "Status", "DeviceStatus", "BluetoothScan", "Usb", "Detach", "Doctor", "Test", "Driver", "Display", "Pair", "Controllers"];
     public static string Literal(string value) => "'" + value.Replace("'", "''") + "'";
     public static string Encode(string script, string action, string resultPath, bool steamVr, bool console)
     {

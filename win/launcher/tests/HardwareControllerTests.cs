@@ -13,7 +13,7 @@ internal static class HardwareControllerTests
         string env = Path.Combine(root, ".env"), state = Path.Combine(root, "state.json");
         File.WriteAllText(state, JsonSerializer.Serialize(new { GearVR = true, BluetoothInstanceId = "saved-system-adapter" }));
         var settings = LauncherSettings.Load(root, state);
-        Check(settings.ControllerMode == "gestures" && !settings.BluetoothEnabled && !settings.ShowCommandPrompt, "Gestures, Bluetooth-off or hidden-console defaults were lost.");
+        Check(settings.ControllerMode == "gestures" && !settings.BluetoothEnabled && !settings.ShowCommandPrompt && settings.GlobalHotkeys, "Gestures, Bluetooth-off, hidden-console or enabled hotkey defaults were lost.");
         settings.ControllerMode = "gestures";
         settings.ShowCommandPrompt = true;
         settings.Save(root);
@@ -24,6 +24,22 @@ internal static class HardwareControllerTests
         Check(File.ReadAllText(env).Contains("XR_BLUETOOTH=0"), "An inherited adapter could re-enable Bluetooth in the PowerShell backend.");
         settings.ControllerMode = "gearvr"; settings.ShowCommandPrompt = false; settings.Save(root);
         Check(LauncherSettings.Load(root, state).GearVr && !LauncherSettings.Load(root, state).ShowCommandPrompt, "Gear VR mode or console-off could not be restored.");
+        settings.ControllerMode = "no";
+        settings.SaveControllerSettings(root);
+        settings = LauncherSettings.Load(root, state);
+        Check(settings.ControllerMode == "no" && !settings.GearVr && File.ReadAllText(env).Contains("XR_GEARVR=0"),
+            "No controllers did not persist independently of the legacy GearVR state.");
+        File.AppendAllText(env, "# Keep advanced values\nXR_START_TIMEOUT=210\n");
+        settings.GlobalHotkeys = false;
+        settings.FrequencyHz = "unfinished";
+        settings.SaveHotkeySettings(root);
+        Check(!LauncherSettings.Load(root, state).GlobalHotkeys && File.ReadAllText(env).Contains("XR_START_TIMEOUT=210") &&
+            LauncherSettings.Load(root, state).ControllerMode == "no", "Hotkey settings saved unfinished form values or changed controller/advanced settings.");
+        settings.GlobalHotkeys = true;
+        settings.SaveHotkeySettings(root);
+        Check(LauncherSettings.Load(root, state).GlobalHotkeys, "Hotkeys could not be re-enabled and restored.");
+        File.WriteAllText(env, "XR_CONTROLLER_MODE=no\nXR_GEARVR=1\n");
+        Check(LauncherSettings.Load(root, state).ControllerMode == "no", "A legacy flag overrode the explicit No mode.");
         File.WriteAllText(env, "XR_CONTROLLER_MODE=gestures\nXR_GEARVR=1\n");
         Check(!LauncherSettings.Load(root, state).GearVr, "A legacy flag overrode the explicit Gestures mode.");
         File.WriteAllText(env, "XR_GEARVR=1\nXR_BLUETOOTH=1\n");

@@ -39,14 +39,15 @@ public partial class MainWindow
     {
         bool available = busyAction.Length == 0 && configurationProblem is null && !closing;
         StartButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanStart;
-        StartButton.ToolTip = readiness.NextStep;
+        StartButton.ToolTip = readiness.CanStart ? "F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." : readiness.NextStep;
+        RestartButton.IsEnabled = available && (runtimeMayBeRunning || installed && resourcesMayBeOwned);
         InstallButton.Content = installed ? "Update" : "Install";
         InstallButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanInstall;
-        InstallButton.ToolTip = readiness.CanInstall ? "Install or update XR Gate for the selected display." : "Select the glasses display number first.";
+        InstallButton.ToolTip = readiness.CanInstall ? "Install or update WSL, Ubuntu, XR Gate and the SteamVR driver for the selected display." : "Select the connected glasses display number first so XR Gate can read its refresh rate.";
         DisplayButton.IsEnabled = available && !runtimeMayBeRunning;
         DeleteButton.IsEnabled = available && (canDeleteInstallation || installed || setupProgress.Pending);
-        Pulse(InstallButton, available && !installed);
-        Pulse(DisplayButton, available && (!readiness.DisplaySelected || !readiness.DisplayConnected));
+        Pulse(InstallButton, InstallButton.IsEnabled && !installed);
+        Pulse(DisplayButton, DisplayButton.IsEnabled && (!readiness.DisplaySelected || !readiness.DisplayConnected));
         if (!available || !readiness.Known) return;
         string hint = runtimeMayBeRunning ? "Click Stop tracking & return USB when finished." : readiness.NextStep;
         if (hint == lastNextStepHint) return;
@@ -54,31 +55,49 @@ public partial class MainWindow
         Log("[Next] " + hint);
     }
 
-    private async Task BeginInstallationAsync(bool confirmed = false)
+    private async Task BeginInstallationAsync(bool confirmed = false, bool firstLoginContinuation = false)
     {
-        try { await InstallCoreAsync(confirmed); }
-        catch (Exception error) { StatusTitle.Text = "Setup needs attention"; StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
+        try { await InstallCoreAsync(confirmed, firstLoginContinuation); }
+        catch (Exception error)
+        {
+            StatusTitle.Text = "Setup needs attention"; StatusDetail.Text = error.Message; Log("ERROR: " + error.Message);
+            ShowSetupPrompt("INSTALLATION PAUSED. CHECK THE ACTIVITY LOG, THEN CLICK INSTALL TO CONTINUE.");
+        }
     }
 
-    private async Task InstallCoreAsync(bool confirmed)
+    private async Task InstallCoreAsync(bool confirmed, bool firstLoginContinuation)
     {
         if (busyAction.Length > 0 || closing || configurationProblem is not null || runtimeMayBeRunning) return;
-        if (!readiness.CanInstall) { UpdateReadinessUi(); Log("[Next] Select glasses display before Install so XR Gate can read its refresh rate."); return; }
+        if (!readiness.CanInstall) { UpdateReadinessUi(); ShowSetupPrompt("CONNECT THE GLASSES AND SELECT THEIR DISPLAY NUMBER. THEN CLICK INSTALL."); return; }
         if (!confirmed && !Confirm("XR Gate will install WSL 2, Ubuntu and the required XR components if they are missing. Administrator permission and a Windows restart may be required. Continue?")) return;
+        if (!firstLoginContinuation) CancelFirstLoginWait();
+        SetupNoticeText.Visibility = Visibility.Collapsed;
         SaveSetupProgress(new(true, settings.Distribution));
         readiness.Installed = false;
+        nextStep = "";
+        firstLoginSession = null;
         bool success = await ExecuteAsync("Install");
-        if (success && installed) SaveSetupProgress(new());
+        if (success && installed) { SaveSetupProgress(new()); SetupNoticeText.Visibility = Visibility.Collapsed; }
         else SaveSetupProgress(new(true, settings.Distribution, nextStep));
         if (closing) return;
         if (nextStep == "restart_windows") await OfferWindowsRestartAsync();
         else if (nextStep == "restart_ubuntu")
         {
+            ShowSetupPrompt("CLICK RESTART UBUNTU & CONTINUE TO FINISH INSTALLATION.");
             NextStepButton.Content = "Restart Ubuntu & continue";
             NextStepButton.Visibility = Visibility.Visible;
             Log("[Next] Click Restart Ubuntu & continue after saving work in Ubuntu.");
         }
-        else if (nextStep == "ubuntu_first_login") Log("[Next] Complete the Ubuntu username/password prompts, type exit, then click Install.");
+        else if (nextStep == "ubuntu_first_login")
+        {
+            if (!firstLoginContinuation && firstLoginSession is not null)
+            {
+                ShowSetupPrompt("CREATE YOUR UBUNTU USERNAME AND PASSWORD IN THE UBUNTU WINDOW. THEN TYPE exit. INSTALLATION WILL CONTINUE AUTOMATICALLY.");
+                StartFirstLoginWait(firstLoginSession);
+            }
+            else ShowSetupPrompt("FINISH CREATING YOUR UBUNTU USERNAME AND PASSWORD, TYPE exit, THEN CLICK INSTALL TO CONTINUE.");
+        }
+        else if (!success) ShowSetupPrompt("INSTALLATION PAUSED. CHECK THE ACTIVITY LOG, THEN CLICK INSTALL TO CONTINUE.");
     }
 
     private async Task OfferResumeAsync()
@@ -98,6 +117,7 @@ public partial class MainWindow
 
     private async Task OfferWindowsRestartAsync()
     {
+        ShowSetupPrompt("SAVE YOUR WORK AND RESTART WINDOWS. OPEN XR GATE AFTERWARD TO CONTINUE INSTALLATION.");
         NextStepButton.Content = "Restart Windows";
         NextStepButton.Visibility = Visibility.Visible;
         Log("[Next] Save your work and restart Windows. Open XR Gate afterward to continue installation.");

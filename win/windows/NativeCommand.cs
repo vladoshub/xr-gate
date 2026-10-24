@@ -22,7 +22,9 @@ namespace XrGateWsl
         private volatile bool stdoutEnded;
         private volatile bool stderrEnded;
 
-        public NativeCommand(string file, string[] arguments)
+        public NativeCommand(string file, string[] arguments) : this(file, arguments, false) { }
+
+        public NativeCommand(string file, string[] arguments, bool closeInput)
         {
             var commandLine = new StringBuilder();
             foreach (string argument in arguments)
@@ -36,6 +38,7 @@ namespace XrGateWsl
             process.StartInfo.CreateNoWindow = true;
             process.StartInfo.RedirectStandardOutput = true;
             process.StartInfo.RedirectStandardError = true;
+            process.StartInfo.RedirectStandardInput = closeInput;
             process.StartInfo.StandardOutputEncoding = Encoding.UTF8;
             process.StartInfo.StandardErrorEncoding = Encoding.UTF8;
             process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
@@ -53,6 +56,7 @@ namespace XrGateWsl
                 if (!process.Start()) throw new InvalidOperationException("Could not start " + file);
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
+                if (closeInput) process.StandardInput.Close();
             }
             catch { Dispose(); throw; }
         }

@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -75,6 +77,51 @@ class ControllerModesTest(unittest.TestCase):
             runtime, _ = self.fixture(Path(folder), "gearvr")
             runtime.generate_profile()
             self.assertEqual(json.loads((runtime.config / "override_controller.json").read_text()), {"template": True})
+
+    def test_no_controllers_disables_hand_and_physical_input_and_keeps_hmd_services(self):
+        for custom in (False, True):
+            with self.subTest(custom=custom), tempfile.TemporaryDirectory() as folder:
+                runtime, source = self.fixture(Path(folder), "no", custom)
+                original = json.loads(source.read_text())
+                original["post_gate_services"].append({"name": "mercury_hand_tracking", "enable_env": "RUN_HAND_TRACKING"})
+                source.write_text(json.dumps(original))
+                data = json.loads(runtime.generate_profile().read_text())
+                names = {service["name"] for group in ("pre_gate_services", "post_gate_services", "foreground_services") for service in data[group]}
+                self.assertEqual(names, {"capture_service", "xr_runtime_adapter"})
+                self.assertEqual(json.loads(source.read_text()), original)
+                runtime.settings["XR_TCP_PORT"] = "45810"
+                captured = {}
+                runtime.run_managed = lambda args, env, handle: captured.update(env)
+                with (Path(folder) / "lock").open("w") as handle, patch.object(linux.socket, "socket"), patch.object(linux.os, "chdir"):
+                    runtime._start_locked(handle)
+                self.assertEqual(captured["RUNTIME_APP_TCP"], "1")
+                for key in ("RUN_OVERRIDE_CONTROLLER", "RUN_OVERRIDE_CONTROLLER_SERVICE", "RUN_HAND_TRACKING",
+                            "RUNTIME_LEFT_HAND_GESTURES_ENABLED", "RUNTIME_RIGHT_HAND_GESTURES_ENABLED", "RUNTIME_DERIVE_HAND_GESTURES"):
+                    self.assertEqual(captured[key], "0", key)
+                self.assertEqual(captured["CONTROLLER_INPUT_TRANSPORT"], "none")
+                self.assertEqual(captured["RUNTIME_CONTROLLER_MODE"], "controller_only_pose_invalid")
+
+    def test_no_mode_overrides_inherited_adapter_options_in_the_real_start_script(self):
+        script = Path(__file__).resolve().parents[2] / "runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh"
+        with tempfile.TemporaryDirectory() as folder:
+            probe = Path(folder) / "adapter.py"
+            probe.write_text('#!/usr/bin/env python3\nimport json, sys\nprint("OPTIONS=" + json.dumps(sys.argv[1:]))\n')
+            probe.chmod(0o755)
+            env = dict(os.environ, ROOT_PROJECT=folder, XR_RUNTIME_ADAPTER_BIN=str(probe),
+                       XR_CONTROLLER_MODE="no", RUNTIME_CONTROLLER_MODE="controller_only_hmd_relative_pose",
+                       CONTROLLER_INPUT_TRANSPORT="shm", RUNTIME_DERIVE_HAND_GESTURES="1")
+            result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(next(line.removeprefix("OPTIONS=") for line in result.stdout.splitlines() if line.startswith("OPTIONS=")))
+            def value(key):
+                self.assertEqual(args.count(key), 1)
+                return args[args.index(key) + 1]
+            self.assertEqual(value("--runtime-controller-mode"), "controller_only_pose_invalid")
+            self.assertEqual(value("--controller-input-transport"), "none")
+            self.assertEqual(value("--runtime-left-hand-gestures-enabled"), "0")
+            self.assertEqual(value("--runtime-right-hand-gestures-enabled"), "0")
+            self.assertEqual(value("--runtime-derive-hand-gestures"), "0")
+            self.assertEqual(value("--hand-skeleton26-input"), "none")
 
     def test_unknown_mode_and_profile_without_a_publisher_fail_explicitly(self):
         with tempfile.TemporaryDirectory() as folder:

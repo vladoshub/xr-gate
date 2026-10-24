@@ -14,8 +14,18 @@ function Reset-Fixture {
     Save-State; $script:Calls.Clear(); $script:Failure = ''
 }
 function Get-XrRegisteredDistributions { return $script:Registered }
+function Stop-XrSteamVr { }
 function Request-RuntimeWindowStop { $script:Calls.Add('cancel-startup') }
-function Invoke-Linux($Operation, $Request) { $script:Calls.Add('stop-linux'); if ($script:Failure -eq 'linux') { throw 'fixture Linux cleanup failed' } }
+function Invoke-Linux($Operation, $Request, [switch]$AsRoot) {
+    if ($Operation -eq 'firmware_cleanup') {
+        Assert $AsRoot 'Firmware cleanup did not run as root.'
+        $script:Calls.Add('release-firmware')
+        if ($script:Failure -eq 'firmware') { throw 'fixture firmware cleanup failed' }
+    } else {
+        $script:Calls.Add('stop-linux')
+        if ($script:Failure -eq 'linux') { throw 'fixture Linux cleanup failed' }
+    }
+}
 function New-LinuxRequest { return @{} }
 function Stop-RuntimeWindow { $script:Calls.Add('stop-window') }
 function Disconnect-SelectedUsb { $script:Calls.Add('return-usb'); if ($script:Failure -eq 'usb') { throw 'fixture USB cleanup failed' } }
@@ -31,7 +41,7 @@ try {
         try { Remove-XrDistribution $target } catch { $rejected = $true }
         Assert ($rejected -and $script:Calls.Count -eq 0) 'An absent, changed or invalid confirmation changed the installation.'
     }
-    foreach ($failureCase in @('linux','usb','unregister')) {
+    foreach ($failureCase in @('linux','usb','firmware','unregister')) {
         Reset-Fixture; $script:Failure = $failureCase
         $rejected = $false
         try { Remove-XrDistribution 'Ubuntu-24.04' } catch { $rejected = $true }
@@ -41,7 +51,7 @@ try {
     Reset-Fixture
     [IO.File]::WriteAllText((Get-RuntimeWindowPath), 'fixture old runtime')
     Remove-XrDistribution 'Ubuntu-24.04'
-    Assert (($script:Calls -join ',') -eq 'cancel-startup,stop-linux,stop-window,return-usb,unregister') 'Deletion did not clean tracking and USB before unregistering.'
+    Assert (($script:Calls -join ',') -eq 'cancel-startup,stop-linux,stop-window,return-usb,release-firmware,unregister') 'Deletion did not clean tracking, USB and firmware before unregistering.'
     $saved = Get-Content -Raw -LiteralPath $script:StateFile | ConvertFrom-Json
     Assert (!$saved.LinuxUser -and !$saved.InstallPending -and !$saved.AttachedUsbInstanceIds.Count -and $saved.DisplayDeviceId -eq 'saved-display') 'Successful deletion left stale setup state or erased the display choice.'
     Assert (!(Test-Path -LiteralPath (Get-RuntimeWindowPath)) -and $script:ActionData.deleted) 'Deletion retained a runtime owner or did not report success.'

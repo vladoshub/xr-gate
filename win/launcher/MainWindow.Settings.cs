@@ -37,6 +37,7 @@ public partial class MainWindow
         InitializeHardwareUi();
         BindAudioChoices();
         UpdateRecoveryUi();
+        ConfigureHotkeys();
         if (configurationProblem is null)
         {
             StatusTitle.Text = "Settings loaded";

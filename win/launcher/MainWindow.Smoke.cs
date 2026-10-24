@@ -14,19 +14,24 @@ public partial class MainWindow
         configurationProblem = null;
         UpdateRecoveryUi();
         await VerifySetupUiAsync();
+        await VerifyFirstLoginUiAsync();
+        await VerifyHotkeysUiAsync();
         await VerifyRuntimeObservationAsync();
         if (!MainTabs.Items.Cast<TabItem>().Select(tab => tab.Header?.ToString()).SequenceEqual(new[] { "Run", "Controllers", "Audio", "Settings", "Tools" }) || Icon is null)
             throw new InvalidOperationException("The tab order, labels or application icon is missing.");
         MainTabs.SelectedItem = ControllersTab;
         await Dispatcher.Yield(DispatcherPriority.DataBind);
-        bool originalGearVr = settings.GearVr;
+        string originalMode = settings.ControllerMode;
+        ControllerModeBox.SetCurrentValue(ComboBox.SelectedValueProperty, "no");
+        ControllerModeBox.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateSource();
+        if (settings.GearVr || settings.ControllerMode != "no") throw new InvalidOperationException("The No controllers choice did not reach settings.");
         ControllerModeBox.SetCurrentValue(ComboBox.SelectedValueProperty, "gestures");
         ControllerModeBox.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateSource();
         if (settings.GearVr || settings.ControllerMode != "gestures") throw new InvalidOperationException("The Gestures choice did not reach settings.");
         ControllerModeBox.SetCurrentValue(ComboBox.SelectedValueProperty, "gearvr");
         ControllerModeBox.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateSource();
         if (!settings.GearVr) throw new InvalidOperationException("The Gear VR choice did not reach settings.");
-        settings.GearVr = originalGearVr;
+        settings.ControllerMode = originalMode;
         ControllerModeBox.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateTarget();
         string originalUsbId = settings.BluetoothUsbId;
         var usbIdBinding = BluetoothUsbIdBox.GetBindingExpression(TextBox.TextProperty)
@@ -267,7 +272,7 @@ public partial class MainWindow
         readiness.Known = true; readiness.Installed = installed = false;
         readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = false;
         UpdateReadinessUi();
-        if (InstallButton.IsEnabled || StartButton.IsEnabled || !DisplayButton.IsEnabled || !Equals(DisplayButton.Tag, true))
+        if (InstallButton.IsEnabled || Equals(InstallButton.Tag, true) || StartButton.IsEnabled || !DisplayButton.IsEnabled || !Equals(DisplayButton.Tag, true))
             throw new InvalidOperationException("Fresh setup must allow display selection and block Install/Start VR.");
         smokeConfirmation = _ => { prompts++; return true; };
         smokeAction = (action, _) =>
@@ -290,6 +295,11 @@ public partial class MainWindow
         UpdateReadinessUi();
         if (!InstallButton.IsEnabled || StartButton.IsEnabled || !Equals(InstallButton.Tag, true) || Equals(DisplayButton.Tag, true))
             throw new InvalidOperationException("Choosing a display must enable Install before WSL is installed.");
+        SetBusy("Install");
+        if (InstallButton.IsEnabled || Equals(InstallButton.Tag, true))
+            throw new InvalidOperationException("Install must stop blinking while unavailable during setup.");
+        SetBusy("");
+        if (!Equals(InstallButton.Tag, true)) throw new InvalidOperationException("An available unfinished Install did not resume blinking.");
         smokeConfirmation = _ => { prompts++; return false; };
         await BeginInstallationAsync();
         if (installs != 0 || prompts != 1) throw new InvalidOperationException("Install bypassed the WSL confirmation.");
@@ -305,7 +315,7 @@ public partial class MainWindow
             throw new InvalidOperationException("Reopening unfinished setup did not offer continuation with confirmation.");
         setupComplete = true;
         await ExecuteAsync("Status", saveSettings: false);
-        if (!StartButton.IsEnabled || InstallButton.Content as string != "Update" || setupProgress.Pending)
+        if (!StartButton.IsEnabled || InstallButton.Content as string != "Update" || Equals(InstallButton.Tag, true) || setupProgress.Pending)
             throw new InvalidOperationException("Complete setup did not enable Start VR and change Install to Update.");
         ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "NOT CONNECTED", display_selected = true, display_connected = false }));
         if (StartButton.IsEnabled || InstallButton.IsEnabled || !DisplayButton.IsEnabled)
@@ -321,6 +331,93 @@ public partial class MainWindow
             notices[0].Foreground.ToString() != "#FFFF6666" || notices[2].Foreground != System.Windows.Media.Brushes.LightGreen)
             throw new InvalidOperationException("Calibration log must show two red stages and one green confirmation without repeats.");
         smokeConfirmation = null; smokeAction = null;
+    }
+
+    private async Task VerifyFirstLoginUiAsync()
+    {
+        try
+        {
+            foreach (string outcome in new[] { "ready", "incomplete", "aborted", "closing", "busy", "restart" })
+            {
+                int installs = 0, confirmations = 0;
+                var releaseLogin = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                readiness.Known = true;
+                installed = readiness.Installed = runtimeMayBeRunning = resourcesMayBeOwned = false;
+                readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = true;
+                UpdateReadinessUi();
+                smokeConfirmation = _ => { confirmations++; return true; };
+                smokeFirstLoginWait = (_, cancellation) => releaseLogin.Task.WaitAsync(cancellation);
+                smokeAction = (action, _) =>
+                {
+                    if (action == "Install")
+                    {
+                        installs++;
+                        if (installs == 1 || outcome == "incomplete")
+                            return Task.FromResult(new ActionResult
+                            {
+                                ExitCode = 20, NextStep = "ubuntu_first_login",
+                                Data = JsonSerializer.SerializeToElement(new { first_login = new { process_id = 1234, start_ticks = "638969000000000000" } })
+                            });
+                        return Task.FromResult(outcome == "restart"
+                            ? new ActionResult { ExitCode = 20, NextStep = "restart_windows" }
+                            : new ActionResult { ExitCode = 0 });
+                    }
+                    bool complete = installs > 1 && outcome == "ready";
+                    return Task.FromResult(new ActionResult { ExitCode = 0, Data = JsonSerializer.SerializeToElement(new
+                    {
+                        installed = complete, setup_complete = complete, running = false,
+                        display_selected = true, display_connected = true, device_status = "CONNECTED"
+                    }) });
+                };
+                await BeginInstallationAsync();
+                Task waiting = firstLoginWaitTask ?? throw new InvalidOperationException("First Ubuntu login did not start automatic continuation.");
+                if (installs != 1 || confirmations != 1 || SetupNoticeText.Visibility != Visibility.Visible ||
+                    SetupNoticeText.FontSize < 20 || !SetupNoticeText.Text.Contains("USERNAME AND PASSWORD") || !SetupNoticeText.Text.Contains("exit"))
+                    throw new InvalidOperationException("First login did not show prominent account/password/exit instructions.");
+                if (outcome == "closing") { closing = true; CancelFirstLoginWait(); }
+                else
+                {
+                    if (outcome == "busy") SetBusy("Doctor");
+                    releaseLogin.SetResult(outcome != "aborted");
+                }
+                await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+                closing = false;
+                if (outcome == "ready")
+                {
+                    if (installs != 2 || confirmations != 1 || !installed || setupProgress.Pending || SetupNoticeText.Visibility != Visibility.Collapsed)
+                        throw new InvalidOperationException("Ubuntu account creation did not resume installation once without another confirmation or restart.");
+                }
+                else if (outcome == "incomplete" || outcome == "aborted")
+                {
+                    if (installs != (outcome == "incomplete" ? 2 : 1) || confirmations != 1 ||
+                        firstLoginCancellation is not null || !SetupNoticeText.Text.Contains("CLICK INSTALL") || !SetupNoticeText.Text.Contains("exit"))
+                        throw new InvalidOperationException("An incomplete Ubuntu login did not stop retrying and explain manual continuation.");
+                }
+                else if (outcome == "closing" && installs != 1)
+                    throw new InvalidOperationException("Closing while creating a Linux account started another installation.");
+                else if (outcome == "busy")
+                {
+                    if (installs != 1 || !SetupNoticeText.Text.Contains("CLICK INSTALL"))
+                        throw new InvalidOperationException("A concurrent action silently lost Ubuntu setup continuation.");
+                    SetBusy("");
+                }
+                else if (outcome == "restart")
+                {
+                    if (installs != 2 || confirmations != 2 || !SetupNoticeText.Text.Contains("RESTART WINDOWS"))
+                        throw new InvalidOperationException("A required restart after automatic continuation failed or awaited its own login task.");
+                    deviceCancellation.Dispose();
+                    deviceCancellation = new CancellationTokenSource();
+                }
+            }
+        }
+        finally
+        {
+            closing = false;
+            CancelFirstLoginWait();
+            firstLoginWaitTask = null;
+            smokeFirstLoginWait = null; smokeConfirmation = null; smokeAction = null;
+            SetupNoticeText.Visibility = Visibility.Collapsed;
+        }
     }
 
     private async Task VerifyRuntimeObservationAsync()

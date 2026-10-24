@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import fcntl
 import gzip
 import json
@@ -128,13 +129,19 @@ class Firmware:
         if not target.is_file() and name in [p.strip() for p in self.settings["XR_WSL_FIRMWARE_FILES"].split(",")]:
             raise FileNotFoundError("Configured firmware is missing: " + str(target))
 
-    def apply(self):
-        if self.settings["XR_WSL_FIRMWARE"] == "0":
-            return
-        lock = self.root / "run/xr-gate-wsl-firmware.lock"
+    @contextmanager
+    def locked(self):
+        # /mnt/wsl and firmware_class.path are shared by WSL distributions.
+        lock = self.root / "mnt/wsl/.xr-gate-firmware.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
         with lock.open("a") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
+    def apply(self):
+        if self.settings["XR_WSL_FIRMWARE"] == "0":
+            return
+        with self.locked():
             self.apply_locked()
 
     def apply_locked(self):
@@ -145,7 +152,9 @@ class Firmware:
         self.destination.mkdir(parents=True, exist_ok=True)
         mounted = self.command(["mountpoint", "-q", self.destination], check=False).returncode == 0
         if mounted and not os.path.samefile(self.source, self.destination):
-            raise RuntimeError("Another firmware directory is already mounted at " + str(self.destination) + ". Choose a different XR_WSL_FIRMWARE_PATH.")
+            raise RuntimeError("The firmware mount at " + str(self.destination) + " does not belong to this Ubuntu installation. "
+                               "It may remain from a deleted distribution. Save your WSL work, close XR Gate and Docker Desktop, "
+                               "run wsl --shutdown in Windows PowerShell, then reopen XR Gate and retry Install.")
         if not mounted:
             self.command(["mount", "--bind", self.source, self.destination])
             self.changed = True
@@ -158,6 +167,26 @@ class Firmware:
             self.parameter.write_text(str(self.destination))
             self.changed = True
         self.messages.append("WSL firmware available: " + str(self.destination))
+
+    def cleanup(self):
+        # Run even if firmware support is now disabled: earlier sessions may
+        # still own a mount. Never detach a different distro's firmware source.
+        unit = self.root / "etc/systemd/system" / SERVICE
+        if unit.is_file():
+            self.command(["systemctl", "disable", "--now", SERVICE], timeout=30)
+        with self.locked():
+            mounted = self.destination.is_dir() and self.command(["mountpoint", "-q", self.destination], check=False).returncode == 0
+            if not mounted:
+                self.messages.append("No firmware mount needs releasing for this Ubuntu installation.")
+                return
+            if not self.source.is_dir() or not os.path.samefile(self.source, self.destination):
+                self.messages.append("Firmware mount belongs to a different installation; left unchanged: " + str(self.destination))
+                return
+            self.command(["umount", self.destination])
+            if self.parameter.is_file() and self.parameter.read_text().removesuffix("\n") == str(self.destination):
+                self.parameter.write_text("")
+            self.changed = True
+            self.messages.append("Released this Ubuntu firmware mount: " + str(self.destination))
 
     @staticmethod
     def write_changed(path, data):
@@ -234,18 +263,28 @@ class Firmware:
 
 
 def main(argv):
-    if len(argv) != 3 or argv[1] not in ("install", "prepare", "status", "boot"):
-        raise ValueError("Usage: wsl_firmware.py install|prepare|status BASE64_JSON, or boot CONFIG_JSON")
+    if len(argv) != 3 or argv[1] not in ("install", "prepare", "status", "cleanup", "boot"):
+        raise ValueError("Usage: wsl_firmware.py install|prepare|status|cleanup BASE64_JSON, or boot CONFIG_JSON")
     action = argv[1]
     if action == "boot":
         request = {"settings": json.loads(Path(argv[2]).read_text())}
     else:
         request = json.loads(base64.b64decode(argv[2], validate=True).decode("utf-8-sig"))
     settings = request.get("settings", {})
+    if action == "cleanup":
+        # Use the installed service's actual paths, even if Settings was edited
+        # after the last installation/attachment.
+        config = Path("/etc/xr-gate-wsl/firmware.json")
+        if config.is_file():
+            settings = json.loads(config.read_text())
     if not isinstance(settings, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in settings.items()):
         raise ValueError("Expected literal firmware settings.")
     manager = Firmware(settings)
-    if action != "status":
+    if action == "cleanup":
+        if os.geteuid() != 0:
+            raise RuntimeError("Firmware cleanup requires root inside Ubuntu.")
+        manager.cleanup()
+    elif action != "status":
         if os.geteuid() != 0:
             raise RuntimeError("Firmware setup requires root inside Ubuntu.")
         if action != "boot":

@@ -268,6 +268,7 @@ RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE_HAND_TRACKING="${RUNTIME_CONTROLLER_RIGH
 RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE_IMU="${RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE_IMU:-${RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE:-controller}}"
 RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE_IMU="${RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE_IMU:-${RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE:-controller}}"
 CONTROLLER_INPUT_MODE="${CONTROLLER_INPUT_MODE:-controller_buttons_runtime_only}" # controller/hand gesture merge mode; hand_tracking_only #controller_buttons_only #hand_plus_controller №controller_buttons_runtime_only
+RUNTIME_CONTROLLER_MODE="${RUNTIME_CONTROLLER_MODE:-}" # empty keeps controller_override.mode from the transform config
 CONTROLLER_INPUT_TRANSPORT="${CONTROLLER_INPUT_TRANSPORT:-shm}"  # controller input transport;  none, shm, tcp
 CONTROLLER_INPUT_REGISTRY="${CONTROLLER_INPUT_REGISTRY:-$TRACKING_REGISTRY}" # controller input source registry path
 CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}" # controller input source stream name
@@ -314,6 +315,20 @@ RUNTIME_VIDEO_SHM_NAME="${RUNTIME_VIDEO_SHM_NAME:-runtime_stereo_video}" # runti
   echo "[ERROR] Run: $ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/scripts/linux/install_xr_runtime_adapter.sh" >&2
   exit 1
 }
+
+# Head-only sessions must override inherited device/profile controller settings.
+# The existing synthesis mode publishes disconnected, invalid controller poses.
+if [[ "${XR_CONTROLLER_MODE:-}" == "no" ]]; then
+  RUNTIME_CONTROLLER_MODE="controller_only_pose_invalid"
+  CONTROLLER_INPUT_MODE="hand_tracking_only"
+  CONTROLLER_INPUT_TRANSPORT="none"
+  HAND_SKELETON26_INPUT="none"
+  HAND_SKELETON26_DERIVE_GESTURES="0"
+  RUNTIME_DERIVE_HAND_GESTURES="0"
+  RUNTIME_DERIVE_EXTRA_GESTURE_BUTTONS="0"
+  RUNTIME_LEFT_HAND_GESTURES_ENABLED="0"
+  RUNTIME_RIGHT_HAND_GESTURES_ENABLED="0"
+fi
 
 export RUNTIME_BODY_TRACKER_MAX_JUMP_M
 export RUNTIME_CONTROLLER_MOVEMENT_SPACE
@@ -541,6 +556,9 @@ if [[ "$RUNTIME_APP_TCP" == "1" ]]; then
     --app-tcp-max-clients "$RUNTIME_APP_TCP_MAX_CLIENTS")
   if [[ "$RUNTIME_APP_TCP_SPATIAL" == "1" ]]; then args+=(--app-tcp-spatial); fi
 fi
+if [[ -n "$RUNTIME_CONTROLLER_MODE" ]]; then
+  args+=(--runtime-controller-mode "$RUNTIME_CONTROLLER_MODE")
+fi
 if [[ "$RUNTIME_HMD_POSE_STABILITY_FILTER" == "1" ]]; then
   args+=(--runtime-hmd-pose-stability-filter)
 fi
@@ -729,6 +747,7 @@ RUNTIME_JITTER_FILTER_BODY_TRACKER_ANG_VEL_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_B
 RUNTIME_JITTER_FILTER_BODY_TRACKER_POS_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_BODY_TRACKER_POS_SMOOTH_ALPHA
 RUNTIME_JITTER_FILTER_BODY_TRACKER_ROT_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_BODY_TRACKER_ROT_SMOOTH_ALPHA
 CONTROLLER_INPUT_MODE=$CONTROLLER_INPUT_MODE # controller/hand gesture merge mode
+RUNTIME_CONTROLLER_MODE=$RUNTIME_CONTROLLER_MODE # empty keeps the configured controller synthesis mode
 CONTROLLER_INPUT_TRANSPORT=$CONTROLLER_INPUT_TRANSPORT # controller input transport
 OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT # runtime-only gesture block gate
 OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS=$OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS # runtime-only gesture block latch

@@ -2,10 +2,10 @@ name: Launcher configuration tests
 
 "on":
   pull_request:
-    paths: ['xr_client/**', 'docker/**', 'win/**', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/openvr_driver/resources/settings/**', 'drivers/openvr_driver/scripts/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
+    paths: ['xr_client/**', 'docker/**', 'win/**', 'runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/openvr_driver/resources/settings/**', 'drivers/openvr_driver/scripts/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
   push:
     branches: [main, master]
-    paths: ['xr_client/**', 'docker/**', 'win/**', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/openvr_driver/resources/settings/**', 'drivers/openvr_driver/scripts/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
+    paths: ['xr_client/**', 'docker/**', 'win/**', 'runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/openvr_driver/resources/settings/**', 'drivers/openvr_driver/scripts/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
   workflow_dispatch:
 
 jobs:
@@ -76,6 +76,15 @@ jobs:
       - name: Confirmed Ubuntu deletion and cleanup before unregistering
         shell: powershell
         run: '& ./win/tests/verify-delete.ps1'
+      - name: First Ubuntu login and dynamic user detection
+        shell: powershell
+        run: '& ./win/tests/verify-first-login.ps1'
+      - name: Graceful SteamVR shutdown and bounded cleanup
+        shell: powershell
+        run: '& ./win/tests/verify-steamvr-stop.ps1'
+      - name: Restart tracking while preserving SteamVR and USB
+        shell: powershell
+        run: '& ./win/tests/verify-restart.ps1'
       - name: Independent platform releases and latest runtime selection
         shell: powershell
         run: '& ./win/tests/verify-release-platforms.ps1'

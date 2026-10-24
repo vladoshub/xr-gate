@@ -36,7 +36,7 @@ function Initialize-XrSettings([string]$Root) {
     $script:Settings = @{}
     foreach ($key in $defaults.Keys) { $script:Settings[$key] = $defaults[$key] }
     foreach ($key in $overrides.Keys) { $script:Settings[$key] = $overrides[$key] }
-    foreach ($key in @('XR_REQUIRE_CAMERA','XR_REQUIRE_HIDRAW','XR_CAMERA_AUTO_SELECT','XR_WSL_FIRMWARE','XR_AUDIO_ENABLED')) {
+    foreach ($key in @('XR_REQUIRE_CAMERA','XR_REQUIRE_HIDRAW','XR_CAMERA_AUTO_SELECT','XR_WSL_FIRMWARE','XR_AUDIO_ENABLED','XR_GLOBAL_HOTKEYS')) {
         if ($script:Settings.ContainsKey($key) -and $script:Settings[$key] -notin @('0','1')) {
             throw "$key must be 0 or 1."
         }
@@ -46,8 +46,8 @@ function Initialize-XrSettings([string]$Root) {
             throw "$key must be empty, 0 or 1."
         }
     }
-    if ($script:Settings.ContainsKey('XR_CONTROLLER_MODE') -and $script:Settings['XR_CONTROLLER_MODE'] -notin @('','gearvr','gestures')) {
-        throw 'XR_CONTROLLER_MODE must be gearvr or gestures, or empty for legacy settings.'
+    if ($script:Settings.ContainsKey('XR_CONTROLLER_MODE') -and $script:Settings['XR_CONTROLLER_MODE'] -notin @('','gearvr','gestures','no')) {
+        throw 'XR_CONTROLLER_MODE must be gearvr, gestures or no, or empty for legacy settings.'
     }
     $script:SettingOverrides = $overrides
 }

@@ -84,6 +84,7 @@ public partial class MainWindow : Window
             catch (Exception error) { Log("Could not read unfinished setup: " + error.Message); }
         }
         UpdateRecoveryUi();
+        SourceInitialized += (_, _) => InitializeHotkeys();
         Loaded += async (_, _) =>
         {
             if (smoke)
@@ -133,7 +134,7 @@ public partial class MainWindow : Window
         SaveSettingsButton.IsEnabled = AdvancedSettingsButton.IsEnabled = !busy && !runtimeMayBeRunning && !recovery;
         RecoveryPanel.IsEnabled = !busy;
         Progress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        StopButton.IsEnabled = busy ? action == "Run" : installed || runtimeMayBeRunning || resourcesMayBeOwned ||
+        StopButton.IsEnabled = busy ? action is "Run" or "Restart" : installed || runtimeMayBeRunning || resourcesMayBeOwned ||
             (!smoke && File.Exists(Path.Combine(stateDirectory, "state.json")));
         NextStepButton.IsEnabled = !busy && !recovery;
         CancelDiagnosticsButton.Visibility = IsCancellableOperation(action) ? Visibility.Visible : Visibility.Collapsed;
@@ -154,8 +155,9 @@ public partial class MainWindow : Window
 
     private async Task<bool> PerformAsync(string action, bool steamVr, bool console, bool saveSettings)
     {
+        bool trackingAction = action is "Run" or "Restart";
         SetBusy(action);
-        StatusTitle.Text = action == "Run" ? "Starting tracking…" : action + "…";
+        StatusTitle.Text = trackingAction ? action == "Restart" ? "Restarting tracking…" : "Starting tracking…" : action + "…";
         StatusDetail.Text = console ? "Complete the prompts in the separate console, then return here." : "You can follow progress in the activity log.";
         WarningText.Visibility = NextStepButton.Visibility = Visibility.Collapsed;
         operationCancellation = new CancellationTokenSource();
@@ -165,7 +167,7 @@ public partial class MainWindow : Window
         if (action == "Test") operationCancellation.CancelAfter(TimeSpan.FromSeconds(settings.StartTimeoutSeconds + 5));
         try
         {
-            if (action is "Stop" or "Detach" or "Delete") { await StopCalibrationProgressAsync(); await StopAudioAsync(required: true); }
+            if (action is "Stop" or "Detach" or "Delete" or "Restart") { await StopCalibrationProgressAsync(); await StopAudioAsync(required: true); }
             if (action == "Delete")
             {
                 if (audioRefreshTask is not null) await audioRefreshTask;
@@ -176,11 +178,12 @@ public partial class MainWindow : Window
             if (writesSettings && !smoke) { settings.Save(root); ControllerSettingsSaved(); }
             var actionSettings = writesSettings || smokeAction is not null || action is "Stop" or "Delete" ? settings : LauncherSettings.Load(root);
             if (smokeAction is null && action is not ("Stop" or "Delete" or "Status" or "Doctor" or "Display")) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
-            if (action == "Run") { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
-            if (action is "Run" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
+            if (trackingAction) { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
+            if (action is "Run" or "Restart" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,
                 timeLimit: action == "Test" ? TimeSpan.FromSeconds(actionSettings.StartTimeoutSeconds + 5) : null);
             nextStep = result.NextStep;
+            if (action == "Install") firstLoginSession = FirstLoginSession.Read(result.Data);
             if (action == "Install") SaveSetupProgress(new(!result.Success, settings.Distribution, nextStep));
             pausedDistribution = result.Data.ValueKind == JsonValueKind.Object && result.Data.TryGetProperty("distribution", out var distro)
                 ? distro.GetString() ?? settings.Distribution : settings.Distribution;
@@ -191,7 +194,7 @@ public partial class MainWindow : Window
             if (result.Success && action is "Stop" or "Detach") resourcesMayBeOwned = false;
             if (result.Success && action == "BluetoothScan") ApplyBluetoothDevices(result.Data);
             if (action == "Status" && result.Success) ApplyStatus(result.Data);
-            else if (action is "Run" or "Install" || ((action is "Stop" or "Display" or "Driver") && result.Success))
+            else if (trackingAction || action == "Install" || ((action is "Stop" or "Display" or "Driver") && result.Success))
             {
                 try
                 {
@@ -202,7 +205,7 @@ public partial class MainWindow : Window
                 catch (OperationCanceledException) { throw; }
                 catch (Exception error) { Log("Status: " + error.Message); }
             }
-            if (action == "Run")
+            if (trackingAction)
             {
                 // A console-only start can return before the Linux supervisor
                 // acquires its lock. Keep observing it until Status confirms exit.
@@ -215,12 +218,13 @@ public partial class MainWindow : Window
             StatusTitle.Text = result.Success ? action switch
             {
                 "Run" => steamVr ? "VR is ready" : "Tracking started",
+                "Restart" => "Tracking restarted",
                 "Stop" => "Tracking stopped",
                 "Delete" => "Ubuntu deleted",
                 "Install" => installed ? "Installation complete" : "Finish setup",
                 "Status" => runtimeMayBeRunning ? "Tracking is running" : readiness.CanStart ? "Ready to start" : "Next setup step",
                 _ => action + " complete"
-            } : result.ExitCode == 20 ? "One more setup step" : action == "Run" && !runtimeMayBeRunning ? "Tracking stopped during startup" : "Action needs attention";
+            } : result.ExitCode == 20 ? "One more setup step" : trackingAction && !runtimeMayBeRunning ? "Tracking stopped during startup" : "Action needs attention";
             StatusDetail.Text = result.Instruction.Length > 0 ? result.Instruction : action == "Status"
                 ? readiness.NextStep
                 : action == "Stop" ? "The managed runtime stopped and its USB devices were returned to Windows."
@@ -280,7 +284,7 @@ public partial class MainWindow : Window
             operationCancellation.Dispose();
             operationCancellation = null;
             SetBusy("");
-            if (action is "Usb" or "Install" or "Run") StartAudioDeviceRefresh();
+            if (action is "Usb" or "Install" or "Run" or "Restart") StartAudioDeviceRefresh();
         }
     }
 
@@ -337,7 +341,7 @@ public partial class MainWindow : Window
 
     private async Task<bool> StopSessionCoreAsync()
     {
-        if (busyAction == "Run")
+        if (busyAction is "Run" or "Restart")
         {
             operationCancellation?.Cancel();
             if (activeTask is not null) await activeTask;
@@ -346,11 +350,18 @@ public partial class MainWindow : Window
         return await ExecuteAsync("Stop", saveSettings: false);
     }
 
-    private async void Start_Click(object sender, RoutedEventArgs e)
+    private async Task<bool> StartVrAsync()
     {
-        if (!readiness.CanStart) { UpdateReadinessUi(); return; }
-        await ExecuteAsync("Run", steamVr: true);
+        if (closing || resourcesReleased || !StartButton.IsEnabled || !readiness.CanStart) { UpdateReadinessUi(); return false; }
+        return await ExecuteAsync("Run", steamVr: true);
     }
+    private async void Start_Click(object sender, RoutedEventArgs e) => await StartVrAsync();
+    private async Task<bool> RestartTrackingAsync()
+    {
+        if (closing || resourcesReleased || !RestartButton.IsEnabled) return false;
+        return await ExecuteAsync("Restart");
+    }
+    private async void Restart_Click(object sender, RoutedEventArgs e) => await RestartTrackingAsync();
     private async void Tracking_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Run");
     private async void Install_Click(object sender, RoutedEventArgs e) => await BeginInstallationAsync();
     private async void Display_Click(object sender, RoutedEventArgs e) => await ExecuteAsync("Display", console: true);
@@ -404,7 +415,7 @@ public partial class MainWindow : Window
 
     private void StartDeviceObservation()
     {
-        if (smoke || closing || resourcesReleased || busyAction is not ("" or "Run") || configurationProblem is not null || deviceObservation is { IsCompleted: false }) return;
+        if (smoke || closing || resourcesReleased || busyAction is not ("" or "Run" or "Restart") || configurationProblem is not null || deviceObservation is { IsCompleted: false }) return;
         deviceObservation = ObserveDeviceAsync();
     }
 
@@ -624,10 +635,12 @@ public partial class MainWindow : Window
 
     private async Task<bool> ShutdownSessionAsync()
     {
+        CancelFirstLoginWait();
         FlushControllerSettings();
         if (controllerSettingsDirty) Log("[Launcher] " + ControllerSaveStatus.Text);
         deviceTimer.Stop();
         deviceCancellation.Cancel();
+        if (firstLoginWaitTask is not null) await firstLoginWaitTask;
         await StopCalibrationProgressAsync();
         await StopAudioAsync(required: true);
         if (deviceObservation is not null) await deviceObservation;
@@ -636,7 +649,7 @@ public partial class MainWindow : Window
         if (busyAction == "Stop" && activeTask is not null) return await activeTask;
         // Let installation/driver setup finish before cleanup; interrupting apt
         // halfway through would leave the next installation unable to continue.
-        if (busyAction.Length > 0 && busyAction != "Run" && activeTask is not null)
+        if (busyAction.Length > 0 && busyAction is not ("Run" or "Restart") && activeTask is not null)
         {
             StatusDetail.Text = "Finishing the current setup step, then stopping tracking and returning USB…";
             await activeTask;
@@ -649,6 +662,8 @@ public partial class MainWindow : Window
     private void ReleaseResources()
     {
         if (resourcesReleased) return;
+        ReleaseHotkeys();
+        CancelFirstLoginWait();
         controllerSaveTimer.Stop();
         deviceTimer.Stop();
         deviceCancellation.Cancel();

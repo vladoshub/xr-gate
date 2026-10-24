@@ -9,7 +9,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\XrGate-Wsl.ps1 -Action Run
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Install','Run','Runtime','Stop','Delete','Status','DeviceStatus','BluetoothScan','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
+    [ValidateSet('Install','Run','Restart','Runtime','Stop','Delete','Status','DeviceStatus','BluetoothScan','Usb','Detach','Doctor','Test','Driver','Display','Pair','Controllers','Help','Admin')]
     [string]$Action = 'Help',
     [string]$Distribution = '',
     [string]$ReleaseTag = '',
@@ -83,6 +83,9 @@ $script:ActionData = $null
 . (Join-Path $PSScriptRoot 'windows\RuntimeWindow.ps1')
 . (Join-Path $PSScriptRoot 'windows\Delete.ps1')
 . (Join-Path $PSScriptRoot 'windows\SetupStatus.ps1')
+. (Join-Path $PSScriptRoot 'windows\FirstLogin.ps1')
+. (Join-Path $PSScriptRoot 'windows\SteamVr.ps1')
+. (Join-Path $PSScriptRoot 'windows\Restart.ps1')
 
 function Write-Step([string]$Message) { Write-Host ("[XR Gate] " + $Message) -ForegroundColor Cyan }
 function Write-XrWarning([string]$Message) {
@@ -320,10 +323,7 @@ function Ensure-Distribution {
             Write-Host 'Save work, restart Windows, and run Install again.' -ForegroundColor Yellow
             return $false
         }
-        $script:NextStep = 'ubuntu_first_login'
-        Write-Step 'In the new Ubuntu window create your Linux username/password, then type exit.'
-        Write-Host 'After completing the first Ubuntu login, run -Action Install again.' -ForegroundColor Yellow
-        Start-Process $wsl -ArgumentList @('--distribution', [string]$script:State.Distribution)
+        Open-XrFirstLogin $wsl
         return $false
     }
     $distroVersion = Get-WslDistributionVersion
@@ -334,11 +334,9 @@ function Ensure-Distribution {
     } else {
         Write-Step ($script:State.Distribution + ' is already WSL2; continuing installation.')
     }
-    $name = Get-WslText @('id','-un')
-    if ($name -eq 'root' -or $name -notmatch '^[a-z_][a-z0-9_-]*[$]?$') {
-        $script:NextStep = 'ubuntu_first_login'
-        Start-Process $wsl -ArgumentList @('--distribution', [string]$script:State.Distribution)
-        Write-Host 'Complete the first Ubuntu login with a regular Linux user, type exit, then run Install again.'
+    $name = Get-XrLoginUser
+    if (!$name) {
+        Open-XrFirstLogin $wsl
         return $false
     }
     $script:State.LinuxUser = $name
@@ -799,6 +797,7 @@ function Show-Help {
 XR Gate / WSL2 / no Docker
   -Action Install                 Install Ubuntu runtime and Windows driver.
   -Action Run [-StartSteamVR]      Attach USB, open xr_client; optionally start SteamVR.
+  -Action Restart                 Restart XR Gate tracking; retain SteamVR and USB.
   -Action Stop                    Stop this managed runtime, then return its USB devices.
   -Action Delete -DeleteDistributionName NAME  Permanently delete the saved Ubuntu and ALL its Linux data.
   -Action Status                  Report installed/running state as JSON.
@@ -943,6 +942,7 @@ try {
         Complete-XrAction 0
     }
     if ($Action -eq 'Stop') {
+        Stop-XrSteamVr
         Request-RuntimeWindowStop
         if ($script:State.LinuxUser) { Invoke-Linux -Operation stop -Request (New-LinuxRequest) }
         Stop-RuntimeWindow
@@ -951,6 +951,7 @@ try {
     }
     if (!$script:State.LinuxUser) { throw 'Run -Action Install first.' }
     switch ($Action) {
+        'Restart' { Restart-XrTracking }
         'Run' {
             if ($Launcher -and $StartSteamVR) {
                 $setup = Get-XrSetupObservation $true

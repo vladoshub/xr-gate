@@ -10,17 +10,24 @@ a{color:#8acaff}li{margin:10px 0}h1,h2{line-height:1.25}strong{color:white}
 <p>Install SteamVR, open it once and close it. Extract the complete xr-gate-windows-wsl-usbip.zip and open XR-Gate.exe. Keep the supplied folders together.</p>
 <h2>Start</h2><ol>
 <li><strong>Select glasses display</strong> — Connect the glasses. In Windows choose Extend these displays and enable the glasses’ SBS mode. In Run, click Select glasses display and choose their display number. Install stays disabled until the selected display is connected.</li>
-<li><strong>Install</strong> — Confirm installation of WSL, Ubuntu and XR Gate. Follow the Ubuntu first-login prompts if shown. Accept a restart when ready; after reboot, open XR Gate to continue unfinished setup. Install becomes Update when setup is complete.</li>
-<li><strong>Start VR</strong> — Available after installation, display selection and device connection. USB connects automatically. Stop tracking &amp; return USB, or close the launcher, to stop the session and return the devices.</li>
+<li><strong>Install</strong> — Confirm installation of WSL, Ubuntu and XR Gate. Create the Ubuntu account if prompted (see below). Installation continues after you type <code>exit</code>. Restart only when XR Gate requests it; after reboot, reopen XR Gate to continue unfinished setup. Install becomes Update when setup is complete.</li>
+<li><strong>Start VR</strong> — Available after installation, display selection and device connection. USB connects automatically. Stop tracking &amp; return USB, or close the launcher, to stop the session, request SteamVR exit and return the devices.</li>
 </ol>
+<h2>Ubuntu account</h2>
+<p>Choose your own Linux username and password in the Ubuntu window. Password characters are not displayed while typing. After the Linux shell appears, type <code>exit</code>; keep XR Gate open and installation will continue automatically. If it stays paused, finish account setup, type <code>exit</code>, then click Install. No restart is needed unless explicitly requested.</p>
 <h2>Tabs</h2><ul>
-<li><strong>Run</strong> — Display selection, Install / Update, Start VR, Stop, status and Activity Log. Delete removes the saved Ubuntu distribution and all its Linux data after confirmation. Blinking buttons show the next setup step.</li>
-<li><strong>Controllers</strong> — Gestures is the default; Bluetooth is off. For Gear VR Controllers, enable Bluetooth, pair and select the left and/or right controller, then Connect &amp; save. Calibration instructions appear once per stage in Activity Log.</li>
+<li><strong>Run</strong> — Display selection, Install / Update, Start VR, Restart tracking, Stop, status and Activity Log. Restart tracking restarts XR Gate inside Ubuntu while keeping SteamVR and USB connected. Buttons include hover hints. Delete removes the saved Ubuntu distribution and all its Linux data after confirmation. Blinking buttons show the next setup step.</li>
+<li><strong>Controllers</strong> — Gestures is the default; Bluetooth is off. No selects head tracking without hand/controller input. For Gear VR Controllers, enable Bluetooth, pair and select the left and/or right controller, then Connect &amp; save. Calibration instructions appear once per stage in Activity Log.</li>
 <li><strong>Audio</strong> — Enable is on by default; turn it off to disable sound and keep device choices. Start VR keeps an available saved Ubuntu output or selects the first available one. Playback only; no microphone.</li>
-<li><strong>Settings</strong> — Hardware preset, display and launch settings. Show command prompt is off by default; enable it before starting for console calibration commands.</li>
+<li><strong>Settings</strong> — Hardware preset, display and launch settings. Hotkeys: F5 starts VR, F6 stops tracking and returns USB, F7 restarts tracking while keeping SteamVR running. Global hotkeys work while XR Gate is open, including when minimized; the checkbox saves automatically. Show command prompt is off by default; enable it before starting for console calibration commands.</li>
 <li><strong>Tools</strong> — Diagnostics, driver registration and tracking checks. List USB devices stays in Settings.</li>
 </ul>
 <p>Bluetooth was tested with ASUS USB-BT500. Use a separate adapter to keep Windows Bluetooth devices available. A built-in MediaTek adapter requires support in the WSL kernel; changing the Ubuntu release alone does not add it.</p>
 <p>Hardware presets are in hardware/*.env; Advanced settings opens .env. The supplied PowerShell and Linux helpers are required by the launcher. Separate .cmd/.bat launchers are no longer included.</p>
-<p>If startup is blocked, follow [Next] in Activity Log. For problems, use Tools → Diagnostics and Save log in Run.</p>
+<h2>Troubleshooting</h2><ul>
+<li>Follow [Next] in Activity Log. Use Tools → Diagnostics and Save log in Run.</li>
+<li>If USB is busy, close camera apps and SteamVR, then reconnect the device and retry Start VR.</li>
+<li>If reinstalling reports an old firmware mount, close XR Gate and Docker, save work in all WSL distributions, run <code>wsl --shutdown</code> in PowerShell, then reopen XR Gate and click Install. This stops all WSL distributions.</li>
+<li>If nothing helps, fully shut down the computer. Unplug the glasses and the separate Bluetooth adapter if used, wait a few seconds, reconnect them and turn the computer on.</li>
+</ul>
 </body></html>

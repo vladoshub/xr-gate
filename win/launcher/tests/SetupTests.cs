@@ -31,6 +31,18 @@ internal static class SetupTests
         Check(notices.Observe("unrelated") is null, "An unrelated log produced calibration instructions.");
         notices.Reset();
         Check(notices.Observe("zeroing") is not null, "A new tracking run did not reset calibration instructions.");
+        var login = FirstLoginSession.Read(JsonSerializer.SerializeToElement(new
+        {
+            first_login = new { process_id = 1234, start_ticks = "638969000000000000" }
+        }));
+        Check(login == new FirstLoginSession(1234, 638969000000000000), "Ubuntu first-login process identity was lost.");
+        foreach (string json in new[] { "{}", "null", "{\"first_login\":null}",
+            "{\"first_login\":{\"process_id\":\"1234\",\"start_ticks\":\"1\"}}",
+            "{\"first_login\":{\"process_id\":-1,\"start_ticks\":\"1\"}}",
+            "{\"first_login\":{\"process_id\":1234,\"start_ticks\":1}}",
+            "{\"first_login\":{\"process_id\":1234,\"start_ticks\":\"invalid\"}}" })
+            Check(FirstLoginSession.Read(JsonSerializer.Deserialize<JsonElement>(json)) is null,
+                "Invalid first-login metadata should allow manual continuation without throwing.");
         string removalState = Path.Combine(folder, "removal-state.json");
         File.WriteAllText(removalState, JsonSerializer.Serialize(new { Distribution = "Ubuntu-24.04", LinuxUser = "saved-user" }));
         var removal = DistributionRemoval.Load(removalState);

@@ -36,8 +36,8 @@ try {
     # quotes. On Windows also check the raw WSL option prefix, which wsl.exe
     # parses before CommandLineToArgvW handles the Linux executable and arguments.
     $probe = Join-Path $temporary "O'Brien native arguments.ps1"
-    $request = To-Base64Json @{user='vlados';settings=@{XR_DEVICE_NAME='Generic XR';XR_TCP_PORT='45810'}}
-    $expected = @('--distribution','Ubuntu-24.04','--user','vlados','--exec','python3',
+    $request = To-Base64Json @{user='fixture_user';settings=@{XR_DEVICE_NAME='Generic XR';XR_TCP_PORT='45810'}}
+    $expected = @('--distribution','Ubuntu-24.04','--user','fixture_user','--exec','python3',
         ("/mnt/c/" + [char]0x041D + [char]0x043E + [char]0x0432 + [char]0x0430 + [char]0x044F + " O'Brien XR Gate/linux/xr_gate_wsl.py"),'run',$request,'',
         'a"b', 'C:\folder with space\', 'C:\simple\', 'literal; & | $() `<>', "line1`nline2")
     $encoded = To-Base64Json $expected
@@ -62,6 +62,22 @@ exit 0
     $probeFiles = Get-RuntimeWindowFiles ([pscustomobject]@{Token=('b' * 32)})
     $code = Invoke-LoggedRuntime -Arguments (@('-NoLogo','-NoProfile','-File',$probe) + $expected) -Files $probeFiles
     Assert ($code -eq 0 -and (Get-Content -Raw -LiteralPath $probeFiles.Output).Contains('runtime arguments preserved')) 'Hidden runtime changed native arguments or quoted WSL options.'
+    # First-login detection must see EOF instead of inheriting an interactive
+    # password/username prompt. Exercise the actual NativeCommand overload.
+    $inputProbe = Join-Path $temporary 'closed input.ps1'
+    [IO.File]::WriteAllText($inputProbe, '[Console]::In.ReadToEnd() | Out-Null; [Console]::WriteLine("stdin closed")', (New-Object Text.UTF8Encoding($true)))
+    $native = New-Object XrGateWsl.NativeCommand($script:Shell, [string[]]@('-NoLogo','-NoProfile','-File',$inputProbe), $true)
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $inputOutput = New-Object Text.StringBuilder
+    try {
+        while ($clock.ElapsedMilliseconds -lt 5000) {
+            while ($null -ne ($line = $native.ReadOutput())) { [void]$inputOutput.AppendLine($line.Text) }
+            if ($native.Finished) { break }
+            Start-Sleep -Milliseconds 25
+        }
+        while ($null -ne ($line = $native.ReadOutput())) { [void]$inputOutput.AppendLine($line.Text) }
+        Assert ($native.Finished -and $native.ExitCode -eq 0 -and $inputOutput.ToString().Contains('stdin closed')) 'First-login probe inherited an interactive stdin or failed to close it.'
+    } finally { $native.Dispose() }
     Assert (!(Get-RuntimeWindowFiles ([pscustomobject]@{Token='../other'}))) 'Runtime log paths trusted an invalid token.'
-    Write-Host 'OK: hidden runtime preserves native arguments and WSL options, owns UTF-8 log pipes and reports bounded plain-string JSON failure tails.'
+    Write-Host 'OK: hidden runtime preserves native arguments and WSL options, probes close stdin, UTF-8 pipes report bounded plain-string JSON failure tails.'
 } finally { Remove-Item -Recurse -Force -LiteralPath $temporary }

@@ -1,3 +1,23 @@
+## No controllers, global hotkeys and tracking restart
+
+- Add No beside Gestures (still the default) and Gear VR Controllers; disable hand/controller services and pass controller-only invalid-pose mode with no input transport to the adapter.
+- Add Settings → Hotkeys: global F5 Start VR, F6 Stop tracking and F7 Restart tracking, with optional disable, conflict reporting and key release on exit.
+- Restart only the managed XR Gate runtime while retaining SteamVR, display/driver state and USB attachments; wait for a fresh HMD stream and allow Stop during restart.
+- Add concise hover hints for every Run button and update the English/Russian guides.
+
+## Ubuntu account continuation and SteamVR shutdown
+
+- Continue installation after Ubuntu account creation and `exit`, using the detected Linux username and bounded probes; show prominent manual instructions if continuation is unavailable.
+- Blink Install only when setup is incomplete and the button is available; preserve genuine reboot requirements.
+- Request graceful SteamVR exit on Stop/launcher shutdown and Delete without preventing XR Gate/USB cleanup if SteamVR stays open.
+- Document first-login password prompts and troubleshooting in English and Russian; replace machine-specific username examples.
+
+## Firmware cleanup before Ubuntu deletion
+
+- Disable the installed firmware service and release this Ubuntu's firmware mount before unregistering it, including when Bluetooth was later disabled.
+- Preserve unrelated mounts and kernel firmware paths; serialize firmware changes across WSL distributions.
+- Explain how to recover an existing stale mount after reinstalling Ubuntu and keep encoded installation requests out of firmware failure logs.
+
 ## Delete Ubuntu and automatic audio selection
 
 - Add Delete in Run with confirmation naming the saved XR Gate Ubuntu distribution and explaining permanent loss of all its Linux data.

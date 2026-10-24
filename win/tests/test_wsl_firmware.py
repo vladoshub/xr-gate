@@ -1,3 +1,4 @@
+import base64
 import gzip
 import importlib.util
 import json
@@ -13,6 +14,9 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location('wsl_firmware_test', Path(__file__).resolve().parents[1] / 'linux/wsl_firmware.py')
 firmware = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(firmware)
+RUNTIME_SPEC = importlib.util.spec_from_file_location('wsl_firmware_runtime_test', Path(__file__).resolve().parents[1] / 'linux/xr_gate_wsl.py')
+runtime_code = importlib.util.module_from_spec(RUNTIME_SPEC)
+RUNTIME_SPEC.loader.exec_module(runtime_code)
 
 
 class FirmwareTest(unittest.TestCase):
@@ -31,6 +35,7 @@ class FirmwareTest(unittest.TestCase):
             code, text = 0, ''
             if args[0] == 'mountpoint': code = 0 if mounted[0] else 1
             elif args[:2] == ['mount', '--bind']: mounted[0] = True
+            elif args[0] == 'umount': mounted[0] = False
             elif args[0] == 'dmesg': text = ''
             elif args[0] == 'dpkg-query': text = 'installed\ninstalled\n'
             return subprocess.CompletedProcess(args, code, stdout=text, stderr='')
@@ -70,6 +75,99 @@ class FirmwareTest(unittest.TestCase):
                 manager.ensure_packages()
                 self.assertEqual(run.call_args_list[-1].args[0], ['apt-get','install','-y','--no-install-recommends','custom-firmware','zstd'])
             with self.assertRaises(ValueError): firmware.packages({'XR_BLUETOOTH_FIRMWARE_PACKAGES':'pkg;command'})
+
+    def test_delete_releases_owned_firmware_and_reinstall_can_mount_a_new_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = self.manager(Path(folder))
+            calls, mounted = [], [False]
+            unit = manager.root / 'etc/systemd/system' / firmware.SERVICE
+            unit.parent.mkdir(parents=True)
+            unit.write_text('fixture firmware service')
+            command = self.fixture_command(manager, calls, mounted)
+            with patch.object(manager, 'command', side_effect=command), patch.object(firmware.os.path, 'samefile', return_value=True):
+                manager.apply()
+                manager.settings['XR_WSL_FIRMWARE'] = '0'
+                manager.cleanup()
+                self.assertFalse(mounted[0])
+                self.assertEqual(manager.parameter.read_text(), '')
+                self.assertIn(['systemctl', 'disable', '--now', firmware.SERVICE], calls)
+                self.assertIn(['umount', str(manager.destination)], calls)
+                self.assertFalse(any(call[0] == 'apt-get' for call in calls))
+            # Recreated Ubuntu has a different /lib/firmware behind the same path.
+            manager.source.rename(manager.source.with_name('old-firmware'))
+            manager.source.mkdir()
+            replacement = firmware.Firmware({}, root=manager.root)
+            with patch.object(replacement, 'command', side_effect=command):
+                replacement.apply()
+            self.assertTrue(mounted[0])
+            self.assertEqual(replacement.parameter.read_text(), str(replacement.destination))
+
+    def test_cleanup_preserves_foreign_mounts_and_unrelated_kernel_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = self.manager(Path(folder))
+            manager.destination.mkdir(parents=True)
+            manager.parameter.write_text('/another/firmware/path')
+            calls, mounted = [], [True]
+            with patch.object(manager, 'command', side_effect=self.fixture_command(manager, calls, mounted)), patch.object(firmware.os.path, 'samefile', return_value=False):
+                manager.cleanup()
+                self.assertTrue(mounted[0])
+                self.assertFalse(any(call[0] == 'umount' for call in calls))
+                with self.assertRaisesRegex(RuntimeError, 'wsl --shutdown'):
+                    manager.apply()
+            self.assertEqual(manager.parameter.read_text(), '/another/firmware/path')
+            with patch.object(manager, 'command', side_effect=self.fixture_command(manager, calls, mounted)), patch.object(firmware.os.path, 'samefile', return_value=True):
+                manager.cleanup()
+            self.assertFalse(mounted[0])
+            self.assertEqual(manager.parameter.read_text(), '/another/firmware/path')
+
+    def test_failed_unmount_preserves_the_kernel_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = self.manager(Path(folder))
+            manager.destination.mkdir(parents=True)
+            manager.parameter.write_text(str(manager.destination))
+            def command(args, **kwargs):
+                if args[0] == 'umount':
+                    raise RuntimeError('fixture firmware mount is busy')
+                return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+            with patch.object(manager, 'command', side_effect=command), patch.object(firmware.os.path, 'samefile', return_value=True):
+                with self.assertRaisesRegex(RuntimeError, 'mount is busy'):
+                    manager.cleanup()
+            self.assertEqual(manager.parameter.read_text(), str(manager.destination))
+
+    def test_cleanup_uses_installed_service_paths_without_installing_packages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / 'firmware.json'
+            installed = {'XR_WSL_FIRMWARE_PATH': '/mnt/wsl/installed-firmware'}
+            config.write_text(json.dumps(installed))
+            request = base64.b64encode(json.dumps({'settings': {'XR_WSL_FIRMWARE_PATH': '/mnt/wsl/unsaved-path'}}).encode()).decode()
+            with patch.object(firmware, 'Firmware') as factory, patch.object(firmware, 'Path', return_value=config), patch.object(firmware.os, 'geteuid', return_value=0):
+                firmware.main(['wsl_firmware.py', 'cleanup', request])
+                factory.assert_called_once_with(installed)
+                factory.return_value.cleanup.assert_called_once_with()
+                factory.return_value.ensure_packages.assert_not_called()
+                factory.return_value.apply.assert_not_called()
+                factory.return_value.install_service.assert_not_called()
+
+    def test_nested_firmware_failures_preserve_reason_without_dumping_the_request(self):
+        runtime = object.__new__(runtime_code.Runtime)
+        runtime.cfg = {'user': 'fixture', 'settings': {'XR_PRIVATE_TEST': 'request contents'}}
+        encoded = base64.b64encode(json.dumps(runtime.cfg).encode()).decode()
+        def failed(args, **kwargs):
+            raise subprocess.CalledProcessError(7, args, stderr='fixture firmware mount conflict')
+        with patch.object(runtime_code.subprocess, 'run', side_effect=failed):
+            for capture in (False, True):
+                with self.subTest(capture=capture), self.assertRaises(RuntimeError) as error:
+                    runtime.firmware('install', capture=capture)
+                self.assertIn('exit 7', str(error.exception))
+                self.assertNotIn(encoded, str(error.exception))
+                if capture:
+                    self.assertIn('firmware mount conflict', str(error.exception))
+        def timed_out(args, **kwargs):
+            raise subprocess.TimeoutExpired(args, 3)
+        with patch.object(runtime_code.subprocess, 'run', side_effect=timed_out), self.assertRaises(subprocess.TimeoutExpired) as error:
+            runtime.firmware('status', capture=True, timeout=3)
+        self.assertNotIn(encoded, str(error.exception))
+        self.assertEqual(error.exception.cmd, ['wsl_firmware.py', 'status'])
 
     def test_bluetooth_kernel_requests_decompress_generic_firmware_and_preserve_good_files_on_failure(self):
         with tempfile.TemporaryDirectory() as folder:

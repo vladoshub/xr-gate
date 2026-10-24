@@ -45,6 +45,7 @@
    <StackPanel>
     <TextBlock x:Name="StatusTitle" Text="Ready to set up" FontWeight="SemiBold" FontSize="17" />
     <TextBlock x:Name="StatusDetail" Text="Connect the glasses and select their display number, then install XR Gate and start VR." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,6,0,0" />
+    <TextBlock x:Name="SetupNoticeText" FontSize="20" FontWeight="Bold" Foreground="#FFD08A" TextWrapping="Wrap" Margin="0,12,0,0" Visibility="Collapsed" />
     <TextBlock x:Name="WarningText" Foreground="#FFD08A" TextWrapping="Wrap" Margin="0,7,0,0" Visibility="Collapsed" />
     <Button x:Name="NextStepButton" Content="Continue" Click="NextStep_Click" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,12,0,0" />
     <Button x:Name="CancelDiagnosticsButton" Content="Cancel diagnostics" Click="CancelDiagnostics_Click" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,12,0,0" />
@@ -66,13 +67,14 @@
      <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel>
        <StackPanel x:Name="ActionPanel">
-        <Button x:Name="DisplayButton" Content="Select glasses display" Click="Display_Click" />
-        <Button x:Name="InstallButton" Content="Install" Click="Install_Click" />
-        <Button x:Name="StartButton" Content="Start VR" Click="Start_Click" Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
-        <Button Content="Refresh status" Click="Refresh_Click" Background="#18253A" />
+        <Button x:Name="DisplayButton" ToolTipService.ShowOnDisabled="True" Content="Select glasses display" Click="Display_Click" ToolTip="Select the glasses display number so XR Gate can read its refresh rate." />
+        <Button x:Name="InstallButton" ToolTipService.ShowOnDisabled="True" Content="Install" Click="Install_Click" ToolTip="Install or update WSL, Ubuntu, XR Gate and the matching SteamVR driver." />
+        <Button x:Name="StartButton" ToolTipService.ShowOnDisabled="True" Content="Start VR" Click="Start_Click" ToolTip="F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
+        <Button x:Name="RestartButton" ToolTipService.ShowOnDisabled="True" Content="Restart tracking" Click="Restart_Click" ToolTip="F7: restart XR Gate inside Ubuntu without restarting SteamVR or detaching USB." />
+        <Button x:Name="RefreshStatusButton" ToolTipService.ShowOnDisabled="True" Content="Refresh status" Click="Refresh_Click" ToolTip="Refresh installation, device and tracking status without starting a session." Background="#18253A" />
        </StackPanel>
-       <Button x:Name="StopButton" Content="Stop tracking &amp; return USB" Click="Stop_Click" Background="#4A2932" Margin="0,4,0,15" />
-       <Button x:Name="DeleteButton" Content="Delete" Click="Delete_Click" Background="#4A2932" ToolTip="Delete the saved XR Gate Ubuntu distribution and all its Linux data." Margin="0,0,0,15" />
+       <Button x:Name="StopButton" ToolTipService.ShowOnDisabled="True" Content="Stop tracking &amp; return USB" Click="Stop_Click" ToolTip="F6: stop XR Gate, request SteamVR exit and return the selected USB devices to Windows." Background="#4A2932" Margin="0,4,0,15" />
+       <Button x:Name="DeleteButton" ToolTipService.ShowOnDisabled="True" Content="Delete" Click="Delete_Click" Background="#4A2932" ToolTip="Delete the saved XR Gate Ubuntu distribution and all its Linux data." Margin="0,0,0,15" />
        <TextBlock Text="STARTUP" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
        <TextBlock Text="Tracking runs in the background. Enable Show command prompt in Settings before starting to use console calibration and manual controls." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,16" />
        <TextBlock Text="REFRESH RATE" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
@@ -85,7 +87,7 @@
        <RichTextBox x:Name="LogBox" Grid.Row="1" IsReadOnly="True" Background="Transparent" BorderThickness="0" FontFamily="Consolas" FontSize="12" Foreground="#C9D8EB" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0" Margin="0">
         <FlowDocument PagePadding="0" />
        </RichTextBox>
-       <Button Grid.Row="2" Content="Save log…" Click="SaveLog_Click" HorizontalAlignment="Right" Background="#1A293E" Margin="0,12,0,0" Padding="12,7" />
+       <Button x:Name="SaveLogButton" ToolTipService.ShowOnDisabled="True" Grid.Row="2" Content="Save log…" Click="SaveLog_Click" ToolTip="Save the Activity Log to a text file for troubleshooting." HorizontalAlignment="Right" Background="#1A293E" Margin="0,12,0,0" Padding="12,7" />
       </Grid>
      </Border>
     </Grid>
@@ -96,7 +98,7 @@
       <TextBlock Text="Controllers" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" />
       <TextBlock Text="Controller input" />
       <ComboBox x:Name="ControllerModeBox" SelectedValuePath="Id" SelectedValue="{Binding ControllerMode, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
-      <TextBlock Text="Gestures uses optical hands. Gear VR Controllers uses physical controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
+      <TextBlock Text="Gestures uses optical hands (default). Gear VR Controllers uses physical controllers. No enables head tracking without controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
       <CheckBox x:Name="BluetoothEnabledBox" Content="Enable Bluetooth" IsChecked="{Binding BluetoothEnabled, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
       <TextBlock Text="Bluetooth USB BUSID (optional; overrides VID:PID)" /><TextBox x:Name="BluetoothBusIdBox" Text="{Binding BluetoothBusId, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
       <TextBlock Text="Bluetooth VID:PID (used when BUSID is empty)" /><TextBox x:Name="BluetoothUsbIdBox" Text="{Binding BluetoothUsbId, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
@@ -176,6 +178,16 @@
        </StackPanel>
       </Grid>
 
+      <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
+       <StackPanel>
+        <TextBlock Text="Hotkeys" FontSize="18" FontWeight="SemiBold" />
+        <CheckBox x:Name="GlobalHotkeysBox" Content="Enable global hotkeys" IsChecked="{Binding GlobalHotkeys, UpdateSourceTrigger=PropertyChanged}" Click="GlobalHotkeys_Click" Margin="0,10,0,8" />
+        <TextBlock Text="F5 — Start VR" />
+        <TextBlock Text="F6 — Stop tracking &amp; return USB" Margin="0,4,0,0" />
+        <TextBlock Text="F7 — Restart tracking (keep SteamVR running)" Margin="0,4,0,0" />
+        <TextBlock x:Name="HotkeysStatus" Text="Work while XR Gate is open, including when minimized. The same startup and cleanup checks apply as for the buttons." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,8,0,0" />
+       </StackPanel>
+      </Border>
       <WrapPanel Margin="0,16,0,0">
        <Button x:Name="SaveSettingsButton" Content="Save settings" Click="SaveSettings_Click" Background="{StaticResource Accent}" Foreground="#082A28" Margin="0,0,10,10" />
        <Button Content="List USB devices" Click="ListUsb_Click" Margin="0,0,10,10" />

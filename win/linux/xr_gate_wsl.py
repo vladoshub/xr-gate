@@ -650,10 +650,18 @@ class Runtime:
             raise FileNotFoundError("Extract the complete updated Windows archive, including linux/wsl_firmware.py.")
         request = base64.b64encode(json.dumps(self.cfg).encode()).decode("ascii")
         args = [sys.executable, str(helper), operation, request]
-        if capture:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
-            return json.loads(result.stdout)
-        run(args, timeout=timeout)
+        try:
+            if capture:
+                result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
+                return json.loads(result.stdout)
+            run(args, timeout=timeout)
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or "").strip() if capture else "See the firmware error above."
+            raise RuntimeError(f"Firmware {operation} failed (exit {error.returncode}). " + detail) from None
+        except subprocess.TimeoutExpired as error:
+            # Keep timeout handling in the Bluetooth readiness loop, without
+            # putting the complete encoded installation request in the log.
+            raise subprocess.TimeoutExpired(["wsl_firmware.py", operation], error.timeout) from None
 
     def wait_for_bluetooth(self):
         seconds = integer_setting(self.settings, "XR_BLUETOOTH_READY_TIMEOUT", 1, 120)
@@ -693,8 +701,8 @@ class Runtime:
     def generate_profile(self):
         custom = self.config / "xr_client.json"
         mode = self.settings.get("XR_CONTROLLER_MODE", "")
-        if mode not in ("", "gearvr", "gestures"):
-            raise ValueError("XR_CONTROLLER_MODE must be gearvr or gestures.")
+        if mode not in ("", "gearvr", "gestures", "no"):
+            raise ValueError("XR_CONTROLLER_MODE must be gearvr, gestures or no.")
         if custom.is_file() and not mode:
             return custom
         package = self.current.resolve()
@@ -718,11 +726,15 @@ class Runtime:
         for group in ("pre_gate_services", "post_gate_services", "foreground_services"):
             if group not in data:
                 continue  # Preserve xr_client defaults for omitted custom sections.
-            if mode == "gestures":
+            if mode in ("gestures", "no"):
                 # Removing these also prevents gesture/manual toggle actions or
                 # inherited RUN_OVERRIDE_CONTROLLER=1 from starting the publisher.
                 data[group] = [service for service in data.get(group, [])
                                if service.get("name") not in ("override_controller", "override_controller_service")]
+            if mode == "no":
+                data[group] = [service for service in data[group]
+                               if service.get("name") not in ("hand_tracking", "mercury_hand_tracking")
+                               and service.get("enable_env") != "RUN_HAND_TRACKING"]
             for service in data.get(group, []):
                 if service.get("name") == "override_controller":
                     found_controller = True
@@ -767,6 +779,7 @@ class Runtime:
         profile = self.generate_profile()
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
+                   XR_CONTROLLER_MODE=self.settings.get("XR_CONTROLLER_MODE", ""),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
         camera = self.capture_device()
         if camera:
@@ -776,10 +789,18 @@ class Runtime:
             log("Capture will open " + camera)
         if self.settings.get("XR_CONTROLLER_MODE") == "gearvr":
             env["XR_GATE_CONTROLLER_INPUT"] = "1"
-        elif self.settings.get("XR_CONTROLLER_MODE") == "gestures":
+        elif self.settings.get("XR_CONTROLLER_MODE") in ("gestures", "no"):
             # Omitted custom sections inherit xr_client defaults. Disable their
             # publishers too, while retaining the default capture/hand services.
             env.update(RUN_OVERRIDE_CONTROLLER="0", RUN_OVERRIDE_CONTROLLER_SERVICE="0")
+        if self.settings.get("XR_CONTROLLER_MODE") == "no":
+            # Keep HMD tracking and the TCP server running, but do not consume
+            # a stale/shared physical-controller stream or derive gesture input.
+            env.update(RUN_HAND_TRACKING="0", RUNTIME_CONTROLLER_MODE="controller_only_pose_invalid",
+                       CONTROLLER_INPUT_MODE="hand_tracking_only", CONTROLLER_INPUT_TRANSPORT="none",
+                       RUNTIME_LEFT_HAND_GESTURES_ENABLED="0", RUNTIME_RIGHT_HAND_GESTURES_ENABLED="0",
+                       RUNTIME_DERIVE_HAND_GESTURES="0", RUNTIME_DERIVE_EXTRA_GESTURE_BUTTONS="0",
+                       HAND_SKELETON26_INPUT="none", HAND_SKELETON26_DERIVE_GESTURES="0")
         if self.settings.get("XR_HMD_MAX_AGE_MS"):
             age_ms = integer_setting(self.settings, "XR_HMD_MAX_AGE_MS", maximum=5000)
             env["MAX_HMD_AGE_MS"] = str(age_ms)
@@ -988,6 +1009,9 @@ def main(argv):
     elif action == "firmware":
         runtime.root_required()
         runtime.firmware("prepare")
+    elif action == "firmware_cleanup":
+        runtime.root_required()
+        runtime.firmware("cleanup", timeout=65)
     elif action == "run":
         runtime.start()
     elif action == "stop":

@@ -211,6 +211,8 @@ DERIVED_GRAB_RESPONSE_START=0.85
 
 ## Controller input override
 
+Set `RUNTIME_CONTROLLER_MODE` to override `controller_override.mode` from the transform config in the Linux start script; leaving it empty keeps the configured mode. The Windows launcher sends `XR_CONTROLLER_MODE=no` for head-only sessions, disables hand/controller services and selects `controller_only_pose_invalid` with `CONTROLLER_INPUT_TRANSPORT=none`. Gestures remains the launcher default.
+
 The adapter can merge hand tracking with external controller input. This is useful when hand pose is available, but buttons, triggers, sticks, or fallback input should come from an external controller.
 
 When an HMD-relative lost-hand fallback is active together with an IMU
