@@ -25,23 +25,105 @@ Vec3 rotate(const Q& q, const Vec3& v) {
   const Q result = multiply(multiply(q, {0, v[0], v[1], v[2]}), conjugate(q));
   return {result[1], result[2], result[3]};
 }
-void position(float& x, float& y, float& z, const Q& correction, const Vec3& pivot) {
+template <class T>
+void position(T& x, T& y, T& z, const Q& correction, const Vec3& pivot) {
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
   const auto r = rotate(correction, {x - pivot[0], y - pivot[1], z - pivot[2]});
-  x = float(pivot[0] + r[0]);
-  y = float(pivot[1] + r[1]);
-  z = float(pivot[2] + r[2]);
+  x = T(pivot[0] + r[0]);
+  y = T(pivot[1] + r[1]);
+  z = T(pivot[2] + r[2]);
 }
-void orientation(float& w, float& x, float& y, float& z, const Q& correction) {
+template <class T>
+void orientation(T& w, T& x, T& y, T& z, const Q& correction) {
   Q q{w, x, y, z};
   if (!normalize(q)) return;
   q = multiply(correction, q);
-  w = float(q[0]);
-  x = float(q[1]);
-  y = float(q[2]);
-  z = float(q[3]);
+  w = T(q[0]);
+  x = T(q[1]);
+  y = T(q[2]);
+  z = T(q[3]);
+}
+Q yaw_correction(double degrees) {
+  const double half = degrees * pi / 360;
+  return {std::cos(half), 0, std::sin(half), 0};
+}
+template <class Hand>
+bool valid_output_pose(const Hand& hand, const Vec3& pivot, Q q) {
+  return (hand.status == 1 || hand.status == 2) && (hand.flags & xr_runtime::HAND_POSE_VALID) &&
+         std::isfinite(pivot[0]) && std::isfinite(pivot[1]) && std::isfinite(pivot[2]) &&
+         normalize(q);
+}
+template <class Hand>
+void rotate_hand_payload(Hand& hand, const Q& correction, const Vec3& pivot) {
+  position(hand.palm_px, hand.palm_py, hand.palm_pz, correction, pivot);
+  position(hand.wrist_px, hand.wrist_py, hand.wrist_pz, correction, pivot);
+  orientation(hand.palm_qw, hand.palm_qx, hand.palm_qy, hand.palm_qz, correction);
+  orientation(hand.wrist_qw, hand.wrist_qx, hand.wrist_qy, hand.wrist_qz, correction);
+  const auto count =
+      std::min<size_t>(hand.joint_count, sizeof(hand.joints) / sizeof(hand.joints[0]));
+  if (hand.flags & xr_runtime::HAND_JOINTS_VALID) {
+    for (size_t i = 0; i < count; ++i) {
+      auto& joint = hand.joints[i];
+      if (!joint.flags) continue;
+      position(joint.px, joint.py, joint.pz, correction, pivot);
+      orientation(joint.qw, joint.qx, joint.qy, joint.qz, correction);
+    }
+  }
+  // The controller position is the fixed pivot, so its world linear velocity stays unchanged.
+  // A final world-space yaw rotates the world angular velocity with the orientation.
+  if (hand.flags & xr_runtime::HAND_ANGULAR_VELOCITY_VALID) {
+    const auto w = rotate(correction, {hand.wx, hand.wy, hand.wz});
+    hand.wx = w[0];
+    hand.wy = w[1];
+    hand.wz = w[2];
+  }
+}
+void output_yaw(xr_runtime::HandSideF32V2& hand, double degrees) {
+  const Vec3 pivot{hand.controller_px, hand.controller_py, hand.controller_pz};
+  if (!degrees || !valid_output_pose(hand, pivot,
+                                     {hand.controller_qw, hand.controller_qx, hand.controller_qy,
+                                      hand.controller_qz}))
+    return;
+  const auto correction = yaw_correction(degrees);
+  rotate_hand_payload(hand, correction, pivot);
+  orientation(hand.controller_qw, hand.controller_qx, hand.controller_qy, hand.controller_qz,
+              correction);
+}
+void output_yaw(xr_runtime::HandSideF64V1& hand, double degrees) {
+  const Vec3 pivot{hand.palm_px, hand.palm_py, hand.palm_pz};
+  if (!degrees ||
+      !valid_output_pose(hand, pivot, {hand.palm_qw, hand.palm_qx, hand.palm_qy, hand.palm_qz}))
+    return;
+  rotate_hand_payload(hand, yaw_correction(degrees), pivot);
+}
+void output_yaw(xr_runtime::RuntimeControllerSideStateV1& side, double degrees) {
+  if (!degrees || !(side.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) ||
+      !(side.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION) ||
+      (side.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION))
+    return;
+  const auto correction = yaw_correction(degrees);
+  auto& q = side.orientation_xyzw;
+  orientation(q[3], q[0], q[1], q[2], correction);
+  const auto w = rotate(
+      correction, {side.angular_velocity[0], side.angular_velocity[1], side.angular_velocity[2]});
+  for (size_t i = 0; i < 3; ++i) side.angular_velocity[i] = float(w[i]);
 }
 }  // namespace
+
+void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF32V2& f, const Config& c, bool left,
+                           bool right) {
+  if (c.left.enabled && left) output_yaw(f.left, c.pose_yaw_offset_degrees);
+  if (c.right.enabled && right) output_yaw(f.right, -c.pose_yaw_offset_degrees);
+}
+void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF64V1& f, const Config& c, bool left,
+                           bool right) {
+  if (c.left.enabled && left) output_yaw(f.left, c.pose_yaw_offset_degrees);
+  if (c.right.enabled && right) output_yaw(f.right, -c.pose_yaw_offset_degrees);
+}
+void apply_pose_yaw_offset(xr_runtime::RuntimeControllerStateFrameV1& f, const Config& c) {
+  if (c.left.enabled) output_yaw(f.left, c.pose_yaw_offset_degrees);
+  if (c.right.enabled) output_yaw(f.right, -c.pose_yaw_offset_degrees);
+}
 
 void WristPoseFilter::side(xr_runtime::HandSideF32V2& h, State& s,
                            const xr_runtime::HandTrackingFrameF32V2& frame, const Config& c,

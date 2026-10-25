@@ -3,6 +3,14 @@
 #include "emulation_controller.hpp"
 
 namespace xr_runtime_adapter::emulation {
+// Apply only to output copies, after recognition, synthesis and all other offsets/filters.
+// Runtime is +Y up, -Z forward: positive yaw turns the left hand outward, negative the right.
+void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF32V2& frame, const Config& config,
+                           bool left_optical = true, bool right_optical = true);
+void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF64V1& frame, const Config& config,
+                           bool left_optical = true, bool right_optical = true);
+void apply_pose_yaw_offset(xr_runtime::RuntimeControllerStateFrameV1& frame, const Config& config);
+
 // One shared rigid correction for the whole hand; finger articulation is untouched.
 class WristPoseFilter {
  public:

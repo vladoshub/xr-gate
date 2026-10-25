@@ -320,6 +320,134 @@ void closed_knuckle_is_not_a_pinch(const Json& data) {
   check(buttons(data, cfg, 28, "left") == CONTROLLER_BUTTON_B,
         "real recorded B was rejected by the knuckle guard");
 }
+void final_yaw_output(const Json& data) {
+  auto profile = data.at("profile");
+  check(em::config_from_json(profile).pose_yaw_offset_degrees == 0,
+        "old profiles acquired an unsolicited yaw offset");
+  profile["pose_yaw_offset_degrees"] = 45;
+  auto cfg = em::config_from_json(profile);
+  HandTrackingFrameF32V2 raw{};
+  raw.left = hand(data, 24, "left");
+  raw.right = hand(data, 55, "right");
+  for (auto* h : {&raw.left, &raw.right}) {
+    turn(*h, 13, {1, 2, 3});
+    h->vx = .1f;
+    h->vy = .2f;
+    h->vz = .3f;
+    h->wx = 1;
+    h->wy = 2;
+    h->wz = 3;
+    // A pre-existing local Z mounting offset must remain before the new world Y yaw.
+    const double a = 13 * pi / 360, b = 30 * pi / 360;
+    h->controller_qw = h->palm_qw = h->wrist_qw = std::cos(a) * std::cos(b);
+    h->controller_qx = h->palm_qx = h->wrist_qx = std::sin(a) * std::sin(b);
+    h->controller_qy = h->palm_qy = h->wrist_qy = std::sin(a) * std::cos(b);
+    h->controller_qz = h->palm_qz = h->wrist_qz = std::cos(a) * std::sin(b);
+  }
+  auto visual = raw;
+  em::apply_pose_yaw_offset(visual, cfg);
+  for (bool left : {false, true}) {
+    const auto& before = left ? raw.left : raw.right;
+    const auto& after = left ? visual.left : visual.right;
+    const double degrees = left ? 45 : -45;
+    const double a = (13 + degrees) * pi / 360, b = 30 * pi / 360;
+    const em::Vec3 pivot{before.controller_px, before.controller_py, before.controller_pz};
+    const double c = std::cos(degrees * pi / 180), s = std::sin(degrees * pi / 180);
+    check(std::abs(after.controller_qw - std::cos(a) * std::cos(b)) < 1e-6 &&
+              std::abs(after.controller_qx - std::sin(a) * std::sin(b)) < 1e-6 &&
+              std::abs(after.controller_qy - std::sin(a) * std::cos(b)) < 1e-6 &&
+              std::abs(after.controller_qz - std::cos(a) * std::sin(b)) < 1e-6,
+          "final yaw used the wrong axis, sign or multiplication order");
+    check(after.controller_px == before.controller_px &&
+              after.controller_py == before.controller_py &&
+              after.controller_pz == before.controller_pz && after.vx == before.vx &&
+              after.vy == before.vy && after.vz == before.vz,
+          "presentation yaw moved the controller pivot or linear velocity");
+    for (size_t i = 0; i < 21; ++i) {
+      const auto& j = before.joints[i];
+      const auto& k = after.joints[i];
+      check(std::abs(k.px - pivot[0] - c * (j.px - pivot[0]) - s * (j.pz - pivot[2])) < 1e-5 &&
+                std::abs(k.py - j.py) < 1e-5 &&
+                std::abs(k.pz - pivot[2] + s * (j.px - pivot[0]) - c * (j.pz - pivot[2])) < 1e-5,
+            "final yaw broke skeleton rigidity or used the world origin as pivot");
+    }
+    const auto m0 = em::measure_hand(before, .3), m1 = em::measure_hand(after, .3);
+    const em::Basis basis{{em::Vec3{1, 0, 0}, em::Vec3{0, 1, 0}, em::Vec3{0, 0, 1}}};
+    const auto w0 = em::wrist_feature(m0, basis), w1 = em::wrist_feature(m1, basis);
+    for (size_t i = 0; i < 4; ++i)
+      check(std::abs(m0.curl[i] - m1.curl[i]) < 1e-4, "presentation yaw changed finger curl");
+    for (size_t i = 0; i < 3; ++i)
+      check(std::abs(w0[i] - w1[i]) < 1e-4 &&
+                std::abs(m0.thumb_feature[i] - m1.thumb_feature[i]) < 1e-4,
+            "presentation yaw changed wrist/thumb calibration features");
+    check(std::abs(after.wx - (c + 3 * s)) < 1e-6 && after.wy == 2 &&
+              std::abs(after.wz - (-s + 3 * c)) < 1e-6,
+          "presentation yaw left angular velocity in the wrong frame");
+    RuntimeControllerStateFrameV1 state{};
+    auto& side = left ? state.left : state.right;
+    side.flags = RUNTIME_CONTROLLER_POSE_VALID | RUNTIME_CONTROLLER_CONNECTED;
+    side.source_mask =
+        RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION | RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
+    side.orientation_xyzw[0] = before.controller_qx;
+    side.orientation_xyzw[1] = before.controller_qy;
+    side.orientation_xyzw[2] = before.controller_qz;
+    side.orientation_xyzw[3] = before.controller_qw;
+    side.angular_velocity[0] = 1;
+    side.angular_velocity[1] = 2;
+    side.angular_velocity[2] = 3;
+    side.buttons = 3;
+    side.trigger = .75;
+    side.thumbstick_y = .9;
+    em::apply_pose_yaw_offset(state, cfg);
+    check(side.orientation_xyzw[0] == after.controller_qx &&
+              side.orientation_xyzw[1] == after.controller_qy &&
+              side.orientation_xyzw[2] == after.controller_qz &&
+              side.orientation_xyzw[3] == after.controller_qw &&
+              side.angular_velocity[0] == after.wx && side.angular_velocity[2] == after.wz &&
+              side.buttons == 3 && side.trigger == .75 && side.thumbstick_y == .9f,
+          "controller output diverged from the visual hand or changed input");
+    side.source_mask |= RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION;
+    const auto imu = state;
+    em::apply_pose_yaw_offset(state, cfg);
+    check(std::memcmp(&imu, &state, sizeof(state)) == 0,
+          "emulation yaw changed a physical IMU pose");
+  }
+  cfg.pose_yaw_offset_degrees = 0;
+  auto unchanged = raw;
+  em::apply_pose_yaw_offset(unchanged, cfg);
+  check(std::memcmp(&raw, &unchanged, sizeof(raw)) == 0, "zero yaw did not preserve exact output");
+  cfg.pose_yaw_offset_degrees = 45;
+  cfg.left.enabled = false;
+  unchanged = raw;
+  em::apply_pose_yaw_offset(unchanged, cfg, true, false);
+  check(std::memcmp(&raw, &unchanged, sizeof(raw)) == 0, "disabled/IMU hands acquired an offset");
+
+  cfg.left.enabled = true;
+  HandTrackingFrameF64V1 legacy{};
+  auto& h = legacy.left;
+  h.status = 1;
+  h.flags = HAND_POSE_VALID | HAND_JOINTS_VALID;
+  h.palm_px = 1;
+  h.palm_py = 2;
+  h.palm_pz = 3;
+  h.palm_qw = h.wrist_qw = 1;
+  h.wrist_px = 1.1;
+  h.wrist_py = 2;
+  h.wrist_pz = 3;
+  h.joint_count = HAND_JOINT_COUNT_V1;
+  for (auto& j : h.joints) {
+    j.flags = 1;
+    j.px = 1.1;
+    j.py = 2;
+    j.pz = 3;
+    j.qw = 1;
+  }
+  em::apply_pose_yaw_offset(legacy, cfg);
+  check(h.palm_px == 1 && h.palm_py == 2 && h.palm_pz == 3 &&
+            std::abs(h.wrist_px - 1 - .1 / std::sqrt(2)) < 1e-10 &&
+            std::abs(h.joints[25].pz - 3 + .1 / std::sqrt(2)) < 1e-10,
+        "legacy hand output used the wrong pivot or omitted a joint");
+}
 }  // namespace
 int main(int argc, char** argv) {
   try {
@@ -330,6 +458,7 @@ int main(int argc, char** argv) {
     flexion_channels_are_independent(data);
     flexion_neutral_and_specials(data);
     whole_hand_filter(data);
+    final_yaw_output(data);
     grip_calibration_is_independent(data);
     closed_knuckle_is_not_a_pinch(data);
     std::cout << "Whole-hand stability, Grip calibration and fist/pinch separation passed\n";

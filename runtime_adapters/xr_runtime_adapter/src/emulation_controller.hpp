@@ -14,8 +14,17 @@ struct HandMeasurement {
   bool palm_valid = false, thumb_valid = false;
   Basis palm_basis{};
   double thumb_clearance = 0, thumb_straightness = 0, pinch_ratio = -1;
+  bool thumb_pad_valid = false;
+  Vec3 thumb_feature{};
+  double thumb_pad_clearance = 0;
   double index_chain_curl = 1, index_knuckle_curl = 1;
   std::array<double, 4> curl{{-1, -1, -1, -1}};
+};
+struct ThumbCalibration {
+  bool calibrated = false;
+  Vec3 neutral{}, axis_x{}, axis_y{};
+  std::array<Vec3, 4> directions{};
+  double deadzone = .12, enable_clearance = .7, disable_clearance = .6;
 };
 struct HandConfig {
   bool enabled = true, calibrated = false;
@@ -27,16 +36,28 @@ struct HandConfig {
   std::array<double, 4> open_curl{{0, 0, 0, 0}}, closed_curl{{1, 1, 1, 1}};
   bool grip_calibrated = false;
   double grip_open_curl = 0, grip_closed_curl = 1;
+  std::string grip_calibration_finger = "little";
+  bool trigger_calibrated = false;
+  double trigger_open_curl = 0, trigger_closed_curl = 1;
+  bool click_calibrated = false;
+  double click_open_curl = 0, click_closed_curl = 1;
+  ThumbCalibration thumb;
 };
 struct Config {
   HandConfig left, right;
   std::string dpad_mode = "four_way";
+  std::string dpad_source = "wrist", thumb_dpad_mode = "eight_way";
+  std::string button_layout = "legacy";
   std::string profile_path;
   bool wrist_filter_enabled = true;
   bool trigger_on_curl = false, grip_on_curl = false;
+  bool thumbstick_click_on_curl = false;
   double wrist_filter_degrees = 2;
+  // Final presentation yaw about runtime +Y; positive turns both hands outward.
+  double pose_yaw_offset_degrees = 0;
   double range_degrees = 30, deadzone = 0.18, smoothing_ms = 40;
   double forward_range_scale = 1;
+  double thumb_back_on = .85, thumb_back_off = .70;
   double min_confidence = 0.3, max_age_ms = 120;
   double extension_on = 0.7, extension_off = 0.45;
   double little_extension_on = 0.60, little_extension_off = 0.45;
@@ -54,6 +75,7 @@ Vec3 wrist_feature(const HandMeasurement& hand, const Basis& reference);
 void calibrate_axes(HandConfig& config, const Vec3& neutral, const Vec3& left, const Vec3& right,
                     const Vec3& up, const Vec3& down);
 Vec3 project_wrist(const HandConfig& config, const Vec3& feature);
+Vec3 project_thumb(const ThumbCalibration& config, const Vec3& feature);
 class Controller {
  public:
   explicit Controller(Config config);
@@ -72,6 +94,7 @@ class Controller {
     bool valid = false, fresh = false, reset_event = false, have_sample = false;
     bool anchored = false, thumb_active = false, pinch_active = false, wait_for_neutral = false;
     bool menu_open = false;
+    bool thumb_back_active = false;
     uint64_t sequence = 0, sample_ns = 0, reset_counter = 0, origin_counter = 0;
     Basis reference{};
     Vec3 neutral{}, axis_x{}, axis_y{};
@@ -79,7 +102,11 @@ class Controller {
     std::array<double, 4> extension{};
     bool grip_finger_active = false;
     double grip_extension = 0;
-    Channel trigger_channel{}, grip_channel{};
+    bool trigger_finger_active = false, trigger_released = false;
+    double trigger_extension = 0;
+    bool click_finger_active = false, click_released = false;
+    double click_extension = 0;
+    Channel trigger_channel{}, grip_channel{}, click_channel{};
     Pose candidate = Pose::None, active = Pose::None;
     uint64_t pose_since_ns = 0;
     double x = 0, y = 0;

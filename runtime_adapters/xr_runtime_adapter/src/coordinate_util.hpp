@@ -84,6 +84,7 @@ struct HandOrientationOffsetConfig {
   bool apply_to_controller = true;
   bool apply_to_palm = true;
   bool apply_to_wrist = true;
+  // Rotate all joint positions/orientations rigidly around the controller (v1: palm).
   bool apply_to_joints = false;
   // Apply this optical hand-alignment offset only while the effective
   // controller orientation source for the side is not IMU. Enabled by
@@ -162,14 +163,29 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
                                 const Qd* hmd_orientation,
                                 bool apply_left_hand_orientation_offset = true,
                                 bool apply_right_hand_orientation_offset = true,
-                                const xr_runtime::HmdPoseF64V1* hmd_motion = nullptr);
+                                const xr_runtime::HmdPoseF64V1* hmd_motion = nullptr,
+                                bool defer_skeleton_offset = false);
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
                                 const Qd* hmd_orientation,
                                 bool apply_left_hand_orientation_offset = true,
                                 bool apply_right_hand_orientation_offset = true,
-                                const xr_runtime::HmdPoseF64V1* hmd_motion = nullptr);
+                                const xr_runtime::HmdPoseF64V1* hmd_motion = nullptr,
+                                bool defer_skeleton_offset = false);
+// Complete a deferred hand_orientation_offset on an output copy exactly once.
+// Controller/palm/wrist orientations already contain their ordinary offset;
+// joints and relative positions must still be before that offset.
+// For pre/world offsets, provide controller (v1: palm) orientations captured
+// immediately after alignment, before any subsequent rigid pose filtering.
+void apply_aligned_hand_skeleton_offset(xr_runtime::HandTrackingFrameF32V2& hand,
+                                         const StreamTransformConfig& cfg,
+                                         bool left = true, bool right = true,
+                                         const std::array<Qd, 2>* aligned_reference = nullptr);
+void apply_aligned_hand_skeleton_offset(xr_runtime::HandTrackingFrameF64V1& hand,
+                                         const StreamTransformConfig& cfg,
+                                         bool left = true, bool right = true,
+                                         const std::array<Qd, 2>* aligned_reference = nullptr);
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,
                                         const StreamTransformConfig& cfg,
                                         const V3d* hmd_position = nullptr);

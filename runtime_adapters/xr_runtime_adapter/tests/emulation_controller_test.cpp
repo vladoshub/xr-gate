@@ -261,6 +261,139 @@ void grip_with_natural_finger_bends() {
     check(measured.curl[3] < .3, "open little-finger splay was mistaken for flexion");
   }
 }
+HandSideF32V2 thumb_pose(bool left, double sweep, double bend, unsigned extended = 9,
+                         bool hidden = false) {
+  auto h = pose(extended, 1, left);
+  const auto basis = em::measure_hand(h, .3).palm_basis;
+  const auto& a = basis[0];
+  const auto& f = basis[1];
+  const auto& n = basis[2];
+  const double angle = (left ? -.6435011088 : .6435011088) + sweep;
+  em::Vec3 base{}, proximal{}, distal{};
+  const auto& index = h.joints[5];
+  for (size_t k = 0; k < 3; ++k) {
+    base[k] = (k == 0   ? index.px
+               : k == 1 ? index.py
+                        : index.pz) +
+              a[k] * (hidden ? 0
+                      : left ? -.06
+                             : .06) -
+              f[k] * (hidden ? .01 : .025);
+    proximal[k] = hidden ? f[k] : std::sin(angle) * a[k] + std::cos(angle) * f[k];
+    distal[k] = hidden ? -f[k] : std::cos(bend) * proximal[k] - std::sin(bend) * n[k];
+  }
+  for (size_t i = 1; i <= 4; ++i) {
+    em::Vec3 p = base;
+    for (size_t k = 0; k < 3; ++k) {
+      if (i == 1) p[k] -= .02 * f[k];
+      if (i >= 3) p[k] += (hidden ? .005 : .035) * proximal[k];
+      if (i == 4) p[k] += .025 * distal[k];
+    }
+    h.joints[i].px = p[0];
+    h.joints[i].py = p[1];
+    h.joints[i].pz = p[2];
+  }
+  return h;
+}
+em::Config thumb_config(bool left) {
+  const auto feature = [&](double x, double y) {
+    const auto m = em::measure_hand(thumb_pose(left, x, y), .3);
+    check(m.thumb_pad_valid, "synthetic thumb feature invalid");
+    return m.thumb_feature;
+  };
+  em::HandConfig axes;
+  em::calibrate_axes(axes, feature(0, .25), feature(-.5, .25), feature(.5, .25), feature(0, 1),
+                     feature(0, -.2));
+  nlohmann::json directions;
+  const char* names[] = {"left", "right", "up", "down"};
+  for (size_t i = 0; i < 4; ++i) directions[names[i]] = axes.directions[i];
+  nlohmann::json j = {{"smoothing_ms", 0},
+                      {"button_confirm_ms", 0},
+                      {"pose_confirm_ms", 0},
+                      {"trigger_on_curl", true},
+                      {"grip_on_curl", true},
+                      {"dpad_source", "thumb"},
+                      {left ? "right" : "left", {{"enabled", false}}},
+                      {left ? "left" : "right",
+                       {{"thumb_calibration",
+                         {{"feature", "thumb_pose_v1"},
+                          {"neutral", axes.neutral},
+                          {"axis_x", axes.axis_x},
+                          {"axis_y", axes.axis_y},
+                          {"directions", directions},
+                          {"enable_clearance", .7},
+                          {"disable_clearance", .6}}}}}};
+  return em::config_from_json(j);
+}
+void thumb_dpad_and_independent_channels() {
+  constexpr uint64_t up = CONTROLLER_BUTTON_DPAD_UP, down = CONTROLLER_BUTTON_DPAD_DOWN,
+                     left_bit = CONTROLLER_BUTTON_DPAD_LEFT,
+                     right_bit = CONTROLLER_BUTTON_DPAD_RIGHT;
+  struct Target {
+    double x, y;
+    uint64_t buttons;
+  };
+  for (bool left : {false, true}) {
+    const auto cfg = thumb_config(left);
+    for (unsigned extended : {0u, 1u, 8u, 9u}) {
+      for (const auto target : {Target{0, 1, up},
+                                {0, -.2, down},
+                                {-.5, .25, left_bit},
+                                {.5, .25, right_bit},
+                                {-.5, 1, up | left_bit},
+                                {.5, 1, up | right_bit},
+                                {-.5, -.2, down | left_bit},
+                                {.5, -.2, down | right_bit}}) {
+        em::Controller c(cfg);
+        auto f = frame();
+        auto h = thumb_pose(left, target.x, target.y, extended);
+        (left ? f.left : f.right) = h;
+        auto output = apply(c, f);
+        const auto side = left ? output.left : output.right;
+        const uint64_t channels = (extended & 1 ? 0 : 1) | (extended & 8 ? 0 : 2);
+        check(side.buttons == (target.buttons | channels),
+              "thumb cardinal/diagonal or Trigger/Grip conflict");
+        tilt(h, .7, -.4);
+        yaw(h, 1.2);
+        (left ? f.left : f.right) = h;
+        advance(f);
+        output = apply(c, f);
+        const auto rotated = left ? output.left : output.right;
+        check(rotated.buttons == side.buttons &&
+                  std::abs(rotated.thumbstick_x - side.thumbstick_x) < 1e-5 &&
+                  std::abs(rotated.thumbstick_y - side.thumbstick_y) < 1e-5,
+              "wrist rotation steered thumb-only D-pad");
+        (left ? f.left : f.right) = thumb_pose(left, 0, .25, extended, true);
+        advance(f);
+        output = apply(c, f);
+        const auto tucked = left ? output.left : output.right;
+        check(tucked.buttons == channels && tucked.thumbstick_x == 0 && tucked.thumbstick_y == 0,
+              "hidden thumb failed to disable only the D-pad");
+        h = thumb_pose(left, target.x, target.y, extended);
+        h.joints[4].flags = 0;
+        (left ? f.left : f.right) = h;
+        advance(f);
+        output = apply(c, f);
+        const auto lost = left ? output.left : output.right;
+        check(lost.buttons == channels && lost.thumbstick_x == 0 && lost.thumbstick_y == 0,
+              "missing thumb retained axes or cancelled independent buttons");
+      }
+    }
+    em::Controller c(cfg);
+    auto f = frame();
+    const auto sample = [&](double fraction) {
+      (left ? f.left : f.right) = thumb_pose(left, 0, .25 - fraction * .45);
+      advance(f);
+      const auto o = apply(c, f);
+      return left ? o.left : o.right;
+    };
+    check(sample(.80).thumbstick_y == 0, "relaxed thumb accidentally moved backwards");
+    check(sample(.90).thumbstick_y < -.65, "strong backward thumb pose did not activate");
+    check(sample(.75).thumbstick_y < 0, "backward thumb hysteresis lost a held direction");
+    check(sample(.65).thumbstick_y == 0,
+          "backward analog input leaked after leaving strict region");
+  }
+}
 void trigger_and_v_across_wrist_orientations() {
   for (bool left : {false, true}) {
     for (double pitch : {-1.2, -.6, 0., .6, 1.2}) {
@@ -761,11 +894,208 @@ void gesture_block_gate_keeps_physical_input() {
   check((out.right.buttons & 3) == 3 && out.right.press_counters[0] == 2,
         "new gestures did not resume after unblocking and fresh confirmation");
 }
+void trigger_calibration_and_wrist_diagonals() {
+  for (bool left : {false, true}) {
+    auto cfg = immediate();
+    cfg.trigger_on_curl = cfg.grip_on_curl = true;
+    auto h = pose(9, 1, left);
+    bend_finger(h, 0, {10, 35, 60});
+    const double curl = em::measure_hand(h, .3).curl[0];
+    check(curl > .25 && curl < .65, "partial trigger fixture has changed");
+    auto f = frame();
+    (left ? f.left : f.right) = h;
+    em::Controller original(cfg);
+    auto out = apply(original, f);
+    check(((left ? out.left : out.right).buttons & 1) == 0,
+          "partial trigger fixture already presses the uncalibrated trigger");
+    auto& side_cfg = left ? cfg.left : cfg.right;
+    side_cfg.trigger_calibrated = true;
+    side_cfg.trigger_open_curl = 0;
+    side_cfg.trigger_closed_curl = curl / .9;
+    em::Controller calibrated(cfg);
+    out = apply(calibrated, f);
+    check((left ? out.left : out.right).buttons == 1,
+          "independent trigger calibration did not recognize a natural partial bend");
+    (left ? f.left : f.right).joints[8].flags = 0;
+    advance(f);
+    out = apply(calibrated, f);
+    check((left ? out.left : out.right).trigger == 0, "missing calibrated index retained trigger");
+    cfg = immediate();
+    cfg.dpad_mode = "eight_way";
+    em::Controller pad(cfg);
+    f = frame();
+    apply(pad, f);
+    uint64_t combinations = 0;
+    for (int x = -8; x <= 8; ++x)
+      for (int y = -8; y <= 8; ++y) {
+        h = pose(0, 1, left);
+        tilt(h, x * .1, y * .1);
+        (left ? f.left : f.right) = h;
+        advance(f);
+        out = apply(pad, f);
+        const uint64_t bits = (left ? out.left : out.right).buttons;
+        if ((bits & 64) && (bits & 256)) combinations |= 1;
+        if ((bits & 64) && (bits & 512)) combinations |= 2;
+        if ((bits & 128) && (bits & 256)) combinations |= 4;
+        if ((bits & 128) && (bits & 512)) combinations |= 8;
+      }
+    check(combinations == 15, "wrist D-pad lacks one or more diagonals");
+  }
+}
+void middle_grip_three_channels_and_rings() {
+  for (bool left : {false, true})
+    for (bool thumb : {false, true})
+      for (bool click_curl : {false, true}) {
+        auto cfg = thumb ? thumb_config(left) : immediate();
+        cfg.button_layout = "middle_grip";
+        cfg.trigger_on_curl = cfg.grip_on_curl = true;
+        cfg.thumbstick_click_on_curl = click_curl;
+        const unsigned neutral = click_curl ? 11 : 3;
+        for (unsigned state = 0; state < 8; ++state) {
+          em::Controller c(cfg);
+          auto f = frame();
+          (left ? f.left : f.right) =
+              thumb ? thumb_pose(left, 0, .25, neutral) : pose(neutral, 1, left);
+          apply(c, f);
+          const unsigned extended =
+              (state & 1 ? 0 : 1) | (state & 2 ? 0 : 2) | (bool(state & 4) != click_curl ? 8 : 0);
+          auto h = thumb ? thumb_pose(left, 0, 1, extended) : pose(extended, 1, left);
+          if (!thumb) tilt(h, .5, 0);
+          (left ? f.left : f.right) = h;
+          advance(f);
+          auto out = apply(c, f);
+          auto side = left ? out.left : out.right;
+          const uint64_t expected = (state & 3) | (state & 4 ? CONTROLLER_BUTTON_THUMBSTICK : 0);
+          check((side.buttons & ~CONTROLLER_BUTTON_DPAD_MASK) == expected &&
+                    (side.buttons & CONTROLLER_BUTTON_DPAD_UP),
+                "middle Grip, little click and Trigger failed an independent D-pad combination");
+          if (state == 7) {
+            h.joints[12].flags = 0;
+            (left ? f.left : f.right) = h;
+            advance(f);
+            out = apply(c, f);
+            check(((left ? out.left : out.right).buttons & 35) == 33,
+                  "missing middle finger cancelled independent Trigger/little click");
+          }
+          (left ? f.left : f.right) =
+              thumb ? thumb_pose(left, 0, .25, extended, true) : pose(extended, 0, left);
+          advance(f);
+          out = apply(c, f);
+          side = left ? out.left : out.right;
+          check(side.buttons == expected && side.thumbstick_x == 0 && side.thumbstick_y == 0,
+                "tucked thumb cancelled an independent click or Grip");
+        }
+        em::Controller c(cfg);
+        auto f = frame();
+        const auto sample = [&](const HandSideF32V2& h) {
+          (left ? f.left : f.right) = h;
+          advance(f);
+          const auto out = apply(c, f);
+          return left ? out.left : out.right;
+        };
+        auto side = sample(pose(3, 0, left));
+        check(side.buttons == (click_curl ? CONTROLLER_BUTTON_THUMBSTICK : 0),
+              "former V pose still invokes a special gesture");
+        side = sample(pose(14, 2, left));
+        check(side.buttons == CONTROLLER_BUTTON_A && side.trigger == 0 && side.grip == 0 &&
+                  side.thumbstick_x == 0 && side.thumbstick_y == 0,
+              "open ring did not exclusively press A");
+        side = sample(pose(0, 2, left));
+        check(side.buttons == CONTROLLER_BUTTON_B && side.trigger == 0 && side.grip == 0 &&
+                  side.thumbstick_x == 0 && side.thumbstick_y == 0,
+              "closed ring leaked Grip/click or failed B");
+        side = sample(pose(0, 0, left));
+        check(side.buttons == 0, "ring release bypassed the three-channel neutral guard");
+        sample(pose(neutral, 0, left));
+        side = sample(pose(click_curl ? 0 : 8, 0, left));
+        check(side.buttons == 35, "all three channels failed after the released neutral");
+      }
+  auto cfg = immediate();
+  cfg.button_layout = "middle_grip";
+  cfg.trigger_on_curl = cfg.grip_on_curl = cfg.thumbstick_click_on_curl = true;
+  cfg.pose_confirm_ms = 120;
+  em::Controller c(cfg);
+  auto f = frame();
+  f.right = pose(0, 0);
+  apply(c, f);
+  f.right = pose(0, 2);
+  advance(f);
+  auto out = apply(c, f);
+  check(out.right.buttons == 0, "unconfirmed ring leaked ordinary buttons");
+  advance(f, 120);
+  out = apply(c, f);
+  check(out.right.buttons == 16, "ring confirmation failed");
+  cfg = immediate();
+  cfg.button_layout = "middle_grip";
+  cfg.trigger_on_curl = cfg.grip_on_curl = true;
+  for (bool curl : {false, true}) {
+    cfg.thumbstick_click_on_curl = curl;
+    em::Controller click(cfg);
+    f = frame();
+    for (bool extended : {false, true}) {
+      f.right = pose(3 | (extended ? 8 : 0), 0);
+      advance(f);
+      out = apply(click, f);
+      check(bool(out.right.buttons & 32) == (extended != curl),
+            "little click activation direction failed");
+    }
+  }
+  cfg.thumbstick_click_on_curl = true;
+  cfg.right.grip_calibrated = true;
+  cfg.right.grip_open_curl = 0;
+  cfg.right.grip_calibration_finger = "little";
+  auto h = pose(11, 0);
+  bend_finger(h, 1, {10, 35, 60});
+  const double middle = em::measure_hand(h, .3).curl[1];
+  check(middle > .2 && middle < .65, "partial middle-finger fixture changed");
+  cfg.right.grip_closed_curl = middle / .9;
+  f = frame();
+  f.right = h;
+  em::Controller stale(cfg);
+  out = apply(stale, f);
+  check(out.right.grip == 0, "old little-finger calibration was applied to middle Grip");
+  cfg.right.grip_calibration_finger = "middle";
+  em::Controller fitted(cfg);
+  out = apply(fitted, f);
+  check(out.right.buttons == 2, "middle Grip calibration did not admit natural partial flexion");
+  h = pose(11, 0);
+  bend_finger(h, 3, {10, 35, 60});
+  const double little = em::measure_hand(h, .3).curl[3];
+  cfg.right.click_calibrated = true;
+  cfg.right.click_open_curl = 0;
+  cfg.right.click_closed_curl = little / .9;
+  f.right = h;
+  advance(f);
+  em::Controller fitted_click(cfg);
+  out = apply(fitted_click, f);
+  check(out.right.buttons == 32, "separate little click calibration failed");
+  cfg.menu_hold_ms = 0;
+  em::Controller open_rings(cfg);
+  f = frame();
+  f.left = pose(14, 2, true);
+  f.right = pose(14, 2);
+  out = apply(open_rings, f);
+  check(out.left.buttons == 8 && out.right.buttons == 8, "two A rings were confused with Menu");
+  em::Controller menu(cfg);
+  f = frame();
+  f.left = pose(15, 1, true);
+  f.right = pose(15, 1);
+  out = apply(menu, f);
+  advance(f);
+  out = apply(menu, f);
+  check(out.left.buttons == 4 && out.right.buttons == 0, "new button layout changed two-hand Menu");
+}
 void validation_and_legacy() {
   for (const auto& j :
        {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
         nlohmann::json{{"deadzone", 1}}, nlohmann::json{{"extension_on", .3}},
-        nlohmann::json{{"forward_range_scale", 0}}, nlohmann::json{{"forward_range_scale", 2.1}}}) {
+        nlohmann::json{{"forward_range_scale", 0}}, nlohmann::json{{"forward_range_scale", 2.1}},
+        nlohmann::json{{"pose_yaw_offset_degrees", -181}},
+        nlohmann::json{{"pose_yaw_offset_degrees", 181}},
+        nlohmann::json{{"pose_yaw_offset_degrees", std::numeric_limits<double>::quiet_NaN()}},
+        nlohmann::json{{"dpad_source", "both"}}, nlohmann::json{{"dpad_source", "thumb"}},
+        nlohmann::json{{"thumb_back_on", .2}}, nlohmann::json{{"thumb_back_off", .9}},
+        nlohmann::json{{"button_layout", "unknown"}}}) {
     bool rejected = false;
     try {
       (void)em::config_from_json(j);
@@ -797,6 +1127,9 @@ int main() {
   try {
     forward_backward_default_and_inversion();
     earlier_forward_activation_preserves_other_directions();
+    thumb_dpad_and_independent_channels();
+    trigger_calibration_and_wrist_diagonals();
+    middle_grip_three_channels_and_rings();
     grip_with_natural_finger_bends();
     trigger_and_v_across_wrist_orientations();
     calibrated_start_with_held_channels_and_hooked_grip();

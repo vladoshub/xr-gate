@@ -3,7 +3,7 @@
   "curl_off": 0.45,
   "curl_on": 0.65,
   "deadzone": 0.18,
-  "dpad_mode": "four_way",
+  "dpad_mode": "eight_way",
   "forward_range_scale": 0.65,
   "trigger_on_curl": true,
   "grip_on_curl": true,
@@ -141,5 +141,12 @@
   "thumb_extension_on": 0.76,
   "version": 3,
   "wrist_filter_enabled": true,
-  "wrist_filter_degrees": 2
+  "wrist_filter_degrees": 2,
+  "dpad_source": "wrist",
+  "thumb_dpad_mode": "eight_way",
+  "thumb_back_on": 0.85,
+  "thumb_back_off": 0.7,
+  "button_layout": "middle_grip",
+  "thumbstick_click_on_curl": false,
+  "pose_yaw_offset_degrees": 45
 }
