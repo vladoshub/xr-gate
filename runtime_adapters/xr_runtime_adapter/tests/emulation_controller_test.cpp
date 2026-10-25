@@ -295,7 +295,7 @@ HandSideF32V2 thumb_pose(bool left, double sweep, double bend, unsigned extended
   }
   return h;
 }
-em::Config thumb_config(bool left) {
+em::Config thumb_config(bool left, bool skeleton = false) {
   const auto feature = [&](double x, double y) {
     const auto m = em::measure_hand(thumb_pose(left, x, y), .3);
     check(m.thumb_pad_valid, "synthetic thumb feature invalid");
@@ -323,6 +323,17 @@ em::Config thumb_config(bool left) {
                           {"directions", directions},
                           {"enable_clearance", .7},
                           {"disable_clearance", .6}}}}}};
+  if (skeleton) {
+    nlohmann::json poses;
+    const std::array<std::array<double,2>,8> targets{{
+        {.5,.25},{.5,1},{0,1},{-.5,1},{-.5,.25},{-.5,-.2},{0,-.2},{.5,-.2}}};
+    for (size_t i=0;i<8;++i)
+      poses[em::thumb_direction_names[i]]=em::measure_hand(thumb_pose(left,targets[i][0],targets[i][1]),.3).thumb_pose;
+    j[left ? "left" : "right"]["thumb_calibration"]={
+        {"feature","thumb_skeleton_v2"},
+        {"neutral_poses",{em::measure_hand(thumb_pose(left,0,.25),.3).thumb_pose}},
+        {"directions",poses},{"enable_clearance",.7},{"disable_clearance",.6}};
+  }
   return em::config_from_json(j);
 }
 void thumb_dpad_and_independent_channels() {
@@ -334,7 +345,8 @@ void thumb_dpad_and_independent_channels() {
     uint64_t buttons;
   };
   for (bool left : {false, true}) {
-    const auto cfg = thumb_config(left);
+    for (bool skeleton : {false, true}) {
+    const auto cfg = thumb_config(left,skeleton);
     for (unsigned extended : {0u, 1u, 8u, 9u}) {
       for (const auto target : {Target{0, 1, up},
                                 {0, -.2, down},
@@ -382,7 +394,16 @@ void thumb_dpad_and_independent_channels() {
     em::Controller c(cfg);
     auto f = frame();
     const auto sample = [&](double fraction) {
-      (left ? f.left : f.right) = thumb_pose(left, 0, .25 - fraction * .45);
+      auto h = thumb_pose(left, 0, .25 - fraction * .45);
+      if (skeleton) {
+        const auto neutral=thumb_pose(left,0,.25), down_pose=thumb_pose(left,0,-.2);
+        for (size_t k=1;k<=4;++k) {
+          h.joints[k].px=neutral.joints[k].px+fraction*(down_pose.joints[k].px-neutral.joints[k].px);
+          h.joints[k].py=neutral.joints[k].py+fraction*(down_pose.joints[k].py-neutral.joints[k].py);
+          h.joints[k].pz=neutral.joints[k].pz+fraction*(down_pose.joints[k].pz-neutral.joints[k].pz);
+        }
+      }
+      (left ? f.left : f.right) = h;
       advance(f);
       const auto o = apply(c, f);
       return left ? o.left : o.right;
@@ -392,6 +413,54 @@ void thumb_dpad_and_independent_channels() {
     check(sample(.75).thumbstick_y < 0, "backward thumb hysteresis lost a held direction");
     check(sample(.65).thumbstick_y == 0,
           "backward analog input leaked after leaving strict region");
+    }
+  }
+}
+void thumb_skeleton_uses_base_motion_and_neutral_range() {
+  for (bool left : {false,true}) {
+    auto cfg=thumb_config(left,true);
+    auto& tc=(left ? cfg.left : cfg.right).thumb;
+    const auto hand=[&](double lateral,double bend) {
+      auto h=thumb_pose(left,0,bend);
+      const auto basis=em::measure_hand(h,.3).palm_basis;
+      for (size_t i=1;i<=4;++i) {
+        h.joints[i].px+=lateral*basis[0][0];
+        h.joints[i].py+=lateral*basis[0][1];
+        h.joints[i].pz+=lateral*basis[0][2];
+      }
+      return h;
+    };
+    tc.neutral_poses={em::measure_hand(hand(-.001,.25),.3).thumb_pose,
+                      em::measure_hand(hand(.001,.25),.3).thumb_pose};
+    for (size_t i=0;i<8;++i) {
+      const auto axis=em::thumb_direction_axes[i];
+      tc.pose_directions[i]=em::measure_hand(hand(axis[0]*.015,axis[1]>0 ? 1 : axis[1]<0 ? -.2 : .25),.3).thumb_pose;
+    }
+    em::validate_thumb_skeleton(tc);
+    const auto a=em::measure_hand(hand(-.015,.25),.3),b=em::measure_hand(hand(.015,.25),.3);
+    for (size_t i=0;i<3;++i)
+      check(std::abs(a.thumb_feature[i]-b.thumb_feature[i])<1e-5,
+            "fixture must have identical legacy thumb features");
+    constexpr uint64_t expected[]={512,576,64,320,256,384,128,640};
+    for (size_t i=0;i<8;++i) {
+      em::Controller c(cfg);auto f=frame();
+      const auto axis=em::thumb_direction_axes[i];
+      (left ? f.left : f.right)=hand(axis[0]*.015,axis[1]>0 ? 1 : axis[1]<0 ? -.2 : .25);
+      const auto o=apply(c,f);
+      check((left ? o.left : o.right).buttons==expected[i],"full thumb skeleton lost base opposition/diagonal");
+    }
+    for (double offset : {-.001,0.,.001}) {
+      em::Controller c(cfg);auto f=frame();(left ? f.left : f.right)=hand(offset,.25);
+      const auto o=apply(c,f);const auto& side=left ? o.left : o.right;
+      check(side.thumbstick_x==0 && side.thumbstick_y==0 && side.buttons==0,
+            "neutral range generated movement");
+    }
+    auto broken=tc;broken.neutral_poses.clear();
+    bool rejected=false;try {em::validate_thumb_skeleton(broken);} catch (const std::exception&) {rejected=true;}
+    check(rejected,"empty skeleton neutral accepted");
+    broken=tc;broken.pose_directions[1]=broken.pose_directions[0];
+    rejected=false;try {em::validate_thumb_skeleton(broken);} catch (const std::exception&) {rejected=true;}
+    check(rejected,"identical thumb directions accepted");
   }
 }
 void trigger_and_v_across_wrist_orientations() {
@@ -1286,6 +1355,7 @@ int main() {
     forward_backward_default_and_inversion();
     earlier_forward_activation_preserves_other_directions();
     thumb_dpad_and_independent_channels();
+    thumb_skeleton_uses_base_motion_and_neutral_range();
     trigger_calibration_and_wrist_diagonals();
     middle_grip_three_channels_and_rings();
     three_finger_click_is_separate();

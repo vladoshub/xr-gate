@@ -77,6 +77,18 @@ em::Vec3 median_feature(const std::vector<em::Vec3>& samples, const std::string&
   }
   return out;
 }
+em::ThumbPose median_thumb(const std::vector<em::HandMeasurement>& samples, const std::string& label) {
+  std::vector<em::ThumbPose> valid;
+  for (const auto& m : samples) if (m.thumb_pad_valid) valid.push_back(m.thumb_pose);
+  if (valid.size() < 10) throw std::runtime_error("need at least 10 valid unique frames for " + label);
+  em::ThumbPose out{};
+  for (size_t i = 0; i < out.size(); ++i) {
+    std::vector<double> values;
+    for (const auto& p : valid) values.push_back(p[i]);
+    std::sort(values.begin(),values.end()); out[i] = values[values.size()/2];
+  }
+  return out;
+}
 Json calibration(const std::map<std::string, std::vector<em::HandMeasurement>>& groups,
                  const em::Config& c, em::HandConfig& hc, const std::string& name) {
   const auto neutral_it = groups.find("neutral");
@@ -198,44 +210,42 @@ void calibrate_controls(const std::map<std::string, std::vector<em::HandMeasurem
     }
   }
   if (!has("thumb_neutral") && !has("thumb_hidden")) return;
-  std::map<std::string, em::Vec3> features;
   std::vector<double> active, hidden;
   const char* labels[] = {"thumb_neutral","thumb_left","thumb_right","thumb_up","thumb_down","thumb_hidden",
                          "thumb_up_left","thumb_up_right","thumb_down_left","thumb_down_right"};
   for (const auto* label : labels) {
-    std::vector<em::Vec3> values;
     if (has(label)) for (const auto& m : groups.at(label)) if (m.thumb_pad_valid) {
-      values.push_back(m.thumb_feature);
       (std::string(label)=="thumb_hidden" ? hidden : active).push_back(m.thumb_pad_clearance);
     }
-    features[label] = median_feature(values, std::string(name)+"."+label);
+    if (!has(label)) throw std::runtime_error(std::string(name)+": missing "+label);
+    (void)median_thumb(groups.at(label),std::string(name)+"."+label);
   }
   const double inactive = quantile(hidden,.95,std::string(name)+".thumb_hidden");
   const double visible = quantile(active,.05,std::string(name)+".thumb_active");
-  if (visible-inactive < .08) throw std::runtime_error(std::string(name)+
+  if (visible-inactive < .05) throw std::runtime_error(std::string(name)+
       ": hidden and active thumb overlap at the IP joint; keep the thumb base away from the palm for directions");
-  em::HandConfig axes;
-  em::calibrate_axes(axes,features["thumb_neutral"],features["thumb_left"],features["thumb_right"],
-                     features["thumb_up"],features["thumb_down"]);
+  em::ThumbCalibration axes;
+  axes.skeleton = true;
+  for (const auto& group : groups) if (group.first.rfind("thumb_neutral#",0)==0)
+    axes.neutral_poses.push_back(median_thumb(group.second,std::string(name)+"."+group.first));
+  if (axes.neutral_poses.empty())
+    axes.neutral_poses.push_back(median_thumb(groups.at("thumb_neutral"),std::string(name)+".thumb_neutral"));
+  for (size_t i = 0; i < 8; ++i) {
+    const std::string label = std::string("thumb_")+em::thumb_direction_names[i];
+    axes.pose_directions[i] = median_thumb(groups.at(label),std::string(name)+"."+label);
+  }
+  em::validate_thumb_skeleton(axes);
   std::vector<double> radii;
   for (const auto& m : groups.at("thumb_neutral")) if (m.thumb_pad_valid) {
-    const auto p=em::project_wrist(axes,m.thumb_feature);
+    const auto p=em::project_thumb(axes,m);
     radii.push_back(std::hypot(p[0],p[1]));
   }
-  const double noise=quantile(radii,.95,std::string(name)+".thumb_neutral");
+  const double noise=quantile(radii,.99,std::string(name)+".thumb_neutral");
   if (noise>.42) throw std::runtime_error(std::string(name)+": unstable thumb neutral; record again");
-  for (const auto* label : {"thumb_up_left","thumb_up_right","thumb_down_left","thumb_down_right"}) {
-    const auto p=em::project_wrist(axes,features[label]);
-    const std::string text=label;
-    if (p[0]*(text.find("left")!=std::string::npos ? -1 : 1)<.25 ||
-        p[1]*(text.find("up")!=std::string::npos ? 1 : -1)<.25)
-      throw std::runtime_error(std::string(name)+": "+label+" does not match both calibrated directions");
-  }
   Json directions;
-  const char* names[]={"left","right","up","down"};
-  for (size_t i=0;i<4;++i) directions[names[i]]=axes.directions[i];
-  profile[name]["thumb_calibration"] = {{"feature","thumb_pose_v1"},{"neutral",axes.neutral},
-      {"axis_x",axes.axis_x},{"axis_y",axes.axis_y},{"directions",directions},
+  for (size_t i=0;i<8;++i) directions[em::thumb_direction_names[i]]=axes.pose_directions[i];
+  profile[name]["thumb_calibration"] = {{"feature","thumb_skeleton_v2"},{"neutral_poses",axes.neutral_poses},
+      {"directions",directions},
       {"deadzone",std::clamp(noise+.03,.12,.45)},
       {"enable_clearance",inactive+.65*(visible-inactive)},
       {"disable_clearance",inactive+.35*(visible-inactive)}};
@@ -266,6 +276,11 @@ int main(int argc, char** argv) {
     em::Controller controller(config);
     em::WristPoseFilter wrist_filter;
     std::array<std::map<std::string, std::vector<em::HandMeasurement>>, 2> groups;
+    struct ThumbHold {
+      std::string label;
+      std::vector<std::pair<uint64_t,em::HandMeasurement>> samples;
+    };
+    std::array<std::map<unsigned,ThumbHold>,2> thumb_holds;
     std::array<uint64_t, 2> previous_stamp{};
     std::ofstream output;
     if (!calibrate) { output.open(argv[3]); if (!output) throw std::runtime_error("cannot open output"); }
@@ -300,7 +315,12 @@ int main(int argc, char** argv) {
             if ((selected != "both" && selected != names[i]) || h.source_timestamp_ns == previous_stamp[i] ||
                 !valid(i == 0 ? h.left : h.right, config)) continue;
             previous_stamp[i] = h.source_timestamp_ns;
-            groups[i][label].push_back(measurements[i]);
+            if (controls_only && label.rfind("thumb_",0)==0 && frame.contains("phase_id")) {
+              auto& hold=thumb_holds[i][frame.at("phase_id").get<unsigned>()];
+              if (!hold.label.empty() && hold.label!=label)
+                throw std::runtime_error("different thumb labels share a phase_id");
+              hold.label=label;hold.samples.emplace_back(h.source_timestamp_ns,measurements[i]);
+            } else groups[i][label].push_back(measurements[i]);
           }
         } else {
           xr_runtime::RuntimeControllerStateFrameV1 result{};
@@ -318,6 +338,22 @@ int main(int argc, char** argv) {
     if (frames == 0) throw std::runtime_error("no frame records found");
     if (calibrate) {
       if (controls_only) {
+        // The recorder verifies the operating fingers before a hold starts;
+        // the thumb can still be settling. For long holds fit the stable tail,
+        // retaining at least two thirds and never trimming more than 1 second.
+        // Short synthetic/older recordings keep every distinct sample.
+        for (size_t side=0;side<2;++side) for (const auto& entry:thumb_holds[side]) {
+          const auto& hold=entry.second;
+          const uint64_t start=hold.samples.front().first,finish=hold.samples.back().first;
+          if (finish<start) throw std::runtime_error("thumb hold timestamps moved backwards");
+          const uint64_t duration=finish-start;
+          const uint64_t settling=duration>=2000000000ULL ? std::min(uint64_t(1000000000),duration/3) : 0;
+          for (const auto& sample:hold.samples) if (sample.first>=start+settling) {
+            groups[side][hold.label].push_back(sample.second);
+            if (hold.label=="thumb_neutral")
+              groups[side][hold.label+"#"+std::to_string(entry.first)].push_back(sample.second);
+          }
+        }
         bool any=false;
         for (size_t i=0;i<2;++i) {
           const auto& group=groups[i];

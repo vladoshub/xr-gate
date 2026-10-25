@@ -116,6 +116,11 @@ class ControlsCalibrationTest(unittest.TestCase):
                 self.assertEqual(saved[side]['open_curl'],original[side]['open_curl'])
                 self.assertGreater(saved[side]['thumb_calibration']['enable_clearance'],
                                    saved[side]['thumb_calibration']['disable_clearance'])
+                thumb=saved[side]['thumb_calibration']
+                self.assertEqual(thumb['feature'],'thumb_skeleton_v2')
+                self.assertEqual(len(thumb['neutral_poses']),2)
+                self.assertEqual(len(thumb['directions']),8)
+                self.assertTrue(all(len(v)==12 for v in thumb['directions'].values()))
             self.assertEqual(saved['dpad_source'],'wrist')
             saved['dpad_source']='thumb'
             output.write_text(json.dumps(saved))
@@ -165,6 +170,60 @@ class ControlsCalibrationTest(unittest.TestCase):
         self.assertFalse(live.ControlsHold('thumb_neutral',1,{}).matches(measured)[0])
         self.assertEqual(len(live.make_controls_plan('both')),46)
         self.assertEqual(len(live.make_controls_plan('both',buttons_only=True)),24)
+
+    def test_invalid_skeleton_profiles_and_duplicate_directions_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=self.record(root/'record.zip')
+            result,_,output=self.fit(root,data)
+            self.assertEqual(result.returncode,0,result.stderr)
+            saved=json.loads(output.read_text());saved['dpad_source']='thumb'
+            for fault in ('empty_neutral','missing_diagonal','duplicate_direction','wrong_dimension','invalid_number'):
+                bad=copy.deepcopy(saved);thumb=bad['right']['thumb_calibration']
+                if fault=='empty_neutral':thumb['neutral_poses']=[]
+                if fault=='missing_diagonal':del thumb['directions']['down_right']
+                if fault=='duplicate_direction':thumb['directions']['up_right']=thumb['directions']['right']
+                if fault=='wrong_dimension':thumb['directions']['left']=[0,0,0]
+                if fault=='invalid_number':thumb['neutral_poses'][0][0]=float('nan')
+                profile=root/(fault+'.json');profile.write_text(json.dumps(bad))
+                target=root/(fault+'.jsonl')
+                failed=subprocess.run([TOOL,'replay',str(root/'frames.jsonl'),str(target),'--config',str(profile)],capture_output=True,text=True)
+                self.assertNotEqual(failed.returncode,0,fault)
+                self.assertFalse(target.exists(),fault)
+
+    def test_thumb_settling_is_excluded_without_refitting_buttons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);records=[]
+            for phase,pose in enumerate(live.make_controls_plan('both',thumb_only=True),1):
+                for j in range(60):
+                    label=pose['label']
+                    settling='thumb_neutral' if label=='thumb_hidden' else 'thumb_hidden'
+                    frame=optical_frame(pose['hand'],settling if j<20 else label,
+                                        5000000000000+phase*10000000000+j*50000000)
+                    frame.update(label=label,phase_label=label,phase_id=phase,phase_stage='hold',
+                                 record_hand=pose['hand'],button_layout='legacy')
+                    records.append(frame)
+            result,original,output=self.fit(root,''.join(json.dumps(r)+'\n' for r in records).encode())
+            self.assertEqual(result.returncode,0,result.stderr)
+            saved=json.loads(output.read_text())
+            for side in ('left','right'):
+                self.assertEqual(saved[side]['thumb_calibration']['deadzone'],.12)
+                actual=copy.deepcopy(saved[side]);actual.pop('thumb_calibration')
+                self.assertEqual(actual,original[side])
+            # The live recorder must use the same settled references; a
+            # transient extended thumb must not block every later direction.
+            references={}
+            archive=live.Archive(root/'settling.zip',{})
+            pose=dict(hand='right',label='thumb_hidden')
+            frames=[r for r in records if r['record_hand']=='right' and r['label']=='thumb_hidden']
+            with contextlib.redirect_stdout(io.StringIO()):
+                stats=archive.phase(1,pose)
+                live.collect_verified(Frames(frames),archive,stats,2.9,5,0,references,True)
+            archive.close('completed')
+            self.assertGreaterEqual(len(references['thumb_hidden']),10)
+            self.assertGreaterEqual(references['thumb_hidden'][0]['stamp'],
+                                    int(frames[0]['hands']['source_timestamp_ns'])+1000000000)
+            gate=live.ControlsHold('thumb_right',1,references)
+            self.assertTrue(gate.matches(live.measure(optical_frame('right','thumb_right',9000000000000),'right'))[0])
 
     def test_middle_grip_calibration_and_all_three_channels(self):
         with tempfile.TemporaryDirectory() as tmp:

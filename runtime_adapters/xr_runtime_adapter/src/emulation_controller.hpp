@@ -4,24 +4,36 @@
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 #include <xr_runtime/contracts/runtime_adapter.hpp>
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
 
 namespace xr_runtime_adapter::emulation {
 using Vec3 = std::array<double, 3>;
 using Basis = std::array<Vec3, 3>;
+using ThumbPose = std::array<double, 12>;
+// Clockwise neighbours in stick coordinates, starting at right.
+inline constexpr std::array<const char*, 8> thumb_direction_names{{
+    "right", "up_right", "up", "up_left", "left", "down_left", "down", "down_right"}};
+inline constexpr std::array<Vec3, 8> thumb_direction_axes{{
+    {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {-1, 1, 0},
+    {-1, 0, 0}, {-1, -1, 0}, {0, -1, 0}, {1, -1, 0}}};
 struct HandMeasurement {
   bool palm_valid = false, thumb_valid = false;
   Basis palm_basis{};
   double thumb_clearance = 0, thumb_straightness = 0, pinch_ratio = -1;
   bool thumb_pad_valid = false;
   Vec3 thumb_feature{};
+  ThumbPose thumb_pose{};
   double thumb_pad_clearance = 0;
   double index_chain_curl = 1, index_knuckle_curl = 1;
   std::array<double, 4> curl{{-1, -1, -1, -1}};
 };
 struct ThumbCalibration {
   bool calibrated = false;
+  bool skeleton = false;
+  std::vector<ThumbPose> neutral_poses;
+  std::array<ThumbPose, 8> pose_directions{};  // absolute palm-local poses
   Vec3 neutral{}, axis_x{}, axis_y{};
   std::array<Vec3, 4> directions{};
   double deadzone = .12, enable_clearance = .7, disable_clearance = .6;
@@ -77,6 +89,8 @@ void calibrate_axes(HandConfig& config, const Vec3& neutral, const Vec3& left, c
                     const Vec3& up, const Vec3& down);
 Vec3 project_wrist(const HandConfig& config, const Vec3& feature);
 Vec3 project_thumb(const ThumbCalibration& config, const Vec3& feature);
+Vec3 project_thumb(const ThumbCalibration& config, const HandMeasurement& hand);
+void validate_thumb_skeleton(const ThumbCalibration& config);
 class Controller {
  public:
   explicit Controller(Config config);

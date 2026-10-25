@@ -35,6 +35,36 @@ void range(double v, double low, double high, const char* name) {
   require(std::isfinite(v) && v >= low && v <= high, std::string(name) + " out of range");
 }
 double forward_axis(double y, double scale) { return y > 0 ? std::min(y / scale, 1.0) : y; }
+double pose_dot(const ThumbPose& a, const ThumbPose& b) {
+  double out = 0;
+  for (size_t i = 0; i < a.size(); ++i) out += a[i] * b[i];
+  return out;
+}
+ThumbPose pose_sub(const ThumbPose& a, const ThumbPose& b) {
+  ThumbPose out{};
+  for (size_t i = 0; i < a.size(); ++i) out[i] = a[i] - b[i];
+  return out;
+}
+ThumbPose thumb_neutral(const ThumbCalibration& c, const ThumbPose& pose) {
+  ThumbPose best = c.neutral_poses.front();
+  double error = pose_dot(pose_sub(pose, best), pose_sub(pose, best));
+  // Repeated neutral holds describe a small resting range, rather than a
+  // fictitious pose halfway between two different thumb positions.
+  for (size_t i = 0; i < c.neutral_poses.size(); ++i) {
+    for (size_t j = i; j < c.neutral_poses.size(); ++j) {
+      const auto& a = c.neutral_poses[i];
+      const auto d = pose_sub(c.neutral_poses[j], a);
+      const double norm = pose_dot(d, d);
+      const double t = norm > 1e-12 ? std::clamp(pose_dot(pose_sub(pose, a), d) / norm, 0.0, 1.0) : 0;
+      ThumbPose n{};
+      for (size_t k = 0; k < n.size(); ++k) n[k] = a[k] + t * d[k];
+      const auto residual = pose_sub(pose, n);
+      const double e = pose_dot(residual, residual);
+      if (e < error) { error = e; best = n; }
+    }
+  }
+  return best;
+}
 bool position(const HandSideF32V2& h, uint32_t i, double confidence, Vec3& p) {
   if (i >= std::min(uint32_t(h.joint_count), HAND_JOINT_COUNT_V2)) return false;
   const auto& j = h.joints[i];
@@ -122,13 +152,29 @@ void parse_hand(const nlohmann::json& j, HandConfig& c) {
   }
   if (j.contains("thumb_calibration")) {
     const auto& t = j.at("thumb_calibration");
-    require(t.at("feature") == "thumb_pose_v1", "unsupported thumb calibration feature");
+    const auto feature = t.at("feature").get<std::string>();
+    require(feature == "thumb_pose_v1" || feature == "thumb_skeleton_v2", "unsupported thumb calibration feature");
     auto& out = c.thumb;
-    out.neutral = t.at("neutral").get<Vec3>();
-    out.axis_x = t.at("axis_x").get<Vec3>();
-    out.axis_y = t.at("axis_y").get<Vec3>();
-    const char* names[] = {"left", "right", "up", "down"};
-    for (size_t i = 0; i < 4; ++i) out.directions[i] = t.at("directions").at(names[i]).get<Vec3>();
+    out.skeleton = feature == "thumb_skeleton_v2";
+    if (out.skeleton) {
+      out.neutral_poses = t.at("neutral_poses").get<std::vector<ThumbPose>>();
+      for (size_t i = 0; i < 8; ++i)
+        out.pose_directions[i] = t.at("directions").at(thumb_direction_names[i]).get<ThumbPose>();
+      validate_thumb_skeleton(out);
+    } else {
+      out.neutral = t.at("neutral").get<Vec3>();
+      out.axis_x = t.at("axis_x").get<Vec3>();
+      out.axis_y = t.at("axis_y").get<Vec3>();
+      const char* names[] = {"left", "right", "up", "down"};
+      for (size_t i = 0; i < 4; ++i) out.directions[i] = t.at("directions").at(names[i]).get<Vec3>();
+      HandConfig axes;
+      axes.neutral = out.neutral;
+      axes.axis_x = out.axis_x;
+      axes.axis_y = out.axis_y;
+      axes.directions = out.directions;
+      axes.directional_calibration = true;
+      validate_axes(axes);
+    }
     out.deadzone = t.value("deadzone", out.deadzone);
     out.enable_clearance = t.at("enable_clearance").get<double>();
     out.disable_clearance = t.at("disable_clearance").get<double>();
@@ -136,13 +182,6 @@ void parse_hand(const nlohmann::json& j, HandConfig& c) {
     range(out.enable_clearance, .01, 3, "thumb_calibration.enable_clearance");
     range(out.disable_clearance, 0, out.enable_clearance - .01,
           "thumb_calibration.disable_clearance");
-    HandConfig axes;
-    axes.neutral = out.neutral;
-    axes.axis_x = out.axis_x;
-    axes.axis_y = out.axis_y;
-    axes.directions = out.directions;
-    axes.directional_calibration = true;
-    validate_axes(axes);
     out.calibrated = true;
   }
   for (size_t i = 0; i < 4; ++i) {
@@ -338,6 +377,15 @@ HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
   // the width of its own base. Measure clearance from the index knuckle instead.
   out.thumb_clearance = length(sub(tip, index)) / width;
   out.thumb_valid = true;
+  // Four thumb joints in a palm-local frame, normalized by palm width. In
+  // particular the normal component and thumb-base movement distinguish
+  // opposition/sweep poses that have the same proximal direction and IP bend.
+  for (size_t i = 0; i < 4; ++i) {
+    const Vec3 relative = mul(sub(i == 3 ? tip : thumb[i], index), 1 / width);
+    out.thumb_pose[3*i] = dot(relative, across);
+    out.thumb_pose[3*i+1] = dot(relative, normal);
+    out.thumb_pose[3*i+2] = dot(relative, forward);
+  }
   // Thumb steering is relative to the palm. The proximal direction measures
   // lateral sweep; signed IP flexion separates curling the tip from arching it
   // backwards. No world/wrist orientation or inferred nail visibility is used.
@@ -421,6 +469,62 @@ Vec3 project_thumb(const ThumbCalibration& c, const Vec3& feature) {
   axes.directions = c.directions;
   axes.directional_calibration = true;
   return project_wrist(axes, feature);
+}
+void validate_thumb_skeleton(const ThumbCalibration& c) {
+  require(!c.neutral_poses.empty() && c.neutral_poses.size() <= 8,
+          "thumb skeleton needs 1..8 neutral poses");
+  const auto finite_pose = [](const ThumbPose& p) {
+    return std::all_of(p.begin(), p.end(), [](double v) { return std::isfinite(v) && std::abs(v) <= 10; });
+  };
+  for (const auto& n : c.neutral_poses) require(finite_pose(n), "invalid thumb skeleton neutral");
+  for (const auto& d : c.pose_directions) require(finite_pose(d), "invalid thumb skeleton direction");
+  for (const auto& d : c.pose_directions) {
+    const auto n = thumb_neutral(c, d);
+    const auto r = pose_sub(d, n);
+    require(pose_dot(r, r) >= .0004, "thumb direction overlaps neutral");
+  }
+  for (size_t i = 0; i < 8; ++i) {
+    for (size_t j = i + 1; j < 8; ++j) {
+      const auto d = pose_sub(c.pose_directions[i], c.pose_directions[j]);
+      require(pose_dot(d, d) >= .0004, "thumb directions overlap");
+    }
+    // Every calibrated neutral must define an observable plane for each
+    // adjacent pair. The runtime also guards the interpolated plane below.
+    for (const auto& n : c.neutral_poses) {
+      const auto a = pose_sub(c.pose_directions[i], n);
+      const auto b = pose_sub(c.pose_directions[(i+1)%8], n);
+      const double aa = pose_dot(a,a), bb = pose_dot(b,b), ab = pose_dot(a,b);
+      require(aa*bb-ab*ab > aa*bb*.0025, "adjacent thumb skeleton directions are collinear");
+    }
+  }
+}
+Vec3 project_thumb(const ThumbCalibration& c, const HandMeasurement& hand) {
+  if (!c.skeleton) return project_thumb(c, hand.thumb_feature);
+  const auto neutral = thumb_neutral(c, hand.thumb_pose);
+  const auto delta = pose_sub(hand.thumb_pose, neutral);
+  double best = std::numeric_limits<double>::infinity();
+  Vec3 out{};
+  for (size_t i = 0; i < 8; ++i) {
+    const size_t j = (i+1)%8;
+    const auto a = pose_sub(c.pose_directions[i], neutral);
+    const auto b = pose_sub(c.pose_directions[j], neutral);
+    const double aa = pose_dot(a,a), bb = pose_dot(b,b), ab = pose_dot(a,b), det = aa*bb-ab*ab;
+    if (aa < 1e-12 || bb < 1e-12 || det <= aa*bb*1e-8) continue;
+    double u = (pose_dot(delta,a)*bb-pose_dot(delta,b)*ab)/det;
+    double v = (pose_dot(delta,b)*aa-pose_dot(delta,a)*ab)/det;
+    if (u < 0) { u = 0; v = pose_dot(delta,b)/bb; }
+    if (v < 0) { v = 0; u = pose_dot(delta,a)/aa; }
+    u = std::max(0.0,u); v = std::max(0.0,v);
+    ThumbPose residual{};
+    for (size_t k = 0; k < residual.size(); ++k) residual[k] = delta[k]-u*a[k]-v*b[k];
+    const double error = pose_dot(residual,residual);
+    if (error < best) {
+      best = error;
+      out = {u*thumb_direction_axes[i][0]+v*thumb_direction_axes[j][0],
+             u*thumb_direction_axes[i][1]+v*thumb_direction_axes[j][1],0};
+    }
+  }
+  return out;
 }
 void Controller::clear_input(SideState& s) {
   s.buttons = s.touches = s.dpad = 0;
@@ -611,7 +715,7 @@ void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideS
   projection.neutral = s.neutral;
   projection.axis_x = s.axis_x;
   projection.axis_y = s.axis_y;
-  const Vec3 axes = thumb_mode ? project_thumb(c.thumb, h.thumb_feature)
+  const Vec3 axes = thumb_mode ? project_thumb(c.thumb, h)
                                : project_wrist(projection, wrist_feature(h, s.reference));
   double x = axes[0], y = axes[1];
   if (thumb_mode) {
@@ -641,7 +745,26 @@ void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideS
   // and tiny-output cutoff. Preserve resting jitter suppression and filter state.
   const double output_y = forward_axis(s.y, thumb_mode ? 1 : config_.forward_range_scale);
   const auto& mode = thumb_mode ? config_.thumb_dpad_mode : config_.dpad_mode;
-  if (mode != "off") {
+  if (thumb_mode && c.thumb.skeleton && mode == "eight_way") {
+    // Component thresholds after circular normalization leave only ~9 degrees
+    // for a diagonal. Use eight angular sectors, with a small boundary margin
+    // for an already held direction; retain the radial press/release limits.
+    const double radius = std::hypot(s.x, output_y);
+    if (radius < (s.dpad ? .45 : .65)) {
+      s.dpad = 0;
+    } else {
+      constexpr uint64_t bits[] = {CONTROLLER_BUTTON_DPAD_RIGHT,
+          CONTROLLER_BUTTON_DPAD_RIGHT|CONTROLLER_BUTTON_DPAD_UP, CONTROLLER_BUTTON_DPAD_UP,
+          CONTROLLER_BUTTON_DPAD_UP|CONTROLLER_BUTTON_DPAD_LEFT, CONTROLLER_BUTTON_DPAD_LEFT,
+          CONTROLLER_BUTTON_DPAD_LEFT|CONTROLLER_BUTTON_DPAD_DOWN, CONTROLLER_BUTTON_DPAD_DOWN,
+          CONTROLLER_BUTTON_DPAD_DOWN|CONTROLLER_BUTTON_DPAD_RIGHT};
+      const double angle = std::atan2(output_y,s.x);
+      int sector = (int(std::lround(angle/(pi/4)))+8)%8;
+      for (int i = 0; i < 8; ++i) if (s.dpad == bits[i] &&
+          std::abs(std::remainder(angle-i*pi/4,2*pi)) <= pi/8+3*pi/180) sector = i;
+      s.dpad = bits[sector];
+    }
+  } else if (mode != "off") {
     const auto direction = [&](double v, uint64_t positive, uint64_t negative) {
       const uint64_t bit = v >= 0 ? positive : negative;
       return std::abs(v) >= ((s.dpad & bit) ? 0.45 : 0.65) ? bit : uint64_t(0);
