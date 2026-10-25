@@ -2,10 +2,10 @@ name: Launcher configuration tests
 
 "on":
   pull_request:
-    paths: ['xr_client/**', 'docker/**', 'win/**', 'runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/openvr_driver/resources/settings/**', 'drivers/openvr_driver/scripts/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
+    paths: ['xr_client/**', 'docker/**', 'win/**', 'runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/**', 'devices/common/common.env', 'devices/common/linux/scripts/build/**', 'devices/common/linux/scripts/monado_driver/**', 'devices/common/linux/scripts/openvr_driver/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
   push:
-    branches: [main, master]
-    paths: ['xr_client/**', 'docker/**', 'win/**', 'runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/openvr_driver/resources/settings/**', 'drivers/openvr_driver/scripts/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
+    branches: [main, master, win]
+    paths: ['xr_client/**', 'docker/**', 'win/**', 'runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh', 'override_controller/scripts/linux/**', 'override_controller/tests/**', 'override_controller/configs/**', 'devices/common/linux/scripts/build/package_device_out.sh', 'drivers/**', 'devices/common/common.env', 'devices/common/linux/scripts/build/**', 'devices/common/linux/scripts/monado_driver/**', 'devices/common/linux/scripts/openvr_driver/**', '.github/workflows/launcher-tests.yml', '.github/workflows/xr-gate-split-build.yml']
   workflow_dispatch:
 
 jobs:
@@ -25,6 +25,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libasound2t64
       - run: python -m unittest discover -s win/tests -p 'test*.py'
+      - run: python -m unittest discover -s drivers/tests -p 'test*.py'
+      - name: Validate driver package shell launchers
+        run: |
+          bash -n drivers/build_profiles.sh
+          bash -n drivers/openvr_driver/scripts/build_driver.sh
+          bash -n drivers/openvr_driver/scripts/build_and_register_driver.sh
+          bash -n drivers/openvr_driver/scripts/register_driver.sh
+          bash -n drivers/monado_driver/scripts/linux/install.sh
+          bash -n drivers/monado_driver/scripts/linux/start.sh
+          bash -n drivers/xrizer/scripts/linux/start_openvr_app_via_monado.sh
       - run: python -m unittest discover -s override_controller/tests -p 'test*.py'
   windows-launcher:
     runs-on: windows-2022
@@ -49,6 +59,9 @@ jobs:
       - name: Real driver JSON, Unicode state, OpenVR registration and administrator results
         shell: powershell
         run: '& ./win/tests/verify-runtime-contracts.ps1'
+      - name: Device-specific driver selection, refresh and cache
+        shell: powershell
+        run: '& ./win/tests/verify-driver-devices.ps1'
       - name: Bluetooth firmware setup and selected-dongle recovery
         shell: powershell
         run: '& ./win/tests/verify-bluetooth-firmware.ps1'

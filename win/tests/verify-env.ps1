@@ -14,6 +14,7 @@ XR_DISPLAY_MODE=extended_sbs
 XR_DISPLAY_OPTION=current
 '@ | Set-Content -LiteralPath (Join-Path $temporary '.env.example') -Encoding UTF8
     @'
+XR_TARGET_DEVICE=fixture_camera
 XR_USB_IDS=1234:abcd
 XR_DISPLAY_FREQUENCY_HZ=72
 XR_WINDOW_WIDTH=2520
@@ -76,13 +77,15 @@ XR_STEAMVR_PATH="D:\A folder\SteamVR"
     Load-State
 
     $bundleRoot = Join-Path $temporary 'archive/xr-gate-windows-wsl-usbip'
-    $package = Join-Path $bundleRoot 'drivers/72Hz-extended_sbs/xr_tracking'
+    $package = Join-Path $bundleRoot 'drivers/fixture_camera/72Hz-extended_sbs/xr_tracking'
     foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
         $target = Join-Path $package $name
         New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
         'fixture' | Set-Content -LiteralPath $target
     }
-    '{"schema":1,"release_tag":"v9.9.9","variants":[{"frequency_hz":72,"display_mode":"extended_sbs"}]}' |
+    '{"xr_tracking":{"deviceProfile":"fixture_camera","displayFrequency":72,"isDisplayOnDesktop":true}}' |
+        Set-Content -LiteralPath (Join-Path $package 'resources/settings/default.vrsettings')
+    '{"schema":2,"release_tag":"v9.9.9","devices":["fixture_camera"],"variants":[{"device":"fixture_camera","frequency_hz":72,"display_mode":"extended_sbs","path":"drivers/fixture_camera/72Hz-extended_sbs/xr_tracking"}]}' |
         Set-Content -LiteralPath (Join-Path $bundleRoot 'bundle.json')
     Assert ((Find-BundledDriver $bundleRoot) -eq $package) 'Bundled driver selection failed.'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -137,7 +140,7 @@ XR_STEAMVR_PATH="D:\A folder\SteamVR"
     Select-AutomaticDriverFrequency $release $cache
     Assert ([int]$script:State.FrequencyHz -eq 72) 'Automatic selection did not use the current custom headset frequency.'
     Assert ($script:State.DisplayDeviceId -eq 'custom-1') 'Automatic selection did not save the selected glasses identity.'
-    Assert ($script:ResolvedDriverRoot -eq (Split-Path -Parent $downloaded | Split-Path -Parent | Split-Path -Parent)) 'Automatic selection ignored the verified cached Windows bundle.'
+    Assert ($script:ResolvedDriverRoot -eq (Split-Path -Parent $downloaded | Split-Path -Parent | Split-Path -Parent | Split-Path -Parent)) 'Automatic selection ignored the verified cached Windows bundle.'
     Add-Type -Path (Join-Path $root 'windows/DisplayNative.cs')
     Assert ([XrGateWsl.DisplayNative]::ModeStructSize -eq 220) 'DEVMODEW layout changed.'
     Assert ([XrGateWsl.DisplayNative]::DeviceStructSize -eq 840) 'DISPLAY_DEVICEW layout changed.'

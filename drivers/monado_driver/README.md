@@ -102,7 +102,7 @@ Native `XR_EXT_hand_tracking` publication is **disabled by default**. Enable it
 when starting (or restarting) the Monado service:
 
 ```bash
-XR_MONADO_HAND_TRACKING=1 bin/drivers/monado_driver/start.sh
+XR_MONADO_HAND_TRACKING=1 bin/drivers/generic/monado_driver/start.sh
 ```
 
 Leave the variable unset, or set `XR_MONADO_HAND_TRACKING=0`, to expose only
@@ -175,7 +175,7 @@ The same Monado binary can be packaged for any validated device target:
 
 ```bash
 XR_MONADO_DEVICE=my_glasses \
-BIN_DIR="$PWD/out/my_glasses/bin/drivers/monado_driver" \
+BIN_DIR="$PWD/out/my_glasses/bin/drivers/my_glasses/monado_driver" \
 XR_BIN_ROOT="$PWD/out/my_glasses/bin" \
 drivers/monado_driver/scripts/linux/install.sh
 ```
@@ -185,24 +185,24 @@ target names matching `[a-z0-9][a-z0-9_.]*` are accepted. Device-specific helper
 scripts are optional; the guaranteed generic entry point is:
 
 ```text
-bin/drivers/monado_driver/start.sh
+bin/drivers/generic/monado_driver/start.sh
 ```
 
-The installer creates a canonical, device-independent OpenXR runtime manifest:
+Each device package contains its own manifest with a relative library path:
 
 ```text
-bin/drivers/monado_driver/openxr_monado_xrgate.json
+bin/drivers/generic/monado_driver/openxr_monado_xrgate.json
 ```
 
 and a sourceable helper:
 
 ```text
-bin/drivers/monado_driver/openxr_runtime_env.sh
+bin/drivers/generic/monado_driver/openxr_runtime_env.sh
 ```
 
 For backward compatibility it also creates the historical manifest and helper
 under `devices/<target>/linux/scripts/monado_driver/`. The generated
-`bin/drivers/monado_driver/env.sh` points at the canonical manifest.
+`bin/drivers/generic/monado_driver/env.sh` points at the canonical manifest.
 
 ## Display and optics config
 
@@ -215,14 +215,14 @@ drivers/monado_driver/configs/display/default.yaml
 The installed copy is:
 
 ```text
-bin/drivers/monado_driver/configs/display/default.yaml
+bin/drivers/generic/monado_driver/configs/display/default.yaml
 ```
 
 Select another config without rebuilding Monado:
 
 ```bash
 XR_MONADO_DISPLAY_CONFIG=/path/cardboard.yaml \
-  bin/drivers/monado_driver/start.sh
+  bin/drivers/generic/monado_driver/start.sh
 ```
 
 The schema is shared with the OpenVR build scripts:
@@ -281,7 +281,7 @@ For example:
 XR_MONADO_EYE_WIDTH=1600 \
 XR_MONADO_EYE_HEIGHT=900 \
 XR_MONADO_REFRESH_HZ=72 \
-  bin/drivers/monado_driver/start.sh
+  bin/drivers/generic/monado_driver/start.sh
 ```
 
 Raw-radian FOV variables remain compatibility overrides.
@@ -291,10 +291,12 @@ Raw-radian FOV variables remain compatibility overrides.
 For the historical XREAL target:
 
 ```text
-out/xr-gate/bin/drivers/monado_driver/
+out/xr-gate/bin/drivers/generic/monado_driver/
 ```
 
 For another target, replace `xreal_ultra` with its package name.
 
 Monado is upstream code. Required changes to Monado remain represented as
 patches under `drivers/monado_driver/patches/`.
+
+Device folders and profile discovery: [DEVICE_PACKAGES.md](../DEVICE_PACKAGES.md).

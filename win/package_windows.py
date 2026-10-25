@@ -12,7 +12,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 ROOT_NAME = "xr-gate-windows-wsl-usbip"
 REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             ".env.example", "windows/Environment.ps1",
-            "windows/Display.ps1", "windows/Driver.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
+            "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
             "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1", "windows/Delete.ps1", "windows/FirstLogin.ps1", "windows/SteamVr.ps1", "windows/Restart.ps1",
             "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/runtime_progress.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
             "README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html")
@@ -30,8 +30,23 @@ def selections(frequencies, modes):
     return [(int(hz), mode) for hz in frequencies for mode in modes]
 
 
-def variant_path(hz, mode):
-    return f"drivers/{hz}Hz-{mode}/xr_tracking"
+def driver_device(value):
+    value = value.strip().lower().replace("-", "_")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_.]*", value) or value.endswith("."):
+        raise ValueError("Invalid driver device identifier: " + value)
+    return value
+
+
+def variant_path(hz, mode, device="generic"):
+    return f"drivers/{driver_device(device)}/{hz}Hz-{mode}/xr_tracking"
+
+
+def device_selection(devices):
+    values = re.split(r"[\s,;]+", devices) if isinstance(devices, str) else list(devices)
+    selected = [driver_device(value) for value in values if value]
+    if not selected or len(selected) != len(set(selected)):
+        raise ValueError("Select unique driver device identifiers.")
+    return selected
 
 
 def hardware_preset(env):
@@ -126,7 +141,7 @@ def build_launcher(source, launcher, output, release_tag="latest"):
         verify_launcher_metadata(json.loads(package.read(f"{ROOT_NAME}/launcher.json"))["launcher"], digest)
 
 
-def verify(path, frequencies, modes):
+def verify(path, frequencies, modes, devices=None):
     expected = selections(frequencies, modes)
     with ZipFile(path) as package:
         launcher_hash = verify_installer(package)
@@ -135,16 +150,29 @@ def verify(path, frequencies, modes):
             raise ValueError("Bundle file missing: bundle.json")
         manifest = json.loads(package.read(f"{ROOT_NAME}/bundle.json"))
         verify_launcher_metadata(manifest.get("launcher", {}), launcher_hash)
-        actual = {(entry["frequency_hz"], entry["display_mode"]) for entry in manifest["variants"]}
-        if manifest.get("schema") != 1 or actual != set(expected):
-            raise ValueError("Bundle variants do not match the requested CI selection.")
-        for hz, mode in expected:
-            prefix = f"{ROOT_NAME}/{variant_path(hz, mode)}"
+        if manifest.get("schema") != 2:
+            raise ValueError("Expected device-specific Windows bundle schema 2.")
+        selected = device_selection(manifest.get("devices", []))
+        if devices is not None and set(selected) != set(device_selection(devices)):
+            raise ValueError("Bundle devices do not match the requested CI selection.")
+        entries = manifest.get("variants", [])
+        actual = {(entry["device"], entry["frequency_hz"], entry["display_mode"]) for entry in entries}
+        wanted = {(device, hz, mode) for device in selected for hz, mode in expected}
+        if actual != wanted or len(entries) != len(actual):
+            raise ValueError("Bundle variants do not match the requested device/frequency/mode selection.")
+        for entry in entries:
+            device, hz, mode = entry["device"], entry["frequency_hz"], entry["display_mode"]
+            relative = variant_path(hz, mode, device)
+            if entry.get("path") != relative:
+                raise ValueError("Unexpected driver path for " + device)
+            prefix = f"{ROOT_NAME}/{relative}"
             for name in ("driver.vrdrivermanifest", "bin/win64/driver_xr_tracking.dll", "bin/win64/openvr_api.dll",
                          "resources/settings/default.vrsettings", "LICENSE", "THIRD_PARTY_NOTICES.md"):
                 if f"{prefix}/{name}" not in names:
                     raise ValueError("Driver file missing: " + prefix + "/" + name)
             settings = json.loads(package.read(prefix + "/resources/settings/default.vrsettings"))["xr_tracking"]
+            if settings.get("deviceProfile") != device:
+                raise ValueError("Driver device profile does not match its folder: " + prefix)
             if settings.get("displayFrequency") != hz:
                 raise ValueError("Unexpected driver frequency: " + prefix)
             for key in ("runtimePoseTransport", "runtimeHandTransport", "runtimeControllerStateTransport"):
@@ -155,17 +183,18 @@ def verify(path, frequencies, modes):
     return manifest
 
 
-def build(source, drivers, output, frequencies, modes, release_tag="latest", *, launcher):
+def build(source, drivers, output, frequencies, modes, release_tag="latest", *, launcher, devices=None):
     variants = selections(frequencies, modes)
+    if devices is None:
+        devices = sorted(path.name for path in drivers.iterdir() if path.is_dir() and
+                         any((path / f"{hz}Hz-{mode}/xr_tracking").is_dir() for hz, mode in variants))
+    selected = device_selection(devices)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", release_tag):
         raise ValueError("Invalid release tag.")
     with tempfile.TemporaryDirectory() as temporary:
         bundle = Path(temporary) / ROOT_NAME
         launcher_metadata = copy_installer(source, bundle, launcher, release_tag)
         env = (bundle / ".env.example").read_text(encoding="utf-8")
-        env = re.sub(r"(?m)^XR_RELEASE_TAG=.*$", "XR_RELEASE_TAG=" + release_tag, env)
-        (bundle / ".env.example").write_text(env, encoding="utf-8", newline="\n")
-        # Make the first install select a variant included in this CI run.
         preset = bundle / hardware_preset(env)
         content = preset.read_text(encoding="utf-8")
         values = dict(re.findall(r"(?m)^(XR_[A-Z_]+)=(.*)$", content))
@@ -177,20 +206,22 @@ def build(source, drivers, output, frequencies, modes, release_tag="latest", *, 
             content = re.sub(r"(?m)^" + key + "=.*$", key + "=" + value, content)
         preset.write_text(content, encoding="utf-8", newline="\n")
         entries = []
-        for hz, mode in variants:
-            relative = variant_path(hz, mode)
-            package = drivers / f"{hz}Hz-{mode}" / "xr_tracking"
-            if not package.is_dir():
-                raise FileNotFoundError("Selected Windows driver was not built: " + str(package))
-            target = bundle / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(package, target, ignore=shutil.ignore_patterns("*.cmd", "*.bat"))
-            entries.append({"frequency_hz": hz, "display_mode": mode, "path": relative})
+        for device in selected:
+            for hz, mode in variants:
+                relative = variant_path(hz, mode, device)
+                package = drivers / device / f"{hz}Hz-{mode}" / "xr_tracking"
+                if not package.is_dir():
+                    raise FileNotFoundError("Selected Windows driver was not built: " + str(package))
+                target = bundle / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(package, target, ignore=shutil.ignore_patterns("*.cmd", "*.bat"))
+                entries.append({"device": device, "frequency_hz": hz, "display_mode": mode, "path": relative})
         (bundle / "bundle.json").write_text(json.dumps({
-            "schema": 1, "release_tag": release_tag, "variants": entries, "launcher": launcher_metadata,
+            "schema": 2, "release_tag": release_tag, "devices": selected,
+            "variants": entries, "launcher": launcher_metadata,
         }, indent=2) + "\n", encoding="utf-8", newline="\n")
         write_zip(bundle, output)
-    verify(output, frequencies, modes)
+    verify(output, frequencies, modes, selected)
 
 
 def main():
@@ -212,13 +243,14 @@ def main():
     for command in (create, check):
         command.add_argument("--frequencies", required=True)
         command.add_argument("--modes", required=True)
+        command.add_argument("--devices", help="Optional space/comma-separated device identifiers")
     args = parser.parse_args()
     if args.command == "build":
-        build(args.source, args.drivers_root, args.output, args.frequencies, args.modes, args.release_tag, launcher=args.launcher_exe)
+        build(args.source, args.drivers_root, args.output, args.frequencies, args.modes, args.release_tag, launcher=args.launcher_exe, devices=args.devices)
     elif args.command == "launcher":
         build_launcher(args.source, args.launcher_exe, args.output, args.release_tag)
     else:
-        verify(args.archive, args.frequencies, args.modes)
+        verify(args.archive, args.frequencies, args.modes, args.devices)
     print("OK Windows bundle: " + str(args.archive if args.command == "verify" else args.output))
 
 

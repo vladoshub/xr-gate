@@ -56,7 +56,9 @@ def log(message):
 
 def is_video_capture(path):
     """QUERYCAP does not start streaming or consume a camera frame."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    # Capture itself needs read/write access; a read-only probe can hide a
+    # permission problem until the tracking process opens the camera.
+    descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
     try:
         capability = bytearray(104)  # struct v4l2_capability from videodev2.h
         fcntl.ioctl(descriptor, 0x80685600, capability, True)  # VIDIOC_QUERYCAP
@@ -79,8 +81,9 @@ def check_runtime_guard(request):
         raise RuntimeError("Runtime startup was cancelled by the launcher.")
 
 
-def run(args, *, env=None, check=True, timeout=None):
-    return subprocess.run([str(x) for x in args], env=env, check=check, timeout=timeout)
+def run(args, *, env=None, check=True, timeout=None, capture_output=False, text=False):
+    return subprocess.run([str(x) for x in args], env=env, check=check, timeout=timeout,
+                          capture_output=capture_output, text=text)
 
 
 def run_diagnostic(args):
@@ -599,30 +602,68 @@ class Runtime:
         deadline = time.monotonic() + 8
         waiting_reported = False
         while True:
+            # trigger only queues events. In particular, a delayed uaccess rule
+            # can remove our ACL after setfacl if we do not wait for it first.
+            try:
+                run(["udevadm", "settle", "--timeout=8"], timeout=10)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                raise RuntimeError("USB device setup did not finish within 8 seconds; "
+                                   "device permissions were not granted. Retry Start VR or check Diagnostics.") from error
             nodes, cameras, hids = self.device_nodes()
             missing_camera = self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras
             missing_hid = self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids
             pending = [str(node) for node in nodes if not node.is_char_device()]
+            detail = ", ".join(pending) or ("camera" if missing_camera else "HID")
             if not (missing_camera or missing_hid or pending):
-                break
+                try:
+                    for node in nodes:
+                        run(["setfacl", "-m", f"u:{self.user}:rw", node], timeout=5)
+                except subprocess.CalledProcessError:
+                    if all(node.is_char_device() for node in nodes):
+                        raise  # An ACL failure on an existing device is real.
+                    detail = "Selected device nodes changed while granting access"
+                else:
+                    # Root opening the camera says nothing about the runtime user's
+                    # permissions. Re-enumerate and probe in a fresh regular-user
+                    # process, also catching nodes replaced during USB attachment.
+                    request = base64.b64encode(json.dumps(self.cfg).encode()).decode("ascii")
+                    try:
+                        access = self.as_user([sys.executable, str(Path(__file__).resolve()), "device_access", request],
+                                              check=False, capture_output=True, text=True, timeout=10)
+                    except subprocess.TimeoutExpired as error:
+                        raise RuntimeError("Device access check timed out for " + self.user +
+                                           ". Retry Start VR or check Diagnostics.") from error
+                    if access.returncode == 0:
+                        camera = json.loads(access.stdout)["camera"]
+                        break
+                    detail = (access.stderr or access.stdout).strip() or "device access check failed"
             if time.monotonic() >= deadline:
-                detail = ", ".join(pending) or ("camera" if missing_camera else "HID")
-                raise RuntimeError("Selected USB camera/HID is not ready: " + detail +
-                                   ". lsusb alone does not confirm the Linux device nodes. Check the hardware preset and Diagnostics.")
+                raise RuntimeError("Selected USB camera/HID access is not ready for " + self.user + ": " + detail +
+                                   ". Check the hardware preset and Diagnostics; lsusb alone does not confirm usable device access.")
             if not waiting_reported:
-                log("Waiting for the selected USB camera/HID device nodes...")
+                log("Waiting for the selected USB camera/HID device nodes and user access...")
                 waiting_reported = True
             time.sleep(0.25)
-        for node in nodes:
-            if not node.is_char_device():
-                raise RuntimeError("Device is missing or is not a character device: " + str(node))
-            run(["setfacl", "-m", f"u:{self.user}:rw", node])
-        log("Selected USB/input device access granted to " + self.user)
-        camera = self.capture_device()
+        log("Selected USB/input device access verified for " + self.user)
         if camera:
             log("Capture camera: " + camera + " (V4L2 video capture, not metadata).")
         if self.cfg.get("bluetooth"):
             self.wait_for_bluetooth()
+
+    def device_access(self):
+        """Check only selected nodes, under the same account as the runtime."""
+        self.user_required()
+        nodes, cameras, hids = self.device_nodes()
+        if self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras:
+            raise FileNotFoundError("Selected USB camera disappeared during setup.")
+        if self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids:
+            raise FileNotFoundError("Selected USB HID disappeared during setup.")
+        unavailable = [str(node) for node in nodes
+                       if not node.is_char_device() or not os.access(node, os.R_OK | os.W_OK)]
+        if unavailable:
+            raise PermissionError("Read/write device access is unavailable to " + self.user + ": " +
+                                  ", ".join(unavailable))
+        return {"camera": self.capture_device()}
 
     def capture_device(self):
         requested = self.settings.get("XR_CAMERA_DEVICE", "")
@@ -1006,6 +1047,8 @@ def main(argv):
         return runtime.install()
     elif action == "prepare":
         runtime.prepare()
+    elif action == "device_access":
+        print(json.dumps(runtime.device_access()))
     elif action == "firmware":
         runtime.root_required()
         runtime.firmware("prepare")

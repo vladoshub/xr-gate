@@ -38,3 +38,5 @@ Hardware presets are in hardware/*.env; Advanced settings opens .env. The suppli
 - If nothing helps, fully shut down the computer. Unplug the glasses and the separate Bluetooth adapter if used, wait a few seconds, reconnect them and turn the computer on.
 
 For custom hardware, `XR_CAMERA_DEVICE` selects the primary camera; `XR_CAMERA_AUTO_SELECT=1` discovers a unique capture node using `XR_USB_IDS`. Keep automatic selection off for profiles that select their own cameras, such as dual-camera layouts.
+
+SteamVR packages use `drivers/<XR_TARGET_DEVICE>/<Hz>Hz-<mode>/xr_tracking`. The active Hardware preset selects the device before refresh rate and display mode. The 60 Hz fallback stays within that device.

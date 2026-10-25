@@ -13,6 +13,7 @@ param(
   [string]$RuntimeTcpHost = "127.0.0.1",
   [ValidateRange(1, 65535)][int]$RuntimeTcpPort = 45810,
   [string]$NlohmannJsonInclude = $env:NLOHMANN_JSON_INCLUDE_DIR,
+  [string]$OutputRoot = "",
   [switch]$BuildTests
 )
 
@@ -31,7 +32,10 @@ if ($Device -notmatch '^[a-z0-9][a-z0-9_.]*$') { throw "Invalid device profile: 
 
 $DriverDir = Join-Path $Root "drivers\openvr_driver"
 if ([string]::IsNullOrWhiteSpace($DisplayConfig)) {
-  $DisplayConfig = Join-Path $DriverDir "configs\display\default.yaml"
+  $DisplayConfig = Join-Path $DriverDir "devices\$Device\display.yaml"
+  if (!(Test-Path -LiteralPath $DisplayConfig -PathType Leaf)) {
+    $DisplayConfig = Join-Path $DriverDir "configs\display\default.yaml"
+  }
 }
 if (!(Test-Path $DisplayConfig)) { throw "Display config not found: $DisplayConfig" }
 $DisplayConfig = (Resolve-Path $DisplayConfig).Path
@@ -56,8 +60,8 @@ if (![string]::IsNullOrWhiteSpace($DeviceSettings)) {
   $DeviceSettings = (Resolve-Path $DeviceSettings).Path
 }
 
-$BuildSuffix = if ($Device -eq "generic" -or $Device -eq "xreal_ultra") { "windows_$BuildType" } else { "windows_${Device}_$BuildType" }
-$BuildDir = Join-Path $Root "build\drivers\openvr_driver\$BuildSuffix"
+$BuildSuffix = "windows_$BuildType"
+$BuildDir = Join-Path $Root "build\drivers\openvr_driver\$Device\$BuildSuffix"
 $CmakeArgs = @('-S', $DriverDir, '-B', $BuildDir, '-G', $Generator,
   "-DCMAKE_BUILD_TYPE=$BuildType", "-DXR_OPENVR_SDK_ROOT=$OpenVrSdkRoot",
   "-DXR_OPENVR_BUILD_TESTS=$(if ($BuildTests) { 'ON' } else { 'OFF' })")
@@ -104,8 +108,22 @@ Copy-Item -Force (Join-Path $DriverDir 'docs\WINDOWS.ru.md') (Join-Path $Package
 Copy-Item -Force (Join-Path $DriverDir 'docs\WINDOWS.en.md') (Join-Path $Package 'WINDOWS.en.md')
 Copy-Item -Force (Join-Path $DriverDir 'docs\CONTROLLER_INPUT.ru.md') (Join-Path $Package 'CONTROLLER_INPUT.ru.md')
 
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $Root 'bin/drivers' }
+$frequencyName = $ResolvedDisplayFrequency.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture)
+$VariantRoot = Join-Path $OutputRoot "$Device/${frequencyName}Hz-$DisplayMode"
+$OutputPackage = Join-Path $VariantRoot 'xr_tracking'
+New-Item -ItemType Directory -Force $VariantRoot | Out-Null
+$Staging = Join-Path $VariantRoot ('.xr_tracking-' + [Guid]::NewGuid().ToString('N'))
+try {
+  Copy-Item -LiteralPath $Package -Destination $Staging -Recurse
+  if (Test-Path -LiteralPath $OutputPackage) { Remove-Item -LiteralPath $OutputPackage -Recurse -Force }
+  Move-Item -LiteralPath $Staging -Destination $OutputPackage
+} finally {
+  if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging -Recurse -Force }
+}
+
 Write-Host "[build_openvr_driver] device: $Device"
 Write-Host "[build_openvr_driver] display config: $DisplayConfig"
 Write-Host "[build_openvr_driver] frequency: $ResolvedDisplayFrequency"
 Write-Host "[build_openvr_driver] mode: $DisplayMode"
-Write-Host "[build_openvr_driver] package: $(Join-Path $BuildDir 'xr_tracking')"
+Write-Host "[build_openvr_driver] package: $OutputPackage"

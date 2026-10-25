@@ -1,7 +1,9 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import struct
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -27,8 +29,9 @@ class CameraSelectionTest(unittest.TestCase):
         close.assert_called_once_with(10)
         def capture(_, __, buffer, ___):
             struct.pack_into('=II', buffer, 84, 0x80000000, 1)
-        with patch.object(linux.os, 'open', return_value=10), patch.object(linux.os, 'close'), patch.object(linux.fcntl, 'ioctl', side_effect=capture):
+        with patch.object(linux.os, 'open', return_value=10) as opened, patch.object(linux.os, 'close'), patch.object(linux.fcntl, 'ioctl', side_effect=capture):
             self.assertTrue(linux.is_video_capture(Path('/dev/video4')))
+        opened.assert_called_once_with(Path('/dev/video4'), os.O_RDWR | os.O_NONBLOCK)
 
     def test_replug_chooses_actual_capture_node_instead_of_video_zero_or_metadata(self):
         runtime = self.runtime({'XR_CAMERA_AUTO_SELECT': '1'})
@@ -80,6 +83,7 @@ class CameraSelectionTest(unittest.TestCase):
         runtime.root_required = lambda: None
         runtime.user = 'fixture'
         runtime.cfg = {}
+        runtime.as_user = Mock(return_value=subprocess.CompletedProcess([], 0, stdout='{"camera":""}', stderr=''))
         node = Mock()
         node.is_char_device.side_effect = [False, True, True]
         runtime.device_nodes = lambda: ([node], [node], [])

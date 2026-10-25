@@ -1,3 +1,17 @@
+## Driver packages by device
+
+- Build configured SteamVR profiles for Windows/Linux and Monado display profiles for Linux into device folders.
+- Discover devices from configurations in CI and local/ACT builds; no hardware list in build logic.
+- Use Windows bundle schema 2 with device metadata, settings/folder verification and device-specific refresh fallback.
+- Separate the Windows cache by device and check the installed driver when the Hardware preset changes.
+- Update Linux registration, Monado relative manifests/startup and device environment paths; add functional tests and CI output checks.
+
+## Verified WSL device permissions
+
+- Finish queued udev events before granting access to the selected USB device nodes; retry transient permission and enumeration changes within the startup deadline.
+- Verify camera/HID/USB read/write access under the configured Linux account before reporting preparation complete, and probe cameras with the same read/write access needed by capture.
+- Keep access scoped to selected hardware; no runtime processes run as root and no global device permissions are changed.
+
 ## No controllers, global hotkeys and tracking restart
 
 - Add No beside Gestures (still the default) and Gear VR Controllers; disable hand/controller services and pass controller-only invalid-pose mode with no input transport to the adapter.

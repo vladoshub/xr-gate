@@ -107,35 +107,33 @@ copy_common_device_bundle() {
 }
 
 write_monado_openxr_runtime_manifest() {
-  local monado_bin_dir="$XR_OUT_BIN_ROOT/drivers/monado_driver"
-  local openxr_lib="$monado_bin_dir/libopenxr_monado.so"
-  local manifest="$monado_bin_dir/openxr_monado_xrgate.json"
-  local env_script="$monado_bin_dir/openxr_runtime_env.sh"
-
-  if [[ ! -e "$openxr_lib" ]]; then
-    log "skip Monado OpenXR runtime manifest: lib not present: $openxr_lib"
-    return 0
-  fi
-
-  mkdir -p "$monado_bin_dir"
-  cat > "$manifest" <<'EOF'
+  local monado_bin_dir openxr_lib manifest env_script
+  local monado_dirs=()
+  shopt -s nullglob
+  monado_dirs=("$XR_OUT_BIN_ROOT"/drivers/*/monado_driver)
+  shopt -u nullglob
+  for monado_bin_dir in "${monado_dirs[@]}"; do
+    openxr_lib="$monado_bin_dir/libopenxr_monado.so"
+    [[ -e "$openxr_lib" ]] || continue
+    manifest="$monado_bin_dir/openxr_monado_xrgate.json"
+    env_script="$monado_bin_dir/openxr_runtime_env.sh"
+    cat > "$manifest" <<'EOF'
 {
   "file_format_version": "1.0.0",
-  "runtime": {
-    "name": "XR Gate Monado",
-    "library_path": "./libopenxr_monado.so"
-  }
+  "runtime": {"name": "XR Gate Monado", "library_path": "./libopenxr_monado.so"}
 }
 EOF
-
-  cat > "$env_script" <<'EOF'
+    if [[ ! -f "$env_script" ]]; then
+      cat > "$env_script" <<'EOF'
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
-  chmod 0755 "$env_script"
-  log "wrote Monado OpenXR runtime manifest: $manifest"
+      chmod 0755 "$env_script"
+    fi
+    log "wrote Monado OpenXR runtime manifest: $manifest"
+  done
 }
 
 copy_runtime_py_dir() {
@@ -337,10 +335,13 @@ EOF_ORT_INFO
     [[ -d "$XR_OUT_BIN_ROOT/backends/mercury_hand_tracking/licenses/monado/LICENSES" ]] || \
       fatal "Mercury runtime is present without Monado license bundle"
   fi
-  if [[ -x "$XR_OUT_BIN_ROOT/drivers/monado_driver/monado-service" || -e "$XR_OUT_BIN_ROOT/drivers/monado_driver/libopenxr_monado.so" ]]; then
-    [[ -d "$XR_OUT_BIN_ROOT/drivers/monado_driver/licenses/monado/LICENSES" ]] || \
-      fatal "Monado runtime is present without Monado license bundle"
-  fi
+  local monado_dir
+  while IFS= read -r monado_dir; do
+    if [[ -x "$monado_dir/monado-service" || -e "$monado_dir/libopenxr_monado.so" ]]; then
+      [[ -d "$monado_dir/licenses/monado/LICENSES" ]] || \
+        fatal "Monado runtime is present without Monado license bundle: $monado_dir"
+    fi
+  done < <(find "$XR_OUT_BIN_ROOT/drivers" -mindepth 2 -maxdepth 2 -type d -name monado_driver 2>/dev/null || true)
 
   if [[ "$found" == "0" ]]; then
     log "no component-local legal bundles found (partial/source-only package)"
@@ -742,7 +743,7 @@ if [[ "$XR_PACKAGE_COPY_DRIVER_RUNTIME" == "1" ]]; then
   # generic bin/drivers/openvr_driver package because SteamVR should register
   # exactly one selected variant.
   shopt -s nullglob
-  openvr_variant_dirs=("$XR_OUT_BIN_ROOT"/drivers/openvr_driver_*HZ*)
+  openvr_variant_dirs=("$XR_OUT_BIN_ROOT"/drivers/*/openvr_driver_*HZ*)
   shopt -u nullglob
   for variant_dir in "${openvr_variant_dirs[@]}"; do
     if [[ -d "$variant_dir/xr_tracking" ]]; then
@@ -753,7 +754,12 @@ if [[ "$XR_PACKAGE_COPY_DRIVER_RUNTIME" == "1" ]]; then
   done
   rm -rf "$XR_OUT_BIN_ROOT/drivers/openvr_driver"
 
-  copy_runtime_file "$XR_ROOT_PROJECT/drivers/monado_driver/scripts/linux/start.sh" "$XR_OUT_BIN_ROOT/drivers/monado_driver/start.sh"
+  shopt -s nullglob
+  monado_variant_dirs=("$XR_OUT_BIN_ROOT"/drivers/*/monado_driver)
+  shopt -u nullglob
+  for variant_dir in "${monado_variant_dirs[@]}"; do
+    copy_runtime_file "$XR_ROOT_PROJECT/drivers/monado_driver/scripts/linux/start.sh" "$variant_dir/start.sh"
+  done
 fi
 
 # Optional full calibration tree. The target device bundle already contains its selected

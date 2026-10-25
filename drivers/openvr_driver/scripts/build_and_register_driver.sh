@@ -67,8 +67,8 @@ printf '[xr] BUILD_MODES=%s\n' "${BUILD_MODES[*]}"
 for mode in "${BUILD_MODES[@]}"; do
   for freq in "${BUILD_FREQUENCIES[@]}"; do
     driver_dir_name="$(openvr_driver_dir_name "$freq" "$mode" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")"
-    install_driver_root="$INSTALL_DRIVERS_ROOT/$driver_dir_name"
-    build_dir="$BUILD_ROOT/$driver_dir_name"
+    install_driver_root="$INSTALL_DRIVERS_ROOT/$XR_OPENVR_DEVICE/$driver_dir_name"
+    build_dir="$BUILD_ROOT/$XR_OPENVR_DEVICE/$driver_dir_name"
 
     echo
     printf '[xr] Building OpenVR driver package: %s\n' "$driver_dir_name"
@@ -93,7 +93,7 @@ for mode in "${BUILD_MODES[@]}"; do
 done
 
 selected_driver_dir_name="$(openvr_driver_dir_name "$SELECTED_DISPLAY_FREQUENCY_HZ" "$SELECTED_DISPLAY_MODE" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")"
-selected_driver_package="$INSTALL_DRIVERS_ROOT/$selected_driver_dir_name/xr_tracking"
+selected_driver_package="$INSTALL_DRIVERS_ROOT/$XR_OPENVR_DEVICE/$selected_driver_dir_name/xr_tracking"
 
 if [[ "${XR_OPENVR_REGISTER_AFTER_BUILD:-1}" == "1" ]]; then
   printf '\n[xr] Registering one SteamVR driver variant\n'

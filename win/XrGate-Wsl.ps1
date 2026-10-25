@@ -405,24 +405,9 @@ function Save-ReleaseAsset($Asset, [string]$Directory) {
     return $path
 }
 function Find-BundledDriver([string]$Root) {
-    $manifestPath = Join-Path $Root 'bundle.json'
-    if (!(Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return '' }
-    $manifest = Get-Content -Encoding UTF8 -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    if ($manifest.schema -ne 1) { throw 'Unsupported Windows bundle format.' }
-    $variant = @($manifest.variants | Where-Object {
-        [int]$_.frequency_hz -eq [int]$script:State.FrequencyHz -and $_.display_mode -eq $script:State.DisplayMode
-    })
-    if ($variant.Count -ne 1) {
-        $choices = @($manifest.variants | ForEach-Object { "$($_.frequency_hz) Hz / $($_.display_mode)" }) -join ', '
-        throw "The bundle contains: $choices. Set XR_DISPLAY_FREQUENCY_HZ and XR_DISPLAY_MODE in .env."
-    }
-    $relative = 'drivers/' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '/xr_tracking'
-    $package = Join-Path $Root $relative
-    foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
-        if (!(Test-Path -LiteralPath (Join-Path $package $name) -PathType Leaf)) { throw "Windows bundle file missing: $relative/$name" }
-    }
-    return $package
+    return Get-XrSelectedDriverPackage $Root
 }
+
 function Get-DriverPackage($Release, [string]$Cache) {
     if ($script:ResolvedDriverRoot) { return Find-BundledDriver $script:ResolvedDriverRoot }
     $localManifest = Join-Path $PSScriptRoot 'bundle.json'
@@ -660,6 +645,7 @@ function Get-SteamVrDirectory {
     return ''
 }
 function Register-XrDriver([switch]$AllowDeferred) {
+    if (!(Test-XrDriverForSelectedDevice ([string]$script:State.DriverPath))) { throw 'Install the SteamVR driver for the selected Hardware preset first.' }
     if (!$script:State.DriverPath -or !(Test-Path -LiteralPath $script:State.DriverPath)) { throw 'Download the Windows driver with -Action Install first.' }
     try { $svr = Get-SteamVrDirectory }
     catch {

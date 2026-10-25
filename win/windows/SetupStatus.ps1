@@ -6,6 +6,7 @@ function Get-XrSetupObservation([bool]$LinuxInstalled) {
             foreach ($relative in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
                 if (!(Test-Path -LiteralPath ([IO.Path]::Combine($script:State.DriverPath, $relative)) -PathType Leaf -ErrorAction SilentlyContinue)) { $driverReady = $false }
             }
+            if ($driverReady) { $driverReady = Test-XrDriverForSelectedDevice ([string]$script:State.DriverPath) }
         } catch { $driverReady = $false }
     }
     $registered = $false

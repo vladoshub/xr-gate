@@ -708,7 +708,7 @@ devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```bash
 cd ~/xr-gate-release/xr-gate
 sudo apt install libopenxr-utils
-XR_RUNTIME_JSON=~/xr-gate-release/xr-gate/bin/drivers/monado_driver/openxr_monado_xrgate.json \
+XR_RUNTIME_JSON=~/xr-gate-release/xr-gate/bin/drivers/xreal_ultra/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
 
@@ -897,3 +897,5 @@ The project uses or can build against these third-party components:
 - gearVRC — reference for GearVR provider behavior and configuration ideas in override_controller.
 - mercury_steamvr_driver — optional source for Mercury hand-tracking ONNX models; not included in the core repository/release.
 - xrizer — optional GPL-3.0-or-later OpenVR-to-OpenXR compatibility tool; not built by default.
+
+Driver builds and device-specific paths: [DEVICE_PACKAGES.md](drivers/DEVICE_PACKAGES.md).

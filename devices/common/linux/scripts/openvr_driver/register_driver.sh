@@ -11,7 +11,7 @@ candidate_scripts=()
 add_candidate() { [[ -n "$1" ]] && candidate_scripts+=("$1"); }
 add_candidate "${OPENVR_REGISTER_DRIVER_SCRIPT:-}"
 if [[ -n "${XR_OUT_ROOT:-}" && -n "${XR_OPENVR_DRIVER_DIR_NAME:-}" ]]; then
-  add_candidate "$XR_OUT_ROOT/bin/drivers/$XR_OPENVR_DRIVER_DIR_NAME/scripts/register_driver.sh"
+  add_candidate "$XR_OUT_ROOT/bin/drivers/${XR_OPENVR_DEVICE:-$XR_DEVICE_TARGET}/$XR_OPENVR_DRIVER_DIR_NAME/scripts/register_driver.sh"
 fi
 if [[ -n "${XR_OUT_ROOT:-}" ]]; then
   add_candidate "$XR_OUT_ROOT/bin/drivers/openvr_driver/scripts/register_driver.sh"

@@ -52,7 +52,7 @@ class ReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             runtime = self.runtime(Path(directory))
             runtime.cfg['bluetooth'] = False
-            with patch.object(runtime, 'root_required'), patch.object(runtime, 'device_nodes', return_value=([],[],[])), patch.object(runtime, 'wait_for_bluetooth') as wait, patch.object(linux, 'run'):
+            with patch.object(runtime, 'root_required'), patch.object(runtime, 'device_nodes', return_value=([],[],[])), patch.object(runtime, 'wait_for_bluetooth') as wait, patch.object(linux, 'run'), patch.object(runtime, 'as_user', return_value=subprocess.CompletedProcess([],0,stdout='{"camera":""}',stderr='')):
                 runtime.prepare()
                 wait.assert_not_called()
 

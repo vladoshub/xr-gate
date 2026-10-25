@@ -115,9 +115,9 @@ class PackageTest(unittest.TestCase):
         path.write_bytes(b"MZ" + b"launcher test fixture" * 8)
         return path
 
-    def drivers(self, root, frequencies="60 90", modes="direct extended_sbs"):
+    def drivers(self, root, frequencies="60 90", modes="direct extended_sbs", device="xreal_ultra"):
         for hz, mode in packager.selections(frequencies, modes):
-            package = root / f"{hz}Hz-{mode}" / "xr_tracking"
+            package = root / device / f"{hz}Hz-{mode}" / "xr_tracking"
             for name in ("driver.vrdrivermanifest", "bin/win64/driver_xr_tracking.dll", "bin/win64/openvr_api.dll",
                          "LICENSE", "THIRD_PARTY_NOTICES.md", "Install-Driver.bat", "Uninstall-Driver.cmd"):
                 path = package / name
@@ -125,7 +125,7 @@ class PackageTest(unittest.TestCase):
                 path.write_text("fixture")
             settings = package / "resources/settings/default.vrsettings"
             settings.parent.mkdir(parents=True)
-            settings.write_text(json.dumps({"xr_tracking": {"modelNumber": "XREAL Air 2 Ultra", "displayFrequency": hz,
+            settings.write_text(json.dumps({"xr_tracking": {"deviceProfile": device, "modelNumber": device, "displayFrequency": hz,
                 "isDisplayOnDesktop": mode == "extended_sbs", "runtimePoseTransport": "tcp", "runtimeHandTransport": "tcp",
                 "runtimeControllerStateTransport": "tcp"}}))
 
@@ -149,8 +149,8 @@ class PackageTest(unittest.TestCase):
                 self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows-wsl-usbip/.env.example"))
                 self.assertEqual(package.read("xr-gate-windows-wsl-usbip/linux/xr_gate_audio.py"), (WIN / "linux/xr_gate_audio.py").read_bytes())
                 for hz, mode in packager.selections("60 90", "direct extended_sbs"):
-                    relative = packager.variant_path(hz, mode)
-                    original = root / "drivers" / f"{hz}Hz-{mode}" / "xr_tracking"
+                    relative = packager.variant_path(hz, mode, "xreal_ultra")
+                    original = root / "drivers" / "xreal_ultra" / f"{hz}Hz-{mode}" / "xr_tracking"
                     for source_file in original.rglob("*"):
                         if source_file.is_file() and source_file.suffix.lower() not in (".bat", ".cmd"):
                             entry = f"{packager.ROOT_NAME}/{relative}/{source_file.relative_to(original).as_posix()}"

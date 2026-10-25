@@ -98,51 +98,66 @@ resolve_runtime_root() {
     fi
   fi
 
-  # Runtime package layout:
-  #   <package>/bin/drivers/openvr_driver_90HZ/scripts/register_driver.sh
-  #   <package>/bin/drivers/openvr_driver_60HZ/scripts/register_driver.sh
-  # Compatibility with the old unsuffixed package is kept below.
-  local package_candidate
-  package_candidate="$(cd "$SCRIPT_DIR/../../../.." >/dev/null 2>&1 && pwd || true)"
-  if [[ -n "$package_candidate" \
-        && -d "$package_candidate/bin/drivers" ]]; then
-    printf '%s\n' "$package_candidate"
-    return 0
-  fi
-
-  # Source-tree layout:
-  #   <repo>/drivers/openvr_driver/scripts/register_driver.sh
-  cd "${DRIVER_ROOT}/../.." && pwd
+  local candidate="$SCRIPT_DIR"
+  while [[ "$candidate" != "/" && -n "$candidate" ]]; do
+    if [[ -d "$candidate/bin/drivers" || \
+          ( -d "$candidate/shared/include" && -d "$candidate/drivers/openvr_driver" ) ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    candidate="$(dirname "$candidate")"
+  done
+  echo "[register_driver][ERROR] Cannot find XR Gate root; set XR_PACKAGE_ROOT." >&2
+  return 2
 }
 
+package_device_profile() {
+  python3 - "$1/resources/settings/default.vrsettings" <<'PY_PROFILE'
+import json, sys
+with open(sys.argv[1], encoding="utf-8-sig") as stream:
+    print(json.load(stream).get("xr_tracking", {}).get("deviceProfile", ""))
+PY_PROFILE
+}
+PACKAGED_OPENVR_DEVICE=""
+if [[ -f "$DRIVER_ROOT/xr_tracking/resources/settings/default.vrsettings" ]]; then
+  PACKAGED_OPENVR_DEVICE="$(package_device_profile "$DRIVER_ROOT/xr_tracking")"
+fi
 PROJECT_ROOT="$(resolve_runtime_root)"
 XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW="${XR_OPENVR_DISPLAY_FREQUENCY_HZ:-${XR_DISPLAY_FREQUENCY_HZ:-${DISPLAY_FREQUENCY_HZ:-60}}}"
 XR_OPENVR_DISPLAY_FREQUENCY_HZ="$(openvr_normalize_display_frequency_hz "$XR_OPENVR_DISPLAY_FREQUENCY_HZ_RAW")"
 XR_OPENVR_DISPLAY_MODE="$(openvr_normalize_display_mode "${XR_OPENVR_DISPLAY_MODE:-${XR_STEAMVR_DISPLAY_MODE:-direct}}")"
-XR_OPENVR_DEVICE="$(openvr_normalize_profile_name "${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}")"
+XR_OPENVR_DEVICE="$(openvr_normalize_profile_name "${XR_OPENVR_DEVICE:-${PACKAGED_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}}")"
 XR_OPENVR_PACKAGE_TAG="$(openvr_normalize_package_tag "${XR_OPENVR_PACKAGE_TAG:-}")"
 XR_OPENVR_DRIVER_DIR_NAME="${XR_OPENVR_DRIVER_DIR_NAME:-$(openvr_driver_dir_name "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")}"
 
 DRIVERS_ROOT="${DRIVERS_ROOT:-$PROJECT_ROOT/bin/drivers}"
 DRIVERS_ROOT="$(openvr_expand_tilde "$DRIVERS_ROOT")"
-DRIVER_DIR="${DRIVER_PACKAGE:-$DRIVERS_ROOT/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking}"
+DRIVER_DIR="${DRIVER_PACKAGE:-$DRIVERS_ROOT/$XR_OPENVR_DEVICE/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking}"
 DRIVER_DIR="$(openvr_expand_tilde "$DRIVER_DIR")"
 
-# Backward compatibility for callers that still pass or expect the old path.
-if [[ ! -f "${DRIVER_DIR}/driver.vrdrivermanifest" ]]; then
-  LEGACY_DRIVER_DIR="$PROJECT_ROOT/bin/drivers/openvr_driver/xr_tracking"
-  if [[ -z "${DRIVER_PACKAGE:-}" && -f "$LEGACY_DRIVER_DIR/driver.vrdrivermanifest" ]]; then
-    DRIVER_DIR="$LEGACY_DRIVER_DIR"
-  fi
+# Legacy packages are usable only when their embedded profile matches.
+if [[ ! -f "$DRIVER_DIR/driver.vrdrivermanifest" && -z "${DRIVER_PACKAGE:-}" ]]; then
+  for legacy in "$DRIVERS_ROOT/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking" \
+                "$DRIVERS_ROOT/openvr_driver/xr_tracking"; do
+    if [[ -f "$legacy/resources/settings/default.vrsettings" ]] && \
+       [[ "$(package_device_profile "$legacy")" == "$XR_OPENVR_DEVICE" ]]; then
+      DRIVER_DIR="$legacy"
+      break
+    fi
+  done
 fi
 
 if [[ ! -f "${DRIVER_DIR}/driver.vrdrivermanifest" ]]; then
   echo "ERROR: driver package not found: ${DRIVER_DIR}" >&2
   echo "Build first: drivers/openvr_driver/scripts/build_driver.sh (or the selected device package installer)" >&2
-  echo "Expected frequency package: $DRIVERS_ROOT/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking" >&2
+  echo "Expected device/frequency package: $DRIVERS_ROOT/$XR_OPENVR_DEVICE/$XR_OPENVR_DRIVER_DIR_NAME/xr_tracking" >&2
   exit 1
 fi
 
+if [[ "$(package_device_profile "$DRIVER_DIR")" != "$XR_OPENVR_DEVICE" ]]; then
+  echo "ERROR: driver device profile does not match $XR_OPENVR_DEVICE: $DRIVER_DIR" >&2
+  exit 2
+fi
 PACKAGED_DISPLAY_CONFIG="$DRIVER_DIR/resources/settings/display_config.yaml"
 if [[ -f "$PACKAGED_DISPLAY_CONFIG" ]]; then
   echo "display config: $PACKAGED_DISPLAY_CONFIG"
@@ -567,6 +582,9 @@ STALE_DRIVER_PACKAGES=(
   "$DRIVER_DIR"
   "$DRIVERS_ROOT/openvr_driver/xr_tracking"
   "$DRIVERS_ROOT"/openvr_driver_*HZ*/xr_tracking
+  "$DRIVERS_ROOT"/*/openvr_driver_*HZ*/xr_tracking
+  "$PROJECT_ROOT"/build/drivers/*/openvr_driver_*HZ*/xr_tracking
+  "$PROJECT_ROOT"/out/*/bin/drivers/*/openvr_driver_*HZ*/xr_tracking
   "$PROJECT_ROOT/build/drivers/openvr_driver/xr_tracking"
   "$PROJECT_ROOT"/build/drivers/openvr_driver_*HZ*/xr_tracking
   "$PROJECT_ROOT/drivers/openvr_driver/build/xr_tracking"

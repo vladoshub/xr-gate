@@ -39,6 +39,8 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
         [IO.File]::WriteAllText($path, 'fixture')
     }
+    @{xr_tracking=@{deviceProfile=(Get-XrDriverDeviceId);displayFrequency=60;isDisplayOnDesktop=$true}} | ConvertTo-Json -Depth 8 |
+        Set-Content -LiteralPath (Join-Path $folder 'resources/settings/default.vrsettings')
     Assert (!(Get-XrSetupObservation $true).setup_complete) 'Unregistered driver was treated as fully installed.'
     $script:Registered = $true
     Assert (!(Get-XrSetupObservation $false).setup_complete) 'A missing Linux runtime was treated as fully installed.'

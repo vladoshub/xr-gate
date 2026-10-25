@@ -260,6 +260,12 @@ jobs:
             devices/common/linux/scripts/build/package_xr_gate_out.sh
             devices/common/linux/scripts/build/build_vendor_components.sh
             devices/common/linux/scripts/build/package_vendor_components.sh
+            drivers/build_profiles.sh
+            drivers/openvr_driver/scripts/build_driver.sh
+            drivers/openvr_driver/scripts/build_and_register_driver.sh
+            drivers/openvr_driver/scripts/register_driver.sh
+            drivers/monado_driver/scripts/linux/install.sh
+            drivers/monado_driver/scripts/linux/start.sh
             drivers/xrizer/scripts/linux/package_xrizer_compliance.sh
             devices/common/linux/scripts/ci/run_act_build.sh
             devices/common/linux/scripts/ci/run_xr_gate_act_build.sh
@@ -291,6 +297,9 @@ jobs:
             libeigen3-dev libboost-all-dev libceres-dev libtbb-dev \
             libfmt-dev libspdlog-dev
           git lfs install --local
+
+      - name: Test device discovery and driver packaging matrix
+        run: python3 -m unittest discover -s drivers/tests -p 'test*.py'
 
       - name: Check native build orchestration
         if: ${{ matrix.component.name == 'basalt' }}
@@ -342,6 +351,37 @@ jobs:
           ./devices/common/linux/scripts/build/install_xr_gate_out.sh
           du -sh out/xr-gate || true
           find out/xr-gate -maxdepth 4 -type f | sort | sed -n '1,200p'
+
+      - name: Validate device-specific driver outputs
+        if: ${{ matrix.component.name == 'steamvr' || matrix.component.name == 'monado' }}
+        env:
+          DRIVER_KIND: ${{ matrix.component.name }}
+        run: |
+          python3 - <<'PY_CHECK'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("drivers").resolve()))
+          from device_profiles import configured_devices
+          kind = os.environ["DRIVER_KIND"]
+          for device in configured_devices(Path.cwd(), kind):
+              base = Path("out/xr-gate/bin/drivers") / device
+              if kind == "steamvr":
+                  variants = list(base.glob("openvr_driver_*HZ*/xr_tracking"))
+                  assert variants, f"No SteamVR package for {device}"
+                  for package in variants:
+                      settings = json.loads((package / "resources/settings/default.vrsettings").read_text())["xr_tracking"]
+                      assert settings["deviceProfile"] == device, str(package)
+                      assert (package / "bin/linux64/driver_xr_tracking.so").is_file(), str(package)
+              else:
+                  package = base / "monado_driver"
+                  assert (package / "device-profile").read_text().strip() == device
+                  assert (package / "monado-service").is_file()
+                  manifest = json.loads((package / "openxr_monado_xrgate.json").read_text())
+                  library = Path(manifest["runtime"]["library_path"])
+                  assert not library.is_absolute(), str(library)
+                  assert (package / library).is_file(), str(package / library)
+                  assert (package / "start.sh").is_file()
+          PY_CHECK
 
       - name: Validate capture launchers and TCP metadata probe
         if: ${{ matrix.component.name == 'capture' }}
@@ -810,6 +850,7 @@ jobs:
           & ./win/tests/verify-env.ps1
           & ./win/tests/verify-steamvr-paths.ps1
           & ./win/tests/verify-runtime-contracts.ps1
+          & ./win/tests/verify-driver-devices.ps1
           & ./win/tests/verify-bluetooth-firmware.ps1
           & ./win/tests/verify-bluetooth-selection.ps1
           & ./win/tests/verify-usb-timeout.ps1
@@ -865,39 +906,43 @@ jobs:
           $sdk = Join-Path $root '.build-deps/openvr'
           $json = Join-Path $root '.build-deps/json/single_include'
           $builder = Join-Path $root 'drivers/openvr_driver/scripts/windows/build_driver.ps1'
-          $build = Join-Path $root 'build/drivers/openvr_driver/windows_Release'
           $dist = Join-Path $root 'dist-windows'
           $drivers = Join-Path $dist 'drivers'
           New-Item -ItemType Directory -Force $dist | Out-Null
+          $deviceJson = & python (Join-Path $root 'drivers/device_profiles.py') --driver steamvr --json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot discover configured SteamVR devices' }
+          $devices = @($deviceJson | ConvertFrom-Json)
+          if (!$devices.Count) { throw 'No configured SteamVR devices' }
           $tested = $false
-          foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
-            foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
-              & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
-                -Generator Ninja -BuildType Release -Device generic `
-                -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
-              if (!$tested) {
-                ctest --test-dir $build -C Release --output-on-failure
-                if ($LASTEXITCODE -ne 0) { throw 'Windows OpenVR driver functional tests failed' }
-                $tested = $true
+          foreach ($device in $devices) {
+            $build = Join-Path $root "build/drivers/openvr_driver/$device/windows_Release"
+            foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
+              foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
+                & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
+                  -Generator Ninja -BuildType Release -Device $device -OutputRoot $drivers `
+                  -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
+                if (!$tested) {
+                  ctest --test-dir $build -C Release --output-on-failure
+                  if ($LASTEXITCODE -ne 0) { throw 'Windows OpenVR driver functional tests failed' }
+                  $tested = $true
+                }
+                $package = Join-Path $drivers "$device/${frequency}Hz-$mode/xr_tracking"
+                $dll = Join-Path $package 'bin/win64/driver_xr_tracking.dll'
+                $exports = & dumpbin.exe /exports $dll
+                if ($LASTEXITCODE -ne 0 -or !($exports | Select-String 'HmdDriverFactory')) { throw 'Driver entry point missing' }
+                if (!(Test-Path (Join-Path $package 'bin/win64/openvr_api.dll'))) { throw 'OpenVR runtime DLL missing' }
+                $settings = Join-Path $package 'resources/settings/default.vrsettings'
+                python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8"))["xr_tracking"]; assert d["deviceProfile"]==sys.argv[2]; assert all(d[k]=="tcp" for k in ("runtimePoseTransport","runtimeHandTransport","runtimeControllerStateTransport"))' $settings $device
+                if ($LASTEXITCODE -ne 0) { throw 'Windows package has unexpected device/transport defaults' }
               }
-              $package = Join-Path $build 'xr_tracking'
-              $dll = Join-Path $package 'bin/win64/driver_xr_tracking.dll'
-              $exports = & dumpbin.exe /exports $dll
-              if ($LASTEXITCODE -ne 0 -or !($exports | Select-String 'HmdDriverFactory')) { throw 'Driver entry point missing' }
-              if (!(Test-Path (Join-Path $package 'bin/win64/openvr_api.dll'))) { throw 'OpenVR runtime DLL missing' }
-              $settings = Join-Path $package 'resources/settings/default.vrsettings'
-              python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8"))["xr_tracking"]; assert all(d[k]=="tcp" for k in ("runtimePoseTransport","runtimeHandTransport","runtimeControllerStateTransport")); assert d["runtimeTcpHost"]=="127.0.0.1" and d["runtimeTcpPort"]==45810' $settings
-              if ($LASTEXITCODE -ne 0) { throw 'Windows package has unexpected transport defaults' }
-              $variant = Join-Path $drivers "${frequency}Hz-${mode}"
-              New-Item -ItemType Directory -Force $variant | Out-Null
-              Copy-Item -LiteralPath $package -Destination $variant -Recurse -Force
             }
           }
           python win/package_windows.py build --drivers-root $drivers `
             --launcher-exe (Join-Path $root 'out/windows-launcher/XR-Gate.exe') `
             --output (Join-Path $dist 'xr-gate-windows-wsl-usbip.zip') `
             --frequencies $env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES `
-            --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE
+            --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE `
+            --devices ($devices -join ' ')
           if ($LASTEXITCODE -ne 0) { throw 'Windows bundle packaging failed' }
       - name: Upload Windows installer and SteamVR drivers
         uses: actions/upload-artifact@v4
