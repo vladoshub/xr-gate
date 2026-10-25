@@ -28,6 +28,8 @@ struct AppTcpFrame {
   int64_t read_timestamp_ns = 0;
   std::optional<xr_runtime::RuntimeHmdPoseF64V1> hmd;
   std::optional<xr_tracking::HandTrackingFrameF32V2> hands;
+  // Optional exact recognition geometry before visual skeleton/yaw offsets.
+  std::optional<xr_tracking::HandTrackingFrameF32V2> emulation_input_hands;
   std::optional<xr_runtime::RuntimeControllerStateFrameV1> controllers;
 };
 

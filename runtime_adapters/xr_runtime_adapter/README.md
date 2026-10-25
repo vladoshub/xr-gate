@@ -194,6 +194,34 @@ predicted or reacquire-blended positions are not used as input samples.
 
 ## Derived gestures
 
+An independent, default-off **emulation controller** uses thumb extension only
+as a D-pad activation switch and wrist tilt for direction. In the operating pose
+(middle and ring curled), index extension gives trigger and little-finger
+extension gives grip; all three channels can work together. Thumb/index rings
+with the other three fingers curled/extended give A/B. A V sign (index and middle
+extended, ring and little curled) gives pad click regardless of thumb position. Menu requires both
+open hands together; one-hand Menu/Home and finger-count shortcuts are removed.
+The existing `--override-controller-block-gestures-while-stream-present` gate
+also blocks emulation gestures. It defaults to true in the launcher's default
+`controller_buttons_runtime_only` mode, with a 2000 ms latch after the last fresh
+stream frame. Physical buttons remain available while gestures are blocked.
+Set `OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=0` to combine them;
+`hand_plus_controller` continues to allow both independently of this gate.
+When allowed, physical `override_controller` buttons combine with these gestures;
+trigger/grip use the larger value. A moving, touched or clicked physical pad takes priority
+over wrist axes and D-pad directions. Idle hardware does not block emulation,
+and physical buttons keep working when hand tracking is lost. Legacy hand
+gestures remain disabled on emulated sides.
+Enable with `EMULATION_CONTROLLER=1` or `--emulation-controller 1`.
+Use the version 3 profile. Tilt is world up expressed in the palm basis, so yaw
+does not move the stick. Calibration records each cardinal separately, includes
+a measured neutral deadzone and normalizes finger extension. Fold detection
+distinguishes PIP/knuckle flexion from a hooked fingertip. Old wrist calibrations
+must be regenerated. A/B can transition directly while gameplay stays blocked
+until a curled neutral. Timed recordings are available with
+`python3 tools/xr_gate_gesture_debug.py --full` from this adapter's directory.
+See [setup, profiles and recording (Russian)](docs/emulation_controller.ru.md).
+
 The adapter can ignore backend-provided hand gestures and derive runtime gestures from hand pose data.
 
 ```bash
