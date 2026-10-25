@@ -33,6 +33,8 @@ TARGETS={'thumb_neutral':(0,.25),'thumb_hidden':(0,.25),'thumb_up':(0,1),
 
 
 def vertices(name,label,variant='neutral',layout='legacy'):
+    if layout=='middle_grip' and label=='click_three_fingers':
+        return coordinates(extended=7,thumb='down',left=name=='left')
     if layout=='middle_grip' and label in ('ring_a','ring_b'):
         return coordinates(extended=14 if label=='ring_a' else 0,thumb='pinch',left=name=='left')
     if layout=='middle_grip':
@@ -78,11 +80,11 @@ class Frames:
 
 
 class ControlsCalibrationTest(unittest.TestCase):
-    def record(self,path,layout='legacy'):
+    def record(self,path,layout='legacy',click_gesture='layout_default'):
         archive=live.Archive(path,{})
         references={'left':{},'right':{}}
         with contextlib.redirect_stdout(io.StringIO()):
-            for i,pose in enumerate(live.make_controls_plan('both',layout=layout),1):
+            for i,pose in enumerate(live.make_controls_plan('both',layout=layout,click_gesture=click_gesture),1):
                 stats=archive.phase(i,pose)
                 values=[optical_frame(pose['hand'],pose['label'],1000000000000+i*2000000000+j*50000000,
                                       pose.get('variant','neutral'),layout) for j in range(25)]
@@ -90,11 +92,12 @@ class ControlsCalibrationTest(unittest.TestCase):
         archive.close('completed')
         with zipfile.ZipFile(path) as z:return z.read('frames.jsonl')
 
-    def fit(self,root,data,layout='legacy'):
+    def fit(self,root,data,layout='legacy',click_gesture='layout_default'):
         source,profile,output=(root/p for p in ('frames.jsonl','base.json','calibrated.json'))
         source.write_bytes(data)
         original=json.loads((ROOT/'configs/emulation-controller.json').read_text())
         original['button_layout']=layout
+        original['thumbstick_click_gesture']=click_gesture
         profile.write_text(json.dumps(original))
         result=subprocess.run([TOOL,'calibrate-controls',str(source),str(output),'--config',str(profile)],capture_output=True,text=True)
         return result,original,output
@@ -240,11 +243,74 @@ class ControlsCalibrationTest(unittest.TestCase):
                 if child.poll() is None:child.kill();child.wait()
                 child.stdout.close();child.stderr.close();server.close();worker.join(timeout=1)
 
-    def test_middle_layout_in_actual_runtime_tcp(self):
+    def test_three_finger_click_calibrates_only_trigger_and_middle_grip(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            data=self.record(root/'runtime-calibration.zip','middle_grip')
-            result,_,profile=self.fit(root,data,'middle_grip')
+            data=self.record(root/'three.zip','middle_grip','three_fingers')
+            records=[json.loads(line) for line in data.splitlines()]
+            labels={r['phase_label'] for r in records}
+            self.assertIn('click_three_fingers',labels)
+            self.assertTrue(labels.isdisjoint({'click_closed','trigger_click_closed','grip_click_closed','trigger_grip_closed'}))
+            result,original,output=self.fit(root,data,'middle_grip','three_fingers')
+            self.assertEqual(result.returncode,0,result.stderr)
+            saved=json.loads(output.read_text())
+            for side in ('left','right'):
+                self.assertEqual(saved[side]['trigger_calibration'],dict(open_curl=0,closed_curl=1))
+                self.assertEqual(saved[side]['grip_calibration'],dict(finger='middle',open_curl=0,closed_curl=1))
+                self.assertNotIn('thumbstick_click_calibration',saved[side])
+                self.assertEqual(saved[side]['calibration'],original[side]['calibration'])
+            self.assertEqual(saved['thumbstick_click_gesture'],'three_fingers')
+            # Migration removes an obsolete little-finger endpoint block.
+            for side in ('left','right'):
+                original[side]['thumbstick_click_calibration']=dict(finger='little',open_curl=0,closed_curl=1)
+            (root/'base.json').write_text(json.dumps(original))
+            target=root/'refitted.json'
+            result=subprocess.run([TOOL,'calibrate-controls',str(root/'frames.jsonl'),str(target),
+                                   '--config',str(root/'base.json')],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(all('thumbstick_click_calibration' not in json.loads(target.read_text())[s]
+                                for s in ('left','right')))
+            # A short candidate must also release and require a neutral pose.
+            saved.update(dpad_source='thumb')
+            output.write_text(json.dumps(saved))
+            replay=[];expected=[]
+            cases=[('control_neutral',0),('trigger_closed',1),('grip_closed',2),('buttons_closed',3),
+                   ('click_three_fingers',32),('buttons_closed',0),('ring_a',0),
+                   ('control_neutral',0),('ring_a',8),('ring_b',16),('control_neutral',0),
+                   ('click_three_fingers',32),('control_neutral',0),('buttons_closed',3)]
+            for side in ('left','right'):
+                for label,bits in cases:
+                    for _ in range(30):
+                        replay.append(optical_frame(side,label,4000000000000+len(replay)*50000000,layout='middle_grip'))
+                        expected.append((side,bits))
+            source=root/'replay.jsonl';source.write_text(''.join(json.dumps(r)+'\n' for r in replay))
+            target=root/'result.jsonl'
+            result=subprocess.run([TOOL,'replay',str(source),str(target),'--config',str(output)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            values=[json.loads(line) for line in target.read_text().splitlines()]
+            for i in range(29,len(values),30):
+                side,bits=expected[i]
+                self.assertEqual(int(values[i][side]['buttons'])&~(64|128|256|512),bits,(side,bits,values[i][side]))
+                if bits==32:
+                    self.assertEqual(values[i][side]['trigger'],0)
+                    self.assertEqual(values[i][side]['grip'],0)
+                    self.assertEqual(values[i][side]['thumbstick'],[0,0])
+            wrong=root/'wrong';wrong.mkdir()
+            result,_,output=self.fit(wrong,data,'middle_grip','layout_default')
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse(output.exists())
+
+    def test_middle_layout_in_actual_runtime_tcp(self):
+        self.check_runtime_layout()
+
+    def test_three_finger_layout_in_actual_runtime_tcp(self):
+        self.check_runtime_layout('three_fingers')
+
+    def check_runtime_layout(self,click_gesture='layout_default'):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            data=self.record(root/'runtime-calibration.zip','middle_grip',click_gesture)
+            result,_,profile=self.fit(root,data,'middle_grip',click_gesture)
             self.assertEqual(result.returncode,0,result.stderr)
             cfg=json.loads(profile.read_text());cfg.update(dpad_source='thumb',thumbstick_click_on_curl=False,
                                                           pose_yaw_offset_degrees=45)
@@ -275,15 +341,20 @@ class ControlsCalibrationTest(unittest.TestCase):
                         event=client.frame(lambda f:f.get('hands') and f.get('controllers'))
                         cases=[(label,(mask&3)|(0 if mask&4 else 32)) for label,mask in live.MIDDLE_STATES.items()]
                         cases += [('ring_a',8),('ring_b',16),('control_neutral',0)]
+                        if click_gesture=='three_fingers':
+                            cases=[('buttons_open',0),('trigger_closed',1),('grip_closed',2),('buttons_closed',3),
+                                   ('click_three_fingers',32),('buttons_closed',0),('ring_a',0),
+                                   ('control_neutral',0),('ring_a',8),('ring_b',16),('control_neutral',0)]
                         for label,bits in cases:
                             stamp=int(event['hands']['source_timestamp_ns']);state['right']=label
                             event=client.frame(lambda f:f.get('hands') and f.get('controllers') and
                                 int(f['hands']['source_timestamp_ns'])>stamp+160000000 and
                                 int(f['controllers']['right']['buttons'])==bits)
-                            if label.startswith('ring_'):
+                            if label.startswith('ring_') or label=='click_three_fingers':
                                 self.assertEqual(event['controllers']['right']['thumbstick'],[0,0])
                         state.update(right='trigger_grip_closed',pad=True)
-                        event=client.frame(lambda f:f.get('controllers') and int(f['controllers']['right']['buttons'])==99)
+                        expected=67 if click_gesture=='three_fingers' else 99
+                        event=client.frame(lambda f:f.get('controllers') and int(f['controllers']['right']['buttons'])==expected)
                         self.assertGreater(event['controllers']['right']['thumbstick'][1],.65)
                         self.assertIn('emulation_input_hands',event)
                         self.assertNotEqual(event['hands']['right']['joints'][8]['position'],

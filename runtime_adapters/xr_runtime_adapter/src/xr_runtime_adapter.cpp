@@ -5498,6 +5498,7 @@ int main(int argc, char** argv) {
                 << " right=" << emulation_right_enabled
                 << " dpad_source=" << emulation_controller_config.dpad_source
                 << " button_layout=" << emulation_controller_config.button_layout
+                << " thumbstick_click_gesture=" << emulation_controller_config.thumbstick_click_gesture
                 << " trigger_activation="
                 << (emulation_controller_config.trigger_on_curl ? "curl" : "extension")
                 << " grip_activation="

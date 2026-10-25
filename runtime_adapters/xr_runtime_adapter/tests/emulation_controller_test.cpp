@@ -1085,6 +1085,162 @@ void middle_grip_three_channels_and_rings() {
   out = apply(menu, f);
   check(out.left.buttons == 4 && out.right.buttons == 0, "new button layout changed two-hand Menu");
 }
+void three_finger_click_is_separate() {
+  for (bool left : {false, true})
+    for (bool thumb : {false, true}) {
+      auto cfg = thumb ? thumb_config(left) : immediate();
+      cfg.button_layout = "middle_grip";
+      cfg.thumbstick_click_gesture = "three_fingers";
+      cfg.trigger_on_curl = cfg.grip_on_curl = true;
+      // The former click finger may open/close independently of all four
+      // Trigger/Grip combinations, with either D-pad source still working.
+      for (unsigned state = 0; state < 4; ++state)
+        for (bool little_open : {false, true}) {
+          em::Controller c(cfg);
+          auto f = frame();
+          auto& hand = left ? f.left : f.right;
+          hand = thumb ? thumb_pose(left, 0, .25, 3) : pose(3, 1, left);
+          apply(c, f);
+          const unsigned mask = (state & 1 ? 0 : 1) | (state & 2 ? 0 : 2) |
+                                (little_open ? 8 : 0);
+          hand = thumb ? thumb_pose(left, 0, 1, mask) : pose(mask, 1, left);
+          if (!thumb) tilt(hand, .5, 0);
+          advance(f);
+          auto out = apply(c, f);
+          auto side = left ? out.left : out.right;
+          check((side.buttons & ~CONTROLLER_BUTTON_DPAD_MASK) == state &&
+                    (side.buttons & CONTROLLER_BUTTON_DPAD_UP),
+                "retired little click interferes with Trigger/Grip/D-pad");
+          hand.joints[20].flags = 0;
+          advance(f);
+          out = apply(c, f);
+          side = left ? out.left : out.right;
+          check((side.buttons & ~CONTROLLER_BUTTON_DPAD_MASK) == state,
+                "missing little tip cancelled independent Trigger/Grip");
+        }
+      for (bool little_open : {false, true}) {
+        cfg.pose_confirm_ms = 120;
+        em::Controller c(cfg);
+        auto f = frame();
+        auto& hand = left ? f.left : f.right;
+        const auto sample = [&](const HandSideF32V2& h, uint64_t ms = 30) {
+          hand = h;
+          advance(f, ms);
+          auto out = apply(c, f);
+          return left ? out.left : out.right;
+        };
+        sample(pose(3, 0, left));
+        // Start from both ordinary buttons held, then enter a separate click.
+        sample(pose(0, 0, left));
+        const unsigned click_mask = little_open ? 15 : 7;
+        auto click = thumb ? thumb_pose(left, 0, 1, click_mask, true) : pose(click_mask, 0, left);
+        if (!thumb) tilt(click, .6, .4);
+        auto side = sample(click);
+        check(side.buttons == 0 && side.trigger == 0 && side.grip == 0 &&
+                  side.thumbstick_x == 0 && side.thumbstick_y == 0,
+              "unconfirmed three-finger candidate leaked another channel");
+        side = sample(click, 120);
+        check(side.buttons == CONTROLLER_BUTTON_THUMBSTICK && side.trigger == 0 &&
+                  side.grip == 0 && side.thumbstick_x == 0 && side.thumbstick_y == 0 &&
+                  side.press_counters[5] == 1,
+              "three-finger click is not exclusive or failed confirmation");
+        side = sample(click, 180);
+        check(side.press_counters[5] == 1, "held three-finger pose repeated click presses");
+        auto missing_little = click;
+        missing_little.joints[20].flags = 0;
+        side = sample(missing_little);
+        check(side.buttons == CONTROLLER_BUTTON_THUMBSTICK && side.press_counters[5] == 1,
+              "missing little tip cancelled the three-finger click");
+        side = sample(pose(0, 0, left));
+        check(side.buttons == 0 && side.release_counters[5] == 1,
+              "three-finger exit did not release once and block gameplay");
+        side = sample(pose(14, 2, left), 180);
+        side = sample(pose(14, 2, left), 180);
+        check(side.buttons == 0, "three-finger transition generated A before neutral");
+        // Neutral ignores the former click finger, including when it is open.
+        sample(pose(11, 0, left));
+        sample(pose(14, 2, left));
+        side = sample(pose(14, 2, left), 120);
+        check(side.buttons == CONTROLLER_BUTTON_A, "A failed after the two-channel neutral");
+        side = sample(click, 180);
+        side = sample(click, 180);
+        check(side.buttons == 0, "A-to-three-finger transition bypassed neutral");
+      }
+    }
+  auto cfg = immediate();
+  cfg.button_layout = "middle_grip";
+  cfg.thumbstick_click_gesture = "three_fingers";
+  cfg.trigger_on_curl = cfg.grip_on_curl = true;
+  cfg.pose_confirm_ms = 120;
+  em::Controller transient(cfg);
+  auto f = frame();
+  f.right = pose(7, 0);
+  apply(transient, f);
+  f.right = pose(0, 0);
+  advance(f, 180);
+  check(apply(transient, f).right.buttons == 0,
+        "unconfirmed three-finger exit leaked ordinary buttons");
+  f.right = pose(3, 0);
+  advance(f);
+  apply(transient, f);
+  f.right = pose(0, 0);
+  advance(f);
+  check(apply(transient, f).right.buttons == 3, "neutral did not rearm ordinary channels");
+
+  cfg.pose_confirm_ms = cfg.menu_hold_ms = 0;
+  em::Controller menu(cfg);
+  f = frame();
+  f.left = pose(7, 0, true);
+  f.right = pose(7, 0);
+  auto out = apply(menu, f);
+  check(out.left.buttons == 32 && out.right.buttons == 32,
+        "two three-finger poses were confused with Menu");
+  f.left = pose(15, 1, true);
+  f.right = pose(15, 1);
+  advance(f);
+  out = apply(menu, f);
+  check(out.left.buttons == 0 && out.right.buttons == 0,
+        "three-finger-to-open-palm transition generated Menu before neutral");
+  f.left = pose(3, 0, true);
+  f.right = pose(3, 0);
+  advance(f);
+  apply(menu, f);
+  f.left = pose(15, 1, true);
+  f.right = pose(15, 1);
+  advance(f);
+  out = apply(menu, f);
+  check(out.left.buttons == 4 && out.right.buttons == 0, "two-hand Menu failed after neutral");
+
+  for (int bad_thumb : {1, 2, 3}) {
+    em::Controller rejected(cfg);
+    auto invalid = frame();
+    invalid.right = pose(7, bad_thumb == 2 ? 2 : 1);
+    if (bad_thumb == 3) invalid.right.joints[4].flags = 0;
+    check(!(apply(rejected, invalid).right.buttons & CONTROLLER_BUTTON_THUMBSTICK),
+          "raised, pinching or missing thumb created a three-finger click");
+  }
+
+  em::Controller physical(cfg);
+  f = frame();
+  f.right = pose(7, 0);
+  RuntimeControllerStateFrameV1 merged{};
+  merged.right.source_mask = RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
+  merged.right.flags = RUNTIME_CONTROLLER_INPUT_VALID;
+  merged.right.buttons = CONTROLLER_BUTTON_TRIGGER;
+  merged.right.trigger = .8f;
+  merged.right.thumbstick_x = .7f;
+  physical.apply(merged, &f, f.timestamp_ns);
+  check(merged.right.buttons == (CONTROLLER_BUTTON_TRIGGER | CONTROLLER_BUTTON_THUMBSTICK) &&
+            merged.right.trigger == .8f && merged.right.thumbstick_x == .7f,
+        "exclusive emulated click suppressed physical controller input");
+  merged = {};
+  merged.right.source_mask = RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
+  merged.right.flags = RUNTIME_CONTROLLER_INPUT_VALID;
+  merged.right.buttons = CONTROLLER_BUTTON_B;
+  physical.apply(merged, &f, f.timestamp_ns, 0, true);
+  check(merged.right.buttons == CONTROLLER_BUTTON_B,
+        "override gesture block failed for three-finger click");
+}
 void validation_and_legacy() {
   for (const auto& j :
        {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
@@ -1095,7 +1251,9 @@ void validation_and_legacy() {
         nlohmann::json{{"pose_yaw_offset_degrees", std::numeric_limits<double>::quiet_NaN()}},
         nlohmann::json{{"dpad_source", "both"}}, nlohmann::json{{"dpad_source", "thumb"}},
         nlohmann::json{{"thumb_back_on", .2}}, nlohmann::json{{"thumb_back_off", .9}},
-        nlohmann::json{{"button_layout", "unknown"}}}) {
+        nlohmann::json{{"button_layout", "unknown"}},
+        nlohmann::json{{"thumbstick_click_gesture", "unknown"}},
+        nlohmann::json{{"thumbstick_click_gesture", "three_fingers"}}}) {
     bool rejected = false;
     try {
       (void)em::config_from_json(j);
@@ -1130,6 +1288,7 @@ int main() {
     thumb_dpad_and_independent_channels();
     trigger_calibration_and_wrist_diagonals();
     middle_grip_three_channels_and_rings();
+    three_finger_click_is_separate();
     grip_with_natural_finger_bends();
     trigger_and_v_across_wrist_orientations();
     calibrated_start_with_held_channels_and_hooked_grip();

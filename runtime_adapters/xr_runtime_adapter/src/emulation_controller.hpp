@@ -48,6 +48,7 @@ struct Config {
   std::string dpad_mode = "four_way";
   std::string dpad_source = "wrist", thumb_dpad_mode = "eight_way";
   std::string button_layout = "legacy";
+  std::string thumbstick_click_gesture = "layout_default";
   std::string profile_path;
   bool wrist_filter_enabled = true;
   bool trigger_on_curl = false, grip_on_curl = false;
@@ -94,6 +95,7 @@ class Controller {
     bool valid = false, fresh = false, reset_event = false, have_sample = false;
     bool anchored = false, thumb_active = false, pinch_active = false, wait_for_neutral = false;
     bool menu_open = false;
+    bool click_neutral_required = false;
     bool thumb_back_active = false;
     uint64_t sequence = 0, sample_ns = 0, reset_counter = 0, origin_counter = 0;
     Basis reference{};

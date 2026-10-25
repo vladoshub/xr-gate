@@ -169,6 +169,7 @@ Config config_from_json(const nlohmann::json& j) {
   c.dpad_source = j.value("dpad_source", c.dpad_source);
   c.thumb_dpad_mode = j.value("thumb_dpad_mode", c.thumb_dpad_mode);
   c.button_layout = j.value("button_layout", c.button_layout);
+  c.thumbstick_click_gesture = j.value("thumbstick_click_gesture", c.thumbstick_click_gesture);
   c.thumbstick_click_on_curl = j.value("thumbstick_click_on_curl", c.thumbstick_click_on_curl);
   c.wrist_filter_enabled = j.value("wrist_filter_enabled", c.wrist_filter_enabled);
   c.trigger_on_curl = j.value("trigger_on_curl", c.trigger_on_curl);
@@ -202,6 +203,11 @@ Config config_from_json(const nlohmann::json& j) {
           "invalid dpad_mode");
   require(c.dpad_source == "wrist" || c.dpad_source == "thumb", "invalid dpad_source");
   require(c.button_layout == "legacy" || c.button_layout == "middle_grip", "invalid button_layout");
+  require(c.thumbstick_click_gesture == "layout_default" ||
+              c.thumbstick_click_gesture == "three_fingers",
+          "invalid thumbstick_click_gesture");
+  require(c.thumbstick_click_gesture != "three_fingers" || c.button_layout == "middle_grip",
+          "three_fingers click requires button_layout=middle_grip");
   require(c.thumb_dpad_mode == "off" || c.thumb_dpad_mode == "four_way" ||
               c.thumb_dpad_mode == "eight_way",
           "invalid thumb_dpad_mode");
@@ -437,7 +443,7 @@ bool Controller::is_released_pose(const SideState& s) const {
         !s.grip_finger_active && (config_.grip_on_curl ? s.grip_extension > 1 - config_.curl_off
                                                        : s.grip_extension < config_.extension_off);
     return s.fingers[2] == Finger::Curled && s.trigger_released && grip_released &&
-           s.click_released;
+           (config_.thumbstick_click_gesture == "three_fingers" || s.click_released);
   }
   // Grip-only calibration may differ from the finger classification used by
   // A/B/V. A still-actuated calibrated Grip must not rearm after a special pose.
@@ -466,9 +472,15 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
                 h.thumb_clearance >= config_.thumb_enable_clearance &&
                 h.thumb_straightness >= config_.thumb_extension_on;
   Pose pose = Pose::None;
+  const bool separate_click = config_.thumbstick_click_gesture == "three_fingers";
   // Legacy V remains available only in the legacy layout. In middle_grip
   // this finger pose is ordinary input; A/B use the two disjoint ring poses.
-  if (config_.button_layout == "legacy" && s.fingers[0] == Finger::Extended &&
+  if (separate_click && h.thumb_valid && h.thumb_clearance <= config_.thumb_disable_clearance &&
+      h.pinch_ratio > config_.pinch_off_ratio &&
+      !s.pinch_active && s.fingers[0] == Finger::Extended &&
+      s.fingers[1] == Finger::Extended && s.fingers[2] == Finger::Extended) {
+    pose = Pose::PadClick;
+  } else if (config_.button_layout == "legacy" && s.fingers[0] == Finger::Extended &&
       s.fingers[1] == Finger::Extended && s.fingers[2] == Finger::Curled &&
       s.fingers[3] == Finger::Curled) {
     pose = Pose::PadClick;
@@ -481,12 +493,19 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
                     [](Finger f) { return f == Finger::Extended; }))
       pose = config_.button_layout == "middle_grip" ? Pose::A : Pose::B;
   }
+  // Even an unconfirmed three-finger candidate must return through the
+  // released operating pose. Do not turn its transition into A/B or gameplay.
+  if (separate_click && s.candidate == Pose::PadClick && pose != Pose::PadClick) {
+    s.click_neutral_required = true;
+    s.wait_for_neutral = true;
+  }
   if ((s.active != Pose::None && pose != s.active) || (was_pinch && !s.pinch_active)) {
     s.wait_for_neutral = true;
     s.active = Pose::None;
   }
   if (s.wait_for_neutral && neutral && !s.pinch_active) {
     s.wait_for_neutral = false;
+    s.click_neutral_required = false;
     s.candidate = Pose::None;
   }
   if (pose != s.candidate) {
@@ -499,7 +518,9 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
     s.click_channel = {};
     // Rearming blocks gameplay channels, but must not lock A->B transitions:
     // an intermediate confirmed ring pose may occur while extending the others.
-    if (pose != Pose::None && pose != Pose::Pinch &&
+    const bool click_blocked = separate_click &&
+        (s.click_neutral_required || (pose == Pose::PadClick && s.wait_for_neutral));
+    if (!click_blocked && pose != Pose::None && pose != Pose::Pinch &&
         double(stamp - s.pose_since_ns) / 1e6 >= config_.pose_confirm_ms) {
       s.active = pose;
       if (pose == Pose::A) s.buttons = CONTROLLER_BUTTON_A;
@@ -536,7 +557,7 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
   channel(s.grip_channel, s.grip_finger_active,
           config_.grip_on_curl ? 1 - s.grip_extension : s.grip_extension, CONTROLLER_BUTTON_GRIP,
           s.grip);
-  if (config_.button_layout == "middle_grip") {
+  if (config_.button_layout == "middle_grip" && !separate_click) {
     float ignored = 0;
     channel(s.click_channel, s.click_finger_active,
             config_.thumbstick_click_on_curl ? 1 - s.click_extension : s.click_extension,
@@ -650,6 +671,7 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
     s.anchored = s.have_sample = false;
     s.fingers = {};
     s.pinch_active = s.wait_for_neutral = false;
+    s.click_neutral_required = false;
     s.candidate = s.active = Pose::None;
   }
   if (frame) {
@@ -670,6 +692,7 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
     s.have_sample = s.menu_open = false;
     s.fingers = {};
     s.pinch_active = s.wait_for_neutral = false;
+    s.click_neutral_required = false;
     s.candidate = s.active = Pose::None;
     return;
   }
@@ -738,31 +761,39 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
                                                : config_.little_extension_off;
   s.grip_finger_active =
       h.curl[grip_finger] >= 0 && grip_strength >= (s.grip_finger_active ? grip_off : grip_on);
-  s.click_extension = h.curl[3] < 0 ? 0
-                      : c.click_calibrated
-                          ? 1 - std::clamp((h.curl[3] - c.click_open_curl) /
-                                               (c.click_closed_curl - c.click_open_curl),
-                                           0.0, 1.0)
-                          : s.extension[3];
-  const double click_strength =
-      config_.thumbstick_click_on_curl ? 1 - s.click_extension : s.click_extension;
-  s.click_finger_active =
-      h.curl[3] >= 0 &&
-      click_strength >= (s.click_finger_active
-                             ? (config_.thumbstick_click_on_curl ? config_.curl_off
-                                                                 : config_.little_extension_off)
-                             : (config_.thumbstick_click_on_curl ? config_.curl_on
-                                                                 : config_.little_extension_on));
-  s.click_released =
-      h.curl[3] >= 0 && !s.click_finger_active &&
-      (config_.thumbstick_click_on_curl ? s.click_extension > 1 - config_.curl_off
-                                        : s.click_extension < config_.little_extension_off);
+  if (config_.thumbstick_click_gesture == "three_fingers") {
+    s.click_extension = 0;
+    s.click_finger_active = false;
+    s.click_released = true;
+  } else {
+    s.click_extension = h.curl[3] < 0 ? 0
+                        : c.click_calibrated
+                            ? 1 - std::clamp((h.curl[3] - c.click_open_curl) /
+                                                 (c.click_closed_curl - c.click_open_curl),
+                                             0.0, 1.0)
+                            : s.extension[3];
+    const double click_strength =
+        config_.thumbstick_click_on_curl ? 1 - s.click_extension : s.click_extension;
+    s.click_finger_active =
+        h.curl[3] >= 0 &&
+        click_strength >= (s.click_finger_active
+                               ? (config_.thumbstick_click_on_curl ? config_.curl_off
+                                                                   : config_.little_extension_off)
+                               : (config_.thumbstick_click_on_curl ? config_.curl_on
+                                                                   : config_.little_extension_on));
+    s.click_released =
+        h.curl[3] >= 0 && !s.click_finger_active &&
+        (config_.thumbstick_click_on_curl ? s.click_extension > 1 - config_.curl_off
+                                          : s.click_extension < config_.little_extension_off);
+  }
   update_buttons(h, s, stamp);
   update_pad(h, c, s, dt, s.wait_for_neutral || s.candidate != Pose::None);
 }
 void Controller::update_menu() {
   const bool both = config_.left.enabled && config_.right.enabled && left_.valid && right_.valid &&
-                    left_.menu_open && right_.menu_open;
+                    left_.menu_open && right_.menu_open &&
+                    (config_.thumbstick_click_gesture != "three_fingers" ||
+                     (!left_.click_neutral_required && !right_.click_neutral_required));
   if (!both || left_.reset_event || right_.reset_event) {
     if (menu_candidate_)
       for (auto* s : {&left_, &right_}) {

@@ -147,6 +147,6 @@
   "thumb_back_on": 0.85,
   "thumb_back_off": 0.7,
   "button_layout": "middle_grip",
-  "thumbstick_click_on_curl": false,
-  "pose_yaw_offset_degrees": 45
+  "pose_yaw_offset_degrees": 45,
+  "thumbstick_click_gesture": "three_fingers"
 }

@@ -143,11 +143,15 @@ void calibrate_controls(const std::map<std::string, std::vector<em::HandMeasurem
                         Json& profile, const char* name) {
   const auto has = [&](const char* label) { return groups.count(label) != 0; };
   const bool middle_layout=profile.value("button_layout",std::string("legacy"))=="middle_grip";
+  const bool three_click=profile.value("thumbstick_click_gesture",std::string("layout_default"))=="three_fingers";
   if (middle_layout && (has("buttons_open") || has("buttons_closed") || has("trigger_closed"))) {
-    const std::vector<std::pair<std::string,unsigned>> states={{"buttons_open",0},{"trigger_closed",1},
+    const std::vector<std::pair<std::string,unsigned>> states=three_click
+      ? std::vector<std::pair<std::string,unsigned>>{{"buttons_open",0},{"trigger_closed",1},
+          {"grip_closed",2},{"buttons_closed",3}}
+      : std::vector<std::pair<std::string,unsigned>>{{"buttons_open",0},{"trigger_closed",1},
       {"grip_closed",2},{"click_closed",4},{"trigger_grip_closed",3},{"trigger_click_closed",5},
       {"grip_click_closed",6},{"buttons_closed",7}};
-    for (size_t channel=0;channel<3;++channel) {
+    for (size_t channel=0;channel<(three_click ? 2u : 3u);++channel) {
       const size_t finger=channel==0 ? 0 : channel==1 ? 1 : 3;
       std::array<double,2> ends{};
       for (size_t closed=0;closed<2;++closed) {
@@ -167,6 +171,7 @@ void calibrate_controls(const std::map<std::string, std::vector<em::HandMeasurem
       profile[name][key]={{"open_curl",ends[0]},{"closed_curl",ends[1]}};
       if (channel!=0) profile[name][key]["finger"]=channel==1 ? "middle" : "little";
     }
+    if (three_click) profile[name].erase("thumbstick_click_calibration");
   } else if (has("buttons_open") || has("buttons_closed") || has("trigger_closed")) {
     for (size_t finger : {size_t(0), size_t(3)}) {
       const char* channel = finger == 0 ? "trigger" : "grip";
@@ -279,6 +284,9 @@ int main(int argc, char** argv) {
         if (calibrate) {
           if (controls_only && frame.contains("button_layout") && frame.at("button_layout")!=config.button_layout)
             throw std::runtime_error("recorded button_layout differs from --config; use the matching profile");
+          if (controls_only && frame.contains("thumbstick_click_gesture") &&
+              frame.at("thumbstick_click_gesture")!=config.thumbstick_click_gesture)
+            throw std::runtime_error("recorded thumbstick_click_gesture differs from --config; use the matching profile");
           if (controls_only) {
             const uint64_t stamp=h.source_timestamp_ns ? h.source_timestamp_ns : h.timestamp_ns;
             const uint64_t now=number(frame.at("read_timestamp_ns"));
