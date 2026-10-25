@@ -3342,7 +3342,7 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
                  "Right controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
   app.add_option("--hand-orientation-offset-only-runtime", hand_orientation_offset_only_runtime,
-                 "Apply hand_orientation_offset only to sides present in a fresh ControllerInputV3 frame from override_controller. Enabled by default; false restores unconditional offset application.");
+                 "Apply hand_orientation_offset only to sides present in fresh ControllerInputV3 input or enabled for emulation. Enabled by default; false restores unconditional offset application.");
   app.add_option("--runtime-controller-left-imu-acceleration-integration", runtime_controller_left_imu_acceleration_integration,
                  "Enable left-controller accelerometer integration. Effective only with IMU_OVERRIDE_CONTROLLER_RUNTIME and current valid accelerometer/orientation data.");
   app.add_option("--runtime-controller-right-imu-acceleration-integration", runtime_controller_right_imu_acceleration_integration,
@@ -5497,10 +5497,15 @@ int main(int argc, char** argv) {
       std::cout << "[xr_runtime_adapter] emulation_controller enabled: left=" << emulation_left_enabled
                 << " right=" << emulation_right_enabled
                 << " dpad=wrist_tilt"
+                << " trigger_activation="
+                << (emulation_controller_config.trigger_on_curl ? "curl" : "extension")
+                << " grip_activation="
+                << (emulation_controller_config.grip_on_curl ? "curl" : "extension")
                 << " profile=" << (emulation_controller_config.profile_path.empty()
                     ? "builtin" : emulation_controller_config.profile_path)
                 << " wrist_filter_deg=" << (emulation_controller_config.wrist_filter_enabled
                     ? emulation_controller_config.wrist_filter_degrees : 0)
+                << " forward_range_scale=" << emulation_controller_config.forward_range_scale
                 << "; hold a neutral raised thumb on first acquisition; thumb against palm stops movement\n";
     }
 
@@ -6238,14 +6243,17 @@ int main(int argc, char** argv) {
               : tracking_transform_config.hand_tracking_21_joint;
           // hand_orientation_offset is optical/controller-alignment data.
           // HAND_ORIENTATION_OFFSET_ONLY_RUNTIME optionally limits it to sides
-          // present in fresh ControllerInputV3 input. The per-stream
+          // present in fresh ControllerInputV3 input or enabled for emulation.
+          // An emulated controller still needs its optical alignment after
+          // override_controller stops. The per-stream
           // hand_orientation_offset.only_optic policy (enabled by default)
           // additionally suppresses it whenever that side is currently using
           // an active IMU orientation source. All other transforms still apply.
           const auto should_apply_hand_orientation_offset =
               [&](const StreamTransformConfig& transform, bool controller_connected,
-                  bool uses_imu_profile) {
-                return (!hand_orientation_offset_only_runtime || controller_connected) &&
+                  bool emulation_enabled, bool uses_imu_profile) {
+                return (!hand_orientation_offset_only_runtime || controller_connected ||
+                        emulation_enabled) &&
                        (!transform.hand_orientation_offset.only_optic ||
                         !uses_imu_profile);
               };
@@ -6253,9 +6261,11 @@ int main(int argc, char** argv) {
             apply_hand_frame_transform(
                 frame.hand_v2, hand_transform, hmd_position_ptr, hmd_orientation_ptr,
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_left_connected, left_uses_imu_profile),
+                    hand_transform, controller_left_connected, emulation_left_enabled,
+                    left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_right_connected, right_uses_imu_profile),
+                    hand_transform, controller_right_connected, emulation_right_enabled,
+                    right_uses_imu_profile),
                 frame.hmd_valid ? &frame.hmd : nullptr);
           }
           if (frame.hand.sequence != 0) {
@@ -6264,9 +6274,11 @@ int main(int argc, char** argv) {
             apply_hand_frame_transform(
                 frame.hand, hand_v1_transform, hmd_position_ptr, hmd_orientation_ptr,
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_left_connected, left_uses_imu_profile),
+                    hand_v1_transform, controller_left_connected, emulation_left_enabled,
+                    left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_right_connected, right_uses_imu_profile),
+                    hand_v1_transform, controller_right_connected, emulation_right_enabled,
+                    right_uses_imu_profile),
                 frame.hmd_valid ? &frame.hmd : nullptr);
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {

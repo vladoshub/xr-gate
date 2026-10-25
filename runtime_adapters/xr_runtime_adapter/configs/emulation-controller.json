@@ -4,6 +4,9 @@
   "curl_on": 0.65,
   "deadzone": 0.18,
   "dpad_mode": "four_way",
+  "forward_range_scale": 0.65,
+  "trigger_on_curl": true,
+  "grip_on_curl": true,
   "extension_off": 0.45,
   "extension_on": 0.65,
   "left": {

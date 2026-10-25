@@ -159,6 +159,69 @@ void forward_backward_default_and_inversion() {
     }
   }
 }
+void earlier_forward_activation_preserves_other_directions() {
+  for (bool left : {false, true}) {
+    auto normal_config = immediate();
+    auto easier_config = em::config_from_json(
+        {{"smoothing_ms", 0}, {"button_confirm_ms", 0}, {"forward_range_scale", .65}});
+    em::Controller normal(normal_config), easier(easier_config);
+    auto f = frame();
+    apply(normal, f);
+    apply(easier, f);
+    bool earlier_press = false;
+    for (int step = 0; step <= 60; ++step) {
+      auto& h = left ? f.left : f.right;
+      h = pose(0, 1, left);
+      tilt(h, step * .01, 0);
+      advance(f);
+      const auto a = apply(normal, f), b = apply(easier, f);
+      const auto& old_side = left ? a.left : a.right;
+      const auto& new_side = left ? b.left : b.right;
+      if (old_side.thumbstick_y == 0)
+        check(new_side.thumbstick_y == 0, "forward sensitivity shrank the calibrated neutral");
+      if ((new_side.buttons & CONTROLLER_BUTTON_DPAD_UP) &&
+          !(old_side.buttons & CONTROLLER_BUTTON_DPAD_UP)) {
+        check(old_side.thumbstick_y >= .65 * .65 - 1e-5 && old_side.thumbstick_y < .65,
+              "forward digital activation did not use the reduced working range");
+        earlier_press = true;
+      }
+    }
+    check(earlier_press, "forward D-pad still requires the old wrist tilt");
+    // At the edge of the radial deadzone, the existing tiny-axis cutoff must
+    // still suppress optical noise before increasing forward sensitivity.
+    for (double pitch : {.09035, .0904, .09045}) {
+      auto& h = left ? f.left : f.right;
+      h = pose(0, 1, left);
+      tilt(h, pitch, 0);
+      advance(f);
+      const auto a = apply(normal, f), b = apply(easier, f);
+      check((left ? a.left : a.right).thumbstick_y == 0 &&
+                (left ? b.left : b.right).thumbstick_y == 0,
+            "forward gain revived subthreshold neutral jitter");
+    }
+    for (const auto angles : {std::array<double, 2>{-.5, 0}, {0, -.5}, {0, .5}}) {
+      auto& h = left ? f.left : f.right;
+      h = pose(0, 1, left);
+      tilt(h, angles[0], angles[1]);
+      advance(f);
+      const auto a = apply(normal, f), b = apply(easier, f);
+      const auto& old_side = left ? a.left : a.right;
+      const auto& new_side = left ? b.left : b.right;
+      check(old_side.thumbstick_x == new_side.thumbstick_x &&
+                old_side.thumbstick_y == new_side.thumbstick_y &&
+                old_side.buttons == new_side.buttons,
+            "forward sensitivity changed back/left/right movement");
+    }
+    auto& h = left ? f.left : f.right;
+    h = pose(0, 0, left);
+    tilt(h, .5, 0);
+    advance(f);
+    const auto out = apply(easier, f);
+    const auto& side = left ? out.left : out.right;
+    check(side.thumbstick_x == 0 && side.thumbstick_y == 0 && side.buttons == 0,
+          "tucked thumb no longer disables the sensitive forward direction");
+  }
+}
 void grip_with_natural_finger_bends() {
   for (bool left : {false, true}) {
     em::Controller c(immediate());
@@ -699,8 +762,10 @@ void gesture_block_gate_keeps_physical_input() {
         "new gestures did not resume after unblocking and fresh confirmation");
 }
 void validation_and_legacy() {
-  for (const auto& j : {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
-                        nlohmann::json{{"deadzone", 1}}, nlohmann::json{{"extension_on", .3}}}) {
+  for (const auto& j :
+       {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
+        nlohmann::json{{"deadzone", 1}}, nlohmann::json{{"extension_on", .3}},
+        nlohmann::json{{"forward_range_scale", 0}}, nlohmann::json{{"forward_range_scale", 2.1}}}) {
     bool rejected = false;
     try {
       (void)em::config_from_json(j);
@@ -731,6 +796,7 @@ void validation_and_legacy() {
 int main() {
   try {
     forward_backward_default_and_inversion();
+    earlier_forward_activation_preserves_other_directions();
     grip_with_natural_finger_bends();
     trigger_and_v_across_wrist_orientations();
     calibrated_start_with_held_channels_and_hooked_grip();

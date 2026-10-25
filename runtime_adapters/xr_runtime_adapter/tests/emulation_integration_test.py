@@ -112,10 +112,12 @@ class ControllerSource:
                         with self.lock:
                             for role, name in enumerate(("left", "right"), 1):
                                 side = self.sides[name]
-                                payload += self.device.pack(2 if side["present"] else 4, role, 6, 3,
+                                payload += self.device.pack(2 if side["present"] else 4, role,
+                                    6 | (24 if side.get("imu") else 0), 3,
                                     side["buttons"], side["touches"], 0, side["trigger"], side["grip"],
                                     side["x"], side["y"], 0, 0, role+40, role+40,
-                                    *side["press"], *side["release"], bytes(64), bytes(288))
+                                    *side["press"], *side["release"], bytes(64),
+                                    side["imu"](sequence,stamp) if side.get("imu") else bytes(288))
                         try:
                             client.sendall(self.header.pack(0x43495633, 3, 32, len(payload), 0,
                                 sequence, stamp)+payload)

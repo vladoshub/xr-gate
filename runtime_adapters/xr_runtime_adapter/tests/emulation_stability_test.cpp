@@ -139,6 +139,136 @@ uint64_t buttons(const Json& data, const em::Config& cfg, int phase, const char*
   }
   return std::string(name) == "left" ? output.left.buttons : output.right.buttons;
 }
+void flexion_channels_are_independent(const Json& data) {
+  // Recorded poses: fist, index only, little only, index+little. Middle/ring
+  // stay curled. The two activation directions are independently selectable.
+  const int phases[] = {50, 51, 45, 55};
+  for (unsigned mode = 0; mode < 4; ++mode) {
+    auto profile = data.at("profile");
+    profile["trigger_on_curl"] = bool(mode & 1);
+    profile["grip_on_curl"] = bool(mode & 2);
+    const auto cfg = em::config_from_json(profile);
+    check(cfg.trigger_on_curl == bool(mode & 1) && cfg.grip_on_curl == bool(mode & 2),
+          "activation directions were not loaded from JSON");
+    for (unsigned pose = 0; pose < 4; ++pose)
+      check((buttons(data, cfg, phases[pose], "right") & 3) == (pose ^ mode),
+            "Trigger/Grip activation truth table failed");
+  }
+  auto cfg = em::config_from_json(data.at("profile"));
+  cfg.trigger_on_curl = cfg.grip_on_curl = true;
+  em::Controller controller(cfg);
+  RuntimeControllerStateFrameV1 output{};
+  for (uint64_t i = 1; i <= 20; ++i) {
+    auto f = frame(hand(data, 50, "right"), i);
+    controller.apply(output, &f, f.timestamp_ns);
+  }
+  check((output.right.buttons & 3) == 3 && output.right.trigger >= .55 && output.right.grip >= .55,
+        "folded fingers did not publish held analog buttons");
+  auto lost = frame(hand(data, 50, "right"), 21);
+  lost.right.joints[20].flags = 0;
+  controller.apply(output, &lost, lost.timestamp_ns);
+  check((output.right.buttons & 3) == 1 && output.right.grip == 0,
+        "missing little finger was inverted into a Grip press");
+  lost = frame(hand(data, 50, "right"), 22);
+  lost.right.status = 0;
+  controller.apply(output, &lost, lost.timestamp_ns);
+  check((output.right.buttons & 3) == 0 && output.right.trigger == 0 && output.right.grip == 0,
+        "lost hand retained flexion buttons");
+  output = {};
+  output.right.source_mask = RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
+  output.right.flags = RUNTIME_CONTROLLER_CONNECTED | RUNTIME_CONTROLLER_INPUT_VALID;
+  output.right.buttons = CONTROLLER_BUTTON_TRIGGER;
+  output.right.trigger = .8f;
+  controller.apply(output, &lost, lost.timestamp_ns, 0, true);
+  check(output.right.buttons == CONTROLLER_BUTTON_TRIGGER && output.right.trigger == .8f &&
+            output.right.grip == 0,
+        "gesture inversion changed blocked physical controller input");
+}
+void flexion_neutral_and_specials(const Json& data) {
+  auto cfg = em::config_from_json(data.at("profile"));
+  const auto old_cfg = cfg;
+  cfg.trigger_on_curl = cfg.grip_on_curl = true;
+  for (const auto item : {std::pair<int, uint64_t>{26, CONTROLLER_BUTTON_A},
+                          {28, CONTROLLER_BUTTON_B},
+                          {30, CONTROLLER_BUTTON_THUMBSTICK},
+                          {31, CONTROLLER_BUTTON_THUMBSTICK}})
+    check(buttons(data, cfg, item.first, "left") == item.second,
+          "flexion buttons conflicted with A/B/V");
+  em::Controller controller(cfg);
+  RuntimeControllerStateFrameV1 output{};
+  uint64_t sequence = 0;
+  const auto hold = [&](int phase, const char* side) {
+    for (unsigned i = 0; i < 20; ++i) {
+      auto f = frame(hand(data, phase, side), ++sequence);
+      controller.apply(output, &f, f.timestamp_ns);
+    }
+  };
+  hold(26, "left");
+  hold(15, "left");
+  check((output.left.buttons & 3) == 0, "fist rearmed folded buttons after A");
+  hold(24, "left");
+  check((output.left.buttons & 3) == 0, "released fingers were not a neutral in flexion mode");
+  hold(15, "left");
+  check((output.left.buttons & 3) == 3, "released pose did not rearm folded buttons after A");
+  em::Controller old_dpad(old_cfg), new_dpad(cfg);
+  RuntimeControllerStateFrameV1 before{}, after{};
+  for (uint64_t i = 1; i <= 20; ++i) {
+    auto f = frame(hand(data, 55, "right"), i);
+    old_dpad.apply(before, &f, f.timestamp_ns);
+    new_dpad.apply(after, &f, f.timestamp_ns);
+  }
+  check((before.right.buttons & 3) == 3 && (after.right.buttons & 3) == 0 &&
+            before.right.thumbstick_x == after.right.thumbstick_x &&
+            before.right.thumbstick_y == after.right.thumbstick_y,
+        "finger inversion changed independent calibrated D-pad axes");
+  cfg.right.calibrated = false;
+  cfg.right.directional_calibration = false;
+  em::Controller automatic(cfg);
+  auto f = frame(hand(data, 55, "right"));
+  after = {};
+  automatic.apply(after, &f, f.timestamp_ns);
+  check((after.right.touches & CONTROLLER_BUTTON_THUMBSTICK) && after.right.thumbstick_x == 0 &&
+            after.right.thumbstick_y == 0,
+        "automatic D-pad neutral did not accept released fingers in flexion mode");
+  em::Controller menu(cfg);
+  for (uint64_t i = 1; i <= 20; ++i) {
+    f = frame(hand(data, 65, "left"), i);
+    f.right = hand(data, 65, "right");
+    menu.apply(after, &f, f.timestamp_ns);
+  }
+  check(after.left.buttons == CONTROLLER_BUTTON_MENU && after.right.buttons == 0,
+        "flexion buttons conflicted with two-hand Menu");
+  for (uint64_t i = 21; i <= 40; ++i) {
+    f = frame(hand(data, 24, "left"), i);
+    f.right = hand(data, 55, "right");
+    menu.apply(after, &f, f.timestamp_ns);
+  }
+  check((after.left.buttons & 3) == 0 && (after.right.buttons & 3) == 0,
+        "released pose after Menu pressed folded buttons");
+  for (uint64_t i = 41; i <= 60; ++i) {
+    f = frame(hand(data, 15, "left"), i);
+    f.right = hand(data, 50, "right");
+    menu.apply(after, &f, f.timestamp_ns);
+  }
+  check((after.left.buttons & 3) == 3 && (after.right.buttons & 3) == 3,
+        "folded buttons did not rearm after two-hand Menu");
+
+  cfg.left.grip_calibrated = true;
+  cfg.left.grip_open_curl = 0;
+  cfg.left.grip_closed_curl = .4;
+  check((buttons(data, cfg, 24, "left") & 3) == 2, "folded Grip ignored its separate calibration");
+  em::Controller calibrated(cfg);
+  for (uint64_t i = 1; i <= 20; ++i) {
+    f = frame(hand(data, 26, "left"), i);
+    calibrated.apply(after, &f, f.timestamp_ns);
+  }
+  for (uint64_t i = 21; i <= 40; ++i) {
+    f = frame(hand(data, 24, "left"), i);
+    calibrated.apply(after, &f, f.timestamp_ns);
+  }
+  check((after.left.buttons & 3) == 0,
+        "actuated calibrated Grip was incorrectly accepted as a released neutral after A");
+}
 void grip_calibration_is_independent(const Json& data) {
   auto cfg = em::config_from_json(data.at("profile"));
   cfg.little_extension_on = .7;
@@ -164,6 +294,32 @@ void grip_calibration_is_independent(const Json& data) {
   check(output.left.buttons == CONTROLLER_BUTTON_MENU && output.right.buttons == 0,
         "Grip calibration changed two-hand Menu");
 }
+void closed_knuckle_is_not_a_pinch(const Json& data) {
+  const auto cfg = em::config_from_json(data.at("profile"));
+  const auto fist = hand(data, 1005, "right");
+  const auto measured = em::measure_hand(fist, .3);
+  check(measured.index_chain_curl < .65 && measured.pinch_ratio < cfg.pinch_on_ratio,
+        "recorded fist no longer reproduces the old pinch ambiguity");
+  check(measured.index_knuckle_curl == 1, "recorded fist lost its folded index knuckle");
+  em::Controller controller(cfg);
+  RuntimeControllerStateFrameV1 output{};
+  for (uint64_t i = 1; i <= 20; ++i) {
+    auto f = frame(fist, i);
+    controller.apply(output, &f, f.timestamp_ns);
+    check((output.right.buttons & (CONTROLLER_BUTTON_A | CONTROLLER_BUTTON_B)) == 0,
+          "closed knuckle was mistaken for a pinch button");
+  }
+  for (uint64_t i = 21; i <= 40; ++i) {
+    auto f = frame(hand(data, 55, "right"), i);
+    controller.apply(output, &f, f.timestamp_ns);
+  }
+  check((output.right.buttons & 3) == 3,
+        "false pinch from the fist blocked the following Trigger/Grip combination");
+  check(buttons(data, cfg, 26, "left") == CONTROLLER_BUTTON_A,
+        "real recorded A was rejected by the knuckle guard");
+  check(buttons(data, cfg, 28, "left") == CONTROLLER_BUTTON_B,
+        "real recorded B was rejected by the knuckle guard");
+}
 }  // namespace
 int main(int argc, char** argv) {
   try {
@@ -171,9 +327,12 @@ int main(int argc, char** argv) {
     std::ifstream in(argv[1]);
     Json data;
     in >> data;
+    flexion_channels_are_independent(data);
+    flexion_neutral_and_specials(data);
     whole_hand_filter(data);
     grip_calibration_is_independent(data);
-    std::cout << "Whole-hand angular stability and independent Grip calibration passed\n";
+    closed_knuckle_is_not_a_pinch(data);
+    std::cout << "Whole-hand stability, Grip calibration and fist/pinch separation passed\n";
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

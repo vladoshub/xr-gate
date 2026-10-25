@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,74 @@ class StabilityIntegrationTest(unittest.TestCase):
     def setUp(self):
         STATE.clear()
         STATE.update(left=dict(phase=15),right=dict(phase=50))
+
+    def test_optical_alignment_survives_override_shutdown(self):
+        def imu_payload(sequence, stamp):
+            # ControllerImuStateV1: fresh identity orientation, no motion samples.
+            return struct.pack('<4I4Q8f',3,8,8|256,0,sequence,stamp,0,stamp,
+                               0,0,0,1,0,0,0,0)+bytes(208)
+
+        for enabled in (False, True):
+            with self.subTest(emulation=enabled), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                cfg=copy.deepcopy(FIXTURE['profile'])
+                cfg.update(wrist_filter_enabled=False,left=dict(enabled=False))
+                profile=root/'profile.json'
+                profile.write_text(json.dumps(cfg))
+                offset=dict(enabled=True,only_optic=True,multiply_order='pre',
+                    apply_to=dict(controller=True,palm=True,wrist=True,joints=False),
+                    left=dict(enabled=True,ry_deg=40),right=dict(enabled=True,ry_deg=-40))
+                transform=root/'transform.json'
+                transform.write_text(json.dumps(dict(enabled=True,streams=dict(
+                    hand_tracking_21_joint=dict(hand_orientation_offset=offset)))))
+                with ControllerSource() as physical:
+                    physical.update('left',present=True,imu=imu_payload)
+                    physical.update('right',present=True,imu=imu_payload)
+                    extra=['--emulation-controller',str(int(enabled)),
+                        '--emulation-controller-config',str(profile),
+                        '--tracking-transform-config',str(transform),
+                        '--controller-input-mode','hand_plus_controller',
+                        '--controller-input-transport','tcp',
+                        '--controller-input-host','127.0.0.1',
+                        '--controller-input-port',str(physical.port),
+                        '--runtime-controller-left-orientation-source','IMU_OVERRIDE_CONTROLLER_RUNTIME',
+                        '--runtime-controller-right-orientation-source','IMU_OVERRIDE_CONTROLLER_RUNTIME',
+                        '--hand-orientation-offset-only-runtime','1']
+                    with harness.runtime(extra=extra) as (_,_,port):
+                        client=harness.Client(port)
+                        try:
+                            def aligned(f, left_angle, right_angle):
+                                if not f.get('hands') or not f.get('controllers'):
+                                    return False
+                                for side,expected in (('left',left_angle),('right',right_angle)):
+                                    q=f['hands'][side]['controller']['orientation_xyzw']
+                                    if abs(math.degrees(2*math.atan2(q[1],q[3]))-expected)>.01:
+                                        return False
+                                return True
+                            # Active IMU uses its dedicated alignment, never the optical offset.
+                            client.frame(lambda f:aligned(f,0,0) and
+                                int(f['controllers']['right']['source_mask'])&16)
+                            physical.update('left',imu=None)
+                            physical.update('right',imu=None)
+                            client.frame(lambda f:aligned(f,40,-40))
+                            # Stop all override packets: only the enabled emulated side keeps
+                            # its configured optical alignment under the default runtime gate.
+                            physical.paused.set()
+                            event=client.frame(lambda f:aligned(f,0,-40 if enabled else 0) and
+                                not int(f['controllers']['right']['source_mask'])&16)
+                            for side in ('left','right'):
+                                self.assertEqual(event['hands'][side]['joints'][8]['orientation_xyzw'],[0,0,0,1])
+                                self.assertAlmostEqual(event['hands'][side]['joints'][8]['position'][0],
+                                                       points(STATE[side]['phase'],side)[8][0],places=5)
+                                self.assertEqual(event['controllers'][side]['orientation_xyzw'],
+                                                 event['hands'][side]['controller']['orientation_xyzw'])
+                            physical.update('left',imu=imu_payload)
+                            physical.update('right',imu=imu_payload)
+                            physical.paused.clear()
+                            client.frame(lambda f:aligned(f,0,0) and
+                                int(f['controllers']['right']['source_mask'])&16)
+                        finally:
+                            client.close()
 
     def test_filter_in_real_runtime_and_physical_bypass(self):
         for mode, enabled in ((False,True),(True,False),(True,True)):
@@ -78,6 +147,46 @@ class StabilityIntegrationTest(unittest.TestCase):
                         finally:
                             client.close()
 
+    def test_flexion_buttons_load_from_json_and_preserve_physical_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile=Path(tmp)/'flexion.json'
+            cfg=copy.deepcopy(FIXTURE['profile'])
+            cfg.update(trigger_on_curl=True,grip_on_curl=True)
+            profile.write_text(json.dumps(cfg))
+            STATE['right']=dict(phase=55)
+            with ControllerSource() as physical:
+                extra=['--emulation-controller','1','--emulation-controller-config',str(profile),
+                    '--controller-input-mode','hand_plus_controller','--controller-input-transport','tcp',
+                    '--controller-input-host','127.0.0.1','--controller-input-port',str(physical.port)]
+                with harness.runtime(extra=extra) as (_,_,port):
+                    client=harness.Client(port)
+                    try:
+                        first=client.frame(lambda f:f.get('hands') and f.get('controllers'))
+                        for phase,expected in ((51,2),(45,1),(50,3),(55,0)):
+                            previous=int(first['hands']['source_timestamp_ns'])
+                            STATE['right']=dict(phase=phase)
+                            first=client.frame(lambda f:f.get('hands') and f.get('controllers') and
+                                int(f['hands']['source_timestamp_ns'])>previous+150000000 and
+                                int(f['controllers']['right']['buttons'])&3==expected)
+                            self.assertEqual(first['controllers']['right']['grip']>.5,bool(expected&2))
+                            self.assertEqual(first['controllers']['right']['trigger']>.5,bool(expected&1))
+                        physical.update('right',present=True,buttons=1,trigger=.75)
+                        event=client.frame(lambda f:f.get('controllers') and
+                            int(f['controllers']['right']['source_mask'])&16 and
+                            int(f['controllers']['right']['buttons'])&3==1)
+                        # A physical digital Trigger also supplies a full analog
+                        # value; that pre-existing normalization stays intact.
+                        self.assertEqual(event['controllers']['right']['trigger'],1)
+                        self.assertEqual(event['controllers']['right']['grip'],0)
+                        physical.update('right',buttons=0,trigger=.75)
+                        event=client.frame(lambda f:f.get('controllers') and
+                            int(f['controllers']['right']['source_mask'])&16 and
+                            int(f['controllers']['right']['buttons'])&3==0)
+                        self.assertAlmostEqual(event['controllers']['right']['trigger'],.75,places=4)
+                        self.assertEqual(event['controllers']['right']['grip'],0)
+                    finally:
+                        client.close()
+
     def test_launcher_loads_profile_from_runtime_configs(self):
         script=ROOT/'scripts/linux/start_xr_runtime_adapter_shm.sh'
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,7 +217,8 @@ class StabilityIntegrationTest(unittest.TestCase):
             root=Path(tmp)
             source,profile,output=(root/p for p in ('hands.jsonl','profile.json','grip.json'))
             original=copy.deepcopy(FIXTURE['profile'])
-            original.update(wrist_filter_enabled=True,wrist_filter_degrees=2)
+            original.update(wrist_filter_enabled=True,wrist_filter_degrees=2,
+                            trigger_on_curl=True,grip_on_curl=True)
             profile.write_text(json.dumps(original))
             def write_samples(open_phase):
                 with source.open('w') as out:

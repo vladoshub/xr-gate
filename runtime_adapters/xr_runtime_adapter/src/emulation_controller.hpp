@@ -14,7 +14,7 @@ struct HandMeasurement {
   bool palm_valid = false, thumb_valid = false;
   Basis palm_basis{};
   double thumb_clearance = 0, thumb_straightness = 0, pinch_ratio = -1;
-  double index_chain_curl = 1;
+  double index_chain_curl = 1, index_knuckle_curl = 1;
   std::array<double, 4> curl{{-1, -1, -1, -1}};
 };
 struct HandConfig {
@@ -33,8 +33,10 @@ struct Config {
   std::string dpad_mode = "four_way";
   std::string profile_path;
   bool wrist_filter_enabled = true;
+  bool trigger_on_curl = false, grip_on_curl = false;
   double wrist_filter_degrees = 2;
   double range_degrees = 30, deadzone = 0.18, smoothing_ms = 40;
+  double forward_range_scale = 1;
   double min_confidence = 0.3, max_age_ms = 120;
   double extension_on = 0.7, extension_off = 0.45;
   double little_extension_on = 0.60, little_extension_off = 0.45;
@@ -75,7 +77,7 @@ class Controller {
     Vec3 neutral{}, axis_x{}, axis_y{};
     std::array<Finger, 4> fingers{};
     std::array<double, 4> extension{};
-    bool grip_extended = false;
+    bool grip_finger_active = false;
     double grip_extension = 0;
     Channel trigger_channel{}, grip_channel{};
     Pose candidate = Pose::None, active = Pose::None;
@@ -98,6 +100,7 @@ class Controller {
   void publish_side(xr_runtime::RuntimeControllerSideStateV1& output, const HandConfig& config,
                     SideState& state);
   static void clear_input(SideState& state);
+  bool is_released_pose(const SideState& state) const;
   Config config_;
   SideState left_, right_;
   bool menu_candidate_ = false, menu_active_ = false;
