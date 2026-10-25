@@ -32,22 +32,12 @@
         }
       },
       "orientation_transform": {
-        "enabled": false,
+        "enabled": true,
         "basis_rotation": {
-          "rx_deg": 0.0,
-          "ry_deg": 0.0,
+          "rx_deg": -90.0,
+          "ry_deg": 180.0,
           "rz_deg": 0.0
         }
-      },
-      "orientation_offset": {
-        "enabled": false,
-        "multiply_order": "post",
-        "quaternion_xyzw": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
       }
     },
     "hand_tracking_21_joint": {
@@ -166,13 +156,13 @@
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 0.0
+          "rz_deg": -60.0
         },
         "right": {
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 0.0
+          "rz_deg": 60.0
         }
       }
     },
@@ -246,22 +236,12 @@
         }
       },
       "orientation_transform": {
-        "enabled": false,
+        "enabled": true,
         "basis_rotation": {
-          "rx_deg": 0.0,
-          "ry_deg": 0.0,
+          "rx_deg": -90.0,
+          "ry_deg": 180.0,
           "rz_deg": 0.0
         }
-      },
-      "orientation_offset": {
-        "enabled": false,
-        "multiply_order": "post",
-        "quaternion_xyzw": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
       }
     },
     "spatial_proxy_mesh": {
