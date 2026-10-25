@@ -226,7 +226,7 @@
   "pinch_off_ratio": 0.65,
   "pinch_on_ratio": 0.55,
   "pose_confirm_ms": 120,
-  "pose_yaw_offset_degrees": 45,
+  "pose_yaw_offset_degrees": 25,
   "range_degrees": 30,
   "right": {
     "calibration": {
@@ -448,5 +448,6 @@
   "trigger_on_curl": true,
   "version": 3,
   "wrist_filter_degrees": 2,
-  "wrist_filter_enabled": true
+  "wrist_filter_enabled": true,
+  "thumb_invert_y": true
 }
