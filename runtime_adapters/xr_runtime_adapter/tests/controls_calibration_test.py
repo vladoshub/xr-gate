@@ -34,7 +34,12 @@ TARGETS={'thumb_neutral':(0,.25),'thumb_hidden':(0,.25),'thumb_up':(0,1),
 
 def vertices(name,label,variant='neutral',layout='legacy'):
     if layout=='middle_grip' and label=='click_three_fingers':
-        return coordinates(extended=7,thumb='down',left=name=='left')
+        points=coordinates(extended=7,thumb='down',left=name=='left')
+        # A tucked fingertip with an extended IP/base still leaves the thumb
+        # D-pad enabled. The intentional click tucks the whole thumb.
+        tucked=vertices(name,'click_ready',layout=layout)
+        points[1:5]=tucked[1:5]
+        return points
     if layout=='middle_grip' and label in ('ring_a','ring_b'):
         return coordinates(extended=14 if label=='ring_a' else 0,thumb='pinch',left=name=='left')
     if layout=='middle_grip':
@@ -48,7 +53,7 @@ def vertices(name,label,variant='neutral',layout='legacy'):
     across=live.unit(live.sub(across,[v*live.dot(across,forward) for v in forward]))
     normal=live.unit(live.cross(across,forward))
     sweep,bend=TARGETS.get(label,(0,.25))
-    hidden=label=='thumb_hidden' or variant=='thumb_tucked'
+    hidden=label in ('thumb_hidden','click_ready') or variant=='thumb_tucked'
     angle=(-.6435011088 if name=='left' else .6435011088)+sweep
     base=[points[5][k]+across[k]*(0 if hidden else -.06 if name=='left' else .06)-
           forward[k]*(.01 if hidden else .025) for k in range(3)]
@@ -334,9 +339,9 @@ class ControlsCalibrationTest(unittest.TestCase):
             output.write_text(json.dumps(saved))
             replay=[];expected=[]
             cases=[('control_neutral',0),('trigger_closed',1),('grip_closed',2),('buttons_closed',3),
-                   ('click_three_fingers',32),('buttons_closed',0),('ring_a',0),
+                   ('click_three_fingers',0),('click_ready',0),('click_three_fingers',32),('buttons_closed',0),('ring_a',0),
                    ('control_neutral',0),('ring_a',8),('ring_b',16),('control_neutral',0),
-                   ('click_three_fingers',32),('control_neutral',0),('buttons_closed',3)]
+                   ('click_ready',0),('click_three_fingers',32),('control_neutral',0),('buttons_closed',3)]
             for side in ('left','right'):
                 for label,bits in cases:
                     for _ in range(30):
@@ -402,7 +407,7 @@ class ControlsCalibrationTest(unittest.TestCase):
                         cases += [('ring_a',8),('ring_b',16),('control_neutral',0)]
                         if click_gesture=='three_fingers':
                             cases=[('buttons_open',0),('trigger_closed',1),('grip_closed',2),('buttons_closed',3),
-                                   ('click_three_fingers',32),('buttons_closed',0),('ring_a',0),
+                                   ('click_three_fingers',0),('click_ready',0),('click_three_fingers',32),('buttons_closed',0),('ring_a',0),
                                    ('control_neutral',0),('ring_a',8),('ring_b',16),('control_neutral',0)]
                         for label,bits in cases:
                             stamp=int(event['hands']['source_timestamp_ns']);state['right']=label

@@ -213,6 +213,7 @@ Config config_from_json(const nlohmann::json& j) {
   c.wrist_filter_enabled = j.value("wrist_filter_enabled", c.wrist_filter_enabled);
   c.trigger_on_curl = j.value("trigger_on_curl", c.trigger_on_curl);
   c.grip_on_curl = j.value("grip_on_curl", c.grip_on_curl);
+  c.thumb_invert_y = j.value("thumb_invert_y", c.thumb_invert_y);
   c.wrist_filter_degrees = j.value("wrist_filter_degrees", c.wrist_filter_degrees);
   c.pose_yaw_offset_degrees = j.value("pose_yaw_offset_degrees", c.pose_yaw_offset_degrees);
   c.range_degrees = j.value("range_degrees", c.range_degrees);
@@ -540,6 +541,8 @@ void Controller::clear_input(SideState& s) {
   s.click_finger_active = s.click_released = false;
   s.click_extension = 0;
   s.thumb_back_active = false;
+  s.click_armed = false;
+  s.click_neutral_since_ns = 0;
 }
 bool Controller::is_released_pose(const SideState& s) const {
   if (config_.button_layout == "middle_grip") {
@@ -557,7 +560,8 @@ bool Controller::is_released_pose(const SideState& s) const {
   return s.fingers[1] == Finger::Curled && s.fingers[2] == Finger::Curled && s.trigger_released &&
          grip_released;
 }
-void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t stamp) {
+void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
+                                SideState& s, uint64_t stamp) {
   const auto all = [&](Finger state) {
     return std::all_of(s.fingers.begin(), s.fingers.end(),
                        [state](Finger f) { return f == state; });
@@ -577,9 +581,28 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
                 h.thumb_straightness >= config_.thumb_extension_on;
   Pose pose = Pose::None;
   const bool separate_click = config_.thumbstick_click_gesture == "three_fingers";
+  const bool tucked = h.thumb_valid && h.thumb_clearance < config_.thumb_disable_clearance &&
+      (config_.dpad_source != "thumb" ||
+       (h.thumb_pad_valid && h.thumb_pad_clearance < c.thumb.disable_clearance));
+  if (separate_click) {
+    // Folding the thumb can transiently make the tracker straighten the ring
+    // finger. Require a confirmed released pose AFTER the pad has switched off,
+    // followed by extending the ring finger; holding that transient pose must
+    // never turn into a delayed click.
+    if (!tucked) {
+      s.click_armed = false;
+      s.click_neutral_since_ns = 0;
+    } else if (neutral && !s.pinch_active && h.pinch_ratio > config_.pinch_off_ratio) {
+      if (!s.click_neutral_since_ns) s.click_neutral_since_ns = stamp;
+      if (double(stamp-s.click_neutral_since_ns)/1e6 >= config_.pose_confirm_ms)
+        s.click_armed = true;
+    } else {
+      s.click_neutral_since_ns = 0;
+    }
+  }
   // Legacy V remains available only in the legacy layout. In middle_grip
   // this finger pose is ordinary input; A/B use the two disjoint ring poses.
-  if (separate_click && h.thumb_valid && h.thumb_clearance <= config_.thumb_disable_clearance &&
+  if (separate_click && s.click_armed && tucked &&
       h.pinch_ratio > config_.pinch_off_ratio &&
       !s.pinch_active && s.fingers[0] == Finger::Extended &&
       s.fingers[1] == Finger::Extended && s.fingers[2] == Finger::Extended) {
@@ -600,6 +623,8 @@ void Controller::update_buttons(const HandMeasurement& h, SideState& s, uint64_t
   // Even an unconfirmed three-finger candidate must return through the
   // released operating pose. Do not turn its transition into A/B or gameplay.
   if (separate_click && s.candidate == Pose::PadClick && pose != Pose::PadClick) {
+    s.click_armed = false;
+    s.click_neutral_since_ns = 0;
     s.click_neutral_required = true;
     s.wait_for_neutral = true;
   }
@@ -718,6 +743,9 @@ void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideS
   const Vec3 axes = thumb_mode ? project_thumb(c.thumb, h)
                                : project_wrist(projection, wrist_feature(h, s.reference));
   double x = axes[0], y = axes[1];
+  // Invert before the stricter back gate so it always protects the output
+  // direction called "back", including its two diagonals.
+  if (thumb_mode && config_.thumb_invert_y) y = -y;
   if (thumb_mode) {
     // Back is close to the user's relaxed thumb pose. Gate the analog axis as
     // well as its button, using calibrated raw Y before radial normalization.
@@ -909,7 +937,7 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
         (config_.thumbstick_click_on_curl ? s.click_extension > 1 - config_.curl_off
                                           : s.click_extension < config_.little_extension_off);
   }
-  update_buttons(h, s, stamp);
+  update_buttons(h, c, s, stamp);
   update_pad(h, c, s, dt, s.wait_for_neutral || s.candidate != Pose::None);
 }
 void Controller::update_menu() {

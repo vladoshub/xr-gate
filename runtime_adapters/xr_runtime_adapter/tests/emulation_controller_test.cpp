@@ -1198,7 +1198,9 @@ void three_finger_click_is_separate() {
           auto out = apply(c, f);
           return left ? out.left : out.right;
         };
-        sample(pose(3, 0, left));
+        const auto ready = thumb ? thumb_pose(left,0,.25,3,true) : pose(3,0,left);
+        sample(ready);
+        sample(ready,120);
         // Start from both ordinary buttons held, then enter a separate click.
         sample(pose(0, 0, left));
         const unsigned click_mask = little_open ? 15 : 7;
@@ -1243,7 +1245,12 @@ void three_finger_click_is_separate() {
   cfg.pose_confirm_ms = 120;
   em::Controller transient(cfg);
   auto f = frame();
+  f.right=pose(3,0);
+  apply(transient,f);
+  advance(f,120);
+  apply(transient,f);
   f.right = pose(7, 0);
+  advance(f);
   apply(transient, f);
   f.right = pose(0, 0);
   advance(f, 180);
@@ -1262,6 +1269,9 @@ void three_finger_click_is_separate() {
   f.left = pose(7, 0, true);
   f.right = pose(7, 0);
   auto out = apply(menu, f);
+  check(out.left.buttons==0 && out.right.buttons==0,"startup pose bypassed click arming");
+  f.left=pose(3,0,true);f.right=pose(3,0);advance(f);apply(menu,f);
+  f.left=pose(7,0,true);f.right=pose(7,0);advance(f);out=apply(menu,f);
   check(out.left.buttons == 32 && out.right.buttons == 32,
         "two three-finger poses were confused with Menu");
   f.left = pose(15, 1, true);
@@ -1291,6 +1301,7 @@ void three_finger_click_is_separate() {
 
   em::Controller physical(cfg);
   f = frame();
+  f.right=pose(3,0);apply(physical,f);advance(f);
   f.right = pose(7, 0);
   RuntimeControllerStateFrameV1 merged{};
   merged.right.source_mask = RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
@@ -1310,6 +1321,91 @@ void three_finger_click_is_separate() {
   check(merged.right.buttons == CONTROLLER_BUTTON_B,
         "override gesture block failed for three-finger click");
 }
+void thumb_inversion_and_click_rearming() {
+  check(em::config_from_json({{"thumb_invert_y",true}}).thumb_invert_y,"thumb inversion option ignored");
+  for (bool left : {false,true}) for (bool skeleton : {false,true}) {
+    auto cfg=thumb_config(left,skeleton);cfg.thumb_invert_y=true;
+    constexpr uint64_t expected[]={128,64,256,512,384,640,320,576};
+    const std::array<std::array<double,2>,8> targets{{
+        {0,1},{0,-.2},{-.5,.25},{.5,.25},{-.5,1},{.5,1},{-.5,-.2},{.5,-.2}}};
+    for (size_t i=0;i<targets.size();++i) {
+      em::Controller c(cfg);auto f=frame();(left ? f.left : f.right)=thumb_pose(left,targets[i][0],targets[i][1]);
+      const auto o=apply(c,f);const auto& side=left ? o.left : o.right;
+      check(side.buttons==expected[i],"thumb inversion lost an axis or diagonal");
+      auto h=left ? f.left : f.right;tilt(h,.6,-.4);yaw(h,.9);(left ? f.left : f.right)=h;advance(f);
+      const auto rotated=apply(c,f);const auto& after=left ? rotated.left : rotated.right;
+      check(after.buttons==side.buttons && std::abs(after.thumbstick_y-side.thumbstick_y)<1e-5,
+            "inverted thumb pad depends on wrist rotation");
+    }
+    em::Controller gate(cfg);auto f=frame();
+    const auto sample=[&](double fraction) {
+      auto h=thumb_pose(left,0,.25+fraction*.75);
+      if (skeleton) {
+        const auto n=thumb_pose(left,0,.25),up=thumb_pose(left,0,1);
+        for (size_t k=1;k<=4;++k) {
+          h.joints[k].px=n.joints[k].px+fraction*(up.joints[k].px-n.joints[k].px);
+          h.joints[k].py=n.joints[k].py+fraction*(up.joints[k].py-n.joints[k].py);
+          h.joints[k].pz=n.joints[k].pz+fraction*(up.joints[k].pz-n.joints[k].pz);
+        }
+      }
+      (left ? f.left : f.right)=h;advance(f);const auto o=apply(gate,f);return left ? o.left : o.right;
+    };
+    check(sample(.8).thumbstick_y==0,"inverted back lost its strict entry threshold");
+    check(sample(.9).thumbstick_y<-.65,"inverted back did not enter the strict region");
+    check(sample(.75).thumbstick_y<0,"inverted back lost hysteresis");
+    check(sample(.65).thumbstick_y==0,"inverted back leaked after strict release");
+  }
+  for (bool left : {false,true}) for (bool thumb : {false,true}) {
+    auto cfg=thumb ? thumb_config(left,true) : immediate();
+    cfg.button_layout="middle_grip";cfg.thumbstick_click_gesture="three_fingers";
+    cfg.trigger_on_curl=cfg.grip_on_curl=true;cfg.pose_confirm_ms=120;
+    em::Controller c(cfg);auto f=frame();
+    const auto sample=[&](unsigned fingers,bool hidden,uint64_t ms) {
+      (left ? f.left : f.right)=thumb ? thumb_pose(left,0,1,fingers,hidden) : pose(fingers,hidden ? 0 : 1,left);
+      advance(f,ms);const auto o=apply(c,f);return left ? o.left : o.right;
+    };
+    check(sample(3,false,30).buttons&CONTROLLER_BUTTON_DPAD_UP || !thumb,"pad fixture did not start active");
+    for (int i=0;i<30;++i) {
+      const auto side=sample(7,true,100);
+      check(side.buttons==0 && side.thumbstick_x==0 && side.thumbstick_y==0,
+            "folding thumb generated a click, including after a long hold");
+    }
+    sample(3,true,30);sample(3,true,60);
+    check(sample(7,true,500).buttons==0,"short tucked neutral armed a click");
+    sample(3,true,30);sample(3,true,120);
+    sample(7,true,30);
+    auto side=sample(7,true,120);
+    check(side.buttons==CONTROLLER_BUTTON_THUMBSTICK && side.press_counters[5]==1,
+          "intentional click failed after confirmed tucked neutral");
+    side=sample(15,true,120);
+    check(side.buttons==CONTROLLER_BUTTON_THUMBSTICK && side.press_counters[5]==1,
+          "little finger changed/repeated a confirmed click");
+    (left ? f.left : f.right).status=0;advance(f);apply(c,f);
+    check(sample(7,true,500).buttons==0,"tracking reacquisition bypassed click arming");
+    sample(3,true,30);sample(3,true,120);sample(3,false,30);
+    check(sample(7,true,500).buttons==0,"reopened thumb did not disarm the click");
+    if (thumb) {
+      sample(3,true,30);sample(3,true,120);
+      auto tip_only=thumb_pose(left,0,.25,7,false);
+      const auto basis=em::measure_hand(tip_only,.3).palm_basis;
+      tip_only.joints[4].px=tip_only.joints[5].px+.01*basis[2][0];
+      tip_only.joints[4].py=tip_only.joints[5].py+.01*basis[2][1];
+      tip_only.joints[4].pz=tip_only.joints[5].pz+.01*basis[2][2];
+      const auto m=em::measure_hand(tip_only,.3);const auto& hc=left ? cfg.left : cfg.right;
+      check(m.thumb_valid && m.thumb_pad_valid && m.thumb_clearance<cfg.thumb_disable_clearance &&
+                m.thumb_pad_clearance>=hc.thumb.disable_clearance,
+            "fixture must fold only the tip while leaving the D-pad base active");
+      (left ? f.left : f.right)=tip_only;advance(f,500);const auto o=apply(c,f);
+      check(!((left ? o.left : o.right).buttons&CONTROLLER_BUTTON_THUMBSTICK),
+            "folded thumb tip clicked before the D-pad base switched off");
+    }
+  }
+  auto wrist_cfg=immediate();auto inverted=wrist_cfg;inverted.thumb_invert_y=true;
+  em::Controller normal(wrist_cfg),other(inverted);auto f=frame();apply(normal,f);apply(other,f);
+  tilt(f.right,.5,0);advance(f);const auto a=apply(normal,f),b=apply(other,f);
+  check(a.right.buttons==b.right.buttons && a.right.thumbstick_y==b.right.thumbstick_y,
+        "thumb-only inversion changed wrist steering");
+}
 void validation_and_legacy() {
   for (const auto& j :
        {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
@@ -1319,6 +1415,7 @@ void validation_and_legacy() {
         nlohmann::json{{"pose_yaw_offset_degrees", 181}},
         nlohmann::json{{"pose_yaw_offset_degrees", std::numeric_limits<double>::quiet_NaN()}},
         nlohmann::json{{"dpad_source", "both"}}, nlohmann::json{{"dpad_source", "thumb"}},
+        nlohmann::json{{"thumb_invert_y", "true"}},
         nlohmann::json{{"thumb_back_on", .2}}, nlohmann::json{{"thumb_back_off", .9}},
         nlohmann::json{{"button_layout", "unknown"}},
         nlohmann::json{{"thumbstick_click_gesture", "unknown"}},
@@ -1359,6 +1456,7 @@ int main() {
     trigger_calibration_and_wrist_diagonals();
     middle_grip_three_channels_and_rings();
     three_finger_click_is_separate();
+    thumb_inversion_and_click_rearming();
     grip_with_natural_finger_bends();
     trigger_and_v_across_wrist_orientations();
     calibrated_start_with_held_channels_and_hooked_grip();

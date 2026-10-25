@@ -64,6 +64,7 @@ struct Config {
   std::string profile_path;
   bool wrist_filter_enabled = true;
   bool trigger_on_curl = false, grip_on_curl = false;
+  bool thumb_invert_y = false;
   bool thumbstick_click_on_curl = false;
   double wrist_filter_degrees = 2;
   // Final presentation yaw about runtime +Y; positive turns both hands outward.
@@ -110,6 +111,8 @@ class Controller {
     bool anchored = false, thumb_active = false, pinch_active = false, wait_for_neutral = false;
     bool menu_open = false;
     bool click_neutral_required = false;
+    bool click_armed = false;
+    uint64_t click_neutral_since_ns = 0;
     bool thumb_back_active = false;
     uint64_t sequence = 0, sample_ns = 0, reset_counter = 0, origin_counter = 0;
     Basis reference{};
@@ -136,7 +139,8 @@ class Controller {
   void update_side(const xr_runtime::HandSideF32V2* hand, const HandConfig& config,
                    SideState& state, const xr_runtime::HandTrackingFrameF32V2* frame,
                    uint64_t now_ns, uint64_t origin_reset_counter);
-  void update_buttons(const HandMeasurement& hand, SideState& state, uint64_t sample_ns);
+  void update_buttons(const HandMeasurement& hand, const HandConfig& config,
+                      SideState& state, uint64_t sample_ns);
   void update_pad(const HandMeasurement& hand, const HandConfig& config, SideState& state,
                   double dt_ms, bool blocked);
   void update_menu();
