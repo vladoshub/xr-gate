@@ -36,10 +36,13 @@
      </TextBlock.Style>
     </TextBlock>
    </StackPanel>
-   <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+   <WrapPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
     <Button Content="Open Ubuntu" Click="OpenUbuntu_Click" Margin="0,0,8,0" Background="#18253A" />
-    <Button Content="Guide" Click="Guide_Click" Margin="0" Background="#18253A" />
-   </StackPanel>
+    <StackPanel Orientation="Horizontal">
+     <Button Content="Guide" Click="Guide_Click" Margin="0,0,8,0" Background="#18253A" />
+     <Button Content="Gestures" Click="Gestures_Click" ToolTip="Open the controller gesture guide." Margin="0" Background="#18253A" />
+    </StackPanel>
+   </WrapPanel>
   </Grid>
   <Border Grid.Row="1" Background="#18283B" CornerRadius="10" Padding="18" Margin="0,0,0,18">
    <StackPanel>

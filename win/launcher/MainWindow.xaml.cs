@@ -574,6 +574,14 @@ public partial class MainWindow : Window
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }
+    private void Gestures_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(Path.Combine(root, "GESTURES.html")) { UseShellExecute = true });
+        }
+        catch (Exception exception) { StatusDetail.Text = exception.Message; }
+    }
     private void Advanced_Click(object sender, RoutedEventArgs e)
     {
         try
