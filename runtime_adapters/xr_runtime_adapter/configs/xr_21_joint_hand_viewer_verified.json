@@ -97,7 +97,7 @@
           "controller": true,
           "palm": true,
           "wrist": true,
-          "joints": false
+          "joints": true
         },
         "left": {
           "enabled": true,
