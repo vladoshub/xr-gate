@@ -83,10 +83,12 @@ if ! grep -qE "(^|[[:space:]])xr_runtime_adapter([[:space:]]|$)" <<<"$target_hel
   fatal "CMake target xr_runtime_adapter was not generated. Check $ADAPTER_DIR/CMakeLists.txt; generated targets are: $help_targets"
 fi
 
-cmake --build "$BUILD_DIR" --target xr_runtime_adapter -j"$BUILD_JOBS"
+cmake --build "$BUILD_DIR" --target xr_runtime_adapter xr_emulation_tool -j"$BUILD_JOBS"
 
 cp "$BUILD_DIR/xr_runtime_adapter" "$INSTALL_BIN_DIR/xr_runtime_adapter"
 chmod +x "$INSTALL_BIN_DIR/xr_runtime_adapter"
+cp "$BUILD_DIR/xr_emulation_tool" "$INSTALL_BIN_DIR/xr_emulation_tool"
+chmod +x "$INSTALL_BIN_DIR/xr_emulation_tool"
 # Device wrappers prefer this installed copy over the source launcher. Keep it
 # in step with the binary so new opt-in environment options take effect.
 mkdir -p "$INSTALL_SCRIPT_DIR"

@@ -465,7 +465,6 @@ enum class HandOrientationOffsetTarget {
   Controller,
   Palm,
   Wrist,
-  Joint,
 };
 
 bool hand_orientation_offset_target_enabled(const HandOrientationOffsetConfig& cfg,
@@ -474,7 +473,6 @@ bool hand_orientation_offset_target_enabled(const HandOrientationOffsetConfig& c
     case HandOrientationOffsetTarget::Controller: return cfg.apply_to_controller;
     case HandOrientationOffsetTarget::Palm: return cfg.apply_to_palm;
     case HandOrientationOffsetTarget::Wrist: return cfg.apply_to_wrist;
-    case HandOrientationOffsetTarget::Joint: return cfg.apply_to_joints;
   }
   return false;
 }
@@ -504,6 +502,89 @@ bool nonzero_q(const Qd& q) {
   return std::isfinite(n2) && n2 > 1e-8;
 }
 
+template <class T>
+void rotate_about_pivot(T& x, T& y, T& z, const Qd& correction, const V3d& pivot) {
+  if (!finite_v3({x, y, z})) return;
+  const auto p = q_rotate(correction, {x - pivot.x, y - pivot.y, z - pivot.z});
+  x = T(pivot.x + p.x);
+  y = T(pivot.y + p.y);
+  z = T(pivot.z + p.z);
+}
+
+template <class Hand>
+void complete_hand_skeleton_offset(Hand& hand, const StreamTransformConfig& cfg, bool left,
+                                   bool apply, const V3d& pivot, const Qd& aligned_root,
+                                   const Qd* aligned_reference) {
+  const auto& offset = cfg.hand_orientation_offset;
+  const auto& side = left ? offset.left : offset.right;
+  if (!apply || !offset.enabled || !offset.apply_to_joints || !side.enabled ||
+      (hand.status != 1 && hand.status != 2) || !(hand.flags & xr_runtime::HAND_POSE_VALID) ||
+      !finite_v3(pivot) || !nonzero_q(aligned_root)) return;
+  const auto mounting = normalize_q(side.q);
+  if (mounting.x == 0 && mounting.y == 0 && mounting.z == 0) return;
+  // post/local: q_aligned = q_before * mounting. Conjugating mounting by either
+  // q_before or q_aligned gives the same shared world correction for the bones.
+  auto correction = offset.pre_multiply ? mounting
+      : q_mul(q_mul(aligned_root, mounting), q_conj(normalize_q(aligned_root)));
+  if (offset.pre_multiply && aligned_reference && nonzero_q(*aligned_reference)) {
+    const auto frame_rotation = q_mul(aligned_root, q_conj(normalize_q(*aligned_reference)));
+    correction = q_mul(q_mul(frame_rotation, mounting), q_conj(frame_rotation));
+  }
+  const auto pose = [&](auto& x, auto& y, auto& z, auto& w, auto& qx, auto& qy, auto& qz,
+                         bool enabled) {
+    if (!enabled) return;
+    rotate_about_pivot(x, y, z, correction, pivot);
+    const Qd aligned{w, qx, qy, qz};
+    if (!nonzero_q(aligned)) return;
+    // Undo the per-pose offset before applying one rigid correction. Local axes
+    // of palm/wrist/joints can differ from the controller's local axes.
+    // Pre/world pose orientations already contain the proper shared correction,
+    // including any later filter rotation. Only post/local poses need replacing.
+    if (!offset.pre_multiply) {
+      const auto before = q_mul(aligned, q_conj(mounting));
+      assign_q(w, qx, qy, qz, q_mul(correction, before));
+    }
+  };
+  pose(hand.palm_px, hand.palm_py, hand.palm_pz,
+       hand.palm_qw, hand.palm_qx, hand.palm_qy, hand.palm_qz, offset.apply_to_palm);
+  pose(hand.wrist_px, hand.wrist_py, hand.wrist_pz,
+       hand.wrist_qw, hand.wrist_qx, hand.wrist_qy, hand.wrist_qz, offset.apply_to_wrist);
+  if (!(hand.flags & xr_runtime::HAND_JOINTS_VALID)) return;
+  const auto count = std::min<size_t>(hand.joint_count, sizeof(hand.joints) / sizeof(hand.joints[0]));
+  for (size_t i = 0; i < count; ++i) {
+    auto& joint = hand.joints[i];
+    if (!joint.flags) continue;
+    rotate_about_pivot(joint.px, joint.py, joint.pz, correction, pivot);
+    const Qd q{joint.qw, joint.qx, joint.qy, joint.qz};
+    if (nonzero_q(q)) assign_q(joint.qw, joint.qx, joint.qy, joint.qz, q_mul(correction, q));
+  }
+}
+
+void complete_hand_skeleton_offset(xr_runtime::HandSideF32V2& hand,
+                                   const StreamTransformConfig& cfg, bool left, bool apply,
+                                   const Qd* aligned_reference) {
+  complete_hand_skeleton_offset(hand, cfg, left, apply,
+      {hand.controller_px, hand.controller_py, hand.controller_pz},
+      {hand.controller_qw, hand.controller_qx, hand.controller_qy, hand.controller_qz}, aligned_reference);
+}
+void complete_hand_skeleton_offset(xr_runtime::HandSideF64V1& hand,
+                                   const StreamTransformConfig& cfg, bool left, bool apply,
+                                   const Qd* aligned_reference) {
+  complete_hand_skeleton_offset(hand, cfg, left, apply,
+      {hand.palm_px, hand.palm_py, hand.palm_pz},
+      {hand.palm_qw, hand.palm_qx, hand.palm_qy, hand.palm_qz}, aligned_reference);
+}
+
+void apply_offset_angular_velocity(const StreamTransformConfig& cfg, bool left, bool apply,
+                                    bool root_enabled, V3d& w) {
+  const auto& offset = cfg.hand_orientation_offset;
+  const auto& side = left ? offset.left : offset.right;
+  // A constant local mounting offset leaves world angular velocity unchanged.
+  // A constant pre/world rotation changes that world vector too.
+  if (apply && offset.enabled && offset.apply_to_joints && offset.pre_multiply &&
+      root_enabled && side.enabled) w = q_rotate(side.q, w);
+}
+
 bool hand_side_has_transformable_payload(const xr_runtime::HandSideF32V2& side) {
   const bool tracking = side.status == 1u || side.status == 2u;
   const bool has_pose = (side.flags & xr_runtime::HAND_POSE_VALID) != 0u;
@@ -514,18 +595,14 @@ bool hand_side_has_transformable_payload(const xr_runtime::HandSideF32V2& side) 
 void apply_hand_joint_transform(xr_runtime::HandJointF32V2& joint,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,
-                                const Qd* hmd_orientation,
-                                bool is_left,
-                                bool apply_orientation_offset) {
+                                const Qd* hmd_orientation) {
   const V3d p = apply_stream_position_transform(cfg, {joint.px, joint.py, joint.pz}, hmd_position, hmd_orientation);
   assign_v3(joint.px, joint.py, joint.pz, p);
 
   const Qd in_q{joint.qw, joint.qx, joint.qy, joint.qz};
   if (nonzero_q(in_q)) {
     const Qd q = apply_stream_orientation_transform(cfg, in_q, hmd_orientation);
-    assign_q(joint.qw, joint.qx, joint.qy, joint.qz,
-             apply_hand_orientation_offset(cfg, q, is_left, HandOrientationOffsetTarget::Joint,
-                                           apply_orientation_offset));
+    assign_q(joint.qw, joint.qx, joint.qy, joint.qz, q);
   }
 }
 
@@ -608,6 +685,8 @@ void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
     V3d w = apply_stream_vector_transform(cfg, {side.wx, side.wy, side.wz});
     apply_hand_motion_transform(cfg, {side.controller_px, side.controller_py, side.controller_pz},
                                 hmd_position, hmd_orientation, hmd_motion, v, w);
+    apply_offset_angular_velocity(cfg, is_left, apply_orientation_offset,
+                                  cfg.hand_orientation_offset.apply_to_controller, w);
     assign_v3(side.vx, side.vy, side.vz, v);
     assign_v3(side.wx, side.wy, side.wz, w);
   }
@@ -615,8 +694,7 @@ void apply_hand_side_transform(xr_runtime::HandSideF32V2& side,
   if ((side.flags & xr_runtime::HAND_JOINTS_VALID) != 0u) {
     const uint32_t n = std::min<uint32_t>(side.joint_count, xr_runtime::HAND_JOINT_COUNT_V2);
     for (uint32_t i = 0; i < n; ++i) {
-      apply_hand_joint_transform(side.joints[i], cfg, hmd_position, hmd_orientation,
-                                 is_left, apply_orientation_offset);
+      apply_hand_joint_transform(side.joints[i], cfg, hmd_position, hmd_orientation);
     }
   }
 }
@@ -644,6 +722,8 @@ void apply_hand_side_transform(xr_runtime::HandSideF64V1& side,
   V3d w = apply_stream_vector_transform(cfg, {side.wx, side.wy, side.wz});
   apply_hand_motion_transform(cfg, {side.palm_px, side.palm_py, side.palm_pz},
                               hmd_position, hmd_orientation, hmd_motion, v, w);
+  apply_offset_angular_velocity(cfg, is_left, apply_orientation_offset,
+                                cfg.hand_orientation_offset.apply_to_palm, w);
   assign_v3(side.vx, side.vy, side.vz, v);
   assign_v3(side.wx, side.wy, side.wz, w);
   const uint32_t n = std::min<uint32_t>(side.joint_count, xr_runtime::HAND_JOINT_COUNT_V1);
@@ -652,9 +732,7 @@ void apply_hand_side_transform(xr_runtime::HandSideF64V1& side,
         {side.joints[i].px, side.joints[i].py, side.joints[i].pz}, hmd_position, hmd_orientation);
     assign_v3(side.joints[i].px, side.joints[i].py, side.joints[i].pz, jp);
     const Qd jq = apply_stream_orientation_transform(cfg, {side.joints[i].qw, side.joints[i].qx, side.joints[i].qy, side.joints[i].qz}, hmd_orientation);
-    assign_q(side.joints[i].qw, side.joints[i].qx, side.joints[i].qy, side.joints[i].qz,
-             apply_hand_orientation_offset(cfg, jq, is_left, HandOrientationOffsetTarget::Joint,
-                                           apply_orientation_offset));
+    assign_q(side.joints[i].qw, side.joints[i].qx, side.joints[i].qy, side.joints[i].qz, jq);
   }
 }
 
@@ -855,7 +933,8 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
                                 const Qd* hmd_orientation,
                                 bool apply_left_hand_orientation_offset,
                                 bool apply_right_hand_orientation_offset,
-                                const xr_runtime::HmdPoseF64V1* hmd_motion) {
+                                const xr_runtime::HmdPoseF64V1* hmd_motion,
+                                bool defer_skeleton_offset) {
   if ((hand.flags & xr_runtime::HAND_FLAG_LEFT_VALID) != 0u &&
       hand_side_has_transformable_payload(hand.left)) {
     apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true,
@@ -866,6 +945,9 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
     apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false,
                               apply_right_hand_orientation_offset, hmd_motion);
   }
+  if (!defer_skeleton_offset)
+    apply_aligned_hand_skeleton_offset(hand, cfg, apply_left_hand_orientation_offset,
+                                      apply_right_hand_orientation_offset);
 }
 
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
@@ -874,11 +956,34 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
                                 const Qd* hmd_orientation,
                                 bool apply_left_hand_orientation_offset,
                                 bool apply_right_hand_orientation_offset,
-                                const xr_runtime::HmdPoseF64V1* hmd_motion) {
+                                const xr_runtime::HmdPoseF64V1* hmd_motion,
+                                bool defer_skeleton_offset) {
   apply_hand_side_transform(hand.left, cfg, hmd_position, hmd_orientation, true,
                             apply_left_hand_orientation_offset, hmd_motion);
   apply_hand_side_transform(hand.right, cfg, hmd_position, hmd_orientation, false,
                             apply_right_hand_orientation_offset, hmd_motion);
+  if (!defer_skeleton_offset)
+    apply_aligned_hand_skeleton_offset(hand, cfg, apply_left_hand_orientation_offset,
+                                      apply_right_hand_orientation_offset);
+}
+
+void apply_aligned_hand_skeleton_offset(xr_runtime::HandTrackingFrameF32V2& hand,
+                                         const StreamTransformConfig& cfg, bool left, bool right,
+                                         const std::array<Qd, 2>* aligned_reference) {
+  if (hand.flags & xr_runtime::HAND_FLAG_LEFT_VALID)
+    complete_hand_skeleton_offset(hand.left, cfg, true, left,
+                                   aligned_reference ? &(*aligned_reference)[0] : nullptr);
+  if (hand.flags & xr_runtime::HAND_FLAG_RIGHT_VALID)
+    complete_hand_skeleton_offset(hand.right, cfg, false, right,
+                                   aligned_reference ? &(*aligned_reference)[1] : nullptr);
+}
+void apply_aligned_hand_skeleton_offset(xr_runtime::HandTrackingFrameF64V1& hand,
+                                         const StreamTransformConfig& cfg, bool left, bool right,
+                                         const std::array<Qd, 2>* aligned_reference) {
+  complete_hand_skeleton_offset(hand.left, cfg, true, left,
+                                 aligned_reference ? &(*aligned_reference)[0] : nullptr);
+  complete_hand_skeleton_offset(hand.right, cfg, false, right,
+                                 aligned_reference ? &(*aligned_reference)[1] : nullptr);
 }
 
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,

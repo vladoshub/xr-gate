@@ -42,6 +42,8 @@
 #include <chrono>
 
 #include "gestures.hpp"
+#include "emulation_controller.hpp"
+#include "emulation_wrist_filter.hpp"
 #include "app_tcp_server.hpp"
 #include "override_controller.hpp"
 #include "hand_tracking_freshness.hpp"
@@ -3030,6 +3032,8 @@ int main(int argc, char** argv) {
   bool runtime_ignore_backend_hand_gestures = false;
   bool runtime_left_hand_gestures_enabled = true;
   bool runtime_right_hand_gestures_enabled = true;
+  bool emulation_controller_enabled = false;
+  std::string emulation_controller_config_path;
   bool runtime_derive_extra_gesture_buttons = true;
   bool runtime_derive_extra_gesture_buttons_with_controller_input = false;
   bool override_controller_block_gestures_while_stream_present = true;
@@ -3277,7 +3281,7 @@ int main(int argc, char** argv) {
 
   app.add_option("--override-controller-block-gestures-while-stream-present",
                  override_controller_block_gestures_while_stream_present,
-                 "In controller_buttons_runtime_only, block hand gesture input while override_controller stream is fresh/recently seen; hand_plus_controller is unaffected");
+                 "In controller_buttons_runtime_only, block legacy and emulation hand gestures while override_controller stream is fresh/recently seen (default true); hand_plus_controller is unaffected");
 
   app.add_option("--override-controller-gesture-block-latch-ms",
                  override_controller_gesture_block_latch_ms,
@@ -3338,7 +3342,7 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
                  "Right controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
   app.add_option("--hand-orientation-offset-only-runtime", hand_orientation_offset_only_runtime,
-                 "Apply hand_orientation_offset only to sides present in a fresh ControllerInputV3 frame from override_controller. Enabled by default; false restores unconditional offset application.");
+                 "Apply hand_orientation_offset only to sides present in fresh ControllerInputV3 input or enabled for emulation. Enabled by default; false restores unconditional offset application.");
   app.add_option("--runtime-controller-left-imu-acceleration-integration", runtime_controller_left_imu_acceleration_integration,
                  "Enable left-controller accelerometer integration. Effective only with IMU_OVERRIDE_CONTROLLER_RUNTIME and current valid accelerometer/orientation data.");
   app.add_option("--runtime-controller-right-imu-acceleration-integration", runtime_controller_right_imu_acceleration_integration,
@@ -3639,6 +3643,10 @@ int main(int argc, char** argv) {
                  "How long to keep the last fresh derived visual pinch/grab in ms after hand tracking stops being fresh; 0 clears immediately");
   app.add_option("--runtime-ignore-backend-hand-gestures", runtime_ignore_backend_hand_gestures,
                  "Ignore pinch/grab/button gesture values received from hand_tracking input before applying controller override or runtime-derived gestures");
+  app.add_option("--emulation-controller", emulation_controller_enabled,
+                 "Opt-in finger/wrist-tilt controller; replaces legacy hand gestures and combines with physical controller input for enabled sides (default false)");
+  app.add_option("--emulation-controller-config", emulation_controller_config_path,
+                 "Optional emulation controller JSON profile; enable explicitly with --emulation-controller 1");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
       app.add_option("--runtime-left-hand-gestures-enabled", runtime_left_hand_gestures_enabled,
                      "Enable visual hand-tracking gestures for the left hand. ControllerInputV3 override buttons are unaffected. Normally set in config controller_override.hand_gestures.left_enabled");
@@ -4053,10 +4061,15 @@ int main(int argc, char** argv) {
   const bool runtime_controller_buttons_only_mode =
       controller_input_config.mode == "controller_buttons_only" ||
       runtime_controller_mode_value == xr_runtime::RuntimeControllerMode::HAND_TRACKING_CONTROLLER_BUTTONS_ONLY;
+  const auto emulation_controller_config = emulation_controller_enabled
+      ? xr_runtime_adapter::emulation::load_config(emulation_controller_config_path)
+      : xr_runtime_adapter::emulation::Config{};
+  const bool emulation_left_enabled = emulation_controller_enabled && emulation_controller_config.left.enabled;
+  const bool emulation_right_enabled = emulation_controller_enabled && emulation_controller_config.right.enabled;
   const bool effective_runtime_left_hand_gestures_enabled =
-      runtime_left_hand_gestures_enabled && !runtime_controller_buttons_only_mode;
+      runtime_left_hand_gestures_enabled && !runtime_controller_buttons_only_mode && !emulation_left_enabled;
   const bool effective_runtime_right_hand_gestures_enabled =
-      runtime_right_hand_gestures_enabled && !runtime_controller_buttons_only_mode;
+      runtime_right_hand_gestures_enabled && !runtime_controller_buttons_only_mode && !emulation_right_enabled;
 
   const uint32_t derived_thumbs_up_button_mask =
       override_controller::parse_runtime_button_target(derived_thumbs_up_button, "--derived-thumbs-up-button");
@@ -5477,6 +5490,27 @@ int main(int argc, char** argv) {
     int64_t override_controller_gesture_block_until_ns = 0;
     gestures::RuntimeGestureHysteresisState runtime_gesture_hysteresis;
     gestures::RuntimeHandGestureSnapshot last_fresh_runtime_hand_gestures;
+    std::optional<xr_runtime_adapter::emulation::Controller> emulation_controller;
+    xr_runtime_adapter::emulation::WristPoseFilter emulation_wrist_filter;
+    if (emulation_controller_enabled) {
+      emulation_controller.emplace(emulation_controller_config);
+      std::cout << "[xr_runtime_adapter] emulation_controller enabled: left=" << emulation_left_enabled
+                << " right=" << emulation_right_enabled
+                << " dpad_source=" << emulation_controller_config.dpad_source
+                << " button_layout=" << emulation_controller_config.button_layout
+                << " thumbstick_click_gesture=" << emulation_controller_config.thumbstick_click_gesture
+                << " trigger_activation="
+                << (emulation_controller_config.trigger_on_curl ? "curl" : "extension")
+                << " grip_activation="
+                << (emulation_controller_config.grip_on_curl ? "curl" : "extension")
+                << " profile=" << (emulation_controller_config.profile_path.empty()
+                    ? "builtin" : emulation_controller_config.profile_path)
+                << " wrist_filter_deg=" << (emulation_controller_config.wrist_filter_enabled
+                    ? emulation_controller_config.wrist_filter_degrees : 0)
+                << " forward_range_scale=" << emulation_controller_config.forward_range_scale
+                << " pose_yaw_offset_deg=" << emulation_controller_config.pose_yaw_offset_degrees
+                << "; hold a neutral raised thumb on first acquisition; thumb against palm stops movement\n";
+    }
 
     std::optional<xr_runtime::HmdPoseF64V1> last_good_hmd;
     std::string last_good_hmd_frame_id = "tracking_world";
@@ -6198,6 +6232,16 @@ int main(int argc, char** argv) {
           spatial_proxy_mesh_thread->set_runtime_hmd_snapshot(runtime_hmd_snapshot);
         }
 
+        const StreamTransformConfig& hand_transform = skeleton26_input_used
+            ? tracking_transform_config.hand_skeleton26
+            : tracking_transform_config.hand_tracking_21_joint;
+        const auto should_apply_hand_orientation_offset =
+            [&](const StreamTransformConfig& transform, bool controller_connected,
+                bool emulation_enabled, bool uses_imu_profile) {
+              return (!hand_orientation_offset_only_runtime || controller_connected ||
+                      emulation_enabled) &&
+                     (!transform.hand_orientation_offset.only_optic || !uses_imu_profile);
+            };
         if (tracking_transform_config.enabled) {
           std::optional<V3d> transformed_hmd_position;
           std::optional<Qd> transformed_hmd_orientation;
@@ -6207,30 +6251,24 @@ int main(int argc, char** argv) {
           }
           const V3d* hmd_position_ptr = transformed_hmd_position ? &(*transformed_hmd_position) : nullptr;
           const Qd* hmd_orientation_ptr = transformed_hmd_orientation ? &(*transformed_hmd_orientation) : nullptr;
-          const StreamTransformConfig& hand_transform = skeleton26_input_used
-              ? tracking_transform_config.hand_skeleton26
-              : tracking_transform_config.hand_tracking_21_joint;
           // hand_orientation_offset is optical/controller-alignment data.
           // HAND_ORIENTATION_OFFSET_ONLY_RUNTIME optionally limits it to sides
-          // present in fresh ControllerInputV3 input. The per-stream
+          // present in fresh ControllerInputV3 input or enabled for emulation.
+          // An emulated controller still needs its optical alignment after
+          // override_controller stops. The per-stream
           // hand_orientation_offset.only_optic policy (enabled by default)
           // additionally suppresses it whenever that side is currently using
           // an active IMU orientation source. All other transforms still apply.
-          const auto should_apply_hand_orientation_offset =
-              [&](const StreamTransformConfig& transform, bool controller_connected,
-                  bool uses_imu_profile) {
-                return (!hand_orientation_offset_only_runtime || controller_connected) &&
-                       (!transform.hand_orientation_offset.only_optic ||
-                        !uses_imu_profile);
-              };
           if (frame.hand_v2.sequence != 0) {
             apply_hand_frame_transform(
                 frame.hand_v2, hand_transform, hmd_position_ptr, hmd_orientation_ptr,
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_left_connected, left_uses_imu_profile),
+                    hand_transform, controller_left_connected, emulation_left_enabled,
+                    left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_right_connected, right_uses_imu_profile),
-                frame.hmd_valid ? &frame.hmd : nullptr);
+                    hand_transform, controller_right_connected, emulation_right_enabled,
+                    right_uses_imu_profile),
+                frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
           if (frame.hand.sequence != 0) {
             const StreamTransformConfig& hand_v1_transform =
@@ -6238,10 +6276,12 @@ int main(int argc, char** argv) {
             apply_hand_frame_transform(
                 frame.hand, hand_v1_transform, hmd_position_ptr, hmd_orientation_ptr,
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_left_connected, left_uses_imu_profile),
+                    hand_v1_transform, controller_left_connected, emulation_left_enabled,
+                    left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_right_connected, right_uses_imu_profile),
-                frame.hmd_valid ? &frame.hmd : nullptr);
+                    hand_v1_transform, controller_right_connected, emulation_right_enabled,
+                    right_uses_imu_profile),
+                frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
             // Yaw correction uses a clean optical reference: apply the normal
@@ -6257,6 +6297,14 @@ int main(int argc, char** argv) {
           }
         }
 
+        const std::array<Qd, 2> skeleton_aligned_reference{{
+            {frame.hand_v2.left.controller_qw, frame.hand_v2.left.controller_qx,
+             frame.hand_v2.left.controller_qy, frame.hand_v2.left.controller_qz},
+            {frame.hand_v2.right.controller_qw, frame.hand_v2.right.controller_qx,
+             frame.hand_v2.right.controller_qy, frame.hand_v2.right.controller_qz}}};
+        const std::array<Qd, 2> legacy_skeleton_aligned_reference{{
+            {frame.hand.left.palm_qw, frame.hand.left.palm_qx, frame.hand.left.palm_qy, frame.hand.left.palm_qz},
+            {frame.hand.right.palm_qw, frame.hand.right.palm_qx, frame.hand.right.palm_qy, frame.hand.right.palm_qz}}};
         if (runtime_hand_stability_gate && frame.hand_v2.sequence != 0) {
           runtime_hand_stability_filter_hand_tracking.apply_prediction_distance_limit(
               frame.hand_v2,
@@ -6372,13 +6420,75 @@ int main(int argc, char** argv) {
           }
         }
 
-        adapter->consume(frame);
+        if (emulation_controller) {
+          // Also clear physical input copied into the legacy hand gesture fields.
+          // Emulation owns input only in runtime_controller_state, never pinch/grab.
+          gestures::clear_runtime_hand_v2_backend_gestures_by_side(
+              frame.hand_v2, emulation_left_enabled, emulation_right_enabled);
+          emulation_wrist_filter.apply(frame.hand_v2, emulation_controller_config,
+              static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
+              !runtime_only_gesture_input_blocked && !controller_left_connected,
+              !runtime_only_gesture_input_blocked && !controller_right_connected);
+        }
+
+        // Recognition, optical/IMU alignment and synthesis retain the original
+        // joint geometry. Skeleton mounting and the extra yaw affect output copies only.
+        const auto& legacy_hand_transform = tracking_transform_config.hand_tracking_21_joint;
+        const bool skeleton_offset = tracking_transform_config.enabled &&
+            ((frame.hand_v2.sequence && hand_transform.hand_orientation_offset.enabled &&
+              hand_transform.hand_orientation_offset.apply_to_joints) ||
+             (frame.hand.sequence && legacy_hand_transform.hand_orientation_offset.enabled &&
+              legacy_hand_transform.hand_orientation_offset.apply_to_joints));
+        const bool emulation_yaw = emulation_controller &&
+            emulation_controller_config.pose_yaw_offset_degrees != 0;
+        std::optional<xr_runtime::RuntimeFrame> presentation_frame;
+        if (skeleton_offset || emulation_yaw) {
+          presentation_frame = frame;
+          if (skeleton_offset) {
+            xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
+                presentation_frame->hand_v2, hand_transform,
+                should_apply_hand_orientation_offset(hand_transform, controller_left_connected,
+                    emulation_left_enabled, left_uses_imu_profile),
+                should_apply_hand_orientation_offset(hand_transform, controller_right_connected,
+                    emulation_right_enabled, right_uses_imu_profile), &skeleton_aligned_reference);
+            xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
+                presentation_frame->hand, legacy_hand_transform,
+                should_apply_hand_orientation_offset(legacy_hand_transform, controller_left_connected,
+                    emulation_left_enabled, left_uses_imu_profile),
+                should_apply_hand_orientation_offset(legacy_hand_transform, controller_right_connected,
+                    emulation_right_enabled, right_uses_imu_profile), &legacy_skeleton_aligned_reference);
+          }
+          if (emulation_yaw) {
+            xr_runtime_adapter::emulation::apply_pose_yaw_offset(
+                presentation_frame->hand_v2, emulation_controller_config,
+                !left_uses_imu_profile, !right_uses_imu_profile);
+            xr_runtime_adapter::emulation::apply_pose_yaw_offset(
+                presentation_frame->hand, emulation_controller_config,
+                !left_uses_imu_profile, !right_uses_imu_profile);
+          }
+        }
+        const auto& output_frame = presentation_frame ? *presentation_frame : frame;
+        adapter->consume(output_frame);
         ++consumed;
 
         std::optional<xr_runtime_adapter::AppTcpFrame> app_tcp_frame;
         if (app_tcp_server && app_tcp_server->has_clients()) {
           app_tcp_frame.emplace();
           app_tcp_frame->read_timestamp_ns = frame.read_timestamp_ns;
+          if (emulation_controller && presentation_frame) {
+            if (frame.hand_v2.sequence != 0) {
+              app_tcp_frame->emulation_input_hands = runtime_hand_frame_v2_from_runtime(
+                  frame.hand_v2, frame.read_timestamp_ns);
+              app_tcp_frame->emulation_input_hands->source_timestamp_ns =
+                  frame.hand_v2.source_timestamp_ns ? frame.hand_v2.source_timestamp_ns
+                                                   : frame.hand_v2.timestamp_ns;
+            } else if (frame.hand.sequence != 0) {
+              app_tcp_frame->emulation_input_hands = runtime_hand_frame_v2_from_v1(
+                  frame.hand, frame.read_timestamp_ns);
+              app_tcp_frame->emulation_input_hands->source_timestamp_ns =
+                  frame.hand.source_timestamp_ns ? frame.hand.source_timestamp_ns : frame.hand.timestamp_ns;
+            }
+          }
         }
         if ((runtime_pose_publisher || runtime_pose_udp_publisher || app_tcp_frame) && frame.hmd.sequence != 0) {
           const uint64_t runtime_pose_seq = runtime_pose_publisher ? runtime_pose_publisher->next_sequence()
@@ -6434,6 +6544,12 @@ int main(int argc, char** argv) {
                   runtime_controller_imu_control_snapshot.gravity_magnitude),
               &runtime_controller_synthesis_state,
               &controller_imu_history);
+          if (emulation_controller) {
+            emulation_controller->apply(runtime_controller_state,
+                runtime_controller_hand ? &*runtime_controller_hand : nullptr,
+                static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
+                runtime_only_gesture_input_blocked);
+          }
           report_controller_imu_alignment_status();
           report_controller_imu_calibration_progress(
               static_cast<uint64_t>(frame.read_timestamp_ns), fresh_controller_input);
@@ -6453,6 +6569,10 @@ int main(int argc, char** argv) {
                 left_imu_orientation_used,
                 right_imu_orientation_used);
           }
+          if (emulation_controller) {
+            xr_runtime_adapter::emulation::apply_pose_yaw_offset(
+                runtime_controller_state, emulation_controller_config);
+          }
           controller_state_for_log = runtime_controller_state;
           controller_state_for_log_available = true;
           controller_hand_for_log = runtime_controller_hand;
@@ -6464,9 +6584,9 @@ int main(int argc, char** argv) {
         if (runtime_hand_publisher || runtime_hand_udp_publisher || app_tcp_frame) {
           xr_tracking::HandTrackingFrameF32V2 runtime_hand{};
           if (frame.hand_v2_valid) {
-            runtime_hand = runtime_hand_frame_v2_from_runtime(frame.hand_v2, frame.read_timestamp_ns);
+            runtime_hand = runtime_hand_frame_v2_from_runtime(output_frame.hand_v2, frame.read_timestamp_ns);
           } else if (frame.hand_valid) {
-            runtime_hand = runtime_hand_frame_v2_from_v1(frame.hand, frame.read_timestamp_ns);
+            runtime_hand = runtime_hand_frame_v2_from_v1(output_frame.hand, frame.read_timestamp_ns);
           } else {
             runtime_hand = runtime_no_hands_frame_v2(frame.read_timestamp_ns, frame.hand_v2.reset_counter != 0 ? frame.hand_v2.reset_counter : frame.hand.reset_counter);
           }

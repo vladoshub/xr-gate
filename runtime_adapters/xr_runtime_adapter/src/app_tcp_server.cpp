@@ -174,19 +174,21 @@ Json hand_json(const xr_tracking::HandSideF32V2& h) {
           {"joints", std::move(joints)}};
 }
 
+Json hands_json(const xr_tracking::HandTrackingFrameF32V2& h) {
+  return {{"sequence", uint64_t(h.sequence)}, {"timestamp_ns", std::to_string(h.timestamp_ns)},
+          {"source_timestamp_ns", std::to_string(h.source_timestamp_ns)},
+          {"reset_counter", uint64_t(h.reset_counter)}, {"tracking_status", uint32_t(h.tracking_status)},
+          {"flags", uint32_t(h.flags)}, {"confidence", double(h.confidence)},
+          {"hand_count", uint32_t(h.hand_count)}, {"left", hand_json(h.left)}, {"right", hand_json(h.right)}};
+}
+
 std::string frame_json(const AppTcpFrame& frame, uint64_t sequence) {
   Json out{{"type", "frame"}, {"sequence", sequence},
            {"read_timestamp_ns", std::to_string(frame.read_timestamp_ns)},
            {"hmd", nullptr}, {"hands", nullptr}, {"controllers", nullptr}};
   if (frame.hmd) out["hmd"] = hmd_json(*frame.hmd);
-  if (frame.hands) {
-    const auto& h = *frame.hands;
-    out["hands"] = {{"sequence", uint64_t(h.sequence)}, {"timestamp_ns", std::to_string(h.timestamp_ns)},
-                    {"source_timestamp_ns", std::to_string(h.source_timestamp_ns)},
-                    {"reset_counter", uint64_t(h.reset_counter)}, {"tracking_status", uint32_t(h.tracking_status)},
-                    {"flags", uint32_t(h.flags)}, {"confidence", double(h.confidence)},
-                    {"hand_count", uint32_t(h.hand_count)}, {"left", hand_json(h.left)}, {"right", hand_json(h.right)}};
-  }
+  if (frame.hands) out["hands"] = hands_json(*frame.hands);
+  if (frame.emulation_input_hands) out["emulation_input_hands"] = hands_json(*frame.emulation_input_hands);
   if (frame.controllers) {
     const auto& c = *frame.controllers;
     out["controllers"] = {{"sequence", uint64_t(c.sequence)}, {"timestamp_ns", std::to_string(c.timestamp_ns)},
