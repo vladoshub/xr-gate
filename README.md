@@ -1,4 +1,4 @@
-# XR Gate
+![XR Gate](docs/media/xr-gate.jpg)
 
 Experimental open-source XR runtime stack, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
 
