@@ -9,6 +9,8 @@ config = json.loads(os.environ["XR_TEST_BLUETOOTH_SESSION"])
 controllers = config["adapters"]
 selected = next(iter(controllers))  # Intentionally defaults to the built-in.
 devices = config["devices"]
+discoverable = config.get("discoverable_devices", {})
+scanning = False
 mode = config.get("mode", "")
 log = Path(config["log"])
 available = True
@@ -52,6 +54,15 @@ for line in sys.stdin:
         emit("Agent is already registered")
         continue
     if action == "scan":
+        scanning = command[1] == "on"
+        if scanning:
+            devices[selected].update(discoverable.get(selected, {}))
+        else:
+            # Model BlueZ dropping transient, unpaired BLE objects when the
+            # discovery client stops. Pairing must finish before this point.
+            for mac in discoverable.get(selected, {}):
+                if not devices[selected].get(mac, {}).get("paired"):
+                    devices[selected].pop(mac, None)
         state = "started" if command[1] == "on" else "stopped"
         emit("Discovery " + state)
         # Foreign-adapter events must not become selectable device-list entries.
@@ -76,7 +87,9 @@ for line in sys.stdin:
         if mode == "drop-after-info":
             available = False
     elif action == "pair":
-        if mode == "pair-timeout":
+        if config.get("require_discovery_for_pair") and not scanning:
+            emit("Failed to pair: discovery was stopped too early")
+        elif mode == "pair-timeout":
             emit("Attempting to pair with " + mac)
         elif mode == "pair-error":
             emit("Failed to pair: org.bluez.Error.AuthenticationFailed")

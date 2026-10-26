@@ -7,6 +7,7 @@ controller template/config; USB identities and product names are never guessed.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import copy
 from datetime import datetime
 import json
@@ -356,7 +357,44 @@ def save_config(path, value):
             temporary.unlink(missing_ok=True)
 
 
-def pair_and_save(config_path, template_path, left, right, session):
+def available_device_info(mac, session):
+    try:
+        return device_info(mac, session)
+    except RuntimeError as error:
+        # Only a missing device may be rediscovered. Adapter loss, command
+        # failures and malformed properties must still abort the operation.
+        if str(error).casefold() != f"Device {mac} not available".casefold():
+            raise
+        return None
+
+
+@contextmanager
+def pairing_devices(choices, session, scan_seconds):
+    selected = {side: available_device_info(mac, session) if mac else None
+                for side, mac in choices.items()}
+    missing = [mac for side, mac in choices.items() if mac and selected[side] is None]
+    if not missing:
+        yield selected
+        return
+    log("Rediscovering selected controllers: " + ", ".join(missing) +
+        f". Put them in pairing mode; searching for {scan_seconds:g}s...")
+    session.ctl("scan", "on")
+    try:
+        session.exchange(None, None, scan_seconds, collect=True)
+        selected = {side: available_device_info(mac, session) if mac else None
+                    for side, mac in choices.items()}
+        missing = [mac for side, mac in choices.items() if mac and selected[side] is None]
+        if missing:
+            raise RuntimeError("Selected controllers not found on this adapter: " + ", ".join(missing) +
+                               ". Put them in pairing mode and retry Connect & save.")
+        # Unpaired BLE objects can disappear when discovery stops. Keep this
+        # client's scan and agent alive until pairing and connection finish.
+        yield selected
+    finally:
+        session.ctl("scan", "off")
+
+
+def pair_and_save(config_path, template_path, left, right, session, scan_seconds=8):
     choices = {"left": address(left), "right": address(right)}
     if not any(choices.values()):
         raise ValueError("Select at least one controller.")
@@ -364,23 +402,23 @@ def pair_and_save(config_path, template_path, left, right, session):
         raise ValueError("Left and right must use different controllers.")
     config = read_config(config_path, template_path)
     template = read_config(template_path) if template_path else copy.deepcopy(config)
-    selected = {side: device_info(mac, session) if mac else None for side, mac in choices.items()}
-    updated = configure(config, template, selected)  # Validate before pairing or writing.
-    for side, device in selected.items():
-        if device is None:
-            continue
-        mac = device["address"]
-        log("Connecting " + side + ": " + clean(device["name"]) + " [" + mac + "]")
-        if not device.get("paired"):
-            session.ctl("pair", mac, seconds=25)
-            if not device_info(mac, session).get("paired"):
-                raise RuntimeError("Pairing did not complete: " + mac + ". Put the controller in pairing mode and retry.")
-        session.ctl("trust", mac)
-        if not device_info(mac, session).get("connected"):
-            session.ctl("connect", mac, seconds=20)
-        final = device_info(mac, session)
-        if not all(final.get(k) for k in ("paired", "trusted", "connected")):
-            raise RuntimeError("Controller is not paired, trusted and connected: " + mac)
+    with pairing_devices(choices, session, scan_seconds) as selected:
+        updated = configure(config, template, selected)  # Validate before pairing or writing.
+        for side, device in selected.items():
+            if device is None:
+                continue
+            mac = device["address"]
+            log("Connecting " + side + ": " + clean(device["name"]) + " [" + mac + "]")
+            if not device.get("paired"):
+                session.ctl("pair", mac, seconds=25)
+                if not device_info(mac, session).get("paired"):
+                    raise RuntimeError("Pairing did not complete: " + mac + ". Put the controller in pairing mode and retry.")
+            session.ctl("trust", mac)
+            if not device_info(mac, session).get("connected"):
+                session.ctl("connect", mac, seconds=20)
+            final = device_info(mac, session)
+            if not all(final.get(k) for k in ("paired", "trusted", "connected")):
+                raise RuntimeError("Controller is not paired, trusted and connected: " + mac)
     save_config(config_path, updated)
     return {"selected": choices, "config": str(config_path)}
 
@@ -420,7 +458,8 @@ def main(argv=None):
                         raise ValueError("Choose a listed controller number.")
                     return found["devices"][index - 1]["address"]
                 args.left, args.right = choose("Left"), choose("Right")
-            result = pair_and_save(args.config, args.template, args.left, args.right, session)
+            result = pair_and_save(args.config, args.template, args.left, args.right, session,
+                                   scan_seconds=args.scan_seconds)
     result["adapter"] = {"address": adapter.address, "hci": adapter.hci, "name": adapter.name}
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0
