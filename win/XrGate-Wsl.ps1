@@ -165,13 +165,17 @@ function Load-State {
         throw 'Distribution name contains unsupported characters.'
     }
 }
-function Get-Tool([string]$Name) {
+function Get-Tool([string]$Name, [switch]$Optional) {
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     if ($Name -eq 'usbipd.exe') {
-        $p = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'usbipd-win\usbipd.exe'
-        if (Test-Path -LiteralPath $p) { return $p }
+        $programFiles = [Environment]::GetFolderPath('ProgramFiles')
+        if ($programFiles) {
+            $p = Join-Path $programFiles 'usbipd-win\usbipd.exe'
+            if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+        }
     }
+    if ($Optional) { return $null }
     throw "$Name was not found. Run -Action Install; reopen PowerShell after installing system tools."
 }
 function Invoke-Native([string]$File, [string[]]$Arguments, [int[]]$AllowedCodes = @(0)) {
@@ -800,10 +804,18 @@ function Disconnect-SelectedUsb {
     $owned = @((@($script:State.AttachedUsbInstanceIds) + @($script:State.UsbInstanceIds) +
         @($script:State.BluetoothInstanceId)) | Where-Object { $_ } | Select-Object -Unique)
     if (!$owned.Count) { return }
+    $usbipd = Get-Tool 'usbipd.exe' -Optional
+    if (!$usbipd) {
+        # Stop also runs when closing an unfinished installation. Do not require
+        # a tool which has not been installed, or discard saved ownership if it
+        # was removed after an earlier session.
+        Write-XrWarning 'USB detach skipped: usbipd-win is not installed. If USB devices were attached before it was removed, unplug and reconnect those devices to return them to Windows.'
+        return
+    }
     $errors = New-Object 'System.Collections.Generic.List[string]'
     foreach ($d in @(Get-UsbDevices)) {
         if ($d.InstanceId -in $owned -and $d.ClientIPAddress) {
-            try { Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$d.BusId) }
+            try { Invoke-Native $usbipd @('detach','--busid',[string]$d.BusId) }
             catch { $errors.Add([string]$_.Exception.Message) }
         }
     }
@@ -978,7 +990,9 @@ try {
         if ($script:State.LinuxUser) { Invoke-Linux -Operation stop -Request (New-LinuxRequest) }
         Stop-RuntimeWindow
         Disconnect-SelectedUsb
-        Complete-XrAction 0 'All managed runtime services stopped and selected USB devices returned to Windows.'
+        $message = 'All managed runtime services stopped and selected USB devices returned to Windows.'
+        if ($script:ActionWarnings.Count) { $message = 'Managed runtime services stopped. See warnings for cleanup details.' }
+        Complete-XrAction 0 $message
     }
     if (!$script:State.LinuxUser) { throw 'Run -Action Install first.' }
     switch ($Action) {
