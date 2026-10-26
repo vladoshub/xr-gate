@@ -24,5 +24,10 @@ for lens in (((52,111),(101,111),(110,115),(110,120),(105,148),(101,156),(94,158
     draw.polygon(points(lens), fill="#0c1526")
 for x in (62,164):
     draw.rounded_rectangle(box((x,117.5,x+26,122.5)), radius=2.5*scale, fill="#93fff0")
+# Two camera apertures on the left and right front corners.
+for x in (44, 212):
+    draw.ellipse(box((x-5.625,97.375,x+5.625,108.625)), fill="#93fff0")
+    draw.ellipse(box((x-4.375,98.625,x+4.375,107.375)), fill="#0c1526")
 image = image.resize((256,256), Image.Resampling.LANCZOS)
 image.save(Path(__file__).with_name("XrGate.ico"), sizes=[(size,size) for size in (16,24,32,48,64,128,256)])
+
