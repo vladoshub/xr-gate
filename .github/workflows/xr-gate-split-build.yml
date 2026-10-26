@@ -12,9 +12,9 @@ name: XR Gate split build
         required: false
         default: true
       cpu_profile:
-        description: "Native CPU target (native requires consistent builder CPUs)"
+        description: "CPU target (generic: no AVX; native: consistent builder CPUs required)"
         type: choice
-        options: [avx2, avx512, native]
+        options: [avx2, generic, avx512, native]
         required: false
         default: avx2
       openvr_frequencies:
@@ -751,6 +751,7 @@ jobs:
           test -f merged/xr-gate/LICENSES/MIT.txt
           test -f merged/xr-gate/THIRD_PARTY_NOTICES.md
           case "$XR_BUILD_CPU" in
+            generic) expected_cpu=x86-64 ;;
             avx2) expected_cpu=x86-64-v3 ;;
             avx512) expected_cpu=x86-64-v4 ;;
             native) expected_cpu=native ;;
@@ -804,6 +805,16 @@ jobs:
           rm -rf merged/xr-gate/bin/python-runtime/venv
           tar -C merged -czf xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz xr-gate
           ls -lh xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz
+
+      - name: Smoke test generic binaries without AVX
+        if: ${{ env.XR_BUILD_CPU == 'generic' && matrix.ubuntu == '24.04' }}
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends qemu-user
+          # Conroe has no AVX/AVX2/FMA. Exercise startup and linked libraries.
+          qemu-x86_64 -cpu Conroe merged/xr-gate/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+          qemu-x86_64 -cpu Conroe merged/xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
 
       - name: Upload merged package
         uses: actions/upload-artifact@v4

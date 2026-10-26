@@ -23,6 +23,7 @@ export XR_COMMON_SOURCE_HOME="${XR_COMMON_SOURCE_HOME:-$XR_ROOT_PROJECT/devices/
 _xr_cpu_output_prefix=""
 _xr_cpu_output_profile="${XR_BUILD_CPU:-avx2}"
 case "${_xr_cpu_output_profile,,}" in
+  generic) _xr_cpu_output_prefix="generic/" ;;
   avx512) _xr_cpu_output_prefix="avx512/" ;;
   native) _xr_cpu_output_prefix="native/" ;;
 esac

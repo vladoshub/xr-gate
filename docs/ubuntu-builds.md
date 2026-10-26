@@ -6,11 +6,20 @@ is not the runtime ABI target. Select the CPU profile with `XR_BUILD_CPU`:
 
 | Profile | GCC/Clang target | OpenCV baseline | Intended use |
 | --- | --- | --- | --- |
+| `generic` | `-march=x86-64 -mtune=generic` | SSE2 | Portable x86-64 runtime without AVX/AVX2/FMA requirements |
 | `avx2` (default) | `-march=x86-64-v3 -mtune=generic` | AVX2 | Shared AVX2/FMA/BMI runtime |
 | `avx512` | `-march=x86-64-v4 -mtune=generic` | AVX512_SKX | CPUs with AVX-512F/CD/BW/DQ/VL |
 | `native` | `-march=native -mtune=native` | NATIVE | The build machine's CPU |
 
-The same profile configures Basalt, OpenCV and the vcpkg dependencies. `avx512`
+The same profile configures Basalt, OpenCV and the vcpkg dependencies. `generic`
+uses the original x86-64 baseline (including SSE2); it does not require SSE3,
+SSE4, AVX, AVX2 or FMA. It can be built on a newer CPU or a hosted GitHub runner
+for use on an older x86-64 CPU. OpenCV CPU dispatch remains disabled. Unlike
+`native`, this profile does not inherit the build host's instruction set.
+The Ubuntu/glibc requirements below still apply, and tracking performance on
+older CPUs must be checked with the actual hardware.
+
+`avx512`
 is the x86-64-v4 baseline, not every vendor-specific AVX-512 extension. `native`
 can use additional extensions on the build host and is not a portable release.
 For native SDK reuse, CPU model/features must match across CI jobs. On heterogeneous
@@ -21,19 +30,22 @@ host's CPU flags, and may reject another kernel/VM even with a similar CPU.
 Local examples (from the repository root):
 
 ```bash
+XR_BUILD_CPU=generic ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 XR_BUILD_CPU=avx2 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 XR_BUILD_CPU=avx512 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 XR_BUILD_CPU=native ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-For GitHub Actions, select `cpu_profile` in the dispatch inputs. With local act:
+For GitHub Actions, select `cpu_profile=generic` in the dispatch inputs for CPUs
+without AVX2. AVX2 remains the default. With local act:
 
 ```bash
-./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --full --allow-pull --input cpu_profile=avx512 --input publish_release=false
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --full --allow-pull --input cpu_profile=generic --input publish_release=false
 ```
 
 Build one profile per invocation. Local output roots are separated automatically:
-`out/xr-gate/` for AVX2, `out/avx512/xr-gate/` for AVX512, and
+`out/generic/xr-gate/` for generic, `out/xr-gate/` for AVX2,
+`out/avx512/xr-gate/` for AVX512, and
 `out/native/xr-gate/` for native. An explicit `XR_OUT_ROOT` still works; the
 installer rejects reusing it for a different CPU profile/native CPU identity.
 CI explicitly selects its original `out/xr-gate/` layout in each isolated job.
@@ -151,3 +163,6 @@ it locally with system site-packages. Same-version and cross-version CI checks
 install only runtime packages, scan ELF dependencies and load the Basalt CLI.
 They do not test live camera capture, tracking accuracy, graphics drivers or
 headset/GPU operation. Optional xrizer and Mercury model handling is unchanged.
+For `generic`, the Ubuntu 24.04 merge job additionally starts the capture probe
+and Basalt backend under QEMU's Conroe CPU model (no AVX/AVX2/FMA). This checks
+startup and linked libraries; it does not exercise a complete tracking session.

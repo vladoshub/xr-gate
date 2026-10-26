@@ -7,10 +7,12 @@ from pathlib import Path
 import re
 
 
-V3_FLAGS = {"avx", "avx2", "fma", "f16c", "bmi1", "bmi2", "lzcnt", "movbe", "xsave",
+V1_FLAGS = {"cmov", "cx8", "fpu", "fxsr", "lm", "mmx", "sse", "sse2", "syscall"}
+V3_FLAGS = V1_FLAGS | {"avx", "avx2", "fma", "f16c", "bmi1", "bmi2", "lzcnt", "movbe", "xsave",
             "cx16", "lahf_lm", "popcnt", "sse3", "ssse3", "sse4_1", "sse4_2"}
 V4_FLAGS = V3_FLAGS | {"avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"}
 PROFILES = {
+    "generic": ("x86-64", "generic", "SSE2"),
     "avx2": ("x86-64-v3", "generic", "AVX2"),
     "avx512": ("x86-64-v4", "generic", "AVX512_SKX"),
     "native": ("native", "native", "NATIVE"),
@@ -39,7 +41,7 @@ def host_features(cpuinfo=None):
 def describe(mode, cpuinfo=None):
     mode = mode.strip().lower()
     if mode not in PROFILES:
-        raise ValueError("XR_BUILD_CPU must be avx2, avx512 or native")
+        raise ValueError("XR_BUILD_CPU must be generic, avx2, avx512 or native")
     march, tune, baseline = PROFILES[mode]
     if mode == "native":
         text = Path("/proc/cpuinfo").read_text() if cpuinfo is None else cpuinfo
@@ -48,7 +50,7 @@ def describe(mode, cpuinfo=None):
         identity = "\n".join(sorted(set(identity)) + sorted(features))
         cache_tag = "native-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
     else:
-        features = V3_FLAGS if mode == "avx2" else V4_FLAGS
+        features = {"generic": V1_FLAGS, "avx2": V3_FLAGS, "avx512": V4_FLAGS}[mode]
         cache_tag = march
     return dict(schema=SCHEMA, profile=mode, march=march, tune=tune,
                 opencv_baseline=baseline, cache_tag=cache_tag,
@@ -61,7 +63,9 @@ def check_package(root, cpuinfo=None):
     if not marker.is_file():
         return
     march = marker.read_text().strip()
-    if march == "x86-64-v3":
+    if march == "x86-64":
+        required = V1_FLAGS
+    elif march == "x86-64-v3":
         required = V3_FLAGS
     elif march == "x86-64-v4":
         required = V4_FLAGS

@@ -158,7 +158,8 @@ The controllers emulate the buttons of real VR controllers - at the moment, the 
 # Quick start Windows
 **If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
 
-Required Windows 11 + AVX2 Instructions.
+Requires Windows 11. Default packages require AVX2; for the Linux/WSL runtime
+on CPUs without AVX2, build with the [`generic` CPU profile](docs/ubuntu-builds.md).
 
 Install SteamVR, open it once and close it. Download from the 'Releases' the last xr-gate-windows-wsl-usbip.zip, connect device to PC and enable SBS mode 
 if it is supported. Then Open XR-Gate.exe
@@ -169,7 +170,8 @@ WSL2 will be installed. The installation is automated — follow the instruction
 # Quick start Linux
 **If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
 
-Required AVX2 Instructions.
+Default packages require AVX2. CPUs without AVX2 can use the
+[`generic` CPU profile](docs/ubuntu-builds.md).
 
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
@@ -505,6 +507,18 @@ Build the complete multi-profile package (vendor components included by default)
 ```bash
 XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
+
+For x86-64 CPUs without AVX2, build a portable SSE2-baseline package (also works
+when building on a newer CPU):
+
+```bash
+XR_BUILD_CPU=generic XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+The result is in `out/generic/xr-gate/`. In GitHub Actions choose
+`cpu_profile=generic`; with ACT replace `--input cpu_profile=avx2` below with
+`--input cpu_profile=generic`. AVX2 remains the default. See
+[CPU profiles and runtime compatibility](docs/ubuntu-builds.md).
 
 Build the complete multi-profile package (vendor components included by default):
 ```bash
