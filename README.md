@@ -363,8 +363,7 @@ When using external input, hands position and rotation from cameras, input from 
 
 ## 3. Run xr_client
 
-**At startup for device with support display manager, you need to select display frequency**
-**For XREAL Ultra - 60Hz or 90Hz mode. 90HZ works only with USB-C directly on Xreal Ultra**
+**At startup for device with support display manager, you need to select display frequency. For XREAL Ultra - 60Hz or 90Hz mode. 90HZ works only with USB-C directly on Xreal Ultra**
 
 
 **XREAL ULTRA | Recomended**
@@ -387,7 +386,7 @@ CTRL + C - exit from xr_client
 
 ## 4. Monado | SteamVR
 
-### SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
+### SteamVR on Linux Fallback windowed mode (XREAL Ultra example)
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
 
@@ -433,7 +432,7 @@ Stereo overlay (need running xr_video backend)
 
 
 
-### Monado/OpenXR on Linux windowed mode (XREAL Ultra example) | Recomended
+### Monado/OpenXR on Linux windowed mode (XREAL Ultra example)
 
 
 Run xr_client
