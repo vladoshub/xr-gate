@@ -20,9 +20,13 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     private string loadedHardware = "";
     private string? profileLabelOverride;
     private string? deviceNameOverride;
+    private string? deviceImageOverride;
+    private Dictionary<string, string> controllerImageOverrides = new(StringComparer.OrdinalIgnoreCase);
     public string HardwareEnv { get; set; } = "";
     public bool AutoDetectHardware { get; set; } = true;
     public string DeviceName { get; private set; } = "XR device";
+    public string DeviceImage { get; private set; } = "";
+    public Dictionary<string, string> ControllerImages { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
     public string ControllerProfileLabel { get; private set; } = "Configured BLE / IMU controller profile";
     public string Distribution { get; set; } = "Ubuntu-24.04";
     public string ReleaseTag { get; set; } = "latest";
@@ -142,6 +146,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             HardwareEnv = hardware, Distribution = Choice("XR_DISTRIBUTION", "Distribution", "Ubuntu-24.04"),
             AutoDetectHardware = overrides.ContainsKey("XR_AUTO_DETECT_HARDWARE") ? Flag("XR_AUTO_DETECT_HARDWARE", true) : !overrides.ContainsKey("XR_HARDWARE_ENV"),
             DeviceName = Get("XR_DEVICE_NAME", Get("XR_TARGET_DEVICE", "XR device")),
+            DeviceImage = Get("XR_DEVICE_IMAGE"), ControllerImages = ReadControllerImages(values),
             ControllerProfileLabel = Get("XR_CONTROLLER_PROFILE_LABEL", "Configured BLE / IMU controller profile"),
             ReleaseTag = Get("XR_RELEASE_TAG", "latest"), UsbBusIds = Get("XR_USB_BUS_IDS"),
             BluetoothBusId = Get("XR_BLUETOOTH_BUS_ID"), SavedBluetoothInstance = bluetoothInstance,
@@ -166,6 +171,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         settings.loadedHardware = hardware;
         settings.profileLabelOverride = overrides.GetValueOrDefault("XR_CONTROLLER_PROFILE_LABEL");
         settings.deviceNameOverride = overrides.GetValueOrDefault("XR_DEVICE_NAME");
+        settings.deviceImageOverride = overrides.GetValueOrDefault("XR_DEVICE_IMAGE");
+        settings.controllerImageOverrides = ReadControllerImages(overrides);
         settings.baseline = settings.GuiValues();
         if (!defaultsOnly)
         {
@@ -182,6 +189,10 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         if (hardwareOverride is not null && !defaultsOnly) settings.explicitKeys.Add("XR_HARDWARE_ENV");
         return settings;
     }
+
+    private static Dictionary<string, string> ReadControllerImages(IReadOnlyDictionary<string, string> values) =>
+        values.Where(pair => pair.Key.StartsWith("XR_CONTROLLER_IMAGE_", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(pair => pair.Key["XR_CONTROLLER_IMAGE_".Length..], pair => pair.Value, StringComparer.OrdinalIgnoreCase);
 
     private Dictionary<string, string> GuiValues() => new(StringComparer.OrdinalIgnoreCase)
     {
@@ -213,6 +224,9 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         var selected = Load(root, hardwareOverride: HardwareEnv.Trim(), defaultsOnly: true);
         var profile = ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
         DeviceName = deviceNameOverride ?? selected.DeviceName;
+        DeviceImage = deviceImageOverride ?? selected.DeviceImage;
+        ControllerImages = new Dictionary<string, string>(selected.ControllerImages, StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in controllerImageOverrides) ControllerImages[pair.Key] = pair.Value;
         string Keep(string key, string current, string inherited) => explicitKeys.Contains(key) ? current : inherited;
         Distribution = Keep("XR_DISTRIBUTION", Distribution, selected.Distribution);
         ReleaseTag = Keep("XR_RELEASE_TAG", ReleaseTag, selected.ReleaseTag);

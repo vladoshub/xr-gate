@@ -54,6 +54,7 @@ public partial class MainWindow
             settings.HardwareEnv = selected;
             if (configurationProblem is null) settings.ApplyHardwarePreset(root);
             else if (!string.IsNullOrWhiteSpace(settings.HardwareEnv) && settings.HardwareEnv != recoveryHardware) ReloadConfiguration(settings.HardwareEnv);
+            UpdateHeaderArtwork();
             AutoDetectHardwareBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
             HardwareDetectionStatus.Text = "Manual preset selected. Automatic detection will not replace it.";
         }

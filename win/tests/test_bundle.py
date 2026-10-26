@@ -110,9 +110,25 @@ class HardwareTest(unittest.TestCase):
 
 
 class PackageTest(unittest.TestCase):
+    def check_documentation_and_images(self, package):
+        names = package.namelist()
+        prefix = packager.ROOT_NAME + "/"
+        self.assertFalse(any(len(Path(name).parts) == 2 and Path(name).suffix in (".md", ".html") for name in names))
+        for name in ("README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html", "GESTURES.html", "IMAGE-ASSETS.md"):
+            self.assertIn(prefix + "docs/" + name, names)
+        self.assertIn(b"<svg", package.read(prefix + "docs/GESTURES.html"))
+        self.assertIn(b"MIT License", package.read(prefix + "docs/IMAGE-ASSETS.md"))
+        self.assertEqual(package.read(prefix + "docs/licenses/fixture/NOTICE.txt"), b"fixture runtime notice")
+        self.assertFalse(any(name.startswith(prefix + "licenses/") for name in names))
+        for image in (WIN / "images").glob("*.png"):
+            self.assertEqual(package.read(prefix + "images/" + image.name), image.read_bytes())
+
     def launcher(self, root):
         path = root / "XR-Gate.exe"
         path.write_bytes(b"MZ" + b"launcher test fixture" * 8)
+        notice = root / "licenses/fixture/NOTICE.txt"
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        notice.write_bytes(b"fixture runtime notice")
         return path
 
     def drivers(self, root, frequencies="60 90", modes="direct extended_sbs", device="xreal_ultra"):
@@ -142,6 +158,7 @@ class PackageTest(unittest.TestCase):
             manifest = packager.verify(archive, "60 90", "direct extended_sbs")
             self.assertEqual(len(manifest["variants"]), 4)
             with ZipFile(archive) as package:
+                self.check_documentation_and_images(package)
                 self.assertNotIn("xr-gate-windows-wsl-usbip/.env", package.namelist())
                 self.assertFalse(any(name.lower().endswith((".cmd", ".bat")) for name in package.namelist()))
                 self.assertFalse(any("/launcher/" in name or "/obj/" in name for name in package.namelist()))
@@ -183,6 +200,7 @@ class PackageTest(unittest.TestCase):
             with ZipFile(archive) as package:
                 self.assertNotIn("xr-gate-windows-wsl-usbip/bundle.json", package.namelist())
                 self.assertIn("xr-gate-windows-wsl-usbip/windows/Driver.ps1", package.namelist())
+                self.check_documentation_and_images(package)
                 self.assertFalse(any(name.lower().endswith((".bat", ".cmd")) for name in package.namelist()))
                 self.assertFalse(any("/launcher/" in name for name in package.namelist()))
                 metadata = json.loads(package.read("xr-gate-windows-wsl-usbip/launcher.json"))["launcher"]

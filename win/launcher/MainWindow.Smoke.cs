@@ -13,6 +13,7 @@ public partial class MainWindow
         if (!smoke) throw new InvalidOperationException("UI fixture is only available in smoke mode.");
         configurationProblem = null;
         UpdateRecoveryUi();
+        VerifyArtworkUi();
         await VerifySetupUiAsync();
         await VerifyFirstLoginUiAsync();
         await VerifyHotkeysUiAsync();

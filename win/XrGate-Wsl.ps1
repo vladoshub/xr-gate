@@ -808,7 +808,7 @@ Options:
   -DisplayName \\.\DISPLAY2       Select this output with -Action Display.
   -DisplayOption current          Keep the SBS mode set in Windows (default).
   -SteamVR D:\SteamLibrary\steamapps\common\SteamVR
-Read START-HERE.html for first-login, physical display and controller steps.
+Read docs/START-HERE.html for first-login, physical display and controller steps.
 '@
 }
 if ($Action -eq 'Help') { Show-Help; return }
@@ -912,7 +912,7 @@ try {
         }
         Install-SelectedWindowsDriver $driverPackage ([string]$release.tag_name)
         Register-XrDriver -AllowDeferred
-        Write-Host 'Installation complete. Next: enable SBS, select the matching Hz in Windows, then click Start VR. See START-HERE.html.' -ForegroundColor Green
+        Write-Host 'Installation complete. Next: enable SBS, select the matching Hz in Windows, then click Start VR. See docs/START-HERE.html.' -ForegroundColor Green
         Complete-XrAction 0 'Installation complete. Click Start VR.'
     }
     if ($Action -eq 'Display') {
@@ -1010,7 +1010,7 @@ try {
     Complete-XrAction 0
 } catch {
     Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red
-    Write-Host 'See START-HERE.html. For device/runtime details use -Action Doctor.'
+    Write-Host 'See docs/START-HERE.html. For device/runtime details use -Action Doctor.'
     Complete-XrAction 1 $_.Exception.Message
 }
 

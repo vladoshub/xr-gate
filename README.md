@@ -13,7 +13,7 @@ Supported:
 
 [Quick Start Linux](#quick-start-linux)
 
-[Quick Start Windows](win/README.md)
+[Quick Start Windows](#quick-start-windows)
 
 For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones. See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
 
@@ -121,8 +121,17 @@ Do not use this project in unsafe environments. Make sure you have enough free s
 
 XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
 
+# Quick start Windows
+Required Windows 11 + AVX2 Instructions.
+
+Install SteamVR, open it once and close it. Download from the 'Releases' the last xr-gate-windows-wsl-usbip.zip, connect device to PC and open XR-Gate.exe.
+
+WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
+
 
 # Quick start Linux
+Required AVX2 Instructions.
+
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
 ## 1. Unpack binary (once)

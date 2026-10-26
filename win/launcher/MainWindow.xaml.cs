@@ -305,6 +305,7 @@ public partial class MainWindow : Window
         var value = default(JsonElement);
         runtimeMayBeRunning = data.TryGetProperty("running", out value) && value.GetBoolean();
         runtimeMayBeRunning |= data.TryGetProperty("starting", out var starting) && starting.ValueKind == JsonValueKind.True;
+        UpdateHeaderArtwork();
         if (!diagnosticLog) return;
         if (data.TryGetProperty("frequency_hz", out value)) Log("[Launcher] Configured driver: " + value + " Hz.");
         if (data.TryGetProperty("display_frequency_hz", out value) && value.ValueKind == JsonValueKind.Number)
@@ -570,7 +571,7 @@ public partial class MainWindow : Window
         try
         {
             string language = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru" ? "START-HERE.ru.html" : "START-HERE.html";
-            Process.Start(new ProcessStartInfo(Path.Combine(root, language)) { UseShellExecute = true });
+            OpenDocumentation(language);
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }
@@ -578,10 +579,18 @@ public partial class MainWindow : Window
     {
         try
         {
-            Process.Start(new ProcessStartInfo(Path.Combine(root, "GESTURES.html")) { UseShellExecute = true });
+            OpenDocumentation("GESTURES.html");
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }
+    private void OpenDocumentation(string name)
+    {
+        string path = Path.Combine(root, "docs", name);
+        // Source checkouts retain the editable documentation at the bundle root.
+        if (!File.Exists(path)) path = Path.Combine(root, name);
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+    }
+
     private void Advanced_Click(object sender, RoutedEventArgs e)
     {
         try

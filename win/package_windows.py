@@ -15,7 +15,7 @@ REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
             "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1", "windows/Delete.ps1", "windows/FirstLogin.ps1", "windows/SteamVr.ps1", "windows/Restart.ps1",
             "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/runtime_progress.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
-            "README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html", "GESTURES.html")
+            "docs/README.md", "docs/README.ru.md", "docs/START-HERE.html", "docs/START-HERE.ru.html", "docs/GESTURES.html", "docs/IMAGE-ASSETS.md")
 
 
 def selections(frequencies, modes):
@@ -67,11 +67,12 @@ def copy_installer(source, bundle, launcher, release_tag):
         relative = path.relative_to(source)
         if not path.is_file() or any(part.startswith(".") or part == "__pycache__" for part in relative.parts):
             continue
-        if relative.parts[0] not in ("windows", "linux", "hardware") and not (
+        if relative.parts[0] not in ("windows", "linux", "hardware", "docs", "images") and not (
             len(relative.parts) == 1 and path.suffix in (".ps1", ".md", ".html")
         ):
             continue
-        target = bundle / relative
+        documentation = len(relative.parts) == 1 and path.suffix.lower() in (".md", ".html")
+        target = bundle / "docs" / relative if documentation else bundle / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
     # Also ship the Linux helper with Windows: a Windows-only build can use an
@@ -84,7 +85,7 @@ def copy_installer(source, bundle, launcher, release_tag):
     shutil.copy2(launcher, bundle / "XR-Gate.exe")
     notices = launcher.parent / "licenses"
     if notices.is_dir():
-        shutil.copytree(notices, bundle / "licenses")
+        shutil.copytree(notices, bundle / "docs" / "licenses")
     env = (source / ".env.example").read_text(encoding="utf-8")
     env = re.sub(r"(?m)^XR_RELEASE_TAG=.*$", "XR_RELEASE_TAG=" + release_tag, env)
     (bundle / ".env.example").write_text(env, encoding="utf-8", newline="\n")
@@ -100,6 +101,8 @@ def verify_installer(package):
         parts = PurePosixPath(name).parts
         if not parts or parts[0] != ROOT_NAME or ".." in parts or "\\" in name:
             raise ValueError("Unexpected ZIP entry: " + name)
+        if len(parts) == 2 and PurePosixPath(name).suffix.lower() in (".md", ".html"):
+            raise ValueError("Documentation must be inside docs/: " + name)
     for name in REQUIRED:
         if f"{ROOT_NAME}/{name}" not in names:
             raise ValueError("Bundle file missing: " + name)
@@ -109,7 +112,27 @@ def verify_installer(package):
     env = package.read(f"{ROOT_NAME}/.env.example").decode("utf-8-sig")
     if f"{ROOT_NAME}/{hardware_preset(env)}" not in names:
         raise ValueError("Hardware preset missing from bundle.")
+    verify_artwork(package)
     return hashlib.sha256(exe).hexdigest()
+
+
+def verify_artwork(package):
+    """Check the image references from configuration, independently of device names."""
+    names = set(package.namelist())
+    configs = [name for name in names if name == f"{ROOT_NAME}/.env.example" or
+               name.startswith(f"{ROOT_NAME}/hardware/") and name.endswith(".env")]
+    for config in configs:
+        text = package.read(config).decode("utf-8-sig")
+        for match in re.finditer(r"(?m)^(?:XR_DEVICE_IMAGE|XR_CONTROLLER_IMAGE_[A-Z0-9_]+)=(.*)$", text):
+            value = match.group(1).strip().strip("\"'")
+            if not value:
+                continue
+            relative = PurePosixPath(value)
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts or "\\" in value or relative.parts[0] != "images":
+                raise ValueError("Image must be inside images/: " + value)
+            entry = f"{ROOT_NAME}/{relative.as_posix()}"
+            if entry not in names:
+                raise ValueError("Configured image missing: " + value)
 
 
 def verify_launcher_metadata(metadata, digest):

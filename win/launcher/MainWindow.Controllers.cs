@@ -47,6 +47,7 @@ public partial class MainWindow
 
     private void ControllerSettingsSaved()
     {
+        UpdateHeaderArtwork();
         controllerSaveTimer.Stop();
         controllerSettingsDirty = false;
         ControllerSaveStatus.Text = "Changes saved automatically.";

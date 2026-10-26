@@ -18,6 +18,7 @@ public partial class MainWindow
             HardwarePresetBox.SelectedValue = hardwareChoices.FirstOrDefault(choice => HardwarePresetChoice.SamePath(root, choice.Path, settings.HardwareEnv))?.Path;
         }
         finally { bindingHardwareChoices = false; }
+        UpdateHeaderArtwork();
     }
 
     private async void AutoDetectHardware_Click(object sender, RoutedEventArgs e)
