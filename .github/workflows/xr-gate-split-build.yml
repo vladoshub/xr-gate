@@ -715,6 +715,11 @@ jobs:
         ubuntu: ["24.04", "26.04"]
 
     steps:
+      - name: Checkout profiles for package validation
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - name: Download partial packages
         uses: actions/download-artifact@v4
         with:
