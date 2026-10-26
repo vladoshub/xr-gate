@@ -15,7 +15,10 @@ Supported:
 
 [Quick Start Windows](#quick-start-windows)
 
-For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones. See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
+[About custom display frequency and video adapters](#about-custom-display-frequency-and-video-adapters)
+
+[About input and controllers](#about-input-and-controllers)
+
 
 ## Supported devices
 
@@ -121,15 +124,50 @@ Do not use this project in unsafe environments. Make sure you have enough free s
 
 XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
 
+# About custom display frequency and video adapters
+
+**Be careful when setting a custom frequency, as this is not a standard mode and correct operation is not guaranteed.**
+
+The screen refresh rate isn't limited to 60Hz. On Windows, you can configure it through the driver - for example, for NVIDIA, you can do this in the Control Panel.
+Also, consider the limitations of video adapters - my USB-C to HDMI adapter allowed me to overclock the refresh rate about 75Hz in SBS.
+Aslo example, for Xreal Ultra, you can set the refresh rate to 90Hz (it works in Linux), but for me, this only worked directly via USB-C without adapters. 
+So, if you want to connect your device directly to HDMI/DispayPort, you'll need an adapter, or if you don't have a port with USB-C Alt Mode.
+
+
+# About input and controllers
+You can use gestures and controllers.
+
+## Gestures
+Gestures try to emulate the controller as much as possible - dpad, trigger, grip, thubstick, A, B, Menu buttons
+See [GESTURES](runtime_adapters/xr_runtime_adapter/configs/GESTURES.md)
+
+## Bluetooth controlles
+Currently, two types of Bluetooth controllers are supported: those with and without an IMU.
+The difference is that controllers with an IMU allow you to track hand orientation from the IMU, which greatly improves sensitivity and accuracy. 
+Prediction when hands leave the camera's field of view is also partially supported (but requires calibration each time you launch).
+For Bluetooth, I strongly recommend using a separate adapter to reduce latency—for example, the ASUS USB-BT500.
+
+For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones.
+See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
+
+
+
+The controllers emulate the buttons of real VR controllers - at the moment, the Samsung Gear VR covers most of the main buttons and has a touch panel, and also has an IMU
+
 # Quick start Windows
+**If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
+
 Required Windows 11 + AVX2 Instructions.
 
-Install SteamVR, open it once and close it. Download from the 'Releases' the last xr-gate-windows-wsl-usbip.zip, connect device to PC and open XR-Gate.exe.
+Install SteamVR, open it once and close it. Download from the 'Releases' the last xr-gate-windows-wsl-usbip.zip, connect device to PC and enable SBS mode 
+if it is supported. Then Open XR-Gate.exe
 
 WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
 
 
 # Quick start Linux
+**If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
+
 Required AVX2 Instructions.
 
 Tested on Ubuntu 24.04 and Ubuntu 26.04
