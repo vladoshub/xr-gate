@@ -495,6 +495,17 @@ XR_OPENVR_DISPLAY_MODE=direct \
 ./devices/common/linux/scripts/openvr_driver/register_driver.sh
 ```
 
+Custom frequency 75HZ:
+```bash
+cd ~/xr-gate-release/xr-gate
+XR_TARGET_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=75 \
+XR_OPENVR_DISPLAY_FREQUENCY_HZ=75 \
+XR_OPENVR_DRIVER_DIR_NAME=openvr_driver_60HZ \
+XR_OPENVR_DISPLAY_MODE=direct \
+./devices/common/linux/scripts/openvr_driver/register_driver.sh
+```
+
 For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, 60 Hz is the safer default:
 
 ```bash
@@ -507,6 +518,21 @@ XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_DISPLAY_MODE=direct \
 ./devices/common/linux/scripts/openvr_driver/register_driver.sh
 ```
+
+For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, custom frequency 75HZ:
+
+```bash
+cd ~/xr-gate-release/xr-gate
+XR_OPENVR_REGISTER_METHOD=manual \
+XR_OPENVR_RUNTIME_MODE=steamvr \
+XR_TARGET_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=75 \
+XR_OPENVR_DISPLAY_FREQUENCY_HZ=75 \
+XR_OPENVR_DRIVER_DIR_NAME=openvr_driver_60HZ \
+XR_OPENVR_DISPLAY_MODE=direct \
+./devices/common/linux/scripts/openvr_driver/register_driver.sh
+```
+
 
 
 **Start xr_client before run SteamVR**
@@ -546,10 +572,10 @@ DP-4 = glasses (3840x1080)
 DP-6 = main monitor
 ```
 
-Run direct mode (tested on Nvidia):
+Run direct mode (tested on Nvidia) 60HZ:
 ```bash
 cd ~/xr-gate-release/xr-gate
-XR_OPENVR_DGPU_GPU_VENDOR=nvidia \
+XR_OPENVR_DGPU_VENDOR=nvidia \
 XR_OPENVR_DGPU_OUTPUT=DP-4 \
 XR_OPENVR_LAUNCH_MODE=steam \
 XR_OPENVR_CLEAR_LOGS=1 \
@@ -557,6 +583,21 @@ XR_DISPLAY_FREQUENCY_HZ=60 \
 ./run_openvr_dgpu_direct.sh 60
 ```
 
+
+Run direct mode (tested on Nvidia) custom frequency 75HZ:
+```bash
+cd ~/xr-gate-release/xr-gate
+XR_TARGET_DEVICE=xreal_ultra \
+XR_OPENVR_DGPU_VENDOR=nvidia \
+XR_OPENVR_DGPU_OUTPUT=DP-4 \
+XR_OPENVR_LAUNCH_MODE=steam \
+XR_OPENVR_CLEAR_LOGS=1 \
+XR_OPENVR_DRIVER_DIR_NAME=openvr_driver_60HZ \
+XR_OPENVR_DISPLAY_MODE=direct \
+XR_OPENVR_DISPLAY_FREQUENCY_HZ=75 \
+XR_DISPLAY_FREQUENCY_HZ=75 \
+./run_openvr_dgpu_direct.sh 75
+```
 
 Start SteamVR. After you can start SteamVR apps/games.
 

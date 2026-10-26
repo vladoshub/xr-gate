@@ -4,7 +4,7 @@ XR Gate runs through the Windows Subsystem for Linux (WSL 2). The Windows launch
 
 [English](README.md) · [Русский](README.ru.md)
 
-Install SteamVR, open it once and close it. Extract the complete xr-gate-windows-wsl-usbip.zip and open XR-Gate.exe. Keep the supplied folders together.
+Install SteamVR, open it once and close it. Download and extract from the 'Releases' the complete xr-gate-windows-wsl-usbip.zip and open XR-Gate.exe. Keep the supplied folders together.
 
 ## Start
 
