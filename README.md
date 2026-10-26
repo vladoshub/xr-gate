@@ -222,8 +222,11 @@ sudo usermod -aG dialout "$USER"
 newgrp dialout
 reboot
 ```
+
+
+# 2. Setting up INPUT | ONCE
 <details>
-  <summary> # 2. Setting up INPUT | ONCE | READ THIS STEP IF YOU HAVE CONTROLLERS (VR-PARK, SAMSUNG GEAR VR) OR WANT TO START WITH CONTROLLERS EMULTATION</summary>
+  <summary>**READ THIS STEP IF YOU HAVE CONTROLLERS (VR-PARK, SAMSUNG GEAR VR) OR WANT TO START WITH CONTROLLERS EMULTATION**</summary>
 
 
 
