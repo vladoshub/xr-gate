@@ -30,10 +30,20 @@ class FakeBus:
         self.fail_once = None
         self.ignore_once = None
         self.break_identity = None
+        self.address_reads = {}
+        self.manufacturer_data = False
+        self.extra_nodes = []
 
     def command(self, args, timeout):
         self.commands.append(args)
+        if "introspect" in args:
+            assert args[-2:] == ["org.bluez", "/org/bluez"]
+            assert "--xml-interface" in args
+            nodes = [path.rsplit("/", 1)[-1] for path in self.addresses]
+            return "<node>" + "".join(f'<node name="{name}"/>' for name in nodes + self.extra_nodes) + "</node>"
         if "GetManagedObjects" in args:
+            if self.manufacturer_data:
+                raise RuntimeError("busctl exited with code 1: no diagnostic output")
             objects = {path: {bt.INTERFACE: {
                 "Address": {"type": "s", "data": address},
                 "Powered": {"type": "b", "data": self.power[path]},
@@ -47,9 +57,12 @@ class FakeBus:
             assert interface == bt.INTERFACE
             if prop == "Address":
                 value = self.addresses[path]
-                if self.break_identity == path:
+                self.address_reads[path] = self.address_reads.get(path, 0) + 1
+                if self.break_identity == path and self.address_reads[path] > 1:
                     value = "AA:BB:CC:DD:EE:99"
                 return json.dumps({"type": "s", "data": value})
+            if prop == "Name":
+                return json.dumps({"type": "s", "data": "Same PC hostname"})
             assert prop == "Powered"
             return json.dumps({"type": "b", "data": self.power[path]})
         if "set-property" in args:
@@ -103,7 +116,29 @@ class BluetoothAdaptersTest(unittest.TestCase):
         self.assertEqual((code, error), (0, ""))
         self.assertIn("AA:BB:CC:DD:EE:02", output)
         self.assertEqual(self.bus.writes, [])
-        self.assertEqual(len(self.bus.commands), 1)  # A single ObjectManager snapshot.
+        self.assertFalse(any("GetManagedObjects" in args for args in self.bus.commands))
+        self.assertEqual(sum("introspect" in args for args in self.bus.commands), 1)
+
+    def test_inventory_can_be_repeated_after_discovering_manufacturer_data(self):
+        before = self.bluez.adapters()
+        self.bus.manufacturer_data = True
+        for _ in range(3):
+            self.assertEqual(self.bluez.adapters(), before)
+        self.assertEqual(self.bus.writes, [])
+
+    def test_inventory_ignores_devices_gatt_and_duplicate_adapter_nodes(self):
+        self.bus.extra_nodes = ["hci0", "hci0/dev_11_22_33_44_55_66", "agent", "hci3/../../hci0"]
+        self.assertEqual([adapter.hci for adapter in self.bluez.adapters()], ["hci0", "hci2"])
+        self.assertFalse(any("GetManagedObjects" in args or any("dev_" in value for value in args)
+                             for args in self.bus.commands))
+        self.assertEqual(self.bus.writes, [])
+
+    def test_invalid_adapter_inventory_never_changes_power(self):
+        for output in ("not XML", "<node>", "<reply/>"):
+            with self.subTest(output=output), patch.object(self.bluez, "call", return_value=output):
+                with self.assertRaisesRegex(RuntimeError, "Invalid BlueZ adapter inventory"):
+                    self.bluez.adapters()
+        self.assertEqual(self.bus.writes, [])
 
     def test_direct_mac_selection_works_without_a_terminal(self):
         code, _, error = self.cli(["--adapter", "aa:bb:cc:dd:ee:02"], tty=False)
