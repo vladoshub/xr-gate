@@ -42,7 +42,10 @@ def run_command(args: list[str], timeout: float) -> str:
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{args[0]} timed out after {timeout:g}s.") from None
     if result.returncode:
-        raise RuntimeError(clean(result.stderr or result.stdout) or f"{args[0]} failed.")
+        detail = clean(result.stderr.strip() or result.stdout.strip())
+        operation = clean(" ".join(args))
+        raise RuntimeError(f"{args[0]} exited with code {result.returncode}: " +
+                           (detail or "no diagnostic output") + f" [command: {operation}]")
     return result.stdout
 
 

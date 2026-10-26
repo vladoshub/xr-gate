@@ -866,7 +866,9 @@ class Runtime:
             if code and (kind != "runtime" or code not in (-signal.SIGTERM, -signal.SIGINT, 130, 143)):
                 if kind == "runtime":
                     self.failure_logs(session["started_ns"])
-                raise RuntimeError("xr_client exited with code " + str(code))
+                label = {"runtime": "xr_client", "bluetooth_scan": "Bluetooth scan",
+                         "bluetooth_pair": "Bluetooth pairing"}.get(kind, kind)
+                raise RuntimeError(label + " exited with code " + str(code))
             return code
         finally:
             # If cleanup failed, keep metadata so Stop can recover the exact
@@ -983,9 +985,11 @@ class Runtime:
         if self.status().get("busy", False):
             raise RuntimeError("Stop tracking before selecting or pairing controllers.")
         package = self.current.resolve()
-        helper = package / "bin/scripts/override_controller/bluetooth_controllers.py"
-        if not helper.is_file():
-            helper = Path(__file__).with_name("bluetooth_controllers.py")
+        # Launcher updates also update these helpers. Prefer the complete
+        # bundled pair over a potentially older downloaded Linux release.
+        helper = Path(__file__).with_name("bluetooth_controllers.py")
+        if not (helper.is_file() and helper.with_name("select_bluetooth_adapter.py").is_file()):
+            helper = package / "bin/scripts/override_controller/bluetooth_controllers.py"
         if not helper.is_file():
             helper = Path(__file__).resolve().parents[2] / "override_controller/scripts/linux/bluetooth_controllers.py"
         if not helper.is_file():

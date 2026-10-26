@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -245,6 +246,17 @@ class HardwareNamesTest(unittest.TestCase):
 
 
 class BusctlProtocolTest(unittest.TestCase):
+    def test_nonzero_exit_includes_status_and_operation_even_without_output(self):
+        command=["busctl","--system","call","org.bluez","/","org.freedesktop.DBus.ObjectManager","GetManagedObjects"]
+        for code in (1,-9):
+            result=subprocess.CompletedProcess(command,code,stdout='',stderr='')
+            with self.subTest(code=code),patch.object(bt.subprocess,'run',return_value=result):
+                with self.assertRaisesRegex(RuntimeError, f"code {code}: no diagnostic output.*GetManagedObjects"):
+                    bt.run_command(command,2)
+        result=subprocess.CompletedProcess(command,1,stdout='Useful diagnostic',stderr='\n')
+        with patch.object(bt.subprocess,'run',return_value=result),self.assertRaisesRegex(RuntimeError,'Useful diagnostic'):
+            bt.run_command(command,2)
+
     def test_scalar_and_single_element_properties_and_invalid_values(self):
         for value in (True, [True]):
             self.assertIs(bt.property_value(json.dumps({"type": "b", "data": value}), "b"), True)

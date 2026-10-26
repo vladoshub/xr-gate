@@ -39,7 +39,18 @@ def address(value):
 
 
 def choose_adapter(selector=None, interactive=False):
-    adapters = BlueZ(5).adapters()
+    # The selected HCI may already be ready while BlueZ's ObjectManager is
+    # briefly unavailable after USB/firmware setup. Retry only this read-only
+    # inventory; never retry pairing/trust/connect or switch another adapter.
+    for attempt in range(3):
+        try:
+            adapters = BlueZ(5).adapters()
+            break
+        except RuntimeError as error:
+            if attempt == 2:
+                raise RuntimeError("Bluetooth adapter inventory failed after 3 attempts: " + str(error)) from error
+            log(f"Adapter inventory temporarily unavailable; retrying ({attempt + 2}/3): {error}")
+            time.sleep(.25 * (attempt + 1))
     if selector:
         selected = find_adapter(adapters, selector)
     else:
@@ -145,7 +156,10 @@ class BluetoothSession:
         while True:
             text = ANSI.sub("", output.decode("utf-8", errors="replace")).replace("\r", "\n")
             text = re.sub(r"(?m)^\[[^\]\n]*\]# ?", "", text)
-            error = self.ERROR.search(text)
+            # Pipes may split a Bluetooth error in the middle of a word.
+            # Wait for its line ending before returning the diagnostic.
+            complete = text[:text.rfind("\n") + 1]
+            error = self.ERROR.search(complete)
             if error:
                 raise RuntimeError(clean(error.group(1)))
             if finish and re.search(finish, text):

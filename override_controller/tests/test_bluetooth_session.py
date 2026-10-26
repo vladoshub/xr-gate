@@ -32,6 +32,20 @@ def adapter(mac, powered=True):
 
 
 class AdapterChoiceTest(unittest.TestCase):
+    def test_inventory_failure_is_retried_without_power_or_pair_commands(self):
+        with patch.object(bt.BlueZ,'adapters',side_effect=[RuntimeError('busctl exit 1'),[adapter(USB)]]) as query, \
+                patch.object(bt.time,'sleep') as sleep,patch.object(bt.BlueZ,'set_powered') as power:
+            self.assertEqual(bt.choose_adapter(USB).address,USB)
+            self.assertEqual(query.call_count,2)
+            sleep.assert_called_once_with(.25)
+            power.assert_not_called()
+        with patch.object(bt.BlueZ,'adapters',side_effect=RuntimeError('busctl exit -9')) as query, \
+                patch.object(bt.time,'sleep'),patch.object(bt,'BluetoothSession') as session:
+            with self.assertRaisesRegex(RuntimeError,'after 3 attempts.*exit -9'):
+                bt.choose_adapter(USB)
+            self.assertEqual(query.call_count,3)
+            session.assert_not_called()
+
     def test_only_powered_adapter_wins_even_when_builtin_is_first(self):
         with patch.object(bt.BlueZ, "adapters", return_value=[adapter(BUILTIN, False), adapter(USB)]):
             self.assertEqual(bt.choose_adapter().address, USB)

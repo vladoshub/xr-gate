@@ -439,8 +439,8 @@ function Get-DriverPackage($Release, [string]$Cache) {
     }
     return Join-Path $directory 'xr_tracking'
 }
-function Get-UsbDevices {
-    $result = Invoke-UsbipdCommand -File (Get-Tool 'usbipd.exe') -Arguments @('state')
+function Get-UsbDevices([int]$TimeoutMilliseconds = 0) {
+    $result = Invoke-UsbipdCommand -File (Get-Tool 'usbipd.exe') -Arguments @('state') -TimeoutMilliseconds $TimeoutMilliseconds
     if ($result.ExitCode -ne 0) { throw 'usbipd state failed; install a current usbipd-win.' }
     $data = $result.Output | ConvertFrom-Json
     return @($data.Devices | Where-Object { $_.BusId })
@@ -449,6 +449,40 @@ function Get-CurrentUsbDevice([string]$InstanceId) {
     $current = @(Get-UsbDevices | Where-Object { $_.InstanceId -eq $InstanceId })
     if ($current.Count -ne 1) { throw 'A selected USB device disconnected. Reconnect it and use List USB devices before retrying.' }
     return $current[0]
+}
+function Wait-CurrentUsbDevice([string]$InstanceId, [switch]$Detached, [int]$TimeoutMilliseconds = 5000) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while ($clock.ElapsedMilliseconds -lt $TimeoutMilliseconds) {
+        $remaining = [int][Math]::Max(1, $TimeoutMilliseconds - $clock.ElapsedMilliseconds)
+        $current = @(Get-UsbDevices -TimeoutMilliseconds ([Math]::Min(2000, $remaining)) |
+            Where-Object { $_.InstanceId -eq $InstanceId })
+        if ($current.Count -gt 1) { throw 'The selected USB instance is ambiguous; refresh List USB devices.' }
+        if ($current.Count -eq 1 -and (!$Detached -or !$current[0].ClientIPAddress)) { return $current[0] }
+        Start-Sleep -Milliseconds 200
+    }
+    throw 'The selected USB device did not return after detach. Reconnect that dongle and refresh List USB devices; another adapter will not be substituted.'
+}
+function Reconnect-SelectedUsbDevice([string]$InstanceId) {
+    $device = Get-CurrentUsbDevice $InstanceId
+    if ($device.ClientIPAddress) {
+        Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$device.BusId)
+    }
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        # Detach can temporarily remove the device or change its BUSID. Wait
+        # for the same Windows instance, then resolve its current address.
+        $device = Wait-CurrentUsbDevice $InstanceId -Detached:($attempt -eq 0)
+        if ($device.ClientIPAddress) { return }
+        if (!$device.PersistedGuid) { $null = Invoke-Elevated -Task Bind -BusIds @([string]$device.BusId) }
+        try {
+            Write-Step ('Reattaching selected USB device [' + $device.BusId + '] to WSL')
+            Invoke-Native (Get-Tool 'usbipd.exe') @('attach','--wsl','--busid',[string]$device.BusId)
+            return
+        } catch {
+            if ($attempt -eq 1) { throw }
+            Write-Step 'USB attach failed during re-enumeration; refreshing the selected instance once...'
+            Start-Sleep -Milliseconds 200
+        }
+    }
 }
 function Select-RuntimeDevices([object[]]$Devices, [string[]]$ExplicitBusIds = @(), [string[]]$SavedInstanceIds = @()) {
     $selected = @()
@@ -578,7 +612,8 @@ function Connect-SelectedUsbCore {
         $reconnect = $firmware -and $firmware.enabled -and !$firmware.ready -and $d.ClientIPAddress -and $d.InstanceId -eq $script:State.BluetoothInstanceId
         if ($reconnect) {
             Write-Step ('Reconnecting the selected Bluetooth dongle after firmware setup: ' + $d.BusId)
-            Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$d.BusId)
+            Reconnect-SelectedUsbDevice ([string]$d.InstanceId)
+            continue
         }
         if (!$d.ClientIPAddress -or $reconnect) {
             Write-Step ("Attaching " + $d.Description + ' [' + $d.BusId + '] to WSL')
@@ -598,8 +633,7 @@ function Connect-SelectedUsbCore {
         if ($bluetooth.Count -ne 1) { throw $prepareError }
         $bluetooth = @(Get-CurrentUsbDevice ([string]$bluetooth[0].InstanceId))
         Write-Step 'Firmware repaired; retrying the selected Bluetooth dongle once...'
-        Invoke-Native (Get-Tool 'usbipd.exe') @('detach','--busid',[string]$bluetooth[0].BusId)
-        Invoke-Native (Get-Tool 'usbipd.exe') @('attach','--wsl','--busid',[string]$bluetooth[0].BusId)
+        Reconnect-SelectedUsbDevice ([string]$bluetooth[0].InstanceId)
         Invoke-Linux -Operation prepare -Request (New-LinuxRequest) -AsRoot
     }
 }
