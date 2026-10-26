@@ -138,7 +138,8 @@ So, if you want to connect your device directly to HDMI/DispayPort, you'll need 
 You can use gestures and controllers.
 
 ## Gestures
-Gestures try to emulate the controller as much as possible - dpad, trigger, grip, thumbstick, A, B and Menu buttons
+Gestures try to emulate the controller as much as possible - dpad, trigger, grip, thumbstick, A, B and Menu buttons.
+
 See [GESTURES](runtime_adapters/xr_runtime_adapter/configs/GESTURES.md)
 
 ## Bluetooth controlles
