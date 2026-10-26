@@ -301,6 +301,7 @@ public partial class MainWindow : Window
     private void ApplyStatus(JsonElement data, bool diagnosticLog = true)
     {
         if (data.ValueKind != JsonValueKind.Object) return;
+        ObserveAboutVersion(data);
         if (data.TryGetProperty("runtime_download_url", out var runtimeUrl) && runtimeUrl.ValueKind == JsonValueKind.String)
             settings.ObserveRuntimeDownloadUrl(runtimeUrl.GetString() ?? "",
                 data.TryGetProperty("runtime_source", out var runtimeSource) && runtimeSource.ValueKind == JsonValueKind.String ? runtimeSource.GetString() ?? "" : "release",

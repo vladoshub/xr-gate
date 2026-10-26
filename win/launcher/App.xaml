@@ -3,6 +3,39 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <Application.Resources>
   <SolidColorBrush x:Key="Accent" Color="#37D6BD" />
+  <LinearGradientBrush x:Key="BrandAccent" StartPoint="0,0" EndPoint="1,1">
+   <GradientStop Color="#BAFFF0" Offset="0" /><GradientStop Color="#37D6BD" Offset="0.6" /><GradientStop Color="#1AAFA0" Offset="1" />
+  </LinearGradientBrush>
+  <!-- Original vector artwork. The disconnected visor shares Start VR's accent. -->
+  <Geometry x:Key="GlassesOutline">M18,32 L29,14 Q35,5 48,10 M182,32 L171,14 Q165,5 152,10 M18,32 H182 M18,41 V61 Q18,76 34,76 H77 Q87,76 89,65 L92,51 Q94,44 100,44 Q106,44 108,51 L111,65 Q113,76 123,76 H166 Q182,76 182,61 V41 M45,47 H64 M45,55 H64 M45,63 H64 M158,46 A2.5,2.5 0 1 0 158,51 A2.5,2.5 0 1 0 158,46 M170,46 A2.5,2.5 0 1 0 170,51 A2.5,2.5 0 1 0 170,46</Geometry>
+  <DrawingBrush x:Key="FineGrid" TileMode="Tile" Viewport="0,0,48,48" ViewportUnits="Absolute" Viewbox="0,0,48,48" ViewboxUnits="Absolute">
+   <DrawingBrush.Drawing>
+    <GeometryDrawing Geometry="M0,48 V0 H48">
+     <GeometryDrawing.Pen><Pen Brush="#263E53" Thickness="0.6" /></GeometryDrawing.Pen>
+    </GeometryDrawing>
+   </DrawingBrush.Drawing>
+  </DrawingBrush>
+  <!-- A static drawing keeps the spatial grid independent of tracking/rendering. -->
+  <DrawingBrush x:Key="LauncherBackdrop" Viewbox="0,0,1200,900" ViewboxUnits="Absolute" Stretch="Fill">
+   <DrawingBrush.Drawing>
+    <DrawingGroup>
+     <GeometryDrawing Brush="#0C1320" Geometry="M0,0 H1200 V900 H0 Z" />
+     <DrawingGroup Opacity="0.23"><GeometryDrawing Brush="{StaticResource FineGrid}" Geometry="M0,0 H1200 V900 H0 Z" /></DrawingGroup>
+     <GeometryDrawing Geometry="M0,0 H1200 V900 H0 Z">
+      <GeometryDrawing.Brush>
+       <RadialGradientBrush Center="0.5,1" GradientOrigin="0.5,1" RadiusX="0.7" RadiusY="0.8">
+        <GradientStop Color="#1829A99A" Offset="0" /><GradientStop Color="#0029A99A" Offset="1" />
+       </RadialGradientBrush>
+      </GeometryDrawing.Brush>
+     </GeometryDrawing>
+     <DrawingGroup Opacity="0.42">
+      <GeometryDrawing Geometry="M600,330 L-1200,900 M600,330 L-600,900 M600,330 L-120,900 M600,330 L240,900 M600,330 L480,900 M600,330 L720,900 M600,330 L960,900 M600,330 L1320,900 M600,330 L1800,900 M600,330 L2400,900 M0,362 H1200 M0,402 H1200 M0,460 H1200 M0,540 H1200 M0,654 H1200 M0,820 H1200">
+       <GeometryDrawing.Pen><Pen Brush="#275166" Thickness="0.8" /></GeometryDrawing.Pen>
+      </GeometryDrawing>
+     </DrawingGroup>
+    </DrawingGroup>
+   </DrawingBrush.Drawing>
+  </DrawingBrush>
   <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E5EDF8" /></Style>
   <Style TargetType="Button">
    <Setter Property="Foreground" Value="#ECF3FF" /><Setter Property="Background" Value="#25334A" />

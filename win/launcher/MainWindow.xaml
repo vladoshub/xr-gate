@@ -2,7 +2,7 @@
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  Icon="Assets/XrGate.ico" Title="XR Gate" Width="1060" Height="800" MinWidth="900" MinHeight="680"
- Background="#0C1320" Foreground="#E5EDF8" FontFamily="Segoe UI" FontSize="14"
+ Background="{StaticResource LauncherBackdrop}" Foreground="#E5EDF8" FontFamily="Segoe UI" FontSize="14"
  WindowStartupLocation="CenterScreen" Closing="Window_Closing">
  <Window.Resources>
   <DataTemplate x:Key="BluetoothControllerLabelTemplate">
@@ -17,13 +17,19 @@
   <Grid Margin="0,0,0,20">
    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
    <StackPanel>
-    <TextBlock Text="XR Gate" FontSize="32" FontWeight="SemiBold" />
+    <TextBlock FontSize="32" FontWeight="SemiBold" AutomationProperties.Name="XR Gate"><Run Text="XR" FontWeight="ExtraBold" FontStyle="Italic" Foreground="{StaticResource BrandAccent}" /><Run Text=" Gate" /></TextBlock>
     <TextBlock x:Name="ProductDescriptionText" Text="6DoF and Hand Tracking Stack" Foreground="#83A3C7" FontSize="11" Margin="2,3,0,0" />
     <TextBlock x:Name="PlatformDescriptionText" Text="Windows launcher" Foreground="#83A3C7" FontSize="12" Margin="2,5,0,0" />
    </StackPanel>
    <Grid x:Name="DeviceHeader" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0" MaxWidth="350">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
     <Image x:Name="DeviceArtwork" Grid.Column="0" Width="96" Height="68" Stretch="Uniform" Margin="0,0,10,0" Visibility="Collapsed" />
+    <Viewbox x:Name="DisconnectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform"
+     ToolTip="Connect an XR device to begin." AutomationProperties.Name="No XR device connected">
+     <Canvas Width="200" Height="86">
+      <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+     </Canvas>
+    </Viewbox>
     <StackPanel Grid.Column="1" VerticalAlignment="Center">
      <TextBlock Text="{Binding DeviceName, StringFormat='Device: {0}'}" ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5" />
      <TextBlock x:Name="DeviceConnectionStatus" Text="—" HorizontalAlignment="Center" Margin="0,6,0,0" FontWeight="SemiBold">
@@ -68,7 +74,8 @@
     </StackPanel>
    </StackPanel>
   </Border>
-  <TabControl x:Name="MainTabs" Grid.Row="2" Background="Transparent" BorderThickness="0">
+  <Grid Grid.Row="2">
+  <TabControl x:Name="MainTabs" Background="Transparent" BorderThickness="0">
    <TabItem Header="Run">
     <Grid Margin="0,8,0,0">
      <Grid.ColumnDefinitions><ColumnDefinition Width="330" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -242,6 +249,9 @@
     </ScrollViewer>
    </TabItem>
   </TabControl>
+   <Button x:Name="AboutButton" Content="About" Click="About_Click" ToolTip="About XR Gate, contact information and installed versions."
+    HorizontalAlignment="Right" VerticalAlignment="Top" Padding="18,10" Margin="0,0,0,8" Background="#152034" />
+  </Grid>
   <DockPanel Grid.Row="3" Margin="0,18,0,0">
    <TextBlock DockPanel.Dock="Right" FontSize="11" Margin="16,0,0,0"><Hyperlink x:Name="ProjectLink" NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
    <TextBlock Text="Windows x64  ·  .NET included  ·  WSL stays active while this launcher is open" Foreground="#6F87A5" FontSize="11" />
