@@ -553,8 +553,11 @@ fi
 if [[ "$EMULATION_CONTROLLER" == "1" ]]; then
   args+=(--emulation-controller 1)
   if [[ -z "$EMULATION_CONTROLLER_CONFIG" ]]; then
+    emulation_device_profile="$(dirname "$TRACKING_TRANSFORM_CONFIG")/emulation-controller.json"
     emulation_user_profile="$ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
-    if [[ -f "$emulation_user_profile" ]]; then
+    if [[ -f "$emulation_device_profile" ]]; then
+      EMULATION_CONTROLLER_CONFIG="$emulation_device_profile"
+    elif [[ -f "$emulation_user_profile" ]]; then
       EMULATION_CONTROLLER_CONFIG="$emulation_user_profile"
     fi
   fi

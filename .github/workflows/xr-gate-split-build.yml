@@ -772,6 +772,15 @@ jobs:
           test -f merged/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
           test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
           test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
+          cmp runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json \
+            merged/xr-gate/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json
+          for target in xreal_ultra leap_motion_uvc leap_motion_uvc_nrf54l15; do
+            expected="devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+            if [[ ! -f "$expected" ]]; then
+              expected="runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+            fi
+            cmp "$expected" "merged/xr-gate/devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+          done
           test -d merged/xr-gate/devices/leap_motion_uvc_nrf54l15
           test -d merged/xr-gate/devices/leap_motion_uvc
           test -x merged/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
@@ -1085,6 +1094,15 @@ jobs:
             test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
             test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
             test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
+            cmp runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json \
+              verify/runtime/xr-gate/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json
+            for target in xreal_ultra leap_motion_uvc leap_motion_uvc_nrf54l15; do
+              expected="devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+              if [[ ! -f "$expected" ]]; then
+                expected="runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+              fi
+              cmp "$expected" "verify/runtime/xr-gate/devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+            done
             test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
             test -d verify/runtime/xr-gate/devices/leap_motion_uvc
             test -x verify/runtime/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh

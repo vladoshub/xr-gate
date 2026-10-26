@@ -78,6 +78,14 @@ copy_device_bundle_for() {
     --exclude='*.pyc' \
     --exclude='*.pyo' \
     "$src/" "$dst/"
+  # Keep gesture calibration beside the selected device's hand transform. A
+  # device-specific profile takes precedence over the shared default profile.
+  local runtime_configs="$dst/configs/xr_runtime_adapter"
+  if [[ -f "$runtime_configs/xr_21_joint_hand_viewer_verified.json" &&
+        ! -f "$runtime_configs/emulation-controller.json" ]]; then
+    copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" \
+      "$runtime_configs/emulation-controller.json"
+  fi
 }
 
 copy_device_bundles() {
@@ -618,8 +626,6 @@ copy_tools_runtime() {
   copy_file "$XR_ROOT_PROJECT/tools/xr_runtime_gesture_watch_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_runtime_gesture_watch_debug.py"
   copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/record_emulation_hands.py" "$XR_OUT_BIN_ROOT/python/tools/record_emulation_hands.py"
   copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/xr_gate_gesture_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_gate_gesture_debug.py"
-  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation_controller.json" "$XR_OUT_ROOT/emulation_controller.json"
-  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
   copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/docs/emulation_controller.ru.md" "$XR_OUT_ROOT/EMULATION_CONTROLLER.ru.md"
   copy_file "$XR_ROOT_PROJECT/tools/debug/view_capture_service_shm.py" "$XR_OUT_BIN_ROOT/python/tools/debug/view_capture_service_shm.py"
   copy_runtime_py_dir "$XR_ROOT_PROJECT/tools/runtime_debug_viewer" "$XR_OUT_BIN_ROOT/python/tools/runtime_debug_viewer"
@@ -922,9 +928,16 @@ for stale_dir in \
   rm -rf "$stale_dir"
 done
 
+# Keep the user-editable emulation profile at the launcher's canonical path.
+# Copy it after removing stale source trees, otherwise runtime_adapters cleanup
+# deletes the profile and the runtime silently uses built-in wrist controls.
+copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" \
+  "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+
 # Quick package sanity checks.
 required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
+  "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
   "$XR_OUT_ROOT/devices/common/common.env"
   "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
@@ -944,6 +957,9 @@ required=(
 )
 for target in ${XR_PACKAGE_DEVICE_TARGETS:-$XR_TARGET_DEVICE}; do
   required+=("$XR_OUT_ROOT/devices/$target")
+  if [[ -f "$XR_OUT_ROOT/devices/$target/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json" ]]; then
+    required+=("$XR_OUT_ROOT/devices/$target/configs/xr_runtime_adapter/emulation-controller.json")
+  fi
 done
 for profile in ${XR_PACKAGE_CONFIG_PROFILES:-${XR_PACKAGE_PROFILES:-}}; do
   required+=("$XR_OUT_BIN_ROOT/python/xr_client/configs/$profile.json")
