@@ -425,7 +425,7 @@ If you have completed the train override controller from the previous point, you
 ---
 
 
-# SteamVR on Linux Fallback windowed mode (XREAL Ultra example)
+# SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
 
@@ -445,7 +445,7 @@ XR_OPENVR_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
 XR_OPENVR_LAUNCH_MODE=none \
 ./run_openvr.sh
-```bash
+```
 
 Then run Steam VR
 
@@ -707,7 +707,7 @@ Stereo overlay (need running xr_video backend)
 ---
 
 
-# Monado/OpenXR on Linux windowed mode (XREAL Ultra example)
+# Monado/OpenXR on Linux windowed mode (XREAL Ultra example) | Recomended
 
 
 Run xr_client
