@@ -19,9 +19,14 @@ try {
     $driverSettings = Join-Path $driver 'resources/settings/default.vrsettings'
     New-Item -ItemType Directory (Split-Path -Parent $driverSettings) -Force | Out-Null
     Copy-Item (Join-Path $sourceRoot 'drivers/openvr_driver/resources/settings/default.vrsettings') $driverSettings
+    # Installed packages include device metadata added by the production renderer.
+    & python (Join-Path $sourceRoot 'drivers/openvr_driver/scripts/render_display_settings.py') `
+        --settings $driverSettings --device-profile (Get-XrDriverDeviceId) --display-frequency 60 --display-mode direct
+    Assert ($LASTEXITCODE -eq 0) 'The real driver package settings could not be rendered.'
     $before = (Get-FileHash -LiteralPath $driverSettings).Hash
     $configuration = Get-XrDriverConfiguration $driverSettings
     Assert ($configuration.FrequencyHz -eq 60 -and !$configuration.OnDesktop) 'The real driver JSON with case-distinct keys could not be read.'
+    Assert ($configuration.Device -ceq (Get-XrDriverDeviceId)) 'The installed driver lost its selected device profile.'
     Assert ((Get-FileHash -LiteralPath $driverSettings).Hash -eq $before) 'Reading driver configuration modified its JSON.'
     $script:State.DriverPath = $driver
     $script:State.RegisteredDriver = $driver
