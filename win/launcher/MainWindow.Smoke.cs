@@ -14,6 +14,7 @@ public partial class MainWindow
         configurationProblem = null;
         UpdateRecoveryUi();
         VerifyArtworkUi();
+        await VerifyInstallSourceUiAsync();
         await VerifySetupUiAsync();
         await VerifyFirstLoginUiAsync();
         await VerifyHotkeysUiAsync();

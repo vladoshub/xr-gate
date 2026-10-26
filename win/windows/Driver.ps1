@@ -90,6 +90,7 @@ function Resolve-DriverFrequency([int[]]$Available, [int]$Detected = 0) {
 }
 function Get-AutomaticDriverBundle($Release, [string]$Cache) {
     $roots = @($PSScriptRoot | Split-Path -Parent)
+    if (Test-XrCustomRuntimeSource $Release) { return Get-XrCustomSourceDriverRoot $roots[0] }
     # A complete local Windows package is authoritative even when its pinned
     # Ubuntu runtime tag has no Windows archive (or still uses the old name).
     $localManifest = Join-Path $roots[0] 'bundle.json'
@@ -183,7 +184,7 @@ function Install-SelectedWindowsDriver([string]$Package, [string]$Tag) {
 function Update-AutomaticWindowsDriver {
     if (!$script:State.ReleaseTag) { throw 'Run Install before starting VR.' }
     $tag = [string]$script:State.ReleaseTag
-    $release = [pscustomobject]@{tag_name=$tag; assets=@()}
+    $release = [pscustomobject]@{tag_name=$tag; assets=@(); xr_runtime_source=[string]($script:State['RuntimeSourceKind'])}
     $cache = Join-Path $script:StateDir ('cache\' + $tag)
     Select-AutomaticDriverFrequency $release $cache
     $settings = Join-Path $script:State.DriverPath 'resources/settings/default.vrsettings'

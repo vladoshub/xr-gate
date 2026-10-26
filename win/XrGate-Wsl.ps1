@@ -66,6 +66,7 @@ $script:State = [ordered]@{
     UsbInstanceIds = @(); BluetoothInstanceId = ''; AttachedUsbInstanceIds = @()
     CleanupSettings = $null
     InstallPending = $false; InstallNextStep = ''
+    RuntimeSourceKind = ''; RuntimeDownloadUrl = ''; RuntimeLocalPath = ''
     FrequencyHz = (Get-XrInteger 'XR_DISPLAY_FREQUENCY_HZ' 1 1000)
     DisplayMode = (Get-XrSetting 'XR_DISPLAY_MODE'); DisplayOption = (Get-XrSetting 'XR_DISPLAY_OPTION')
     GearVR = $false; DriverPath = ''; RegisteredDriver = ''
@@ -86,8 +87,12 @@ $script:ActionData = $null
 . (Join-Path $PSScriptRoot 'windows\FirstLogin.ps1')
 . (Join-Path $PSScriptRoot 'windows\SteamVr.ps1')
 . (Join-Path $PSScriptRoot 'windows\Restart.ps1')
+. (Join-Path $PSScriptRoot 'windows\RuntimeSources.ps1')
 
 function Write-Step([string]$Message) { Write-Host ("[XR Gate] " + $Message) -ForegroundColor Cyan }
+function Write-XrTrackingGuidance([string]$Context) {
+    Write-Host ('[Tracking setup] Keep the device cameras uncovered, ensure good lighting, and point the device at a scene with many varied objects and details. ' + $Context) -ForegroundColor DarkYellow
+}
 function Write-XrWarning([string]$Message) {
     $script:ActionWarnings.Add($Message)
     Write-Warning $Message
@@ -410,6 +415,7 @@ function Find-BundledDriver([string]$Root) {
 
 function Get-DriverPackage($Release, [string]$Cache) {
     if ($script:ResolvedDriverRoot) { return Find-BundledDriver $script:ResolvedDriverRoot }
+    if (Test-XrCustomRuntimeSource $Release) { return Find-BundledDriver (Get-XrCustomSourceDriverRoot $PSScriptRoot) }
     $localManifest = Join-Path $PSScriptRoot 'bundle.json'
     if (Test-Path -LiteralPath $localManifest -PathType Leaf) {
         $manifest = Get-Content -Encoding UTF8 -Raw -LiteralPath $localManifest | ConvertFrom-Json
@@ -874,6 +880,7 @@ try {
         }
         $script:ActionData = @{installed=[bool]$status.installed; running=[bool]$status.running;
             distribution=[string]$script:State.Distribution; release=[string]$script:State.ReleaseTag;
+            runtime_download_url=[string]$script:State.RuntimeDownloadUrl; runtime_source=[string]$script:State.RuntimeSourceKind;
             frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode;
             can_delete=([bool]$script:State.LinuxUser -or [bool]$script:State.InstallPending)}
         $setup = Get-XrSetupObservation ([bool]$status.installed)
@@ -922,13 +929,18 @@ try {
         $wsl = Get-Tool 'wsl.exe'
         Invoke-Native $wsl @('-d',[string]$script:State.Distribution,'-u','root','--exec','env','DEBIAN_FRONTEND=noninteractive','apt-get','update')
         Invoke-Native $wsl @('-d',[string]$script:State.Distribution,'-u','root','--exec','env','DEBIAN_FRONTEND=noninteractive','apt-get','install','-y','--no-install-recommends','python3')
-        $release = Get-ReleaseInfo $ReleaseTag; Write-Step ("Selected release: " + $release.tag_name)
-        $runtimeAsset = Select-ReleaseAsset $release 'xr-gate-ubuntu-24.04-linux-x64.tar.gz'
-        $modelsAsset = Select-ReleaseAsset $release 'hand-tracking-models-mercury.tar.gz'
-        $cache = Join-Path $script:StateDir ('cache\' + $release.tag_name)
+        $source = Get-XrRuntimeSource $ReleaseTag
+        $release = $source.Release; $runtimeAsset = $source.Runtime; $modelsAsset = $source.Models; $cache = $source.Cache
+        $script:State.RuntimeSourceKind = $source.Kind
+        $script:State.RuntimeDownloadUrl = $source.RuntimeUrl
+        $script:State.RuntimeLocalPath = $source.LocalPath
+        Save-State
+        Write-Step ('XR Gate source: ' + $(if ($source.Kind -eq 'local') { $source.LocalPath } else { $source.RuntimeUrl }))
+        $runtimeArchive = Save-XrRuntimeArchive $runtimeAsset $cache
+        $modelsArchive = Save-XrRuntimeArchive $modelsAsset $cache
+        if ($source.Kind -ne 'release') { $release.tag_name = $source.Kind + '-' + ([string]$runtimeAsset.digest).Substring(7,12) }
+        Write-Step ("Selected release: " + $release.tag_name)
         if ((Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { Select-AutomaticDriverFrequency $release $cache }
-        $runtimeArchive = Save-ReleaseAsset $runtimeAsset $cache
-        $modelsArchive = Save-ReleaseAsset $modelsAsset $cache
         $driverPackage = Get-DriverPackage $release $cache
         $request = New-LinuxRequest
         $request.tag = [string]$release.tag_name
@@ -1001,7 +1013,7 @@ try {
             }
             if ($StartSteamVR) {
                 Ensure-XrDriverRegistration
-                Write-Step 'Waiting for valid updating HMD poses before starting SteamVR...'
+                Write-XrTrackingGuidance 'SteamVR will start when head tracking is ready.'
                 Wait-XrStream $TimeoutSeconds -RuntimeWindow $runtimeWindow; Start-Process 'steam://rungameid/250820'
             }
         }

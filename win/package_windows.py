@@ -13,7 +13,7 @@ ROOT_NAME = "xr-gate-windows-wsl-usbip"
 REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             ".env.example", "windows/Environment.ps1",
             "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
-            "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1", "windows/Delete.ps1", "windows/FirstLogin.ps1", "windows/SteamVr.ps1", "windows/Restart.ps1",
+            "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1", "windows/Delete.ps1", "windows/FirstLogin.ps1", "windows/SteamVr.ps1", "windows/Restart.ps1", "windows/RuntimeSources.ps1",
             "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/runtime_progress.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
             "docs/README.md", "docs/README.ru.md", "docs/START-HERE.html", "docs/START-HERE.ru.html", "docs/GESTURES.html", "docs/IMAGE-ASSETS.md")
 

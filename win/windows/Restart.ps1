@@ -8,7 +8,7 @@ function Restart-XrTracking {
     Invoke-Linux -Operation prepare -Request (New-LinuxRequest) -AsRoot
     Start-RuntimeWindow
     $window = Read-RuntimeWindow
-    Write-Step 'Waiting for valid updating HMD poses after tracking restart...'
+    Write-XrTrackingGuidance 'Waiting for head tracking to resume after restart.'
     Wait-XrStream $TimeoutSeconds -RuntimeWindow $window
     Write-Step 'Tracking restarted. SteamVR was left running.'
 }

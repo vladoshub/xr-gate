@@ -18,8 +18,8 @@
    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
    <StackPanel>
     <TextBlock Text="XR Gate" FontSize="32" FontWeight="SemiBold" />
-    <TextBlock Text="WINDOWS LAUNCHER" Foreground="#83A3C7" FontSize="11" Margin="2,3,0,0" />
-    <TextBlock FontSize="12" Margin="2,5,0,0"><Hyperlink NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
+    <TextBlock x:Name="ProductDescriptionText" Text="6DoF and Hand Tracking Stack" Foreground="#83A3C7" FontSize="11" Margin="2,3,0,0" />
+    <TextBlock x:Name="PlatformDescriptionText" Text="Windows launcher" Foreground="#83A3C7" FontSize="12" Margin="2,5,0,0" />
    </StackPanel>
    <Grid x:Name="DeviceHeader" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0" MaxWidth="350">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -186,6 +186,23 @@
        </StackPanel>
       </Grid>
 
+      <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0" IsEnabled="{Binding IsEnabled, ElementName=SettingsFields}">
+       <StackPanel>
+        <TextBlock Text="XR Gate installation source" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
+        <TextBlock Text="URL XR Gate" />
+        <TextBox x:Name="RuntimeUrlBox" Text="{Binding RuntimeDownloadUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding RuntimeUrlEnabled}" ToolTip="The runtime archive URL. Empty uses the selected release tag; models are downloaded beside the runtime." />
+        <TextBlock Text="Local path XR Gate" />
+        <DockPanel>
+         <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+          <Button Content="Folder…" Click="BrowseRuntimeFolder_Click" Margin="8,5,0,13" Padding="10,7" />
+          <Button Content="Archive…" Click="BrowseRuntimeArchive_Click" Margin="8,5,0,13" Padding="10,7" />
+         </StackPanel>
+         <TextBox x:Name="RuntimeLocalPathBox" Text="{Binding RuntimeLocalPath, UpdateSourceTrigger=PropertyChanged}" />
+        </DockPanel>
+        <TextBlock Text="A local path takes priority over the URL. Select the runtime .tar.gz or a folder containing xr-gate-ubuntu-24.04-linux-x64.tar.gz and hand-tracking-models-mercury.tar.gz. For a custom URL, keep the models archive beside the runtime." Foreground="#ACBED5" TextWrapping="Wrap" />
+       </StackPanel>
+      </Border>
+
       <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
        <StackPanel>
         <TextBlock Text="Hotkeys" FontSize="18" FontWeight="SemiBold" />
@@ -225,6 +242,9 @@
     </ScrollViewer>
    </TabItem>
   </TabControl>
-  <TextBlock Grid.Row="3" Text="Windows x64  ·  .NET included  ·  WSL stays active while this launcher is open" Foreground="#6F87A5" FontSize="11" Margin="0,18,0,0" />
+  <DockPanel Grid.Row="3" Margin="0,18,0,0">
+   <TextBlock DockPanel.Dock="Right" FontSize="11" Margin="16,0,0,0"><Hyperlink x:Name="ProjectLink" NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
+   <TextBlock Text="Windows x64  ·  .NET included  ·  WSL stays active while this launcher is open" Foreground="#6F87A5" FontSize="11" />
+  </DockPanel>
  </Grid>
 </Window>

@@ -145,7 +145,9 @@ public partial class MainWindow
             {
                 paragraph.FontSize = 18;
                 paragraph.FontWeight = FontWeights.Bold;
-                paragraph.Foreground = entry.Tone == "success" ? Brushes.LightGreen : new SolidColorBrush(Color.FromRgb(255, 102, 102));
+                paragraph.Foreground = entry.Tone == "success" ? Brushes.LightGreen :
+                    entry.Tone == "guidance" ? new SolidColorBrush(Color.FromRgb(255, 180, 84)) :
+                    new SolidColorBrush(Color.FromRgb(255, 102, 102));
             }
             LogBox.Document.Blocks.Add(paragraph);
         }

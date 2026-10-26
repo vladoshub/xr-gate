@@ -39,7 +39,7 @@ public sealed class CalibrationNotices
         if (stage is not ("zeroing" or "optical" or "complete") || !shown.Add(stage)) return null;
         return stage switch
         {
-            "zeroing" => new("Keep it still on a stable surface while the gyroscope is zeroed."),
+            "zeroing" => new("Keep controllers still on a stable surface while the gyroscope is zeroed."),
             "optical" => new("Calibrating controller: keep the hand and controller visible to the cameras and keep your head steady. Gently move the controller 10-20 cm forward/back or side to side, with clear starts and stops. Avoid fast wrist rotations. Continue until calibration is confirmed."),
             _ => new("Controller calibration completed. IMU prediction is active.", true)
         };

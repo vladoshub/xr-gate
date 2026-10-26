@@ -29,7 +29,53 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     public Dictionary<string, string> ControllerImages { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
     public string ControllerProfileLabel { get; private set; } = "Configured BLE / IMU controller profile";
     public string Distribution { get; set; } = "Ubuntu-24.04";
-    public string ReleaseTag { get; set; } = "latest";
+    private string releaseTag = "latest";
+    private string runtimeDownloadUrl = "";
+    private string resolvedRuntimeDownloadUrl = "";
+    private string runtimeLocalPath = "";
+    public string ReleaseTag
+    {
+        get => releaseTag;
+        set
+        {
+            if (releaseTag == value) return;
+            releaseTag = value;
+            resolvedRuntimeDownloadUrl = "";
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeDownloadUrl)));
+        }
+    }
+    private string DefaultRuntimeDownloadUrl => "https://github.com/vladoshub/xr-gate/releases/" +
+        (ReleaseTag.Trim() == "latest" ? "latest/download/" : "download/" + Uri.EscapeDataString(ReleaseTag.Trim()) + "/") +
+        "xr-gate-ubuntu-24.04-linux-x64.tar.gz";
+    public string RuntimeDownloadUrl
+    {
+        get => runtimeDownloadUrl.Length > 0 ? runtimeDownloadUrl :
+            resolvedRuntimeDownloadUrl.Length > 0 ? resolvedRuntimeDownloadUrl : DefaultRuntimeDownloadUrl;
+        set
+        {
+            string selected = value.Trim();
+            runtimeDownloadUrl = selected == DefaultRuntimeDownloadUrl || selected == resolvedRuntimeDownloadUrl ? "" : selected;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeDownloadUrl)));
+        }
+    }
+    public string RuntimeLocalPath
+    {
+        get => runtimeLocalPath;
+        set
+        {
+            runtimeLocalPath = value.Trim();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeLocalPath)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeUrlEnabled)));
+        }
+    }
+    public bool RuntimeUrlEnabled => RuntimeLocalPath.Length == 0;
+    public void ObserveRuntimeDownloadUrl(string url, string sourceKind = "release", string selectedTag = "")
+    {
+        resolvedRuntimeDownloadUrl = sourceKind != "release" ||
+            (selectedTag.Length > 0 && ReleaseTag != "latest" && selectedTag != ReleaseTag) ? "" : url;
+        if (runtimeDownloadUrl.Length == 0)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeDownloadUrl)));
+    }
     public string UsbBusIds { get; set; } = "";
     public string BluetoothBusId { get; set; } = "";
     public string BluetoothUsbId { get; set; } = "";
@@ -149,6 +195,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             DeviceImage = Get("XR_DEVICE_IMAGE"), ControllerImages = ReadControllerImages(values),
             ControllerProfileLabel = Get("XR_CONTROLLER_PROFILE_LABEL", "Configured BLE / IMU controller profile"),
             ReleaseTag = Get("XR_RELEASE_TAG", "latest"), UsbBusIds = Get("XR_USB_BUS_IDS"),
+            RuntimeDownloadUrl = Get("XR_RUNTIME_URL"), RuntimeLocalPath = Get("XR_RUNTIME_LOCAL_PATH"),
             BluetoothBusId = Get("XR_BLUETOOTH_BUS_ID"), SavedBluetoothInstance = bluetoothInstance,
             BluetoothUsbId = Get("XR_BLUETOOTH_USB_ID"),
             BluetoothEnabled = Flag("XR_BLUETOOTH", false),
@@ -169,6 +216,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             FirstLoginTimeoutSeconds = int.TryParse(Get("XR_FIRST_LOGIN_TIMEOUT"), out int loginSeconds) && loginSeconds is >= 15 and <= 3600 ? loginSeconds : 600
         };
         settings.loadedHardware = hardware;
+        settings.ObserveRuntimeDownloadUrl(saved.GetValueOrDefault("RuntimeDownloadUrl", ""),
+            saved.GetValueOrDefault("RuntimeSourceKind", "release"), saved.GetValueOrDefault("ReleaseTag", ""));
         settings.profileLabelOverride = overrides.GetValueOrDefault("XR_CONTROLLER_PROFILE_LABEL");
         settings.deviceNameOverride = overrides.GetValueOrDefault("XR_DEVICE_NAME");
         settings.deviceImageOverride = overrides.GetValueOrDefault("XR_DEVICE_IMAGE");
@@ -199,6 +248,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             ["XR_HARDWARE_ENV"] = HardwareEnv.Trim(), ["XR_DISTRIBUTION"] = Distribution.Trim(),
             ["XR_AUTO_DETECT_HARDWARE"] = AutoDetectHardware ? "1" : "0",
             ["XR_RELEASE_TAG"] = ReleaseTag.Trim(), ["XR_USB_BUS_IDS"] = UsbBusIds.Trim(),
+            ["XR_RUNTIME_URL"] = runtimeDownloadUrl, ["XR_RUNTIME_LOCAL_PATH"] = RuntimeLocalPath,
             ["XR_BLUETOOTH_BUS_ID"] = BluetoothBusId.Trim(), ["XR_BLUETOOTH"] = BluetoothEnabled ? "1" : "0",
             ["XR_BLUETOOTH_USB_ID"] = BluetoothUsbId.Trim(),
             ["XR_GEARVR"] = GearVr ? "1" : "0", ["XR_AUTO_DRIVER_FREQUENCY"] = AutoDriverFrequency ? "1" : "0",
@@ -230,6 +280,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         string Keep(string key, string current, string inherited) => explicitKeys.Contains(key) ? current : inherited;
         Distribution = Keep("XR_DISTRIBUTION", Distribution, selected.Distribution);
         ReleaseTag = Keep("XR_RELEASE_TAG", ReleaseTag, selected.ReleaseTag);
+        runtimeDownloadUrl = Keep("XR_RUNTIME_URL", runtimeDownloadUrl, selected.runtimeDownloadUrl);
+        RuntimeLocalPath = Keep("XR_RUNTIME_LOCAL_PATH", RuntimeLocalPath, selected.RuntimeLocalPath);
         UsbBusIds = Keep("XR_USB_BUS_IDS", UsbBusIds, selected.UsbBusIds);
         BluetoothBusId = Keep("XR_BLUETOOTH_BUS_ID", BluetoothBusId, selected.BluetoothBusId);
         BluetoothUsbId = Keep("XR_BLUETOOTH_USB_ID", BluetoothUsbId, selected.BluetoothUsbId);
@@ -257,6 +309,10 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         var values = GuiValues();
         foreach (string value in values.Values) ValidateLiteral(value);
         ValidateAudioSelection();
+        if (RuntimeUrlEnabled && (!Uri.TryCreate(RuntimeDownloadUrl, UriKind.Absolute, out var runtimeUri) ||
+            runtimeUri.Scheme is not ("https" or "http") ||
+            !(runtimeUri.AbsolutePath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) || runtimeUri.AbsolutePath.EndsWith('/'))))
+            throw new FormatException("URL XR Gate must point to an HTTP(S) runtime .tar.gz archive or download folder.");
         if (!Regex.IsMatch(Distribution, @"^[A-Za-z0-9][A-Za-z0-9._-]*$")) throw new FormatException("Invalid Ubuntu distribution name.");
         if (!Regex.IsMatch(ReleaseTag, @"^[A-Za-z0-9_.-]+$")) throw new FormatException("Use latest or a release tag such as v2.3.0.");
         if (!int.TryParse(FrequencyHz, out int hz) || hz < 1 || hz > 1000) throw new FormatException("Refresh rate must be 1–1000 Hz.");

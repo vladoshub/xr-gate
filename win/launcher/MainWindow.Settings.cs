@@ -75,6 +75,18 @@ public partial class MainWindow
         catch (Exception error) { StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
     }
 
+    private void BrowseRuntimeFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog { Title = "Folder containing the XR Gate runtime and Mercury models archives" };
+        if (dialog.ShowDialog(this) == true) settings.RuntimeLocalPath = dialog.FolderName;
+    }
+
+    private void BrowseRuntimeArchive_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Title = "Select the XR Gate runtime archive (models must be beside it)", Filter = "XR Gate runtime (*.tar.gz)|*.tar.gz" };
+        if (dialog.ShowDialog(this) == true) settings.RuntimeLocalPath = dialog.FileName;
+    }
+
     private void OpenProblem_Click(object sender, RoutedEventArgs e)
     {
         if (configurationProblem is null) return;

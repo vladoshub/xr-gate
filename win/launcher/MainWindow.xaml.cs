@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private Task<bool>? stopTask;
     private CancellationTokenSource? operationCancellation;
     private string busyAction = "";
+    private bool reconnectHintShown;
     private string nextStep = "";
     private string pausedDistribution = "";
     private bool installed;
@@ -116,12 +117,20 @@ public partial class MainWindow : Window
         {
             if (resourcesReleased) return;
             sessionLog?.WriteLine(line);
-            pendingLog.Enqueue(new(line));
+            pendingLog.Enqueue(new(line, ActivityMessages.Tone(message)));
+            if (!reconnectHintShown && ActivityMessages.SuggestReconnect(message))
+            {
+                reconnectHintShown = true;
+                string hint = DateTime.Now.ToString("HH:mm:ss") + "  [Hint] " + ActivityMessages.ReconnectHint;
+                sessionLog?.WriteLine(hint);
+                pendingLog.Enqueue(new(hint, "guidance"));
+            }
         }
     }
 
     private void SetBusy(string action)
     {
+        if (action.Length > 0 && action != busyAction) { lock (pendingLog) reconnectHintShown = false; }
         busyAction = action;
         bool busy = action.Length > 0;
         bool recovery = configurationProblem is not null;
@@ -230,6 +239,7 @@ public partial class MainWindow : Window
                 : action == "Stop" ? "The managed runtime stopped and its USB devices were returned to Windows."
                 : settings.ShowCommandPrompt ? "Complete any startup or calibration prompts in the tracking console."
                 : "Tracking runs in the background. For console commands, stop tracking, enable Show command prompt in Settings, then start again.";
+            if (!result.Success && reconnectHintShown) StatusDetail.Text += "\n" + ActivityMessages.ReconnectHint;
             if (result.Warnings.Length > 0)
             {
                 WarningText.Text = string.Join("\n", result.Warnings);
@@ -291,6 +301,10 @@ public partial class MainWindow : Window
     private void ApplyStatus(JsonElement data, bool diagnosticLog = true)
     {
         if (data.ValueKind != JsonValueKind.Object) return;
+        if (data.TryGetProperty("runtime_download_url", out var runtimeUrl) && runtimeUrl.ValueKind == JsonValueKind.String)
+            settings.ObserveRuntimeDownloadUrl(runtimeUrl.GetString() ?? "",
+                data.TryGetProperty("runtime_source", out var runtimeSource) && runtimeSource.ValueKind == JsonValueKind.String ? runtimeSource.GetString() ?? "" : "release",
+                data.TryGetProperty("release", out var runtimeTag) && runtimeTag.ValueKind == JsonValueKind.String ? runtimeTag.GetString() ?? "" : "");
         ApplyDeviceObservation(data);
         installed = data.TryGetProperty("setup_complete", out var complete) && complete.ValueKind == JsonValueKind.True;
         readiness.Known = true;

@@ -870,6 +870,7 @@ jobs:
           & ./win/tests/verify-usb-timeout.ps1
           & ./win/tests/verify-device-lifecycle.ps1
           & ./win/tests/verify-release-platforms.ps1
+          & ./win/tests/verify-runtime-sources.ps1
       - name: Test Bluetooth side selection and configuration updates
         run: python -m unittest discover -s win/tests -p 'test_bluetooth_controllers.py'
       - name: Verify partial TCP streams have a total deadline

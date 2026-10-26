@@ -24,6 +24,8 @@ Choose your own Linux username and password in the Ubuntu window. Password chara
 - **Settings** — Hardware preset, display and launch settings. Hotkeys: F5 starts VR, F6 stops tracking and returns USB, F7 restarts tracking while keeping SteamVR running. Global hotkeys work while XR Gate is open, including when minimized; the checkbox saves automatically. Show command prompt is off by default; enable it before starting for console calibration commands.
 - **Tools** — Diagnostics, driver registration and tracking checks. List USB devices stays in Settings.
 
+**Installation source:** Settings → URL XR Gate shows the runtime download URL. Local path XR Gate overrides it: select the runtime `.tar.gz` or a folder containing `xr-gate-ubuntu-24.04-linux-x64.tar.gz` and `hand-tracking-models-mercury.tar.gz`. Custom download URLs also use the models archive beside the runtime. Save settings, then Install / Update.
+
 ## Bluetooth adapter for WSL2
 
 Bluetooth was tested with ASUS USB-BT500. Use a separate adapter to keep Windows Bluetooth devices available. A built-in MediaTek adapter requires support in the WSL kernel; changing the Ubuntu release alone does not add it.
@@ -33,7 +35,7 @@ Hardware presets are in hardware/*.env; Advanced settings opens .env. The suppli
 ## Troubleshooting
 
 - Follow [Next] in Activity Log. Use Tools → Diagnostics and Save log in Run.
-- If USB is busy, close camera apps and SteamVR, then reconnect the device and retry Start VR.
+- If the XR device or Bluetooth adapter is busy or not responding, stop tracking, unplug and reconnect the selected devices, then retry. Close camera apps if Windows keeps the camera busy.
 - If reinstalling reports an old firmware mount, close XR Gate and Docker, save work in all WSL distributions, run `wsl --shutdown` in PowerShell, then reopen XR Gate and click Install. This stops all WSL distributions.
 - If nothing helps, fully shut down the computer. Unplug the glasses and the separate Bluetooth adapter if used, wait a few seconds, reconnect them and turn the computer on.
 
