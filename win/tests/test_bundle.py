@@ -152,19 +152,19 @@ class PackageTest(unittest.TestCase):
             shutil.copytree(WIN, source, ignore=shutil.ignore_patterns("__pycache__", "tests"))
             (source / ".env").write_text("PRIVATE=value")
             self.drivers(root / "drivers")
-            archive = root / "xr-gate-windows-wsl-usbip.zip"
+            archive = root / "xr-gate-windows-wsl2-usbip.zip"
             executable = self.launcher(root)
             packager.build(source, root / "drivers", archive, "60 90", "direct extended_sbs", "v9.9.9", launcher=executable)
             manifest = packager.verify(archive, "60 90", "direct extended_sbs")
             self.assertEqual(len(manifest["variants"]), 4)
             with ZipFile(archive) as package:
                 self.check_documentation_and_images(package)
-                self.assertNotIn("xr-gate-windows-wsl-usbip/.env", package.namelist())
+                self.assertNotIn("xr-gate-windows-wsl2-usbip/.env", package.namelist())
                 self.assertFalse(any(name.lower().endswith((".cmd", ".bat")) for name in package.namelist()))
                 self.assertFalse(any("/launcher/" in name or "/obj/" in name for name in package.namelist()))
-                self.assertEqual(package.read("xr-gate-windows-wsl-usbip/XR-Gate.exe"), executable.read_bytes())
-                self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows-wsl-usbip/.env.example"))
-                self.assertEqual(package.read("xr-gate-windows-wsl-usbip/linux/xr_gate_audio.py"), (WIN / "linux/xr_gate_audio.py").read_bytes())
+                self.assertEqual(package.read("xr-gate-windows-wsl2-usbip/XR-Gate.exe"), executable.read_bytes())
+                self.assertIn(b"XR_RELEASE_TAG=v9.9.9", package.read("xr-gate-windows-wsl2-usbip/.env.example"))
+                self.assertEqual(package.read("xr-gate-windows-wsl2-usbip/linux/xr_gate_audio.py"), (WIN / "linux/xr_gate_audio.py").read_bytes())
                 for hz, mode in packager.selections("60 90", "direct extended_sbs"):
                     relative = packager.variant_path(hz, mode, "xreal_ultra")
                     original = root / "drivers" / "xreal_ultra" / f"{hz}Hz-{mode}" / "xr_tracking"
@@ -178,12 +178,12 @@ class PackageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             self.drivers(root / "drivers", "90", "direct")
-            archive = root / "xr-gate-windows-wsl-usbip.zip"
+            archive = root / "xr-gate-windows-wsl2-usbip.zip"
             executable = self.launcher(root)
             packager.build(WIN, root / "drivers", archive, "90", "direct", launcher=executable)
             with ZipFile(archive) as package:
-                env = package.read("xr-gate-windows-wsl-usbip/.env.example").decode()
-                preset = package.read("xr-gate-windows-wsl-usbip/" + packager.hardware_preset(env)).decode()
+                env = package.read("xr-gate-windows-wsl2-usbip/.env.example").decode()
+                preset = package.read("xr-gate-windows-wsl2-usbip/" + packager.hardware_preset(env)).decode()
                 self.assertIn("XR_DISPLAY_FREQUENCY_HZ=90", preset)
                 self.assertIn("XR_DISPLAY_MODE=direct", preset)
             with self.assertRaises(ValueError):
@@ -198,12 +198,12 @@ class PackageTest(unittest.TestCase):
             archive = root / "launcher.zip"
             packager.build_launcher(WIN, executable, archive)
             with ZipFile(archive) as package:
-                self.assertNotIn("xr-gate-windows-wsl-usbip/bundle.json", package.namelist())
-                self.assertIn("xr-gate-windows-wsl-usbip/windows/Driver.ps1", package.namelist())
+                self.assertNotIn("xr-gate-windows-wsl2-usbip/bundle.json", package.namelist())
+                self.assertIn("xr-gate-windows-wsl2-usbip/windows/Driver.ps1", package.namelist())
                 self.check_documentation_and_images(package)
                 self.assertFalse(any(name.lower().endswith((".bat", ".cmd")) for name in package.namelist()))
                 self.assertFalse(any("/launcher/" in name for name in package.namelist()))
-                metadata = json.loads(package.read("xr-gate-windows-wsl-usbip/launcher.json"))["launcher"]
+                metadata = json.loads(package.read("xr-gate-windows-wsl2-usbip/launcher.json"))["launcher"]
                 packager.verify_launcher_metadata(metadata, packager.verify_installer(package))
             executable.write_bytes(b"not a Windows executable")
             with self.assertRaises(ValueError):

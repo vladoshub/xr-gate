@@ -423,13 +423,12 @@ function Get-DriverPackage($Release, [string]$Cache) {
             return Find-BundledDriver $PSScriptRoot
         }
     }
-    $bundles = @($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows-wsl-usbip.zip' })
-    if (!$bundles.Count) { $bundles = @($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows.zip' }) }
-    if ($bundles.Count) {
-        $asset = Select-ReleaseAsset $Release ([string]$bundles[0].name)
+    $bundleName = Get-XrWindowsBundleName $Release
+    if ($bundleName) {
+        $asset = Select-ReleaseAsset $Release $bundleName
         $archive = Save-ReleaseAsset $asset $Cache
         $directory = Join-Path $Cache ('windows-' + ([string]$asset.digest).Substring(7,12))
-        $bundleRoot = if ($asset.name -ceq 'xr-gate-windows.zip') { 'xr-gate-windows' } else { 'xr-gate-windows-wsl-usbip' }
+        $bundleRoot = [IO.Path]::GetFileNameWithoutExtension($bundleName)
         if (!(Test-Path -LiteralPath (Join-Path $directory ($bundleRoot + '/bundle.json')))) {
             Expand-Archive -LiteralPath $archive -DestinationPath $directory -Force
         }

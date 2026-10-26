@@ -76,33 +76,41 @@ XR_STEAMVR_PATH="D:\A folder\SteamVR"
     $script:Settings['XR_AUTO_DRIVER_FREQUENCY'] = '0'
     Load-State
 
-    $bundleRoot = Join-Path $temporary 'archive/xr-gate-windows-wsl-usbip'
-    $package = Join-Path $bundleRoot 'drivers/fixture_camera/72Hz-extended_sbs/xr_tracking'
-    foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
-        $target = Join-Path $package $name
-        New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
-        'fixture' | Set-Content -LiteralPath $target
+    foreach ($bundleName in @('xr-gate-windows-wsl2-usbip.zip', 'xr-gate-windows-wsl-usbip.zip', 'xr-gate-windows.zip')) {
+        $bundleRootName = [IO.Path]::GetFileNameWithoutExtension($bundleName)
+        $bundleRoot = Join-Path $temporary ('archive-' + $bundleRootName + '/' + $bundleRootName)
+        $package = Join-Path $bundleRoot 'drivers/fixture_camera/72Hz-extended_sbs/xr_tracking'
+        foreach ($name in @('driver.vrdrivermanifest','bin/win64/driver_xr_tracking.dll','bin/win64/openvr_api.dll','resources/settings/default.vrsettings')) {
+            $target = Join-Path $package $name
+            New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
+            'fixture' | Set-Content -LiteralPath $target
+        }
+        '{"xr_tracking":{"deviceProfile":"fixture_camera","displayFrequency":72,"isDisplayOnDesktop":true}}' |
+            Set-Content -LiteralPath (Join-Path $package 'resources/settings/default.vrsettings')
+        '{"schema":2,"release_tag":"v9.9.9","devices":["fixture_camera"],"variants":[{"device":"fixture_camera","frequency_hz":72,"display_mode":"extended_sbs","path":"drivers/fixture_camera/72Hz-extended_sbs/xr_tracking"}]}' |
+            Set-Content -LiteralPath (Join-Path $bundleRoot 'bundle.json')
+        Assert ((Find-BundledDriver $bundleRoot) -eq $package) 'Bundled driver selection failed.'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $script:TestBundleName = $bundleName
+        $script:TestArchive = Join-Path $temporary $bundleName
+        [IO.Compression.ZipFile]::CreateFromDirectory((Split-Path -Parent $bundleRoot), $script:TestArchive)
+        function Save-ReleaseAsset($Asset, [string]$Directory) {
+            Assert ($Asset.name -eq $script:TestBundleName) 'Installer requested an old standalone variant.'
+            return $script:TestArchive
+        }
+        $release = [pscustomobject]@{tag_name='v9.9.9'; assets=@([pscustomobject]@{
+            name=$bundleName; digest=('sha256:' + ('f' * 64));
+            browser_download_url=('https://github.com/vladoshub/xr-gate/releases/download/v9.9.9/' + $bundleName)
+        })}
+        $cache = Join-Path $temporary ('cache-' + $bundleRootName)
+        New-Item -ItemType Directory $cache | Out-Null
+        $downloaded = Get-DriverPackage $release $cache
+        Assert (Test-Path -LiteralPath (Join-Path $downloaded 'bin/win64/driver_xr_tracking.dll')) 'Combined release bundle was not installed.'
+        $automatic = Get-AutomaticDriverBundle $release $cache
+        Assert ((Find-BundledDriver $automatic) -eq $downloaded) ('Automatic driver lookup failed for ' + $bundleName)
+        $offline = Get-AutomaticDriverBundle ([pscustomobject]@{tag_name='v9.9.9'; assets=@()}) $cache
+        Assert ((Find-BundledDriver $offline) -eq $downloaded) ('Offline driver cache failed for ' + $bundleName)
     }
-    '{"xr_tracking":{"deviceProfile":"fixture_camera","displayFrequency":72,"isDisplayOnDesktop":true}}' |
-        Set-Content -LiteralPath (Join-Path $package 'resources/settings/default.vrsettings')
-    '{"schema":2,"release_tag":"v9.9.9","devices":["fixture_camera"],"variants":[{"device":"fixture_camera","frequency_hz":72,"display_mode":"extended_sbs","path":"drivers/fixture_camera/72Hz-extended_sbs/xr_tracking"}]}' |
-        Set-Content -LiteralPath (Join-Path $bundleRoot 'bundle.json')
-    Assert ((Find-BundledDriver $bundleRoot) -eq $package) 'Bundled driver selection failed.'
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $script:TestArchive = Join-Path $temporary 'xr-gate-windows-wsl-usbip.zip'
-    [IO.Compression.ZipFile]::CreateFromDirectory((Split-Path -Parent $bundleRoot), $script:TestArchive)
-    function Save-ReleaseAsset($Asset, [string]$Directory) {
-        Assert ($Asset.name -eq 'xr-gate-windows-wsl-usbip.zip') 'Installer requested an old standalone variant.'
-        return $script:TestArchive
-    }
-    $release = [pscustomobject]@{tag_name='v9.9.9'; assets=@([pscustomobject]@{
-        name='xr-gate-windows-wsl-usbip.zip'; digest=('sha256:' + ('f' * 64));
-        browser_download_url='https://github.com/vladoshub/xr-gate/releases/download/v9.9.9/xr-gate-windows-wsl-usbip.zip'
-    })}
-    $cache = Join-Path $temporary 'cache'
-    New-Item -ItemType Directory $cache | Out-Null
-    $downloaded = Get-DriverPackage $release $cache
-    Assert (Test-Path -LiteralPath (Join-Path $downloaded 'bin/win64/driver_xr_tracking.dll')) 'Combined release bundle was not installed.'
     $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 90
     Assert ($selection.Frequency -eq 90 -and !$selection.Fallback) 'Current glasses frequency did not select its matching driver.'
     $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 59

@@ -110,14 +110,14 @@ jobs:
         shell: pwsh
         run: |
           python win/package_windows.py launcher --launcher-exe out/windows-launcher/XR-Gate.exe `
-            --output out/xr-gate-windows-wsl-usbip-launcher.zip
+            --output out/xr-gate-windows-wsl2-usbip-launcher.zip
           if ($LASTEXITCODE -ne 0) { throw 'Launcher packaging failed' }
       - name: Upload portable Windows launcher
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-windows-wsl-usbip-launcher
+          name: xr-gate-windows-wsl2-usbip-launcher
           path: |
-            out/xr-gate-windows-wsl-usbip-launcher.zip
-            out/xr-gate-windows-wsl-usbip-launcher.zip.sha256
+            out/xr-gate-windows-wsl2-usbip-launcher.zip
+            out/xr-gate-windows-wsl2-usbip-launcher.zip.sha256
           if-no-files-found: error
           retention-days: 14

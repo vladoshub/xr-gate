@@ -1,6 +1,13 @@
 # Driver selection shared by the GUI and command-line installer.
 $script:ResolvedDriverRoot = ''
+$script:WindowsBundleNames = @('xr-gate-windows-wsl2-usbip.zip', 'xr-gate-windows-wsl-usbip.zip', 'xr-gate-windows.zip')
 . (Join-Path $PSScriptRoot 'DriverDevices.ps1')
+function Get-XrWindowsBundleName($Release) {
+    foreach ($name in $script:WindowsBundleNames) {
+        if (@($Release.assets | Where-Object { $_.name -ceq $name }).Count) { return $name }
+    }
+    return $null
+}
 function Get-XrDriverConfiguration([string]$Path) {
     # Driver JSON deliberately contains debugMode and DebugMode. PS 5.1's
     # PSCustomObject conversion cannot represent both names; use a dictionary.
@@ -102,16 +109,18 @@ function Get-AutomaticDriverBundle($Release, [string]$Cache) {
         if ($Release.assets.Count) {
             # A reinstall must honor the current asset digest even when an asset
             # was replaced under the same release tag.
-            $bundleName = if (@($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows-wsl-usbip.zip' }).Count) { 'xr-gate-windows-wsl-usbip.zip' } else { 'xr-gate-windows.zip' }
+            $bundleName = Get-XrWindowsBundleName $Release
+            if (!$bundleName) { throw ('Release ' + $Release.tag_name + ' contains no Windows driver bundle. Download the complete Windows package.') }
             $currentAsset = Select-ReleaseAsset $Release $bundleName
             $directoryName = [IO.Path]::GetFileNameWithoutExtension($bundleName)
             $roots += Join-Path $Cache ('windows-' + ([string]$currentAsset.digest).Substring(7,12) + '/' + $directoryName)
         } else {
             # Start VR can use the last installed bundle without a network call.
-            $roots += @(Get-ChildItem -LiteralPath $Cache -Directory -Filter 'windows-*' |
-                Sort-Object LastWriteTime -Descending | ForEach-Object { Join-Path $_.FullName 'xr-gate-windows-wsl-usbip' })
-            $roots += @(Get-ChildItem -LiteralPath $Cache -Directory -Filter 'windows-*' |
-                Sort-Object LastWriteTime -Descending | ForEach-Object { Join-Path $_.FullName 'xr-gate-windows' })
+            $cached = @(Get-ChildItem -LiteralPath $Cache -Directory -Filter 'windows-*' | Sort-Object LastWriteTime -Descending)
+            foreach ($bundleName in $script:WindowsBundleNames) {
+                $directoryName = [IO.Path]::GetFileNameWithoutExtension($bundleName)
+                $roots += @($cached | ForEach-Object { Join-Path $_.FullName $directoryName })
+            }
         }
     }
     foreach ($root in $roots) {
@@ -123,7 +132,8 @@ function Get-AutomaticDriverBundle($Release, [string]$Cache) {
         }
     }
     if (!$Release.assets.Count) { $Release = Get-ReleaseInfo ([string]$Release.tag_name) }
-    $bundleName = if (@($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows-wsl-usbip.zip' }).Count) { 'xr-gate-windows-wsl-usbip.zip' } else { 'xr-gate-windows.zip' }
+    $bundleName = Get-XrWindowsBundleName $Release
+    if (!$bundleName) { throw ('Release ' + $Release.tag_name + ' contains no Windows driver bundle. Download the complete Windows package.') }
     $asset = Select-ReleaseAsset $Release $bundleName
     $archive = Save-ReleaseAsset $asset $Cache
     $directory = Join-Path $Cache ('windows-' + ([string]$asset.digest).Substring(7,12))

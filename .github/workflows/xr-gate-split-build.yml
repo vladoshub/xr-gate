@@ -965,7 +965,7 @@ jobs:
           }
           python win/package_windows.py build --drivers-root $drivers `
             --launcher-exe (Join-Path $root 'out/windows-launcher/XR-Gate.exe') `
-            --output (Join-Path $dist 'xr-gate-windows-wsl-usbip.zip') `
+            --output (Join-Path $dist 'xr-gate-windows-wsl2-usbip.zip') `
             --frequencies $env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES `
             --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE `
             --devices ($devices -join ' ')
@@ -973,10 +973,10 @@ jobs:
       - name: Upload Windows installer and SteamVR drivers
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-windows-wsl-usbip
+          name: xr-gate-windows-wsl2-usbip
           path: |
-            dist-windows/xr-gate-windows-wsl-usbip.zip
-            dist-windows/xr-gate-windows-wsl-usbip.zip.sha256
+            dist-windows/xr-gate-windows-wsl2-usbip.zip
+            dist-windows/xr-gate-windows-wsl2-usbip.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -1033,7 +1033,7 @@ jobs:
         if: ${{ env.XR_RELEASE_WINDOWS_DRIVER == '1' }}
         uses: actions/download-artifact@v4
         with:
-          name: xr-gate-windows-wsl-usbip
+          name: xr-gate-windows-wsl2-usbip
           path: release-assets/windows
 
       - name: Download unpack helper
@@ -1062,10 +1062,10 @@ jobs:
             test -f release-assets/unpack-helper/unpack_xr_gate.sh
           fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            test -f release-assets/windows/xr-gate-windows-wsl-usbip.zip
-            test -f release-assets/windows/xr-gate-windows-wsl-usbip.zip.sha256
-            (cd release-assets/windows && sha256sum -c xr-gate-windows-wsl-usbip.zip.sha256)
-            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows-wsl-usbip.zip \
+            test -f release-assets/windows/xr-gate-windows-wsl2-usbip.zip
+            test -f release-assets/windows/xr-gate-windows-wsl2-usbip.zip.sha256
+            (cd release-assets/windows && sha256sum -c xr-gate-windows-wsl2-usbip.zip.sha256)
+            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows-wsl2-usbip.zip \
               --frequencies "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" --modes "$XR_WINDOWS_OPENVR_BUILD_MODES"
           fi
 
@@ -1150,7 +1150,7 @@ jobs:
             )
           fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            ASSETS+=(release-assets/windows/xr-gate-windows-wsl-usbip.zip release-assets/windows/xr-gate-windows-wsl-usbip.zip.sha256)
+            ASSETS+=(release-assets/windows/xr-gate-windows-wsl2-usbip.zip release-assets/windows/xr-gate-windows-wsl2-usbip.zip.sha256)
           fi
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             for ubuntu in 24.04 26.04; do

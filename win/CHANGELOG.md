@@ -1,3 +1,8 @@
+## Windows WSL2 package name
+
+- Rename the release archive, extracted folder and CI artifacts to xr-gate-windows-wsl2-usbip.
+- Keep driver installation and offline cache support for earlier Windows package names.
+
 ## Driver packages by device
 
 - Build configured SteamVR profiles for Windows/Linux and Monado display profiles for Linux into device folders.

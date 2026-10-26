@@ -161,7 +161,7 @@ The controllers emulate the buttons of real VR controllers - at the moment, the 
 Requires Windows 11. Default packages require AVX2; for the Linux/WSL runtime
 on CPUs without AVX2, build with the [`generic` CPU profile](docs/ubuntu-builds.md).
 
-Install SteamVR, open it once and close it. Download from the 'Releases' the last xr-gate-windows-wsl-usbip.zip, connect device to PC and enable SBS mode 
+Install SteamVR, open it once and close it. Download from [latest release](https://github.com/vladoshub/xr-gate/releases/latest) the last xr-gate-windows-wsl2-usbip.zip, connect device to PC and enable SBS mode
 if it is supported. Then Open XR-Gate.exe
 
 WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
@@ -180,7 +180,7 @@ Tested on Ubuntu 24.04 and Ubuntu 26.04
 
 Download these artifacts:
 
-https://github.com/vladoshub/xr-gate/releases/latest
+[latest release](https://github.com/vladoshub/xr-gate/releases/latest)
 
 1. xr-gate-linux-x64.tar.gz
 

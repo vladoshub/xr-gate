@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from zipfile import ZipFile, ZIP_DEFLATED
 
-ROOT_NAME = "xr-gate-windows-wsl-usbip"
+ROOT_NAME = "xr-gate-windows-wsl2-usbip"
 REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             ".env.example", "windows/Environment.ps1",
             "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
