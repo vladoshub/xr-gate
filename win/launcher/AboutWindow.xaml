@@ -9,7 +9,10 @@
  <StackPanel Margin="30">
   <DockPanel Margin="0,0,0,18">
    <Viewbox DockPanel.Dock="Right" Width="100" Height="52" Margin="20,0,0,0" Stretch="Uniform" IsHitTestVisible="False">
-    <Canvas Width="200" Height="86"><Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" /></Canvas>
+    <Canvas Width="200" Height="86">
+     <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+     <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
+    </Canvas>
    </Viewbox>
    <StackPanel>
     <TextBlock FontSize="30" FontWeight="SemiBold" AutomationProperties.Name="XR Gate"><Run Text="XR" FontWeight="ExtraBold" FontStyle="Italic" Foreground="{StaticResource BrandAccent}" /><Run Text=" Gate" /></TextBlock>

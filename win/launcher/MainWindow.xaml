@@ -28,6 +28,7 @@
      ToolTip="Connect an XR device to begin." AutomationProperties.Name="No XR device connected">
      <Canvas Width="200" Height="86">
       <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+      <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
      </Canvas>
     </Viewbox>
     <StackPanel Grid.Column="1" VerticalAlignment="Center">

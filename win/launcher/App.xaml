@@ -7,7 +7,11 @@
    <GradientStop Color="#BAFFF0" Offset="0" /><GradientStop Color="#37D6BD" Offset="0.6" /><GradientStop Color="#1AAFA0" Offset="1" />
   </LinearGradientBrush>
   <!-- Original vector artwork. The disconnected visor shares Start VR's accent. -->
-  <Geometry x:Key="GlassesOutline">M18,32 L29,14 Q35,5 48,10 M182,32 L171,14 Q165,5 152,10 M18,32 H182 M18,41 V61 Q18,76 34,76 H77 Q87,76 89,65 L92,51 Q94,44 100,44 Q106,44 108,51 L111,65 Q113,76 123,76 H166 Q182,76 182,61 V41 M45,47 H64 M45,55 H64 M45,63 H64 M158,46 A2.5,2.5 0 1 0 158,51 A2.5,2.5 0 1 0 158,46 M170,46 A2.5,2.5 0 1 0 170,51 A2.5,2.5 0 1 0 170,46</Geometry>
+  <Geometry x:Key="GlassesOutline">M24,27 L33,15 Q36,11 43,13 L52,16 M176,27 L167,15 Q164,11 157,13 L148,16 M16,29 Q48,20 82,27 L91,35 L87,59 Q85,70 73,72 H35 Q23,72 20,62 Z M184,29 Q152,20 118,27 L109,35 L113,59 Q115,70 127,72 H165 Q177,72 180,62 Z M91,37 Q100,31 109,37</Geometry>
+  <GeometryGroup x:Key="GlassesCameras">
+   <EllipseGeometry Center="42,43" RadiusX="2.5" RadiusY="2.5" />
+   <EllipseGeometry Center="158,43" RadiusX="2.5" RadiusY="2.5" />
+  </GeometryGroup>
   <DrawingBrush x:Key="FineGrid" TileMode="Tile" Viewport="0,0,48,48" ViewportUnits="Absolute" Viewbox="0,0,48,48" ViewboxUnits="Absolute">
    <DrawingBrush.Drawing>
     <GeometryDrawing Geometry="M0,48 V0 H48">
