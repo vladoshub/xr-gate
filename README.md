@@ -401,31 +401,9 @@ CTRL + C - exit from xr_client
 
 If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
 
-**Tracking recommendations:**
-
-1. It is recommended not to cover the glasses' cameras. It is also recommended to use the glasses in a bright place.
-
-2. To ensure successful positioning, it is recommended to make small head movements for a few seconds after the initial frame check when starting xr_client.
-
-3. The current hand tracking system isn't perfect, and it's generally recommended to use joysticks instead of gestures (enabling override_controller automatically disables gestures, and vice versa). It is not recommended to wave your arms quickly or block the view of your hands in front of the front camera.
-
----
-
-## Possible problems
-1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
-
-2. Hand or head tracking isn't working, or my pose is off somewhere - most likely, tracking received bad frames (not enough light) and can't calculate the pose correctly. 6DoF is  sensitive to video quality, especially during initialization when the backend starts, and can begin to exhibit cumulative errors (unlike hand tracking). It's recommended to restart the backend and slowly rotate your head for a couple of seconds when starting the backend to ensure proper initialization. Press "1" in xr_client to restart backends
-
-3. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep on XREAL Ultra). In the xr_client skip SBS mode selection. It was also noted that if the main display is connected via Type-C, the glasses may not work correctly in SBS.
-
-4. The glasses don't work in any mode - there may be a conflict with the main monitor - try reconnecting the main monitor or changing the frequency on the glasses in the display settings
-
-5. I had problems using Bluetooth controllers. Try re-enabling the controllers themselves.
-
----
 
 
-# SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
+## SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
 
@@ -452,242 +430,7 @@ Then run Steam VR
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
 
-
-# SteamVR on Linux Direct Mode (XREAL Ultra example) | Alternative
-
-**Workaround for systems without built-in x11 (Ubuntu 26.04)**
-
-### 1. Install LightDM + Xfce
-
-
-```bash
-sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository -y universe
-sudo apt update
-
-sudo apt install -y \
-  lightdm lightdm-gtk-greeter \
-  xfce4 xfce4-terminal dbus-x11 \
-  xserver-xorg xserver-xorg-input-libinput \
-  xserver-xorg-video-amdgpu
-```
-
-### 1a. Additional for NVIDIA GPU
-```bash
-bash <<'BASH'
-set -e
-
-LIGHTDM_NATIVE_ARCH="$(dpkg --print-architecture)"
-
-read -r LIGHTDM_NV_GL LIGHTDM_NV_VERSION < <(
-  dpkg-query -W \
-    -f='${Package} ${Architecture} ${Version} ${db:Status-Status}\n' \
-    'libnvidia-gl*' 2>/dev/null |
-  awk -v arch="$LIGHTDM_NATIVE_ARCH" \
-    '$2 == arch && $4 == "installed" {print $1, $3; exit}'
-)
-
-LIGHTDM_NV_XORG="xserver-xorg-video-nvidia${LIGHTDM_NV_GL#libnvidia-gl}"
-
-sudo apt install -y "${LIGHTDM_NV_XORG}=${LIGHTDM_NV_VERSION}"
-
-test -f /usr/lib/xorg/modules/drivers/nvidia_drv.so
-BASH
-```
-
-### 2. Enable lightdm
-
-```bash
-sudo mkdir -p /etc/lightdm/lightdm.conf.d
-
-sudo tee /etc/lightdm/lightdm.conf.d/90-xfce.conf >/dev/null <<'EOF'
-[Seat:*]
-greeter-session=lightdm-gtk-greeter
-user-session=xfce
-EOF
-
-sudo dpkg-reconfigure lightdm
-```
-
-Choose lightdm and:
-
-
-```bash
-sudo systemctl enable lightdm.service --force
-sudo systemctl set-default graphical.target
-sudo reboot
-```
-
-
-### 2a. Additional install blueman for convenience and Bluetooth control
-
-
-```bash
-sudo apt update
-sudo apt install -y bluez blueman rfkill
-
-sudo systemctl enable --now bluetooth.service
-sudo rfkill unblock bluetooth
-bluetoothctl power on
-```
-
-
-
-
-### Run xr_client
-
-```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config xreal_ultra
-```
-
-## Use SteamVR
-
-###  Register OpenVR driver (once)
-
-For direct USB4/iGPU path, tested with HX370 iGPU:
-
-90HZ
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
-
-60HZ
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
-
-Custom frequency 75HZ:
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=75 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=75 \
-XR_OPENVR_DRIVER_DIR_NAME=openvr_driver_60HZ \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
-
-For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, 60 Hz is the safer default:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_OPENVR_REGISTER_METHOD=manual \
-XR_OPENVR_RUNTIME_MODE=steamvr \
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
-
-For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, custom frequency 75HZ:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_OPENVR_REGISTER_METHOD=manual \
-XR_OPENVR_RUNTIME_MODE=steamvr \
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=75 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=75 \
-XR_OPENVR_DRIVER_DIR_NAME=openvr_driver_60HZ \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
-
-
-
-**Start xr_client before run SteamVR**
-
-### Start on Integrated GPU with USB-C video output without discrete GPU in system
-
-Tested on HX370
-
-
-Just start Steam and start SteamVR. After you can start SteamVR apps/games.
-
-
-### Start on Discrete GPU
-
-Tested on RTX6000 Pro Blackwell
-
-
-In most cases, you will need an adapter to run the glasses with a dGPU.
-
-Check displays:
-
-```bash
-xrandr --query | grep " connected"
-```
-
-Example output:
-
-```text
-DP-6 connected primary 7680x2160+0+1080
-DP-4 connected 3840x1080+1920+0
-```
-
-Here:
-
-```text
-DP-4 = glasses (3840x1080)
-DP-6 = main monitor
-```
-
-Run direct mode (tested on Nvidia) 60HZ:
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_OPENVR_DGPU_VENDOR=nvidia \
-XR_OPENVR_DGPU_OUTPUT=DP-4 \
-XR_OPENVR_LAUNCH_MODE=steam \
-XR_OPENVR_CLEAR_LOGS=1 \
-XR_DISPLAY_FREQUENCY_HZ=60 \
-./run_openvr_dgpu_direct.sh 60
-```
-
-
-Run direct mode (tested on Nvidia) custom frequency 75HZ:
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_TARGET_DEVICE=xreal_ultra \
-XR_OPENVR_DGPU_VENDOR=nvidia \
-XR_OPENVR_DGPU_OUTPUT=DP-4 \
-XR_OPENVR_LAUNCH_MODE=steam \
-XR_OPENVR_CLEAR_LOGS=1 \
-XR_OPENVR_DRIVER_DIR_NAME=openvr_driver_60HZ \
-XR_OPENVR_DISPLAY_MODE=direct \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=75 \
-XR_DISPLAY_FREQUENCY_HZ=75 \
-./run_openvr_dgpu_direct.sh 75
-```
-
-Start SteamVR. After you can start SteamVR apps/games.
-
-
-After finishing the work, I recommend restoring the glasses to their normal state to avoid problems during future launches or if you have an issue with xr_client or the SteamVR driver:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_STEAMVR_RESTORE_OUTPUT=DP-4 \
-XR_STEAMVR_RESTORE_MAIN_OUTPUT=DP-6 \
-XR_STEAMVR_RESTORE_LAYOUT=right-of \
-./run_openvr_restore_desktop.sh
-```
-
-
-## Some demo OpenVR
+### Some demo OpenVR
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -704,10 +447,9 @@ Stereo overlay (need running xr_video backend)
 ./run_steamvr_video_overlay.sh
 ```
 
----
 
 
-# Monado/OpenXR on Linux windowed mode (XREAL Ultra example) | Recomended
+## Monado/OpenXR on Linux windowed mode (XREAL Ultra example) | Recomended
 
 
 Run xr_client
@@ -726,96 +468,6 @@ XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
 ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
-
-
-# Monado/OpenXR on Linux (XREAL Ultra example) | Alternative
-
-
-### A. Monado with main monitor — Auto disable main monitor
-
-Example for 90 Hz XREAL Ultra:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-XR_TRACKING_MONADO_XCB_RATE_HZ=90 \
-./devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
-```
-
-After stopping Monado driver with `Ctrl+C`, the main display should be restored.
-
-### B. Monado with main monitor — Manually disable main monitor
-
-Check displays:
-
-```bash
-xrandr --query | grep " connected"
-```
-
-Example output:
-
-```text
-DP-6 connected primary 7680x2160+0+1080
-DisplayPort-1 connected 3840x1080+1920+0
-```
-
-Here:
-
-```text
-DisplayPort-1 = glasses
-DP-6 = main display
-```
-
-Disable main display:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-XR_TRACKING_MAIN_OUTPUT=DP-6 \
-devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
-```
-
-Run Monado driver:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-devices/common/linux/scripts/monado_driver/start_monado_driver.sh
-```
-
-
-Enable main display again:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-XR_TRACKING_MAIN_OUTPUT=DP-6 \
-devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
-```
-
-
-### C. Monado without main monitor in system
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-devices/common/linux/scripts/monado_driver/start_monado_driver.sh
-```
-
 ### Start OpenXR demo
 
 ```bash
@@ -831,6 +483,29 @@ Check /readme/xrizer.md
 
 ---
 
+
+**Tracking recommendations:**
+
+1. It is recommended not to cover the glasses' cameras. It is also recommended to use the glasses in a bright place.
+
+2. To ensure successful positioning, it is recommended to make small head movements for a few seconds after the initial frame check when starting xr_client.
+
+3. The current hand tracking system isn't perfect, and it's generally recommended to use joysticks instead of gestures (enabling override_controller automatically disables gestures, and vice versa). It is not recommended to wave your arms quickly or block the view of your hands in front of the front camera.
+
+---
+
+## Possible problems
+1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
+
+2. Hand or head tracking isn't working, or my pose is off somewhere - most likely, tracking received bad frames (not enough light) and can't calculate the pose correctly. 6DoF is  sensitive to video quality, especially during initialization when the backend starts, and can begin to exhibit cumulative errors (unlike hand tracking). It's recommended to restart the backend and slowly rotate your head for a couple of seconds when starting the backend to ensure proper initialization. Press "1" in xr_client to restart backends
+
+3. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep on XREAL Ultra). In the xr_client skip SBS mode selection. It was also noted that if the main display is connected via Type-C, the glasses may not work correctly in SBS.
+
+4. The glasses don't work in any mode - there may be a conflict with the main monitor - try reconnecting the main monitor or changing the frequency on the glasses in the display settings
+
+5. I had problems using Bluetooth controllers. Try re-enabling the controllers themselves.
+
+---
 
 # Linux build:
 
