@@ -155,7 +155,7 @@ See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), inc
 
 The controllers emulate the buttons of real VR controllers - at the moment, the Samsung Gear VR covers most of the main buttons and has a touch panel, and also has an IMU
 
-# **Quick start Windows**
+# Quick start Windows
 **If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
 
 Required Windows 11 + AVX2 Instructions.
@@ -166,14 +166,14 @@ if it is supported. Then Open XR-Gate.exe
 WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
 
 
-# **Quick start Linux**
+# Quick start Linux
 **If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
 
 Required AVX2 Instructions.
 
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
-# 1. Unpack binary (once)
+## 1. Unpack binary (once)
 
 
 Download these artifacts:
@@ -224,9 +224,9 @@ reboot
 ```
 
 
-# 2. Setting up INPUT | ONCE
+## 2. Setting up INPUT | ONCE
 <details>
-  <summary>READ THIS STEP IF YOU HAVE CONTROLLERS (VR-PARK, SAMSUNG GEAR VR) OR WANT TO START WITH CONTROLLERS EMULTATION</summary>
+  <summary>READ THIS STEP IF YOU HAVE CONTROLLERS (VR-PARK, SAMSUNG GEAR VR) OR WANT TO START WITH CONTROLLER EMULTATION</summary>
 
 
 
@@ -256,7 +256,7 @@ export DEVICE_CONFIG=leap_motion_uvc
 ```
 
 
-## Switch to external Bluetooth (optional | recomended)
+### Switch to external Bluetooth (optional | recomended)
 
 Connect the adapters, stop XR Gate/controller capture, then run the selector from the extracted Ubuntu release:
 
@@ -270,7 +270,7 @@ The selected adapter is powered on and verified **before** the other adapters ar
 
 
 
-## Choose supported Bluetooth controllers (recomended)
+### Choose supported Bluetooth controllers (recomended)
 
 **If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
 
@@ -342,7 +342,7 @@ sed -i \
 ```
 
 
-## Train new devices (Optional)
+### Train new devices (Optional)
 Train your devices.
 **Choose this option if you don't have any controllers from the list above or you want to use your own layout (for example, use the keyboard for control)**
 
@@ -361,7 +361,7 @@ When using external input, hands position and rotation from cameras, input from 
 
 </details>
 
-# 3. Run xr_client
+## 3. Run xr_client
 
 **At startup for device with support display manager, you need to select display frequency**
 **For XREAL Ultra - 60Hz or 90Hz mode. 90HZ works only with USB-C directly on Xreal Ultra**
@@ -385,9 +385,9 @@ You can switch between 3DoF/6DoF or disable/enable hand-tracking without restart
 CTRL + C - exit from xr_client
 
 
-# 4. Monado | SteamVR
+## 4. Monado | SteamVR
 
-## SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
+### SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
 
@@ -433,7 +433,7 @@ Stereo overlay (need running xr_video backend)
 
 
 
-## Monado/OpenXR on Linux windowed mode (XREAL Ultra example) | Recomended
+### Monado/OpenXR on Linux windowed mode (XREAL Ultra example) | Recomended
 
 
 Run xr_client
@@ -478,7 +478,7 @@ Check /readme/xrizer.md
 
 ---
 
-## Possible problems
+# Possible problems
 1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
 
 2. Hand or head tracking isn't working, or my pose is off somewhere - most likely, tracking received bad frames (not enough light) and can't calculate the pose correctly. 6DoF is  sensitive to video quality, especially during initialization when the backend starts, and can begin to exhibit cumulative errors (unlike hand tracking). It's recommended to restart the backend and slowly rotate your head for a couple of seconds when starting the backend to ensure proper initialization. Press "1" in xr_client to restart backends
@@ -565,7 +565,7 @@ cd out/xr-gate
 `run_xr_client.sh` intentionally has no implicit hardware profile. Calling it
 without `--config` prints the packaged profile list and exits.
 
-## Runtime package
+# Runtime package
 
 The portable runtime package is built under:
 
@@ -582,21 +582,21 @@ The default profile set is controlled by `XR_PACKAGE_PROFILES`. For advanced
 packaging, `XR_PACKAGE_DEVICE_TARGETS` and `XR_PACKAGE_CONFIG_PROFILES` can be
 overridden independently.
 
-## Main components
+# Main components
 
-### `capture_service_cpp`
+## `capture_service_cpp`
 
 C++ camera/IMU capture backend. The active camera, layout, IMU, and transport settings come from the selected runtime profile.
 
-### `capture_client`
+## `capture_client`
 
 Standalone Python reader SDK for runtime streams. It is used by recorders, calibration tools, debug viewers, and Python-side experiments.
 
-### `backends/`
+## `backends/`
 
 Tracking and perception backends, including hand tracking, video, spatial mapping/scanning, 3DoF, and 6DoF integration paths.
 
-### `xr_runtime_adapter`
+## `xr_runtime_adapter`
 
 Runtime normalization layer. It consumes backend streams, applies transforms/prediction/stale checks, and republishes runtime-ready HMD, controller, hand, video, and spatial data.
 
@@ -604,15 +604,15 @@ Applications can opt into a read-only TCP JSON stream for HMD/hand/controller
 state with `RUNTIME_APP_TCP=1` (off by default). See
 [Application TCP/UDP and video access](runtime_adapters/xr_runtime_adapter/docs/application_network_api.md).
 
-### `xr_client`
+## `xr_client`
 
 Process orchestrator for starting, stopping, and supervising the runtime stack.
 
-### `drivers/` and `apps/`
+## `drivers/` and `apps/`
 
 SteamVR/OpenVR, Monado/OpenXR, optional xrizer integration, and experimental SteamVR applications/overlays.
 
-## Source layout
+# Source layout
 
 ```text
 shared/include/                 shared ABI/contracts
@@ -635,7 +635,7 @@ Upstream code belongs under `third_party/`. Project-owned code is stored normall
 
 More documentation is in the `readme/` folder.
 
-## Optional GPL tools
+# Optional GPL tools
 
 `xrizer` is an optional third-party GPL-3.0-or-later tool. It is not built by default and is not part of the core binary release.
 
@@ -648,7 +648,7 @@ XR_BUILD_ONLY=xrizer ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 
 See `readme/xrizer.md`.
 
-## License
+# License
 
 Project-owned source code is licensed under the MIT License. See `LICENSE`.
 
@@ -656,7 +656,7 @@ Third-party files, adapted code, SDKs, binaries, configuration templates, models
 
 See `THIRD_PARTY_NOTICES.md` for the component inventory and packaging rules.
 
-## Third-party code and references
+# Third-party code and references
 
 The project uses or can build against these third-party components:
 
