@@ -173,7 +173,7 @@ Required AVX2 Instructions.
 
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
-## 1. Unpack binary (once)
+# 1. Unpack binary (once)
 
 
 Download these artifacts:
@@ -222,9 +222,9 @@ sudo usermod -aG dialout "$USER"
 newgrp dialout
 reboot
 ```
+<details>
+  <summary># 2. Setting up controllers. Once. READ THIS STEP IF YOU HAVE CONTROLLERS (VR-PARK, SAMSUNG GEAR VR) OR WANT TO START WITH CONTROLLERS EMULTATION</summary>
 
-
-## 2. Setting up controllerst (once | optional)
 
 
 **1. Without this, input will be limited to gestures (pinch, grab).**
@@ -253,7 +253,7 @@ export DEVICE_CONFIG=leap_motion_uvc
 ```
 
 
-### Switch to external Bluetooth (optional | recomended)
+## Switch to external Bluetooth (optional | recomended)
 
 Connect the adapters, stop XR Gate/controller capture, then run the selector from the extracted Ubuntu release:
 
@@ -356,52 +356,33 @@ If you use an external controller, you can continue to use controller input when
 
 When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
 
+</details>
+
+# 3. Run xr_client
+
+**At startup for device with support display manager, you need to select display frequency**
+**For XREAL Ultra - 60Hz or 90Hz mode. 90HZ works only with USB-C directly on Xreal Ultra**
 
 
-## 3. Run xr_client
-
-**You must launch the client every time before launching SteamVR.**
-
-
-At startup, you need to select 60Hz or 90Hz mode.
-If you have integrated graphics, a USB-C video output, and don't have a separate graphics card, you can try 90Hz mode. Otherwise, I recommend 60Hz.
-
-If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the driver from section 3)
-
-It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
-
-**XREAL ULTRA (recomended, VIO)**
+**XREAL ULTRA | Recomended**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-**XREAL ULTRA (no IMU mode, VO)**
-```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config xreal_ultra --no-imu
-```
+**Alternative**
 
-**UltraLeapUVC + nRF54L15 (experimental, VIO)**
 ```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config leap_motion_uvc_nrf54l15
-```
-
-**UltraLeapUVC (experimental, no IMU mod, VO)**
-```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config leap_motion_uvc
+./run_xr_client.sh --config xreal_ultra --no-imu #no IMU mode, VO | XREAL Ultra NO IMU
+./run_xr_client.sh --config leap_motion_uvc_nrf54l15 #experimental, VIO | LeapMotionUVC + nrf54l15 IMU
+./run_xr_client.sh --config leap_motion_uvc #experimental, no IMU mod, VO | LeapMotionUVC
 ```
 
 You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
-
 CTRL + C - exit from xr_client
 
 
-If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
-
-
+# 4. Monado | SteamVR
 
 ## SteamVR on Linux Fallback windowed mode (XREAL Ultra example) | Recomended
 
