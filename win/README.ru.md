@@ -4,7 +4,7 @@ XR Gate работает через подсистему Windows Subsystem for L
 
 [English](README.md) · [Русский](README.ru.md)
 
-Установите SteamVR, откройте его один раз и закройте. Распакуйте весь xr-gate-windows-wsl-usbip.zip и запустите XR-Gate.exe. Сохраните все папки из архива рядом с программой.
+Установите SteamVR, откройте его один раз и закройте. Скачайте и распакуйте из 'Releases' https://github.com/vladoshub/xr-gate/releases/latest весь xr-gate-windows-wsl-usbip.zip и запустите XR-Gate.exe. Сохраните все папки из архива рядом с программой.
 
 ## Запуск
 
