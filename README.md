@@ -453,7 +453,7 @@ Then run Steam VR
 
 
 
-# SteamVR on Linux Direct Mode (XREAL Ultra example)
+# SteamVR on Linux Direct Mode (XREAL Ultra example) | Alternative
 
 **Workaround for systems without built-in x11 (Ubuntu 26.04)**
 
@@ -728,7 +728,7 @@ XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
 
 
 
-# Monado/OpenXR on Linux (XREAL Ultra example)
+# Monado/OpenXR on Linux (XREAL Ultra example) | Alternative
 
 
 ### A. Monado with main monitor — Auto disable main monitor
