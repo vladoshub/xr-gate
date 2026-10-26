@@ -12,9 +12,28 @@ function Get-Tool([string]$Name) {
     if ($Name -eq 'wsl.exe') { throw 'Firmware contract tests must not start a real WSL distribution.' }
     return $Name
 }
-function Get-UsbDevices { return @($script:Camera,$script:Bluetooth,$script:Other) }
+function Get-UsbDevices([int]$TimeoutMilliseconds=0) {
+    if ($script:DisappearRemaining -gt 0) {
+        $script:DisappearRemaining--
+        return @($script:Camera,$script:Other)
+    }
+    return @($script:Camera,$script:Bluetooth,$script:Other)
+}
 function Invoke-Native([string]$File,[string[]]$Arguments) {
     $script:Calls.Add([pscustomobject]@{Operation='native';Arguments=$Arguments})
+    Assert ($Arguments[-1] -eq $script:Bluetooth.BusId) 'A USB command targeted a stale BUSID or unrelated device.'
+    if ($Arguments[0] -eq 'detach') {
+        $script:Bluetooth.ClientIPAddress=''
+        $script:DisappearRemaining=$script:DisappearAfterDetach
+        if ($script:BusIdAfterDetach) { $script:Bluetooth.BusId=$script:BusIdAfterDetach }
+    } elseif ($Arguments[0] -eq 'attach') {
+        if ($script:FailAttaches -gt 0) {
+            $script:FailAttaches--
+            $script:Bluetooth.BusId='9-4'
+            throw 'fixture attach failed during re-enumeration'
+        }
+        $script:Bluetooth.ClientIPAddress='host'
+    }
 }
 function Invoke-Linux {
     param([string]$Operation,$Request,[switch]$AsRoot,[switch]$Capture)
@@ -40,6 +59,12 @@ function Reset-Fixture($Reports,[int]$FailPrepares=0) {
     $script:ReportIndex = 0
     $script:PrepareCount = 0
     $script:FailPrepares = $FailPrepares
+    $script:Bluetooth.BusId='2-7'
+    $script:Bluetooth.ClientIPAddress='host'
+    $script:DisappearRemaining=0
+    $script:DisappearAfterDetach=0
+    $script:BusIdAfterDetach=''
+    $script:FailAttaches=0
     $script:Settings['XR_USB_IDS'] = '1234:5678'
     $script:Settings['XR_USB_INSTANCE_IDS'] = ''
     $script:Settings['XR_BLUETOOTH'] = '1'
@@ -71,6 +96,39 @@ Connect-SelectedUsbCore
 Assert ($script:PrepareCount -eq 2) 'A newly discovered compressed firmware did not get one retry.'
 $native = @($script:Calls | Where-Object { $_.Operation -eq 'native' })
 Assert ($native.Count -eq 2 -and $native[0].Arguments[-1] -eq '2-7' -and $native[1].Arguments[-1] -eq '2-7') 'Firmware recovery touched unrelated USB devices.'
+
+Reset-Fixture @((Report $false $true))
+$script:DisappearAfterDetach=2
+$script:BusIdAfterDetach='8-6'
+Connect-SelectedUsbCore
+$native=@($script:Calls | Where-Object { $_.Operation -eq 'native' })
+Assert ($native.Count -eq 2 -and $native[0].Arguments[-1] -eq '2-7' -and $native[1].Arguments[-1] -eq '8-6') 'Initial firmware setup reused a BUSID from before detach.'
+
+Reset-Fixture @((Report $true),(Report $false $false @('vendor_x/controller.bin'))) 1
+$script:DisappearAfterDetach=2
+$script:BusIdAfterDetach='8-7'
+Connect-SelectedUsbCore
+$native=@($script:Calls | Where-Object { $_.Operation -eq 'native' })
+Assert ($native.Count -eq 2 -and $native[0].Arguments[-1] -eq '2-7' -and $native[1].Arguments[-1] -eq '8-7') 'Firmware repair reused a BUSID from before detach.'
+
+Reset-Fixture @((Report $false $true))
+$script:FailAttaches=1
+Connect-SelectedUsbCore
+$native=@($script:Calls | Where-Object { $_.Operation -eq 'native' })
+Assert ($native.Count -eq 3 -and $native[1].Arguments[-1] -eq '2-7' -and $native[2].Arguments[-1] -eq '9-4') 'A racing USB attach did not refresh the selected identity for its one retry.'
+
+Reset-Fixture @((Report $false $true))
+$script:FailAttaches=2
+$rejected=$false
+try { Connect-SelectedUsbCore } catch { $rejected=$_.Exception.Message.Contains('fixture attach failed') }
+Assert ($rejected -and @($script:Calls | Where-Object { $_.Operation -eq 'native' }).Count -eq 3) 'USB attach failure did not stop after one retry.'
+
+Reset-Fixture @()
+$script:DisappearRemaining=100
+$rejected=$false
+try { Wait-CurrentUsbDevice $script:Bluetooth.InstanceId -TimeoutMilliseconds 20 | Out-Null }
+catch { $rejected=$_.Exception.Message.Contains('did not return') }
+Assert ($rejected -and $script:Calls.Count -eq 0) 'A missing selected instance fell back to another USB device.'
 
 Reset-Fixture @((Report $true),(Report $false)) 1
 $rejected = $false

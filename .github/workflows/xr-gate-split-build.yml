@@ -12,9 +12,9 @@ name: XR Gate split build
         required: false
         default: true
       cpu_profile:
-        description: "Native CPU target (native requires consistent builder CPUs)"
+        description: "CPU target (generic: no AVX; native: consistent builder CPUs required)"
         type: choice
-        options: [avx2, avx512, native]
+        options: [avx2, generic, avx512, native]
         required: false
         default: avx2
       openvr_frequencies:
@@ -260,6 +260,12 @@ jobs:
             devices/common/linux/scripts/build/package_xr_gate_out.sh
             devices/common/linux/scripts/build/build_vendor_components.sh
             devices/common/linux/scripts/build/package_vendor_components.sh
+            drivers/build_profiles.sh
+            drivers/openvr_driver/scripts/build_driver.sh
+            drivers/openvr_driver/scripts/build_and_register_driver.sh
+            drivers/openvr_driver/scripts/register_driver.sh
+            drivers/monado_driver/scripts/linux/install.sh
+            drivers/monado_driver/scripts/linux/start.sh
             drivers/xrizer/scripts/linux/package_xrizer_compliance.sh
             devices/common/linux/scripts/ci/run_act_build.sh
             devices/common/linux/scripts/ci/run_xr_gate_act_build.sh
@@ -291,6 +297,9 @@ jobs:
             libeigen3-dev libboost-all-dev libceres-dev libtbb-dev \
             libfmt-dev libspdlog-dev
           git lfs install --local
+
+      - name: Test device discovery and driver packaging matrix
+        run: python3 -m unittest discover -s drivers/tests -p 'test*.py'
 
       - name: Check native build orchestration
         if: ${{ matrix.component.name == 'basalt' }}
@@ -342,6 +351,37 @@ jobs:
           ./devices/common/linux/scripts/build/install_xr_gate_out.sh
           du -sh out/xr-gate || true
           find out/xr-gate -maxdepth 4 -type f | sort | sed -n '1,200p'
+
+      - name: Validate device-specific driver outputs
+        if: ${{ matrix.component.name == 'steamvr' || matrix.component.name == 'monado' }}
+        env:
+          DRIVER_KIND: ${{ matrix.component.name }}
+        run: |
+          python3 - <<'PY_CHECK'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("drivers").resolve()))
+          from device_profiles import configured_devices
+          kind = os.environ["DRIVER_KIND"]
+          for device in configured_devices(Path.cwd(), kind):
+              base = Path("out/xr-gate/bin/drivers") / device
+              if kind == "steamvr":
+                  variants = list(base.glob("openvr_driver_*HZ*/xr_tracking"))
+                  assert variants, f"No SteamVR package for {device}"
+                  for package in variants:
+                      settings = json.loads((package / "resources/settings/default.vrsettings").read_text())["xr_tracking"]
+                      assert settings["deviceProfile"] == device, str(package)
+                      assert (package / "bin/linux64/driver_xr_tracking.so").is_file(), str(package)
+              else:
+                  package = base / "monado_driver"
+                  assert (package / "device-profile").read_text().strip() == device
+                  assert (package / "monado-service").is_file()
+                  manifest = json.loads((package / "openxr_monado_xrgate.json").read_text())
+                  library = Path(manifest["runtime"]["library_path"])
+                  assert not library.is_absolute(), str(library)
+                  assert (package / library).is_file(), str(package / library)
+                  assert (package / "start.sh").is_file()
+          PY_CHECK
 
       - name: Validate capture launchers and TCP metadata probe
         if: ${{ matrix.component.name == 'capture' }}
@@ -675,6 +715,11 @@ jobs:
         ubuntu: ["24.04", "26.04"]
 
     steps:
+      - name: Checkout profiles for package validation
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - name: Download partial packages
         uses: actions/download-artifact@v4
         with:
@@ -706,6 +751,7 @@ jobs:
           test -f merged/xr-gate/LICENSES/MIT.txt
           test -f merged/xr-gate/THIRD_PARTY_NOTICES.md
           case "$XR_BUILD_CPU" in
+            generic) expected_cpu=x86-64 ;;
             avx2) expected_cpu=x86-64-v3 ;;
             avx512) expected_cpu=x86-64-v4 ;;
             native) expected_cpu=native ;;
@@ -732,6 +778,15 @@ jobs:
           test -f merged/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
           test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
           test -f merged/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
+          cmp runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json \
+            merged/xr-gate/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json
+          for target in xreal_ultra leap_motion_uvc leap_motion_uvc_nrf54l15; do
+            expected="devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+            if [[ ! -f "$expected" ]]; then
+              expected="runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+            fi
+            cmp "$expected" "merged/xr-gate/devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+          done
           test -d merged/xr-gate/devices/leap_motion_uvc_nrf54l15
           test -d merged/xr-gate/devices/leap_motion_uvc
           test -x merged/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
@@ -750,6 +805,16 @@ jobs:
           rm -rf merged/xr-gate/bin/python-runtime/venv
           tar -C merged -czf xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz xr-gate
           ls -lh xr-gate-ubuntu-${{ matrix.ubuntu }}-linux-x64.tar.gz
+
+      - name: Smoke test generic binaries without AVX
+        if: ${{ env.XR_BUILD_CPU == 'generic' && matrix.ubuntu == '24.04' }}
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends qemu-user
+          # Conroe has no AVX/AVX2/FMA. Exercise startup and linked libraries.
+          qemu-x86_64 -cpu Conroe merged/xr-gate/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
+          qemu-x86_64 -cpu Conroe merged/xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
 
       - name: Upload merged package
         uses: actions/upload-artifact@v4
@@ -810,11 +875,13 @@ jobs:
           & ./win/tests/verify-env.ps1
           & ./win/tests/verify-steamvr-paths.ps1
           & ./win/tests/verify-runtime-contracts.ps1
+          & ./win/tests/verify-driver-devices.ps1
           & ./win/tests/verify-bluetooth-firmware.ps1
           & ./win/tests/verify-bluetooth-selection.ps1
           & ./win/tests/verify-usb-timeout.ps1
           & ./win/tests/verify-device-lifecycle.ps1
           & ./win/tests/verify-release-platforms.ps1
+          & ./win/tests/verify-runtime-sources.ps1
       - name: Test Bluetooth side selection and configuration updates
         run: python -m unittest discover -s win/tests -p 'test_bluetooth_controllers.py'
       - name: Verify partial TCP streams have a total deadline
@@ -865,47 +932,51 @@ jobs:
           $sdk = Join-Path $root '.build-deps/openvr'
           $json = Join-Path $root '.build-deps/json/single_include'
           $builder = Join-Path $root 'drivers/openvr_driver/scripts/windows/build_driver.ps1'
-          $build = Join-Path $root 'build/drivers/openvr_driver/windows_Release'
           $dist = Join-Path $root 'dist-windows'
           $drivers = Join-Path $dist 'drivers'
           New-Item -ItemType Directory -Force $dist | Out-Null
+          $deviceJson = & python (Join-Path $root 'drivers/device_profiles.py') --driver steamvr --json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot discover configured SteamVR devices' }
+          $devices = @($deviceJson | ConvertFrom-Json)
+          if (!$devices.Count) { throw 'No configured SteamVR devices' }
           $tested = $false
-          foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
-            foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
-              & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
-                -Generator Ninja -BuildType Release -Device generic `
-                -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
-              if (!$tested) {
-                ctest --test-dir $build -C Release --output-on-failure
-                if ($LASTEXITCODE -ne 0) { throw 'Windows OpenVR driver functional tests failed' }
-                $tested = $true
+          foreach ($device in $devices) {
+            $build = Join-Path $root "build/drivers/openvr_driver/$device/windows_Release"
+            foreach ($frequency in ($env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES -split ' ')) {
+              foreach ($mode in ($env:XR_WINDOWS_OPENVR_BUILD_MODES -split ' ')) {
+                & $builder -Root $root -OpenVrSdkRoot $sdk -NlohmannJsonInclude $json `
+                  -Generator Ninja -BuildType Release -Device $device -OutputRoot $drivers `
+                  -DisplayFrequency $frequency -DisplayMode $mode -RuntimeTransport tcp -BuildTests
+                if (!$tested) {
+                  ctest --test-dir $build -C Release --output-on-failure
+                  if ($LASTEXITCODE -ne 0) { throw 'Windows OpenVR driver functional tests failed' }
+                  $tested = $true
+                }
+                $package = Join-Path $drivers "$device/${frequency}Hz-$mode/xr_tracking"
+                $dll = Join-Path $package 'bin/win64/driver_xr_tracking.dll'
+                $exports = & dumpbin.exe /exports $dll
+                if ($LASTEXITCODE -ne 0 -or !($exports | Select-String 'HmdDriverFactory')) { throw 'Driver entry point missing' }
+                if (!(Test-Path (Join-Path $package 'bin/win64/openvr_api.dll'))) { throw 'OpenVR runtime DLL missing' }
+                $settings = Join-Path $package 'resources/settings/default.vrsettings'
+                python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8"))["xr_tracking"]; assert d["deviceProfile"]==sys.argv[2]; assert all(d[k]=="tcp" for k in ("runtimePoseTransport","runtimeHandTransport","runtimeControllerStateTransport"))' $settings $device
+                if ($LASTEXITCODE -ne 0) { throw 'Windows package has unexpected device/transport defaults' }
               }
-              $package = Join-Path $build 'xr_tracking'
-              $dll = Join-Path $package 'bin/win64/driver_xr_tracking.dll'
-              $exports = & dumpbin.exe /exports $dll
-              if ($LASTEXITCODE -ne 0 -or !($exports | Select-String 'HmdDriverFactory')) { throw 'Driver entry point missing' }
-              if (!(Test-Path (Join-Path $package 'bin/win64/openvr_api.dll'))) { throw 'OpenVR runtime DLL missing' }
-              $settings = Join-Path $package 'resources/settings/default.vrsettings'
-              python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8"))["xr_tracking"]; assert all(d[k]=="tcp" for k in ("runtimePoseTransport","runtimeHandTransport","runtimeControllerStateTransport")); assert d["runtimeTcpHost"]=="127.0.0.1" and d["runtimeTcpPort"]==45810' $settings
-              if ($LASTEXITCODE -ne 0) { throw 'Windows package has unexpected transport defaults' }
-              $variant = Join-Path $drivers "${frequency}Hz-${mode}"
-              New-Item -ItemType Directory -Force $variant | Out-Null
-              Copy-Item -LiteralPath $package -Destination $variant -Recurse -Force
             }
           }
           python win/package_windows.py build --drivers-root $drivers `
             --launcher-exe (Join-Path $root 'out/windows-launcher/XR-Gate.exe') `
-            --output (Join-Path $dist 'xr-gate-windows-wsl-usbip.zip') `
+            --output (Join-Path $dist 'xr-gate-windows-wsl2-usbip.zip') `
             --frequencies $env:XR_WINDOWS_OPENVR_BUILD_FREQUENCIES `
-            --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE
+            --modes $env:XR_WINDOWS_OPENVR_BUILD_MODES --release-tag $env:WINDOWS_BUNDLE_RELEASE `
+            --devices ($devices -join ' ')
           if ($LASTEXITCODE -ne 0) { throw 'Windows bundle packaging failed' }
       - name: Upload Windows installer and SteamVR drivers
         uses: actions/upload-artifact@v4
         with:
-          name: xr-gate-windows-wsl-usbip
+          name: xr-gate-windows-wsl2-usbip
           path: |
-            dist-windows/xr-gate-windows-wsl-usbip.zip
-            dist-windows/xr-gate-windows-wsl-usbip.zip.sha256
+            dist-windows/xr-gate-windows-wsl2-usbip.zip
+            dist-windows/xr-gate-windows-wsl2-usbip.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -962,7 +1033,7 @@ jobs:
         if: ${{ env.XR_RELEASE_WINDOWS_DRIVER == '1' }}
         uses: actions/download-artifact@v4
         with:
-          name: xr-gate-windows-wsl-usbip
+          name: xr-gate-windows-wsl2-usbip
           path: release-assets/windows
 
       - name: Download unpack helper
@@ -991,10 +1062,10 @@ jobs:
             test -f release-assets/unpack-helper/unpack_xr_gate.sh
           fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            test -f release-assets/windows/xr-gate-windows-wsl-usbip.zip
-            test -f release-assets/windows/xr-gate-windows-wsl-usbip.zip.sha256
-            (cd release-assets/windows && sha256sum -c xr-gate-windows-wsl-usbip.zip.sha256)
-            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows-wsl-usbip.zip \
+            test -f release-assets/windows/xr-gate-windows-wsl2-usbip.zip
+            test -f release-assets/windows/xr-gate-windows-wsl2-usbip.zip.sha256
+            (cd release-assets/windows && sha256sum -c xr-gate-windows-wsl2-usbip.zip.sha256)
+            python3 win/package_windows.py verify release-assets/windows/xr-gate-windows-wsl2-usbip.zip \
               --frequencies "$XR_WINDOWS_OPENVR_BUILD_FREQUENCIES" --modes "$XR_WINDOWS_OPENVR_BUILD_MODES"
           fi
 
@@ -1040,6 +1111,15 @@ jobs:
             test -f verify/runtime/xr-gate/bin/python/xr_client/configs/xreal_ultra.json
             test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc_nrf54l15.json
             test -f verify/runtime/xr-gate/bin/python/xr_client/configs/leap_motion_uvc.json
+            cmp runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json \
+              verify/runtime/xr-gate/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json
+            for target in xreal_ultra leap_motion_uvc leap_motion_uvc_nrf54l15; do
+              expected="devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+              if [[ ! -f "$expected" ]]; then
+                expected="runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+              fi
+              cmp "$expected" "verify/runtime/xr-gate/devices/$target/configs/xr_runtime_adapter/emulation-controller.json"
+            done
             test -d verify/runtime/xr-gate/devices/leap_motion_uvc_nrf54l15
             test -d verify/runtime/xr-gate/devices/leap_motion_uvc
             test -x verify/runtime/xr-gate/devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu24.sh
@@ -1070,7 +1150,7 @@ jobs:
             )
           fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
-            ASSETS+=(release-assets/windows/xr-gate-windows-wsl-usbip.zip release-assets/windows/xr-gate-windows-wsl-usbip.zip.sha256)
+            ASSETS+=(release-assets/windows/xr-gate-windows-wsl2-usbip.zip release-assets/windows/xr-gate-windows-wsl2-usbip.zip.sha256)
           fi
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             for ubuntu in 24.04 26.04; do

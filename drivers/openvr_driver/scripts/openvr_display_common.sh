@@ -154,7 +154,10 @@ openvr_resolve_display_config() {
     return 0
   fi
 
-  local candidate="$driver_root/configs/display/default.yaml"
+  local profile
+  profile="$(openvr_normalize_profile_name "${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}")"
+  local candidate="$driver_root/devices/$profile/display.yaml"
+  if [[ ! -f "$candidate" ]]; then candidate="$driver_root/configs/display/default.yaml"; fi
   if [[ ! -f "$candidate" ]]; then
     echo "[ERROR] OpenVR default display config not found: $candidate" >&2
     return 2

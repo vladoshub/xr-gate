@@ -110,13 +110,13 @@ ls -l /proc/"$(pgrep -n vrserver)"/fd | grep -E 'runtime_(hmd_pose|hand_tracking
 Historical XREAL packages keep their existing names, for example:
 
 ```text
-out/xr-gate/bin/drivers/openvr_driver_60HZ/xr_tracking/
+out/xr-gate/bin/drivers/generic/openvr_driver_60HZ/xr_tracking/
 ```
 
 Custom device profiles are namespaced, for example:
 
 ```text
-out/my_glasses/bin/drivers/openvr_driver_my_glasses_72HZ/xr_tracking/
+out/my_glasses/bin/drivers/my_glasses/openvr_driver_my_glasses_72HZ/xr_tracking/
 ```
 
 The final `xr_tracking/` directory is the SteamVR driver package registered manually or with `vrpathreg`.
@@ -223,3 +223,5 @@ build/cache/backup artifacts:
 ```bash
 ./drivers/openvr_driver/scripts/package_source_zip.sh
 ```
+
+Device folders and profile discovery: [DEVICE_PACKAGES.md](../DEVICE_PACKAGES.md).

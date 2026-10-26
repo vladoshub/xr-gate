@@ -15,11 +15,15 @@
     <PublishTrimmed>false</PublishTrimmed>
     <DebugType>embedded</DebugType>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/XrGate.ico</ApplicationIcon>
     <Product>XR Gate Windows Launcher</Product>
     <Description>Install and run XR Gate with native Windows SteamVR</Description>
     <Version>1.1.0</Version>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets/XrGate.ico" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <None Update="licenses/NAudio-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Compile Remove="tests/**/*.cs" />
     <None Remove="tests/**" />
   </ItemGroup>

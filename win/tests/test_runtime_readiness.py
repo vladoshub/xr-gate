@@ -12,6 +12,21 @@ SPEC.loader.exec_module(linux)
 
 
 class ReadinessTest(unittest.TestCase):
+    def test_bluetooth_pair_uses_updated_bundled_helpers_before_downloaded_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);runtime=self.runtime(root/'managed')
+            bundled=root/'launcher/linux';bundled.mkdir(parents=True)
+            for name in ('bluetooth_controllers.py','select_bluetooth_adapter.py'):
+                (bundled/name).write_text('# updated launcher helper\n')
+            downloaded=runtime.current/'bin/scripts/override_controller/bluetooth_controllers.py'
+            downloaded.parent.mkdir(parents=True);downloaded.write_text('# old runtime helper\n')
+            with patch.object(linux,'__file__',str(bundled/'xr_gate_wsl.py')),patch.object(runtime,'user_required'), \
+                    patch.object(runtime,'status',return_value={'busy':False}),patch.object(runtime,'controller_template',return_value=root/'template.json'), \
+                    patch.object(runtime,'write'),patch.object(runtime,'run_managed') as launch:
+                runtime.bluetooth_controllers()
+            self.assertEqual(launch.call_args.args[0][1],str(bundled/'bluetooth_controllers.py'))
+            self.assertEqual(launch.call_args.kwargs['kind'],'bluetooth_pair')
+
     def runtime(self, folder):
         account = SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_name='fixture_user', pw_dir=str(folder))
         with patch.object(linux.pwd, 'getpwnam', return_value=account):
@@ -52,7 +67,7 @@ class ReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             runtime = self.runtime(Path(directory))
             runtime.cfg['bluetooth'] = False
-            with patch.object(runtime, 'root_required'), patch.object(runtime, 'device_nodes', return_value=([],[],[])), patch.object(runtime, 'wait_for_bluetooth') as wait, patch.object(linux, 'run'):
+            with patch.object(runtime, 'root_required'), patch.object(runtime, 'device_nodes', return_value=([],[],[])), patch.object(runtime, 'wait_for_bluetooth') as wait, patch.object(linux, 'run'), patch.object(runtime, 'as_user', return_value=subprocess.CompletedProcess([],0,stdout='{"camera":""}',stderr='')):
                 runtime.prepare()
                 wait.assert_not_called()
 

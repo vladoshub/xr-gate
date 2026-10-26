@@ -9,7 +9,7 @@ public sealed class ProcessRunner(string root, string stateDirectory, Action<str
     public static TimeSpan DiagnosticTimeout { get; } = TimeSpan.FromSeconds(60);
     public static TimeSpan UsbTimeout { get; } = TimeSpan.FromMinutes(3);
 
-    public async Task<ActionResult> RunAsync(string action, bool steamVr = false, bool console = false, CancellationToken cancellation = default, TimeSpan? timeLimit = null, IReadOnlyDictionary<string, string>? parameters = null)
+    public async Task<ActionResult> RunAsync(string action, bool steamVr = false, bool console = false, CancellationToken cancellation = default, TimeSpan? timeLimit = null, IReadOnlyDictionary<string, string>? parameters = null, bool quiet = false)
     {
         using var deadline = new CancellationTokenSource(timeLimit ?? (action is "Doctor" or "Status" ? DiagnosticTimeout :
             action is "Usb" or "Detach" or "Stop" or "BluetoothScan" or "Pair" ? UsbTimeout :
@@ -45,17 +45,18 @@ public sealed class ProcessRunner(string root, string stateDirectory, Action<str
             if (parameters is not null)
                 foreach (var parameter in parameters)
                 {
-                    if (parameter.Key is not ("LeftControllerMac" or "RightControllerMac")) throw new ArgumentException("Unsupported launcher parameter.");
+                    if (!(action == "Pair" && parameter.Key is "LeftControllerMac" or "RightControllerMac") &&
+                        !(action == "Delete" && parameter.Key == "DeleteDistributionName")) throw new ArgumentException("Unsupported launcher parameter.");
                     info.ArgumentList.Add("-" + parameter.Key);
                     info.ArgumentList.Add(parameter.Value);
                 }
         }
-        if (action != "DeviceStatus") log("[Launcher] " + action + (console ? " — complete the prompts in the separate console." : ""));
+        if (!quiet && action != "DeviceStatus") log("[Launcher] " + action + (console ? " — complete the prompts in the separate console." : ""));
         try
         {
             using var process = Process.Start(info) ?? throw new IOException("Could not start Windows PowerShell.");
-            Task output = console ? Task.CompletedTask : PumpAsync(process.StandardOutput, cancellation, action != "DeviceStatus");
-            Task error = console ? Task.CompletedTask : PumpAsync(process.StandardError, cancellation, action != "DeviceStatus");
+            Task output = console ? Task.CompletedTask : PumpAsync(process.StandardOutput, cancellation, !quiet && action != "DeviceStatus");
+            Task error = console ? Task.CompletedTask : PumpAsync(process.StandardError, cancellation, !quiet && action != "DeviceStatus");
             try { await process.WaitForExitAsync(cancellation); }
             catch (OperationCanceledException)
             {

@@ -178,16 +178,16 @@ XR_DEVICE_CONFIGS_ROOT
 XR_CALIB_DIR
 ```
 
-In package mode these should resolve to:
+In package mode these resolve relative to the extracted package directory (`<package-root>` below):
 
 ```text
-XR_PACKAGE_ROOT=/home/vlados/src/xr_tracking/out/xr-gate
-XR_BIN_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/bin
-XR_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xr-gate/devices/xreal_ultra
-XR_COMMON_DEVICE_HOME=/home/vlados/src/xr_tracking/out/xr-gate/devices/common
-XR_COMMON_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/devices/common/linux/scripts
-XR_DEVICE_SCRIPTS_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/devices/xreal_ultra/linux/scripts
-XR_DEVICE_CONFIGS_ROOT=/home/vlados/src/xr_tracking/out/xr-gate/devices/xreal_ultra/configs
+XR_PACKAGE_ROOT=<package-root>
+XR_BIN_ROOT=<package-root>/bin
+XR_DEVICE_HOME=<package-root>/devices/xreal_ultra
+XR_COMMON_DEVICE_HOME=<package-root>/devices/common
+XR_COMMON_SCRIPTS_ROOT=<package-root>/devices/common/linux/scripts
+XR_DEVICE_SCRIPTS_ROOT=<package-root>/devices/xreal_ultra/linux/scripts
+XR_DEVICE_CONFIGS_ROOT=<package-root>/devices/xreal_ultra/configs
 ```
 
 Recommended rule:
@@ -387,7 +387,7 @@ Example:
 In package mode this should resolve to something like:
 
 ```text
-/home/vlados/src/xr_tracking/out/xr-gate/devices/common/linux/scripts/capture_service/start_capture_service.sh
+<package-root>/devices/common/linux/scripts/capture_service/start_capture_service.sh
 ```
 
 Recommended rule:

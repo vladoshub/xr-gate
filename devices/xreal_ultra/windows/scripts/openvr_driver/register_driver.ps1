@@ -3,7 +3,8 @@ param(
   [ValidateRange(60,120)]
   [int]$FrequencyHz = 60,
   [string]$Device = "",
-  [string]$VrPathReg = ""
+  [string]$VrPathReg = "",
+  [ValidateSet("direct", "extended_sbs")][string]$DisplayMode = "direct"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +35,7 @@ if ([string]::IsNullOrWhiteSpace($VrPathReg)) {
 }
 if (-not (Test-Path $VrPathReg)) { throw "vrpathreg.exe not found; pass -VrPathReg" }
 
-$DriverPackage = Join-Path $env:XR_OUT_BIN_ROOT "drivers\openvr_driver_${FrequencyHz}HZ\xr_tracking"
+$DriverPackage = Join-Path $env:XR_OUT_BIN_ROOT "drivers\$Device\${FrequencyHz}Hz-$DisplayMode\xr_tracking"
 if (-not (Test-Path (Join-Path $DriverPackage "driver.vrdrivermanifest"))) {
   throw "Driver package not found: $DriverPackage. Run install_xreal_ultra_out.ps1 first."
 }

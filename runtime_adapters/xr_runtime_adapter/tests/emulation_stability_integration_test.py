@@ -330,6 +330,17 @@ class StabilityIntegrationTest(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             args=json.loads(capture.read_text())
             self.assertEqual(args[args.index('--emulation-controller-config')+1],str(profile))
+            device_configs=root/'devices/fixture/configs/xr_runtime_adapter'
+            device_configs.mkdir(parents=True)
+            transform=device_configs/'xr_21_joint_hand_viewer_verified.json'
+            transform.write_text('{}')
+            device_profile=device_configs/'emulation-controller.json'
+            device_profile.write_text(json.dumps(FIXTURE['profile']))
+            env['TRACKING_TRANSFORM_CONFIG']=str(transform)
+            result=subprocess.run(['bash',str(script)],env=env,capture_output=True,text=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            args=json.loads(capture.read_text())
+            self.assertEqual(args[args.index('--emulation-controller-config')+1],str(device_profile))
             explicit=root/'explicit.json'
             explicit.write_text('{}')
             env['EMULATION_CONTROLLER_CONFIG']=str(explicit)

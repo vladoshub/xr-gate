@@ -126,42 +126,11 @@ Invoke-Step "override_controller" {
 }
 
 Invoke-Step "openvr_driver" {
-  if ([string]::IsNullOrWhiteSpace($OpenVrSdkRoot)) {
-    throw "Set -OpenVrSdkRoot or XR_OPENVR_SDK_ROOT to Valve OpenVR SDK root"
-  }
-  $Source = Join-Path $Root "drivers\openvr_driver"
+  $Builder = Join-Path $Root 'drivers/openvr_driver/scripts/windows/build_driver.ps1'
   foreach ($freq in $OpenVrFrequencies) {
-    $Build = Join-Path $Root "build\drivers\openvr_driver_${freq}HZ\windows_$BuildType"
-    $extra = @("-DXR_OPENVR_SDK_ROOT=$OpenVrSdkRoot")
-    Invoke-CMakeConfigureBuild $Source $Build $OutRoot $extra
-    $Pkg = Join-Path $Build "xr_tracking"
-    $Settings = Join-Path $Pkg "resources\settings\default.vrsettings"
-    if (-not (Test-Path $Settings)) { throw "OpenVR package settings not found: $Settings" }
-    $json = Get-Content $Settings -Raw | ConvertFrom-Json
-    $DeviceProfile = Join-Path $Source "devices\$Device\settings\default.vrsettings"
-    if (Test-Path $DeviceProfile) {
-      $overlay = Get-Content $DeviceProfile -Raw | ConvertFrom-Json
-      foreach ($section in @("xr_tracking", "steamvr")) {
-        if ($overlay.PSObject.Properties.Name -contains $section) {
-          if (-not ($json.PSObject.Properties.Name -contains $section)) {
-            $json | Add-Member -NotePropertyName $section -NotePropertyValue ([pscustomobject]@{})
-          }
-          foreach ($prop in $overlay.$section.PSObject.Properties) {
-            $json.$section | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
-          }
-        }
-      }
-    }
-    if (-not $json.xr_tracking) { $json | Add-Member -NotePropertyName xr_tracking -NotePropertyValue ([pscustomobject]@{}) }
-    if (-not $json.steamvr) { $json | Add-Member -NotePropertyName steamvr -NotePropertyValue ([pscustomobject]@{}) }
-    $json.xr_tracking | Add-Member -NotePropertyName deviceProfile -NotePropertyValue $Device -Force
-    $json.xr_tracking | Add-Member -NotePropertyName displayFrequency -NotePropertyValue $freq -Force
-    $json.steamvr | Add-Member -NotePropertyName displayFrequency -NotePropertyValue $freq -Force
-    $json | ConvertTo-Json -Depth 32 | Set-Content -Encoding UTF8 $Settings
-
-    $Dst = Join-Path $OutBin "drivers\openvr_driver_${freq}HZ\xr_tracking"
-    Copy-Tree $Pkg $Dst
-    Log "installed OpenVR ${freq}Hz package: $Dst"
+    & $Builder -Root $Root -OpenVrSdkRoot $OpenVrSdkRoot -BuildType $BuildType `
+      -Generator $Generator -Device $Device -DisplayFrequency $freq -DisplayMode direct `
+      -NlohmannJsonInclude $NlohmannJsonInclude -OutputRoot (Join-Path $OutBin 'drivers')
   }
 }
 

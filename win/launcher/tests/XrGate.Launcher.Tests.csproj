@@ -6,5 +6,6 @@
   <ItemGroup>
     <Compile Include="../Core/*.cs" Link="Core/%(Filename)%(Extension)" />
     <Compile Include="../Services/ProcessRunner.cs" Link="Services/ProcessRunner.cs" />
+    <Compile Include="../Services/WslAudioClient.cs" Link="Services/WslAudioClient.cs" />
   </ItemGroup>
 </Project>

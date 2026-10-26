@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
-using System.Windows.Input;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using XrGate.Launcher.Core;
 
@@ -27,11 +27,17 @@ public partial class MainWindow
 
     private void ReloadConfiguration(string? hardware = null)
     {
+        FlushControllerSettings();
+        ResetControllerAutoSave();
         var session = SettingsRecovery.Open(root, hardwareOverride: hardware);
         settings = session.Settings;
+        if (hardware is not null) settings.AutoDetectHardware = false;
         configurationProblem = session.Problem;
         DataContext = settings;
+        InitializeHardwareUi();
+        BindAudioChoices();
         UpdateRecoveryUi();
+        ConfigureHotkeys();
         if (configurationProblem is null)
         {
             StatusTitle.Text = "Settings loaded";
@@ -39,13 +45,18 @@ public partial class MainWindow
         }
     }
 
-    private void HardwarePreset_Changed(object sender, KeyboardFocusChangedEventArgs e)
+    private void HardwarePreset_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (busyAction.Length > 0) return;
+        if (bindingHardwareChoices || busyAction.Length > 0 || HardwarePresetBox.SelectedValue is not string selected) return;
         try
         {
+            settings.AutoDetectHardware = false;
+            settings.HardwareEnv = selected;
             if (configurationProblem is null) settings.ApplyHardwarePreset(root);
             else if (!string.IsNullOrWhiteSpace(settings.HardwareEnv) && settings.HardwareEnv != recoveryHardware) ReloadConfiguration(settings.HardwareEnv);
+            UpdateHeaderArtwork();
+            AutoDetectHardwareBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
+            HardwareDetectionStatus.Text = "Manual preset selected. Automatic detection will not replace it.";
         }
         catch (Exception error) { StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
     }
@@ -59,9 +70,21 @@ public partial class MainWindow
             string relative = Path.GetRelativePath(root, dialog.FileName);
             string hardware = relative.StartsWith(".." + Path.DirectorySeparatorChar) ? dialog.FileName : relative;
             if (configurationProblem is not null) ReloadConfiguration(hardware);
-            else { settings.HardwareEnv = hardware; settings.ApplyHardwarePreset(root); }
+            else { settings.AutoDetectHardware = false; settings.HardwareEnv = hardware; settings.ApplyHardwarePreset(root); InitializeHardwareUi(); }
         }
         catch (Exception error) { StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
+    }
+
+    private void BrowseRuntimeFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog { Title = "Folder containing the XR Gate runtime and Mercury models archives" };
+        if (dialog.ShowDialog(this) == true) settings.RuntimeLocalPath = dialog.FolderName;
+    }
+
+    private void BrowseRuntimeArchive_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Title = "Select the XR Gate runtime archive (models must be beside it)", Filter = "XR Gate runtime (*.tar.gz)|*.tar.gz" };
+        if (dialog.ShowDialog(this) == true) settings.RuntimeLocalPath = dialog.FileName;
     }
 
     private void OpenProblem_Click(object sender, RoutedEventArgs e)

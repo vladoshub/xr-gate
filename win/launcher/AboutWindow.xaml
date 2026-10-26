@@ -1,0 +1,45 @@
+<Window x:Class="XrGate.Launcher.AboutWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="About XR Gate" Icon="Assets/XrGate.ico" Width="540" SizeToContent="Height" ResizeMode="NoResize"
+ Background="#0C1320" Foreground="#E5EDF8" FontFamily="Segoe UI" FontSize="14"
+ WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+ <Window.InputBindings><KeyBinding Key="Escape" Command="ApplicationCommands.Close" /></Window.InputBindings>
+ <Window.CommandBindings><CommandBinding Command="ApplicationCommands.Close" Executed="Close_Executed" /></Window.CommandBindings>
+ <StackPanel Margin="30">
+  <DockPanel Margin="0,0,0,18">
+   <Viewbox DockPanel.Dock="Right" Width="100" Height="52" Margin="20,0,0,0" Stretch="Uniform" IsHitTestVisible="False">
+    <Canvas Width="200" Height="86">
+     <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+     <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
+    </Canvas>
+   </Viewbox>
+   <StackPanel>
+    <TextBlock FontSize="30" FontWeight="SemiBold" AutomationProperties.Name="XR Gate"><Run Text="XR" FontWeight="ExtraBold" FontStyle="Italic" Foreground="{StaticResource BrandAccent}" /><Run Text=" Gate" /></TextBlock>
+    <TextBlock Text="6DoF and Hand Tracking Stack" Foreground="#83A3C7" FontSize="12" Margin="2,4,0,0" />
+   </StackPanel>
+  </DockPanel>
+  <TextBlock Text="Open source realtime modular XR tracking stack (stereo camera with/without IMU) with 6DoF, hand-tracking support." TextWrapping="Wrap" Foreground="#C3D3E5" LineHeight="22" Margin="0,0,0,22" />
+  <Border Background="#18283B" CornerRadius="8" Padding="16">
+   <Grid>
+    <Grid.ColumnDefinitions><ColumnDefinition Width="132" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+    <TextBlock Text="XR Gate version" Foreground="#8FA6C3" Margin="0,0,12,12" />
+    <TextBlock x:Name="RuntimeVersionText" Grid.Column="1" Text="Not checked yet" TextWrapping="Wrap" Margin="0,0,0,12" />
+    <TextBlock Grid.Row="1" Text="Launcher version" Foreground="#8FA6C3" Margin="0,0,12,0" />
+    <TextBlock x:Name="LauncherVersionText" Grid.Row="1" Grid.Column="1" TextWrapping="Wrap" />
+   </Grid>
+  </Border>
+  <TextBlock Text="Support devices" Foreground="#8FA6C3" FontWeight="SemiBold" Margin="0,22,0,8" />
+  <ScrollViewer MaxHeight="132" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+   <ItemsControl x:Name="SupportedDevicesList">
+    <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="#C3D3E5" Margin="0,0,8,6" /></DataTemplate></ItemsControl.ItemTemplate>
+   </ItemsControl>
+  </ScrollViewer>
+  <TextBlock x:Name="SupportedDevicesNotice" Foreground="#8FA6C3" TextWrapping="Wrap" Visibility="Collapsed" />
+  <TextBlock Text="CONTACT" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" Margin="0,22,0,8" />
+  <TextBlock><Hyperlink NavigateUri="mailto:vladosyarovenko@gmail.com" RequestNavigate="Email_RequestNavigate" Foreground="{StaticResource Accent}">vladosyarovenko@gmail.com</Hyperlink></TextBlock>
+  <TextBlock x:Name="ContactErrorText" TextWrapping="Wrap" Foreground="#FFD08A" Margin="0,8,0,0" Visibility="Collapsed" />
+  <Button Content="Close" Click="Close_Click" HorizontalAlignment="Right" Margin="0,24,0,0" Padding="22,10" />
+ </StackPanel>
+</Window>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XR Gate — Controller Gestures</title><style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:850px;margin:32px auto;padding:0 22px;background:#101b2a;color:#e8eff8}
+a{color:#8acaff}li{margin:10px 0}h1,h2{line-height:1.25}strong{color:white}
+table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #34455e}th{background:#18283b;color:white}th:first-child,td:first-child{width:28%}
+.hand-map{display:grid;grid-template-columns:minmax(200px,300px) 1fr;gap:24px;align-items:center;padding:22px;background:#18283b;border:1px solid #34455e;border-radius:16px;margin:24px 0}
+.hand-map svg{width:100%;max-height:360px}.hand-map dl{margin:0}.hand-map dt{font-weight:700;color:white}.hand-map dd{margin:4px 0 16px;color:#b9c9de}.marker{display:inline-block;width:25px;height:25px;border-radius:50%;text-align:center;color:#0c1320;margin-right:8px}.hand-note{font-size:14px;color:#b9c9de}
+@media(max-width:620px){.hand-map{grid-template-columns:1fr}.hand-map svg{max-height:300px}}
+</style></head><body>
+<!-- Content: runtime_adapters/xr_runtime_adapter/configs/GESTURES.md, main at 4f896399c1fd3c1814e1c6dc5af29da9e5f39bba. -->
+<nav aria-label="Language and help"><a href="GESTURES.html" lang="en" hreflang="en" aria-current="page">English</a> · <a href="GESTURES.ru.html" lang="ru" hreflang="ru">Русский</a> · <a href="START-HERE.html">Readme</a> · <a href="START-HERE.ru.html">Руководство</a> · <a href="https://github.com/vladoshub/xr-gate/blob/main/runtime_adapters/xr_runtime_adapter/configs/GESTURES.md">GitHub</a></nav>
+<main>
+<h1>Controller Gestures</h1>
+<p>Gestures work the same way on either hand. Menu requires both hands.</p>
+<p><strong>Ready pose:</strong> ring finger bent, index and middle fingers straight. Keep your pinky comfortable.</p>
+<h2>Finger Map</h2>
+<p class="hand-note">The open palm below identifies each finger. Use the ready pose above when controlling movement and buttons.</p>
+<section class="hand-map" aria-label="Finger controls">
+<svg viewBox="0 0 330 440" role="img" aria-labelledby="palm-title palm-desc" xmlns="http://www.w3.org/2000/svg">
+<title id="palm-title">Open palm with five numbered fingers</title>
+<desc id="palm-desc">One: thumb. Two: index. Three: middle. Four: ring. Five: pinky. Their controller actions are listed beside the palm.</desc>
+<defs><linearGradient id="palm-fill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#314c68"/><stop offset="1" stop-color="#20334b"/></linearGradient></defs>
+<path d="M128 413 L116 353 C102 336 91 314 80 291 L31 227 C21 214 24 200 35 196 C46 192 56 199 64 209 L103 252 L95 115 C94 99 103 87 116 87 C130 87 138 98 139 113 L143 226 L143 62 C143 45 152 34 166 34 C181 34 188 46 187 64 L184 225 L193 88 C194 72 204 63 217 65 C231 67 236 78 235 94 L226 232 L240 137 C242 122 252 116 263 119 C276 122 281 133 279 147 L275 279 C275 310 269 334 255 357 L245 413 Z" fill="url(#palm-fill)" stroke="#8ca8c9" stroke-width="3.5" stroke-linejoin="round"/>
+<g fill="none" stroke="#617e9f" stroke-width="2.5" stroke-linecap="round"><path d="M118 283 C147 247 193 254 233 279"/><path d="M113 296 C125 321 144 340 169 352"/><path d="M149 377 C175 383 203 382 227 373"/><path d="M139 228 L145 257 M184 226 L183 254 M226 233 L219 263"/></g>
+<g font-family="system-ui,sans-serif" font-size="17" font-weight="700" text-anchor="middle" fill="#0c1320">
+<circle cx="52" cy="219" r="17" fill="#f4c56b"/><text x="52" y="225">1</text>
+<circle cx="118" cy="121" r="17" fill="#61d8ed"/><text x="118" y="127">2</text>
+<circle cx="165" cy="73" r="17" fill="#c4a1ff"/><text x="165" y="79">3</text>
+<circle cx="213" cy="111" r="17" fill="#7ce2b5"/><text x="213" y="117">4</text>
+<circle cx="258" cy="157" r="17" fill="#c2cddb"/><text x="258" y="163">5</text>
+</g></svg>
+<dl>
+<dt><span class="marker" style="background:#f4c56b">1</span>Thumb → Movement + A/B</dt><dd>Move your thumb to steer. A thumb–index circle selects A or B with the finger shapes shown below.</dd>
+<dt><span class="marker" style="background:#61d8ed">2</span>Index → Trigger</dt><dd>Bend to press; straighten to release.</dd>
+<dt><span class="marker" style="background:#c4a1ff">3</span>Middle → Grip</dt><dd>Bend to press; straighten to release.</dd>
+<dt><span class="marker" style="background:#7ce2b5">4</span>Ring → Part of stick click</dt><dd>From the ready pose, tuck your thumb, pause, then straighten your ring finger. Follow the two steps under Thumbstick Click.</dd>
+<dt><span class="marker" style="background:#c2cddb">5</span>Pinky → No separate button</dt><dd>Ignored for the ready pose and stick click. Follow the finger shapes for A and B.</dd>
+</dl></section>
+<h2>Buttons</h2>
+<table>
+<thead><tr><th scope="col">Button</th><th scope="col">Gesture</th></tr></thead>
+<tbody>
+<tr><td>Trigger</td><td>Bend your index finger. Straighten it to release.</td></tr>
+<tr><td>Grip</td><td>Bend your middle finger. Straighten it to release.</td></tr>
+<tr><td>A</td><td>Make a circle with your thumb and index finger; keep the other three fingers straight.</td></tr>
+<tr><td>B</td><td>Make a circle with your thumb and index finger; bend the other three fingers.</td></tr>
+<tr><td>Thumbstick click / touchpad press</td><td>Three straight fingers with your thumb tucked — follow the steps below.</td></tr>
+<tr><td>Menu</td><td>Briefly hold both hands open with your thumbs away from your palms.</td></tr>
+</tbody>
+</table>
+<p><strong>For Trigger and Grip, try bending the finger only partway. A full curl may not be necessary.</strong></p>
+<h2>Thumb Movement</h2>
+<p>Keep your wrist still and your thumb away from your palm.</p>
+<table>
+<thead><tr><th scope="col">Movement</th><th scope="col">Thumb gesture</th></tr></thead>
+<tbody>
+<tr><td>Forward</td><td>Straighten and slightly arch your thumb backward.</td></tr>
+<tr><td>Backward</td><td>Bend the tip toward your palm while keeping the base away from it.</td></tr>
+<tr><td>Left / right</td><td>Point your thumb in the desired direction.</td></tr>
+<tr><td>Diagonal</td><td>Combine sideways movement with bending or straightening.</td></tr>
+<tr><td>Stop</td><td>Return your thumb to neutral or tuck it against your palm.</td></tr>
+</tbody>
+</table>
+<p>Backward movement requires a more deliberate gesture.</p>
+<p>In wrist control mode, keep your thumb out and tilt your wrist in the desired direction. Diagonals also work. Tucking your thumb stops movement.</p>
+<h2>Thumbstick Click</h2>
+<ol>
+<li>Keep your index and middle fingers straight and your ring finger bent. Tuck your whole thumb against your palm, keep the thumb and index tips apart, and pause briefly.</li>
+<li>Keep your thumb tucked and straighten your ring finger. The three straight fingers activate the click. Your pinky is ignored.</li>
+</ol>
+<p>Bend your ring finger to release. Tucking your thumb to stop movement does not activate the click by itself.</p>
+<p><strong>Trigger, Grip, and movement can work together.</strong> After A, B, or a thumbstick click, release the gesture and return to the ready pose.</p>
+</main>
+</body></html>

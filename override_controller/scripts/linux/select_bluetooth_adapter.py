@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+import xml.etree.ElementTree as ET
 
 
 MAC = re.compile(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", re.I)
@@ -42,7 +43,10 @@ def run_command(args: list[str], timeout: float) -> str:
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{args[0]} timed out after {timeout:g}s.") from None
     if result.returncode:
-        raise RuntimeError(clean(result.stderr or result.stdout) or f"{args[0]} failed.")
+        detail = clean(result.stderr.strip() or result.stdout.strip())
+        operation = clean(" ".join(args))
+        raise RuntimeError(f"{args[0]} exited with code {result.returncode}: " +
+                           (detail or "no diagnostic output") + f" [command: {operation}]")
     return result.stdout
 
 
@@ -148,34 +152,29 @@ class BlueZ:
         self.call("set-property", "org.bluez", path, INTERFACE, "Powered", "b", str(powered).lower())
 
     def adapters(self) -> list[Adapter]:
-        # One ObjectManager snapshot avoids recursively introspecting every
-        # paired device, service and characteristic just to enumerate adapters.
-        output = self.call("--json=short", "call", "org.bluez", "/",
-                           "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
+        # GetManagedObjects includes remote devices and their ManufacturerData
+        # (a{qv}). Ubuntu 24.04's busctl cannot convert non-string dictionary
+        # keys to JSON: after discovery it exits 1 with no diagnostic output.
+        # Introspect only the manager's immediate children, never device/GATT
+        # subtrees, then read the adapter's scalar properties separately.
+        output = self.call("--xml-interface", "introspect", "org.bluez", "/org/bluez")
         try:
-            message = json.loads(output)
-            objects, = message["data"]
-            if message["type"] != "a{oa{sa{sv}}}" or not isinstance(objects, dict):
-                raise ValueError("Expected a managed object dictionary")
-        except (KeyError, TypeError, ValueError):
+            root = ET.fromstring(output)
+            if root.tag != "node":
+                raise ValueError("Expected an introspection node")
+        except (ET.ParseError, ValueError):
             raise RuntimeError("Invalid BlueZ adapter inventory from busctl.") from None
-        paths = []
-        for path, interfaces in objects.items():
-            if not ADAPTER_PATH.fullmatch(path):
-                continue
-            if not isinstance(interfaces, dict):
-                raise RuntimeError("Invalid BlueZ adapter interfaces from busctl.")
-            if INTERFACE in interfaces:
-                paths.append(path)
-        paths.sort(key=lambda path: int(path.rsplit("hci", 1)[1]))
+        paths = set()
+        for child in root.findall("node"):
+            name = child.get("name", "")
+            path = name if name.startswith("/") else "/org/bluez/" + name
+            if ADAPTER_PATH.fullmatch(path):
+                paths.add(path)
         adapters = []
-        for path in paths:
-            properties = objects[path][INTERFACE]
-            if not isinstance(properties, dict):
-                raise RuntimeError("Invalid BlueZ adapter properties from busctl.")
-            address = self.valid_address(property_value(properties.get("Address"), "s"), path)
-            powered = property_value(properties.get("Powered"), "b")
-            name = property_value(properties.get("Name", {"type": "s", "data": ""}), "s")
+        for path in sorted(paths, key=lambda path: int(path.rsplit("hci", 1)[1])):
+            address = self.address(path)
+            powered = self.powered(path)
+            name = self.get(path, "Name", "s")
             name, usb_id = hardware_name(path.rsplit("/", 1)[-1], name, self.timeout)
             adapters.append(Adapter(path, address, powered, name, usb_id))
         return adapters

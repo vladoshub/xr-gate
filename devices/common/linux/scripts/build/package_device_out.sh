@@ -78,6 +78,14 @@ copy_device_bundle_for() {
     --exclude='*.pyc' \
     --exclude='*.pyo' \
     "$src/" "$dst/"
+  # Keep gesture calibration beside the selected device's hand transform. A
+  # device-specific profile takes precedence over the shared default profile.
+  local runtime_configs="$dst/configs/xr_runtime_adapter"
+  if [[ -f "$runtime_configs/xr_21_joint_hand_viewer_verified.json" &&
+        ! -f "$runtime_configs/emulation-controller.json" ]]; then
+    copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" \
+      "$runtime_configs/emulation-controller.json"
+  fi
 }
 
 copy_device_bundles() {
@@ -107,35 +115,33 @@ copy_common_device_bundle() {
 }
 
 write_monado_openxr_runtime_manifest() {
-  local monado_bin_dir="$XR_OUT_BIN_ROOT/drivers/monado_driver"
-  local openxr_lib="$monado_bin_dir/libopenxr_monado.so"
-  local manifest="$monado_bin_dir/openxr_monado_xrgate.json"
-  local env_script="$monado_bin_dir/openxr_runtime_env.sh"
-
-  if [[ ! -e "$openxr_lib" ]]; then
-    log "skip Monado OpenXR runtime manifest: lib not present: $openxr_lib"
-    return 0
-  fi
-
-  mkdir -p "$monado_bin_dir"
-  cat > "$manifest" <<'EOF'
+  local monado_bin_dir openxr_lib manifest env_script
+  local monado_dirs=()
+  shopt -s nullglob
+  monado_dirs=("$XR_OUT_BIN_ROOT"/drivers/*/monado_driver)
+  shopt -u nullglob
+  for monado_bin_dir in "${monado_dirs[@]}"; do
+    openxr_lib="$monado_bin_dir/libopenxr_monado.so"
+    [[ -e "$openxr_lib" ]] || continue
+    manifest="$monado_bin_dir/openxr_monado_xrgate.json"
+    env_script="$monado_bin_dir/openxr_runtime_env.sh"
+    cat > "$manifest" <<'EOF'
 {
   "file_format_version": "1.0.0",
-  "runtime": {
-    "name": "XR Gate Monado",
-    "library_path": "./libopenxr_monado.so"
-  }
+  "runtime": {"name": "XR Gate Monado", "library_path": "./libopenxr_monado.so"}
 }
 EOF
-
-  cat > "$env_script" <<'EOF'
+    if [[ ! -f "$env_script" ]]; then
+      cat > "$env_script" <<'EOF'
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export XR_RUNTIME_JSON="$SCRIPT_DIR/openxr_monado_xrgate.json"
 echo "XR_RUNTIME_JSON=$XR_RUNTIME_JSON"
 EOF
-  chmod 0755 "$env_script"
-  log "wrote Monado OpenXR runtime manifest: $manifest"
+      chmod 0755 "$env_script"
+    fi
+    log "wrote Monado OpenXR runtime manifest: $manifest"
+  done
 }
 
 copy_runtime_py_dir() {
@@ -337,10 +343,13 @@ EOF_ORT_INFO
     [[ -d "$XR_OUT_BIN_ROOT/backends/mercury_hand_tracking/licenses/monado/LICENSES" ]] || \
       fatal "Mercury runtime is present without Monado license bundle"
   fi
-  if [[ -x "$XR_OUT_BIN_ROOT/drivers/monado_driver/monado-service" || -e "$XR_OUT_BIN_ROOT/drivers/monado_driver/libopenxr_monado.so" ]]; then
-    [[ -d "$XR_OUT_BIN_ROOT/drivers/monado_driver/licenses/monado/LICENSES" ]] || \
-      fatal "Monado runtime is present without Monado license bundle"
-  fi
+  local monado_dir
+  while IFS= read -r monado_dir; do
+    if [[ -x "$monado_dir/monado-service" || -e "$monado_dir/libopenxr_monado.so" ]]; then
+      [[ -d "$monado_dir/licenses/monado/LICENSES" ]] || \
+        fatal "Monado runtime is present without Monado license bundle: $monado_dir"
+    fi
+  done < <(find "$XR_OUT_BIN_ROOT/drivers" -mindepth 2 -maxdepth 2 -type d -name monado_driver 2>/dev/null || true)
 
   if [[ "$found" == "0" ]]; then
     log "no component-local legal bundles found (partial/source-only package)"
@@ -566,6 +575,9 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/drivers/openvr_driver/scripts/register_driver.sh" \
     "$XR_OUT_BIN_ROOT/scripts/drivers/openvr_driver/register_driver.sh"
   copy_runtime_file \
+    "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/start_openvr.py" \
+    "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr.py"
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/start_openvr_dgpu_direct.sh" \
     "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   copy_runtime_file \
@@ -617,8 +629,6 @@ copy_tools_runtime() {
   copy_file "$XR_ROOT_PROJECT/tools/xr_runtime_gesture_watch_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_runtime_gesture_watch_debug.py"
   copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/record_emulation_hands.py" "$XR_OUT_BIN_ROOT/python/tools/record_emulation_hands.py"
   copy_runtime_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/tools/xr_gate_gesture_debug.py" "$XR_OUT_BIN_ROOT/python/tools/xr_gate_gesture_debug.py"
-  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation_controller.json" "$XR_OUT_ROOT/emulation_controller.json"
-  copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
   copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/docs/emulation_controller.ru.md" "$XR_OUT_ROOT/EMULATION_CONTROLLER.ru.md"
   copy_file "$XR_ROOT_PROJECT/tools/debug/view_capture_service_shm.py" "$XR_OUT_BIN_ROOT/python/tools/debug/view_capture_service_shm.py"
   copy_runtime_py_dir "$XR_ROOT_PROJECT/tools/runtime_debug_viewer" "$XR_OUT_BIN_ROOT/python/tools/runtime_debug_viewer"
@@ -644,6 +654,7 @@ write_app_launchers() {
   write_root_launcher "record_emulation_hands.sh" "bin/python/tools/record_emulation_hands.py"
   write_root_launcher "gesture_debug.sh" "bin/python/tools/xr_gate_gesture_debug.py"
   write_root_launcher "emulation_tool.sh" "bin/runtime_adapters/xr_runtime_adapter/xr_emulation_tool"
+  write_root_launcher "run_openvr.sh" "bin/scripts/drivers/steam_vr/start_openvr.py"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"
@@ -742,7 +753,7 @@ if [[ "$XR_PACKAGE_COPY_DRIVER_RUNTIME" == "1" ]]; then
   # generic bin/drivers/openvr_driver package because SteamVR should register
   # exactly one selected variant.
   shopt -s nullglob
-  openvr_variant_dirs=("$XR_OUT_BIN_ROOT"/drivers/openvr_driver_*HZ*)
+  openvr_variant_dirs=("$XR_OUT_BIN_ROOT"/drivers/*/openvr_driver_*HZ*)
   shopt -u nullglob
   for variant_dir in "${openvr_variant_dirs[@]}"; do
     if [[ -d "$variant_dir/xr_tracking" ]]; then
@@ -753,7 +764,12 @@ if [[ "$XR_PACKAGE_COPY_DRIVER_RUNTIME" == "1" ]]; then
   done
   rm -rf "$XR_OUT_BIN_ROOT/drivers/openvr_driver"
 
-  copy_runtime_file "$XR_ROOT_PROJECT/drivers/monado_driver/scripts/linux/start.sh" "$XR_OUT_BIN_ROOT/drivers/monado_driver/start.sh"
+  shopt -s nullglob
+  monado_variant_dirs=("$XR_OUT_BIN_ROOT"/drivers/*/monado_driver)
+  shopt -u nullglob
+  for variant_dir in "${monado_variant_dirs[@]}"; do
+    copy_runtime_file "$XR_ROOT_PROJECT/drivers/monado_driver/scripts/linux/start.sh" "$variant_dir/start.sh"
+  done
 fi
 
 # Optional full calibration tree. The target device bundle already contains its selected
@@ -916,9 +932,16 @@ for stale_dir in \
   rm -rf "$stale_dir"
 done
 
+# Keep the user-editable emulation profile at the launcher's canonical path.
+# Copy it after removing stale source trees, otherwise runtime_adapters cleanup
+# deletes the profile and the runtime silently uses built-in wrist controls.
+copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json" \
+  "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
+
 # Quick package sanity checks.
 required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
+  "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
   "$XR_OUT_ROOT/devices/common/common.env"
   "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
@@ -938,6 +961,9 @@ required=(
 )
 for target in ${XR_PACKAGE_DEVICE_TARGETS:-$XR_TARGET_DEVICE}; do
   required+=("$XR_OUT_ROOT/devices/$target")
+  if [[ -f "$XR_OUT_ROOT/devices/$target/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json" ]]; then
+    required+=("$XR_OUT_ROOT/devices/$target/configs/xr_runtime_adapter/emulation-controller.json")
+  fi
 done
 for profile in ${XR_PACKAGE_CONFIG_PROFILES:-${XR_PACKAGE_PROFILES:-}}; do
   required+=("$XR_OUT_BIN_ROOT/python/xr_client/configs/$profile.json")

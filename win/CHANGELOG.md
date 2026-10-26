@@ -1,3 +1,77 @@
+## Windows WSL2 package name
+
+- Rename the release archive, extracted folder and CI artifacts to xr-gate-windows-wsl2-usbip.
+- Keep driver installation and offline cache support for earlier Windows package names.
+
+## Driver packages by device
+
+- Build configured SteamVR profiles for Windows/Linux and Monado display profiles for Linux into device folders.
+- Discover devices from configurations in CI and local/ACT builds; no hardware list in build logic.
+- Use Windows bundle schema 2 with device metadata, settings/folder verification and device-specific refresh fallback.
+- Separate the Windows cache by device and check the installed driver when the Hardware preset changes.
+- Update Linux registration, Monado relative manifests/startup and device environment paths; add functional tests and CI output checks.
+
+## Verified WSL device permissions
+
+- Finish queued udev events before granting access to the selected USB device nodes; retry transient permission and enumeration changes within the startup deadline.
+- Verify camera/HID/USB read/write access under the configured Linux account before reporting preparation complete, and probe cameras with the same read/write access needed by capture.
+- Keep access scoped to selected hardware; no runtime processes run as root and no global device permissions are changed.
+
+## No controllers, global hotkeys and tracking restart
+
+- Add No beside Gestures (still the default) and Gear VR Controllers; disable hand/controller services and pass controller-only invalid-pose mode with no input transport to the adapter.
+- Add Settings → Hotkeys: global F5 Start VR, F6 Stop tracking and F7 Restart tracking, with optional disable, conflict reporting and key release on exit.
+- Restart only the managed XR Gate runtime while retaining SteamVR, display/driver state and USB attachments; wait for a fresh HMD stream and allow Stop during restart.
+- Add concise hover hints for every Run button and update the English/Russian guides.
+
+## Ubuntu account continuation and SteamVR shutdown
+
+- Continue installation after Ubuntu account creation and `exit`, using the detected Linux username and bounded probes; show prominent manual instructions if continuation is unavailable.
+- Blink Install only when setup is incomplete and the button is available; preserve genuine reboot requirements.
+- Request graceful SteamVR exit on Stop/launcher shutdown and Delete without preventing XR Gate/USB cleanup if SteamVR stays open.
+- Document first-login password prompts and troubleshooting in English and Russian; replace machine-specific username examples.
+
+## Firmware cleanup before Ubuntu deletion
+
+- Disable the installed firmware service and release this Ubuntu's firmware mount before unregistering it, including when Bluetooth was later disabled.
+- Preserve unrelated mounts and kernel firmware paths; serialize firmware changes across WSL distributions.
+- Explain how to recover an existing stale mount after reinstalling Ubuntu and keep encoded installation requests out of firmware failure logs.
+
+## Delete Ubuntu and automatic audio selection
+
+- Add Delete in Run with confirmation naming the saved XR Gate Ubuntu distribution and explaining permanent loss of all its Linux data.
+- Stop audio/tracking and release selected USB before unregistering Ubuntu; retain setup state on failure and reset readiness after deletion.
+- Add Audio Enable, on by default, with immediate persistence and preserved source/output choices when disabled.
+- After Start VR attaches USB, refresh audio outputs and keep an available saved output or select the first available one.
+
+## Background WSL startup
+
+- Leave simple native arguments unquoted so WSL recognizes its distribution, user and exec options.
+- Keep quotes and escaping for paths with spaces, empty values and literal quotes.
+- Return runtime log tails as plain JSON strings in Windows PowerShell 5.1.
+
+## Controller settings autosave
+
+- Save Controllers fields automatically; text fields wait briefly after typing.
+- Keep the last valid settings when an adapter identifier is incomplete, with an inline message.
+- Save pending valid edits on close and preserve unrelated settings and preset defaults.
+
+## Runtime exit and camera selection
+
+- Stop waiting for TCP when the owned runtime exits; keep device status live during startup.
+- Report unexpected exits and current-session startup errors in Activity Log, including with a hidden console.
+- Pass XR_CAMERA_DEVICE to capture and optionally discover the actual capture node using configured USB IDs.
+- Wait for Linux device nodes after attachment, exclude V4L2 metadata nodes and require HID for the supplied XREAL preset.
+
+## Guided Windows setup
+
+- Select the connected glasses display before Install; block Start VR until setup, display and device are ready.
+- Confirm WSL installation, offer required restarts and resume unfinished setup after reopening.
+- Highlight the next setup button and show concise Activity Log instructions.
+- Default to Gestures with Bluetooth off; attach USB automatically on Start VR.
+- Show controller calibration stages once, including completion, with a hidden tracking console.
+- Remove standalone batch wrappers from the GUI package and shorten English/Russian guides.
+
 # Windows Launcher 1.1.0
 
 - Keep expected administrator-fixture failures out of the CI shell's LASTEXITCODE, and keep firmware contract tests independent of real WSL distributions.

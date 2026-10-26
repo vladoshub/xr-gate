@@ -32,6 +32,20 @@ def adapter(mac, powered=True):
 
 
 class AdapterChoiceTest(unittest.TestCase):
+    def test_inventory_failure_is_retried_without_power_or_pair_commands(self):
+        with patch.object(bt.BlueZ,'adapters',side_effect=[RuntimeError('busctl exit 1'),[adapter(USB)]]) as query, \
+                patch.object(bt.time,'sleep') as sleep,patch.object(bt.BlueZ,'set_powered') as power:
+            self.assertEqual(bt.choose_adapter(USB).address,USB)
+            self.assertEqual(query.call_count,2)
+            sleep.assert_called_once_with(.25)
+            power.assert_not_called()
+        with patch.object(bt.BlueZ,'adapters',side_effect=RuntimeError('busctl exit -9')) as query, \
+                patch.object(bt.time,'sleep'),patch.object(bt,'BluetoothSession') as session:
+            with self.assertRaisesRegex(RuntimeError,'after 3 attempts.*exit -9'):
+                bt.choose_adapter(USB)
+            self.assertEqual(query.call_count,3)
+            session.assert_not_called()
+
     def test_only_powered_adapter_wins_even_when_builtin_is_first(self):
         with patch.object(bt.BlueZ, "adapters", return_value=[adapter(BUILTIN, False), adapter(USB)]):
             self.assertEqual(bt.choose_adapter().address, USB)
@@ -108,7 +122,7 @@ class BluetoothSessionTest(unittest.TestCase):
             found = bt.discover(config, session, seconds=0.01)
             self.assertEqual({d["address"] for d in found["devices"]}, {LEFT, RIGHT})
             self.assertEqual({d["name"] for d in found["devices"]}, {"Same Gear controller"})
-            bt.pair_and_save(config_path, TEMPLATE, LEFT, RIGHT, session)
+            bt.pair_and_save(config_path, TEMPLATE, LEFT, RIGHT, session, scan_seconds=.01)
             self.assertIs(session.process, process)
         self.assertIsNotNone(process.poll())
         saved = json.loads(config_path.read_text())
@@ -124,6 +138,156 @@ class BluetoothSessionTest(unittest.TestCase):
             info = bt.device_info(LEFT, session)
         self.assertEqual(info["name"], "Same Gear controller")
         self.assertNotEqual(info["name"], "Wrong built-in device")
+
+    def test_cached_bonded_controllers_are_scanned_until_both_connect(self):
+        for device in self.config["devices"][USB].values():
+            device.update(paired=True, trusted=True, connected=False)
+        self.config["require_discovery_for_connect"] = True
+        path = self.root / "gearvr.json"
+        with bt.BluetoothSession(adapter(USB)) as session:
+            bt.pair_and_save(path, TEMPLATE, LEFT, RIGHT, session, scan_seconds=.01)
+        self.assertEqual(bt.selected_sides(json.loads(path.read_text())), {"left": LEFT, "right": RIGHT})
+        commands = self.commands()
+        self.assertFalse(any(c["command"][0] == "pair" for c in commands))
+        scans = [c["command"] for c in commands if c["command"][0] == "scan"]
+        self.assertEqual(scans, [["scan", "on"], ["scan", "off"]])
+        off = next(i for i, c in enumerate(commands) if c["command"] == ["scan", "off"])
+        self.assertTrue(all(i < off for i, c in enumerate(commands) if c["command"][0] == "connect"))
+
+    def test_local_abort_is_retried_after_the_failed_link_disconnects(self):
+        self.config["devices"][USB][LEFT].update(paired=True, trusted=True)
+        self.config.update(connect_failures=2, abort_disconnect_after_info=2, require_discovery_for_connect=True)
+        path = self.root / "gearvr.json"
+        with bt.BluetoothSession(adapter(USB)) as session:
+            bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
+        self.assertEqual(bt.selected_sides(json.loads(path.read_text())), {"left": LEFT, "right": None})
+        commands = self.commands()
+        connects = [c for c in commands if c["command"][0] == "connect"]
+        self.assertEqual(len(connects), 3)
+        self.assertTrue(all(c["adapter"] == USB and c["command"][1] == LEFT for c in connects))
+        self.assertFalse(any(c["command"][0] in ("pair", "power", "remove", "disconnect") for c in commands))
+        self.assertEqual([c["command"] for c in commands if c["command"][0] == "scan"],
+                         [["scan", "on"], ["scan", "off"]])
+
+    def test_repeated_local_aborts_stop_and_preserve_config(self):
+        self.config["devices"][USB][LEFT].update(paired=True, trusted=True)
+        self.config["connect_failures"] = 100
+        path = self.root / "gearvr.json"
+        original = TEMPLATE.read_bytes()
+        path.write_bytes(original)
+        with self.assertRaisesRegex(RuntimeError, "after 3 attempt.*Wake the controller"):
+            with bt.BluetoothSession(adapter(USB)) as session:
+                bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertFalse(list(self.root.glob("*.before-bluetooth-*")))
+        commands = self.commands()
+        self.assertEqual(sum(c["command"][0] == "connect" for c in commands), 3)
+        self.assertEqual([c["command"] for c in commands if c["command"][0] == "scan"],
+                         [["scan", "on"], ["scan", "off"]])
+        self.assertIsNotNone(self.process.poll())
+
+    def test_nontransient_connection_failure_is_not_retried(self):
+        self.config["devices"][USB][LEFT].update(paired=True, trusted=True)
+        self.config.update(connect_failures=100, connect_failure="org.bluez.Error.AuthenticationFailed")
+        path = self.root / "gearvr.json"
+        original = TEMPLATE.read_bytes()
+        path.write_bytes(original)
+        with self.assertRaisesRegex(RuntimeError, "AuthenticationFailed"):
+            with bt.BluetoothSession(adapter(USB)) as session:
+                bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(sum(c["command"][0] == "connect" for c in self.commands()), 1)
+        self.assertEqual([c["command"] for c in self.commands() if c["command"][0] == "scan"],
+                         [["scan", "on"], ["scan", "off"]])
+
+    def test_abort_with_a_stuck_connected_property_obeys_deadline(self):
+        self.config.update(connect_failures=100, abort_disconnect_after_info=10000)
+        with self.assertRaisesRegex(RuntimeError, "recovery timed out"):
+            with bt.BluetoothSession(adapter(USB)) as session:
+                bt.connect_controller(LEFT, session, seconds=.1)
+        self.assertEqual(sum(c["command"][0] == "connect" for c in self.commands()), 1)
+        self.assertIsNotNone(self.process.poll())
+
+    def test_already_connected_controller_does_not_need_another_scan(self):
+        self.config["devices"][USB][LEFT].update(paired=True, trusted=True, connected=True)
+        path = self.root / "gearvr.json"
+        with bt.BluetoothSession(adapter(USB)) as session:
+            bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
+        self.assertFalse(any(c["command"][0] in ("scan", "connect", "pair") for c in self.commands()))
+        self.assertEqual(bt.selected_sides(json.loads(path.read_text())), {"left": LEFT, "right": None})
+
+    def test_missing_after_reattach_is_rediscovered_on_same_adapter_until_both_connected(self):
+        self.config["discoverable_devices"] = {USB: self.config["devices"][USB]}
+        self.config["devices"][USB] = {}
+        self.config["require_discovery_for_pair"] = True
+        path = self.root / "gearvr.json"
+        with bt.BluetoothSession(adapter(USB)) as session:
+            bt.pair_and_save(path, TEMPLATE, LEFT, RIGHT, session, scan_seconds=.01)
+        self.assertEqual(bt.selected_sides(json.loads(path.read_text())), {"left": LEFT, "right": RIGHT})
+        commands = self.commands()
+        scans = [c["command"] for c in commands if c["command"][0] == "scan"]
+        self.assertEqual(scans, [["scan", "on"], ["scan", "off"]])
+        scan_off = next(i for i, c in enumerate(commands) if c["command"] == ["scan", "off"])
+        connects = [(i, c) for i, c in enumerate(commands) if c["command"][0] == "connect"]
+        self.assertEqual(len(connects), 2)
+        self.assertTrue(all(i < scan_off for i, _ in connects))
+        for c in commands:
+            if c["command"][0] not in ("select", "quit"):
+                self.assertEqual(c["adapter"], USB)
+            if c["command"][0] in ("pair", "trust", "connect"):
+                self.assertIn(c["command"][1], (LEFT, RIGHT))
+        self.assertIsNotNone(self.process.poll())
+
+    def test_missing_controller_does_not_pair_other_advertisements_or_rewrite_config(self):
+        self.config["devices"][USB].pop(LEFT)
+        path = self.root / "gearvr.json"
+        original = TEMPLATE.read_bytes()
+        path.write_bytes(original)
+        with self.assertRaisesRegex(RuntimeError, "not found.*" + LEFT + ".*pairing mode"):
+            with bt.BluetoothSession(adapter(USB)) as session:
+                bt.pair_and_save(path, TEMPLATE, LEFT, RIGHT, session, scan_seconds=.01)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(list(self.root.glob("*.before-bluetooth-*")), [])
+        commands = self.commands()
+        self.assertFalse(any(c["command"][0] in ("pair", "trust", "connect") for c in commands))
+        self.assertEqual([c["command"] for c in commands if c["command"][0] == "scan"],
+                         [["scan", "on"], ["scan", "off"]])
+        self.assertIsNotNone(self.process.poll())
+
+    def test_pair_failure_after_rediscovery_stops_scan_and_preserves_config(self):
+        self.config["mode"] = "pair-error"
+        self.config["discoverable_devices"] = {USB: self.config["devices"][USB]}
+        self.config["devices"][USB] = {}
+        path = self.root / "gearvr.json"
+        original = TEMPLATE.read_bytes()
+        path.write_bytes(original)
+        with self.assertRaisesRegex(RuntimeError, "Failed to pair"):
+            with bt.BluetoothSession(adapter(USB)) as session:
+                bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(list(self.root.glob("*.before-bluetooth-*")), [])
+        self.assertEqual([c["command"] for c in self.commands() if c["command"][0] == "scan"],
+                         [["scan", "on"], ["scan", "off"]])
+        self.assertIsNotNone(self.process.poll())
+
+    def test_rediscovery_interruption_stops_scan_without_writing(self):
+        self.config["devices"][USB] = {}
+        path = self.root / "gearvr.json"
+        with self.assertRaises(KeyboardInterrupt):
+            with bt.BluetoothSession(adapter(USB)) as session:
+                exchange = session.exchange
+
+                def interrupt(lines, finish, seconds=8, collect=False):
+                    if collect:
+                        raise KeyboardInterrupt
+                    return exchange(lines, finish, seconds, collect)
+
+                with patch.object(session, "exchange", side_effect=interrupt):
+                    bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
+        self.assertFalse(path.exists())
+        self.assertEqual([c["command"] for c in self.commands() if c["command"][0] == "scan"],
+                         [["scan", "on"], ["scan", "off"]])
+        self.assertIsNotNone(self.process.poll())
 
     def test_failed_selection_sends_no_device_commands_and_reaps_process(self):
         for mode in ("reject-select", "select-eof"):
@@ -143,10 +307,11 @@ class BluetoothSessionTest(unittest.TestCase):
         path.write_bytes(original)
         with self.assertRaisesRegex(RuntimeError, "not available"):
             with bt.BluetoothSession(adapter(USB)) as session:
-                bt.pair_and_save(path, TEMPLATE, LEFT, "none", session)
+                bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(list(self.root.glob("*.before-bluetooth-*")), [])
         self.assertFalse(any(c["command"][0] in ("pair", "trust", "connect") for c in self.commands()))
+        self.assertFalse(any(c["command"][0] == "scan" for c in self.commands()))
         self.assertIsNotNone(self.process.poll())
 
     def test_pair_failure_or_false_success_preserves_existing_config(self):
@@ -158,7 +323,7 @@ class BluetoothSessionTest(unittest.TestCase):
                 path.write_bytes(original)
                 with self.assertRaisesRegex(RuntimeError, "Failed to pair|Pairing did not complete"):
                     with bt.BluetoothSession(adapter(USB)) as session:
-                        bt.pair_and_save(path, TEMPLATE, LEFT, "none", session)
+                        bt.pair_and_save(path, TEMPLATE, LEFT, "none", session, scan_seconds=.01)
                 self.assertEqual(path.read_bytes(), original)
                 self.assertEqual(list(self.root.glob("*.before-bluetooth-*")), [])
                 self.assertIsNotNone(self.process.poll())

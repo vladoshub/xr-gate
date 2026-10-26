@@ -225,82 +225,7 @@ run_step bridges env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/bridges" \
   bash "$XR_ROOT_PROJECT/bridges/scripts/linux/install_bridges.sh"
 
-run_step openvr_driver bash -c '
-  set -euo pipefail
-
-  normalize_display_frequency_hz() {
-    local value="${1:-60}"
-    python3 - "$value" <<'"'"'PY'"'"'
-import math
-import sys
-text = sys.argv[1].strip()
-try:
-    value = float(text)
-except ValueError:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-if not math.isfinite(value) or abs(value - round(value)) > 1e-6:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-hz = int(round(value))
-if hz < 60 or hz > 120:
-    print(f"[ERROR] Unsupported display frequency: {text}", file=sys.stderr)
-    print("Expected integer Hz in range 60..120.", file=sys.stderr)
-    sys.exit(2)
-print(hz)
-PY
-  }
-
-  normalize_display_mode() {
-    local value="${1:-direct}"
-    value="${value,,}"
-    value="${value//-/_}"
-    case "$value" in
-      direct|direct_mode|drm|drm_lease) printf "direct\n" ;;
-      extended|extended_sbs|sbs|windowed|desktop) printf "extended_sbs\n" ;;
-      *)
-        echo "[ERROR] Unsupported OpenVR display mode: $1" >&2
-        echo "Expected direct or extended_sbs." >&2
-        exit 2
-        ;;
-    esac
-  }
-
-  openvr_driver_dir_name() {
-    local hz="$1"
-    local mode="$2"
-    if [[ "$mode" == "direct" ]]; then
-      printf "openvr_driver_%sHZ\n" "$hz"
-    else
-      printf "openvr_driver_%sHZ_%s\n" "$hz" "$mode"
-    fi
-  }
-
-  XR_OPENVR_DEVICE="${XR_OPENVR_DEVICE:-${XR_DEVICE_TARGET:-generic}}"
-
-  readarray -t freqs < <(for raw in ${XR_OPENVR_BUILD_FREQUENCIES:-60 75 90}; do normalize_display_frequency_hz "$raw"; done | awk "!seen[\$0]++")
-  readarray -t modes < <(for raw in ${XR_OPENVR_BUILD_MODES:-direct}; do normalize_display_mode "$raw"; done | awk "!seen[\$0]++")
-
-  for mode in "${modes[@]}"; do
-    for freq in "${freqs[@]}"; do
-      driver_dir="$(openvr_driver_dir_name "$freq" "$mode")"
-      echo "[install_device_out:${XR_TARGET_DEVICE}] build OpenVR driver ${freq}Hz mode=${mode} -> ${XR_OUT_BIN_ROOT}/drivers/${driver_dir}" >&2
-      XR_OPENVR_DEVICE="$XR_OPENVR_DEVICE" \
-      XR_OPENVR_DISPLAY_FREQUENCY_HZ="$freq" \
-      XR_OPENVR_DISPLAY_MODE="$mode" \
-      XR_OPENVR_DRIVER_DIR_NAME="$driver_dir" \
-      XR_OPENVR_SINGLE_VARIANT_BUILD=1 \
-      INSTALL_DRIVERS_ROOT="$XR_OUT_BIN_ROOT/drivers" \
-      INSTALL_DRIVER_ROOT="$XR_OUT_BIN_ROOT/drivers/$driver_dir" \
-      INSTALL_DRIVER_PACKAGE="$XR_OUT_BIN_ROOT/drivers/$driver_dir/xr_tracking" \
-      BUILD_DIR="${OPENVR_BUILD_ROOT:-$XR_BUILD_ROOT/drivers}/$driver_dir" \
-      CLONE_OPENVR="${CLONE_OPENVR:-1}" \
-        "$XR_ROOT_PROJECT/drivers/openvr_driver/scripts/build_driver.sh"
-    done
-  done
-'
+run_step openvr_driver bash "$XR_ROOT_PROJECT/drivers/build_profiles.sh" steamvr
 
 if should_build_xrizer; then
   run_step xrizer env \
@@ -312,13 +237,7 @@ else
   log "skip xrizer: optional GPL component disabled; set XR_BUILD_XRIZER=1 or XR_BUILD_ONLY=xrizer to build it"
 fi
 
-run_step monado_driver env \
-  XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-$XR_TARGET_DEVICE}" \
-  BIN_DIR="$XR_OUT_BIN_ROOT/drivers/monado_driver" \
-  XR_BIN_ROOT="$XR_OUT_BIN_ROOT" \
-  BUILD_DIR="${MONADO_BUILD_DIR:-$XR_BUILD_ROOT/monado_driver}" \
-  CLONE_MONADO="${CLONE_MONADO:-1}" \
-  bash "$XR_ROOT_PROJECT/drivers/monado_driver/scripts/linux/install.sh"
+run_step monado_driver bash "$XR_ROOT_PROJECT/drivers/build_profiles.sh" monado
 
 run_step steamvr_video_overlay env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/apps/steamvr/video_overlay" \

@@ -20,24 +20,99 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     private string loadedHardware = "";
     private string? profileLabelOverride;
     private string? deviceNameOverride;
+    private string? deviceImageOverride;
+    private Dictionary<string, string> controllerImageOverrides = new(StringComparer.OrdinalIgnoreCase);
     public string HardwareEnv { get; set; } = "";
+    public bool AutoDetectHardware { get; set; } = true;
     public string DeviceName { get; private set; } = "XR device";
+    public string DeviceImage { get; private set; } = "";
+    public Dictionary<string, string> ControllerImages { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
     public string ControllerProfileLabel { get; private set; } = "Configured BLE / IMU controller profile";
     public string Distribution { get; set; } = "Ubuntu-24.04";
-    public string ReleaseTag { get; set; } = "latest";
+    private string releaseTag = "latest";
+    private string runtimeDownloadUrl = "";
+    private string resolvedRuntimeDownloadUrl = "";
+    private string runtimeLocalPath = "";
+    public string ReleaseTag
+    {
+        get => releaseTag;
+        set
+        {
+            if (releaseTag == value) return;
+            releaseTag = value;
+            resolvedRuntimeDownloadUrl = "";
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeDownloadUrl)));
+        }
+    }
+    private string DefaultRuntimeDownloadUrl => "https://github.com/vladoshub/xr-gate/releases/" +
+        (ReleaseTag.Trim() == "latest" ? "latest/download/" : "download/" + Uri.EscapeDataString(ReleaseTag.Trim()) + "/") +
+        "xr-gate-ubuntu-24.04-linux-x64.tar.gz";
+    public string RuntimeDownloadUrl
+    {
+        get => runtimeDownloadUrl.Length > 0 ? runtimeDownloadUrl :
+            resolvedRuntimeDownloadUrl.Length > 0 ? resolvedRuntimeDownloadUrl : DefaultRuntimeDownloadUrl;
+        set
+        {
+            string selected = value.Trim();
+            runtimeDownloadUrl = selected == DefaultRuntimeDownloadUrl || selected == resolvedRuntimeDownloadUrl ? "" : selected;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeDownloadUrl)));
+        }
+    }
+    public string RuntimeLocalPath
+    {
+        get => runtimeLocalPath;
+        set
+        {
+            runtimeLocalPath = value.Trim();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeLocalPath)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeUrlEnabled)));
+        }
+    }
+    public bool RuntimeUrlEnabled => RuntimeLocalPath.Length == 0;
+    public void ObserveRuntimeDownloadUrl(string url, string sourceKind = "release", string selectedTag = "")
+    {
+        resolvedRuntimeDownloadUrl = sourceKind != "release" ||
+            (selectedTag.Length > 0 && ReleaseTag != "latest" && selectedTag != ReleaseTag) ? "" : url;
+        if (runtimeDownloadUrl.Length == 0)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeDownloadUrl)));
+    }
     public string UsbBusIds { get; set; } = "";
     public string BluetoothBusId { get; set; } = "";
     public string BluetoothUsbId { get; set; } = "";
     public bool BluetoothEnabled { get; set; }
-    public bool GearVr { get; set; }
+    private string controllerMode = "gestures";
+    public bool GearVr
+    {
+        get => controllerMode == "gearvr";
+        set { if (value) ControllerMode = "gearvr"; else if (GearVr) ControllerMode = "gestures"; }
+    }
+    public string ControllerMode
+    {
+        get => controllerMode;
+        set
+        {
+            if (value is not ("gearvr" or "gestures" or "no")) throw new FormatException("Choose Gear VR Controllers, Gestures or No.");
+            controllerMode = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ControllerMode)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GearVr)));
+        }
+    }
+    public bool GlobalHotkeys { get; set; } = true;
+    public bool ShowCommandPrompt { get; set; }
     public bool AutoDriverFrequency { get; set; } = true;
     public string FrequencyHz { get; set; } = "60";
     public string DisplayMode { get; set; } = "extended_sbs";
     public string DisplayName { get; set; } = "";
     public string SteamVrPath { get; set; } = "";
     public string ControllerConfig { get; set; } = "";
+    public bool AudioEnabled { get; set; } = true;
+    public string AudioSourceId { get; set; } = "default";
+    public string AudioOutputId { get; set; } = "none";
+    public string LinuxUser { get; private set; } = "";
+    public string LinuxRoot { get; private set; } = "~/xr-gate-wsl";
     public string SavedBluetoothInstance { get; private set; } = "";
     public int StartTimeoutSeconds { get; private set; } = 180;
+    public int FirstLoginTimeoutSeconds { get; private set; } = 600;
 
     public static Dictionary<string, string> ReadEnv(string path, bool required = false)
     {
@@ -105,27 +180,48 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         string Choice(string key, string name, string fallback) => overrides.ContainsKey(key)
             ? Get(key, fallback) : saved.GetValueOrDefault(name, Get(key, fallback));
         bool Flag(string key, bool fallback) => Get(key) switch { "1" => true, "0" => false, _ => fallback };
+        string controllerMode = Get("XR_CONTROLLER_MODE");
+        if (!overrides.ContainsKey("XR_CONTROLLER_MODE") && overrides.GetValueOrDefault("XR_GEARVR") is "0" or "1")
+            controllerMode = overrides["XR_GEARVR"] == "1" ? "gearvr" : "gestures";
+        if (controllerMode is not ("" or "gearvr" or "gestures" or "no"))
+            throw new SettingsReadException(Path.Combine(root, ".env"), "XR_CONTROLLER_MODE must be gearvr, gestures or no, or empty for legacy settings.");
         string bluetoothInstance = Get("XR_BLUETOOTH_INSTANCE_ID", saved.GetValueOrDefault("BluetoothInstanceId", ""));
         if (bluetoothInstance.Length == 0) bluetoothInstance = saved.GetValueOrDefault("BluetoothInstanceId", "");
         var settings = new LauncherSettings
         {
             HardwareEnv = hardware, Distribution = Choice("XR_DISTRIBUTION", "Distribution", "Ubuntu-24.04"),
+            AutoDetectHardware = overrides.ContainsKey("XR_AUTO_DETECT_HARDWARE") ? Flag("XR_AUTO_DETECT_HARDWARE", true) : !overrides.ContainsKey("XR_HARDWARE_ENV"),
             DeviceName = Get("XR_DEVICE_NAME", Get("XR_TARGET_DEVICE", "XR device")),
+            DeviceImage = Get("XR_DEVICE_IMAGE"), ControllerImages = ReadControllerImages(values),
             ControllerProfileLabel = Get("XR_CONTROLLER_PROFILE_LABEL", "Configured BLE / IMU controller profile"),
             ReleaseTag = Get("XR_RELEASE_TAG", "latest"), UsbBusIds = Get("XR_USB_BUS_IDS"),
+            RuntimeDownloadUrl = Get("XR_RUNTIME_URL"), RuntimeLocalPath = Get("XR_RUNTIME_LOCAL_PATH"),
             BluetoothBusId = Get("XR_BLUETOOTH_BUS_ID"), SavedBluetoothInstance = bluetoothInstance,
             BluetoothUsbId = Get("XR_BLUETOOTH_USB_ID"),
-            BluetoothEnabled = Flag("XR_BLUETOOTH", bluetoothInstance.Length > 0 || Get("XR_BLUETOOTH_BUS_ID").Length > 0),
-            GearVr = Flag("XR_GEARVR", saved.GetValueOrDefault("GearVR", "False").Equals("True", StringComparison.OrdinalIgnoreCase)),
+            BluetoothEnabled = Flag("XR_BLUETOOTH", false),
+            ControllerMode = controllerMode.Length > 0 ? controllerMode :
+                Flag("XR_GEARVR", saved.GetValueOrDefault("GearVR", "False").Equals("True", StringComparison.OrdinalIgnoreCase)) ? "gearvr" : "gestures",
+            GlobalHotkeys = Flag("XR_GLOBAL_HOTKEYS", true),
+            ShowCommandPrompt = Flag("XR_SHOW_COMMAND_PROMPT", false),
             AutoDriverFrequency = Flag("XR_AUTO_DRIVER_FREQUENCY", true),
             FrequencyHz = Choice("XR_DISPLAY_FREQUENCY_HZ", "FrequencyHz", "60"),
             DisplayMode = Choice("XR_DISPLAY_MODE", "DisplayMode", "extended_sbs"),
             DisplayName = Get("XR_DISPLAY_NAME"), SteamVrPath = Get("XR_STEAMVR_PATH"), ControllerConfig = Get("XR_CONTROLLER_CONFIG"),
-            StartTimeoutSeconds = int.TryParse(Get("XR_START_TIMEOUT"), out int seconds) && seconds is >= 5 and <= 600 ? seconds : 180
+            AudioEnabled = Flag("XR_AUDIO_ENABLED", true),
+            AudioSourceId = Get("XR_AUDIO_SOURCE", "default"), AudioOutputId = Get("XR_AUDIO_OUTPUT", "none"),
+            LinuxUser = Get("XR_LINUX_USER", saved.GetValueOrDefault("Distribution") == Choice("XR_DISTRIBUTION", "Distribution", "Ubuntu-24.04")
+                ? saved.GetValueOrDefault("LinuxUser", "") : ""),
+            LinuxRoot = Get("XR_LINUX_ROOT", "~/xr-gate-wsl"),
+            StartTimeoutSeconds = int.TryParse(Get("XR_START_TIMEOUT"), out int seconds) && seconds is >= 5 and <= 600 ? seconds : 180,
+            FirstLoginTimeoutSeconds = int.TryParse(Get("XR_FIRST_LOGIN_TIMEOUT"), out int loginSeconds) && loginSeconds is >= 15 and <= 3600 ? loginSeconds : 600
         };
         settings.loadedHardware = hardware;
+        settings.ObserveRuntimeDownloadUrl(saved.GetValueOrDefault("RuntimeDownloadUrl", ""),
+            saved.GetValueOrDefault("RuntimeSourceKind", "release"), saved.GetValueOrDefault("ReleaseTag", ""));
         settings.profileLabelOverride = overrides.GetValueOrDefault("XR_CONTROLLER_PROFILE_LABEL");
         settings.deviceNameOverride = overrides.GetValueOrDefault("XR_DEVICE_NAME");
+        settings.deviceImageOverride = overrides.GetValueOrDefault("XR_DEVICE_IMAGE");
+        settings.controllerImageOverrides = ReadControllerImages(overrides);
         settings.baseline = settings.GuiValues();
         if (!defaultsOnly)
         {
@@ -143,16 +239,26 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         return settings;
     }
 
+    private static Dictionary<string, string> ReadControllerImages(IReadOnlyDictionary<string, string> values) =>
+        values.Where(pair => pair.Key.StartsWith("XR_CONTROLLER_IMAGE_", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(pair => pair.Key["XR_CONTROLLER_IMAGE_".Length..], pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+
     private Dictionary<string, string> GuiValues() => new(StringComparer.OrdinalIgnoreCase)
     {
             ["XR_HARDWARE_ENV"] = HardwareEnv.Trim(), ["XR_DISTRIBUTION"] = Distribution.Trim(),
+            ["XR_AUTO_DETECT_HARDWARE"] = AutoDetectHardware ? "1" : "0",
             ["XR_RELEASE_TAG"] = ReleaseTag.Trim(), ["XR_USB_BUS_IDS"] = UsbBusIds.Trim(),
+            ["XR_RUNTIME_URL"] = runtimeDownloadUrl, ["XR_RUNTIME_LOCAL_PATH"] = RuntimeLocalPath,
             ["XR_BLUETOOTH_BUS_ID"] = BluetoothBusId.Trim(), ["XR_BLUETOOTH"] = BluetoothEnabled ? "1" : "0",
             ["XR_BLUETOOTH_USB_ID"] = BluetoothUsbId.Trim(),
             ["XR_GEARVR"] = GearVr ? "1" : "0", ["XR_AUTO_DRIVER_FREQUENCY"] = AutoDriverFrequency ? "1" : "0",
+            ["XR_CONTROLLER_MODE"] = ControllerMode, ["XR_SHOW_COMMAND_PROMPT"] = ShowCommandPrompt ? "1" : "0",
+            ["XR_GLOBAL_HOTKEYS"] = GlobalHotkeys ? "1" : "0",
             ["XR_DISPLAY_FREQUENCY_HZ"] = FrequencyHz.Trim(), ["XR_DISPLAY_MODE"] = DisplayMode.Trim(),
             ["XR_DISPLAY_NAME"] = DisplayName.Trim(), ["XR_STEAMVR_PATH"] = SteamVrPath.Trim(),
-            ["XR_CONTROLLER_CONFIG"] = ControllerConfig.Trim()
+            ["XR_CONTROLLER_CONFIG"] = ControllerConfig.Trim(),
+            ["XR_AUDIO_ENABLED"] = AudioEnabled ? "1" : "0",
+            ["XR_AUDIO_SOURCE"] = AudioSourceId.Trim(), ["XR_AUDIO_OUTPUT"] = AudioOutputId.Trim()
     };
 
     private void RememberEdits()
@@ -168,14 +274,20 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         var selected = Load(root, hardwareOverride: HardwareEnv.Trim(), defaultsOnly: true);
         var profile = ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
         DeviceName = deviceNameOverride ?? selected.DeviceName;
+        DeviceImage = deviceImageOverride ?? selected.DeviceImage;
+        ControllerImages = new Dictionary<string, string>(selected.ControllerImages, StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in controllerImageOverrides) ControllerImages[pair.Key] = pair.Value;
         string Keep(string key, string current, string inherited) => explicitKeys.Contains(key) ? current : inherited;
         Distribution = Keep("XR_DISTRIBUTION", Distribution, selected.Distribution);
         ReleaseTag = Keep("XR_RELEASE_TAG", ReleaseTag, selected.ReleaseTag);
+        runtimeDownloadUrl = Keep("XR_RUNTIME_URL", runtimeDownloadUrl, selected.runtimeDownloadUrl);
+        RuntimeLocalPath = Keep("XR_RUNTIME_LOCAL_PATH", RuntimeLocalPath, selected.RuntimeLocalPath);
         UsbBusIds = Keep("XR_USB_BUS_IDS", UsbBusIds, selected.UsbBusIds);
         BluetoothBusId = Keep("XR_BLUETOOTH_BUS_ID", BluetoothBusId, selected.BluetoothBusId);
         BluetoothUsbId = Keep("XR_BLUETOOTH_USB_ID", BluetoothUsbId, selected.BluetoothUsbId);
         if (!explicitKeys.Contains("XR_BLUETOOTH") && (SavedBluetoothInstance.Length == 0 || profile.GetValueOrDefault("XR_BLUETOOTH") is "0" or "1")) BluetoothEnabled = selected.BluetoothEnabled;
-        if (!explicitKeys.Contains("XR_GEARVR") && profile.GetValueOrDefault("XR_GEARVR") is "0" or "1") GearVr = selected.GearVr;
+        if (!explicitKeys.Contains("XR_CONTROLLER_MODE") && !explicitKeys.Contains("XR_GEARVR") &&
+            (profile.GetValueOrDefault("XR_GEARVR") is "0" or "1" || profile.GetValueOrDefault("XR_CONTROLLER_MODE") is "gearvr" or "gestures" or "no")) ControllerMode = selected.ControllerMode;
         if (!explicitKeys.Contains("XR_AUTO_DRIVER_FREQUENCY")) AutoDriverFrequency = selected.AutoDriverFrequency;
         FrequencyHz = Keep("XR_DISPLAY_FREQUENCY_HZ", FrequencyHz, selected.FrequencyHz);
         DisplayMode = Keep("XR_DISPLAY_MODE", DisplayMode, selected.DisplayMode);
@@ -196,20 +308,26 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         RememberEdits();
         var values = GuiValues();
         foreach (string value in values.Values) ValidateLiteral(value);
+        ValidateAudioSelection();
+        if (RuntimeUrlEnabled && (!Uri.TryCreate(RuntimeDownloadUrl, UriKind.Absolute, out var runtimeUri) ||
+            runtimeUri.Scheme is not ("https" or "http") ||
+            !(runtimeUri.AbsolutePath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) || runtimeUri.AbsolutePath.EndsWith('/'))))
+            throw new FormatException("URL XR Gate must point to an HTTP(S) runtime .tar.gz archive or download folder.");
         if (!Regex.IsMatch(Distribution, @"^[A-Za-z0-9][A-Za-z0-9._-]*$")) throw new FormatException("Invalid Ubuntu distribution name.");
         if (!Regex.IsMatch(ReleaseTag, @"^[A-Za-z0-9_.-]+$")) throw new FormatException("Use latest or a release tag such as v2.3.0.");
         if (!int.TryParse(FrequencyHz, out int hz) || hz < 1 || hz > 1000) throw new FormatException("Refresh rate must be 1–1000 Hz.");
         if (DisplayMode is not ("direct" or "extended_sbs")) throw new FormatException("Display mode must be direct or extended_sbs.");
         foreach (string id in UsbBusIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) ValidateBusId(id);
-        if (BluetoothBusId.Length > 0) ValidateBusId(BluetoothBusId.Trim());
-        if (BluetoothUsbId.Trim().Length > 0 && !Regex.IsMatch(BluetoothUsbId.Trim(), @"^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$"))
-            throw new FormatException("Bluetooth VID:PID must look like 1234:abcd, or be empty to use the saved adapter.");
+        ValidateControllerSettings();
         ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
         string path = Path.Combine(root, ".env");
         string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
         // Preserve advanced settings and comments, including keys the GUI does not expose.
         var persisted = values.Where(pair => explicitKeys.Contains(pair.Key) || profileChoices.Contains(pair.Key))
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        // Persist these even when they equal the defaults: a chosen preset must
+        // stay manual, and Gestures must override the legacy controllers-ready marker.
+        foreach (string key in new[] { "XR_AUTO_DETECT_HARDWARE", "XR_CONTROLLER_MODE", "XR_GEARVR", "XR_BLUETOOTH", "XR_SHOW_COMMAND_PROMPT" }) persisted[key] = values[key];
         var removed = values.Keys.Where(key => !persisted.ContainsKey(key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string updated = UpdateEnv(original, persisted, removed);
         if (updated == original) return;
@@ -221,6 +339,91 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         baseline = values;
+    }
+
+    private Dictionary<string, string> ControllerValues() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["XR_CONTROLLER_MODE"] = ControllerMode, ["XR_GEARVR"] = GearVr ? "1" : "0",
+        ["XR_BLUETOOTH"] = BluetoothEnabled ? "1" : "0",
+        ["XR_BLUETOOTH_BUS_ID"] = BluetoothBusId.Trim(), ["XR_BLUETOOTH_USB_ID"] = BluetoothUsbId.Trim(),
+        ["XR_CONTROLLER_CONFIG"] = ControllerConfig.Trim()
+    };
+
+    private void ValidateControllerSettings()
+    {
+        foreach (string value in ControllerValues().Values) ValidateLiteral(value);
+        if (BluetoothBusId.Trim().Length > 0) ValidateBusId(BluetoothBusId.Trim());
+        if (BluetoothUsbId.Trim().Length > 0 && !Regex.IsMatch(BluetoothUsbId.Trim(), @"^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$"))
+            throw new FormatException("Bluetooth VID:PID must look like 1234:abcd, or be empty to use the saved adapter.");
+    }
+
+    // Controller edits must not save or validate unfinished fields in other tabs.
+    public void SaveControllerSettings(string root)
+    {
+        ValidateControllerSettings();
+        var values = ControllerValues();
+        RememberEdits();
+        // Keep unchanged adapter/config defaults inherited from the hardware preset.
+        var persisted = values.Where(pair => explicitKeys.Contains(pair.Key) || profileChoices.Contains(pair.Key) ||
+            pair.Key is "XR_CONTROLLER_MODE" or "XR_GEARVR" or "XR_BLUETOOTH")
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        var removed = values.Keys.Where(key => !persisted.ContainsKey(key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string path = Path.Combine(root, ".env");
+        string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
+        string updated = UpdateEnv(original, persisted, removed);
+        if (updated != original)
+        {
+            string temporary = path + ".controllers-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                File.WriteAllText(temporary, updated, new UTF8Encoding(false));
+                File.Move(temporary, path, true);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+        foreach (var pair in values) baseline[pair.Key] = pair.Value;
+    }
+
+    private void ValidateAudioSelection()
+    {
+        ValidateLiteral(AudioSourceId); ValidateLiteral(AudioOutputId);
+        if (AudioOutputId.Length > 0 && AudioOutputId != "none" && !Regex.IsMatch(AudioOutputId, @"^alsa:[0-9a-f]{64}$"))
+            throw new FormatException("Choose a WSL audio output from the device list, or No audio.");
+    }
+
+    // The hotkeys checkbox can change during VR without saving unfinished fields.
+    public void SaveHotkeySettings(string root)
+    {
+        const string key = "XR_GLOBAL_HOTKEYS";
+        var values = new Dictionary<string, string> { [key] = GlobalHotkeys ? "1" : "0" };
+        string path = Path.Combine(root, ".env");
+        string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
+        string temporary = path + ".hotkeys-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(temporary, UpdateEnv(original, values), new UTF8Encoding(false));
+            File.Move(temporary, path, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        explicitKeys.Add(key); baseline[key] = values[key];
+    }
+
+    // Audio can change during VR; leave other, possibly unfinished form fields alone.
+    public void SaveAudioSelection(string root)
+    {
+        ValidateAudioSelection();
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        { ["XR_AUDIO_ENABLED"] = AudioEnabled ? "1" : "0", ["XR_AUDIO_SOURCE"] = AudioSourceId, ["XR_AUDIO_OUTPUT"] = AudioOutputId };
+        string path = Path.Combine(root, ".env");
+        string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
+        string temporary = path + ".audio-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(temporary, UpdateEnv(original, values), new UTF8Encoding(false));
+            File.Move(temporary, path, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        foreach (var pair in values) { explicitKeys.Add(pair.Key); baseline[pair.Key] = pair.Value; }
     }
 
     public static string UpdateEnv(string original, IReadOnlyDictionary<string, string> values, IReadOnlySet<string>? removed = null)

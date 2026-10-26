@@ -17,6 +17,9 @@ SHELL = os.environ.get('XR_GATE_TEST_POWERSHELL') or shutil.which('powershell.ex
 @unittest.skipUnless(SHELL, 'PowerShell is required for TCP contract integration')
 class TcpDeadlineTest(unittest.TestCase):
     def probe(self, mode):
+        managed = mode.startswith('runtime_exit_')
+        if managed:
+            mode = mode.removeprefix('runtime_exit_')
         finished = threading.Event()
         with socket.socket() as listener, tempfile.TemporaryDirectory() as temporary:
             listener.bind(('127.0.0.1',0))
@@ -26,12 +29,14 @@ class TcpDeadlineTest(unittest.TestCase):
                 try:
                     connection, _ = listener.accept()
                     with connection:
-                        if mode != 'partial_hello':
+                        if mode not in ('partial_hello', 'silent_hello'):
                             connection.sendall(b'{"protocol":"xr_gate_app_v1"}\n')
                         if mode == 'ready':
                             for index in range(1,4):
                                 frame = {'type':'frame','sequence':index,'hmd':{'pose_valid':True,'source_timestamp_ns':str(index)}}
                                 connection.sendall((json.dumps(frame)+'\n').encode())
+                            finished.wait(6)
+                        elif mode == 'silent_hello':
                             finished.wait(6)
                         else:
                             while not finished.wait(0.05): connection.sendall(b' ')
@@ -40,8 +45,20 @@ class TcpDeadlineTest(unittest.TestCase):
             thread.start()
             script = Path(temporary)/'tcp.ps1'
             helper = str(WIN/'XrGate-Wsl.ps1').replace("'","''")
+            fixture = ''
+            if managed:
+                fixture = '''
+Add-Type 'public sealed class RuntimeFixture : System.IDisposable { readonly System.Diagnostics.Stopwatch clock=System.Diagnostics.Stopwatch.StartNew(); public bool HasExited { get { return clock.ElapsedMilliseconds > 800; } } public void Dispose() {} }'
+function Get-RuntimeWindowProcess($Record) { return New-Object RuntimeFixture }
+$script:StateDir=$PSScriptRoot
+$record=[pscustomobject]@{Token=('a' * 32)}
+$files=Get-RuntimeWindowFiles $record
+[IO.File]::WriteAllText($files.Error, 'fixture camera unavailable')
+Wait-XrStream 30 -RuntimeWindow $record
+'''
             script.write_text("$ErrorActionPreference='Stop'\n. '"+helper+"' -Action Help *> $null\n"
-                              "$script:TcpHost='127.0.0.1'\n$script:TcpPort="+str(listener.getsockname()[1])+"\nWait-XrStream 1\n", encoding='utf-8-sig')
+                              "$script:TcpHost='127.0.0.1'\n$script:TcpPort="+str(listener.getsockname()[1])+"\n" +
+                              (fixture if managed else "Wait-XrStream 1\n"), encoding='utf-8-sig')
             started = time.monotonic()
             child = subprocess.Popen([SHELL,'-NoLogo','-NoProfile','-File',str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
@@ -67,6 +84,14 @@ class TcpDeadlineTest(unittest.TestCase):
         code, output = self.probe('ready')
         self.assertEqual(code,0,output)
         self.assertIn('pose_valid=true',output)
+
+    def test_runtime_exit_interrupts_wait_even_during_silent_or_partial_tcp_read(self):
+        for mode in ('partial_hello', 'partial_frame', 'silent_hello'):
+            with self.subTest(mode=mode):
+                code, output = self.probe('runtime_exit_' + mode)
+                self.assertNotEqual(code, 0, output)
+                self.assertIn('fixture camera unavailable', output)
+                self.assertIn('Tracking stopped', output)
 
 
 if __name__ == '__main__': unittest.main()

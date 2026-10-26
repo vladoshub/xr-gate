@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import struct
 import sys
 import tarfile
 import tempfile
@@ -53,8 +54,36 @@ def log(message):
     print("[XR Gate WSL] " + message, flush=True)
 
 
-def run(args, *, env=None, check=True, timeout=None):
-    return subprocess.run([str(x) for x in args], env=env, check=check, timeout=timeout)
+def is_video_capture(path):
+    """QUERYCAP does not start streaming or consume a camera frame."""
+    # Capture itself needs read/write access; a read-only probe can hide a
+    # permission problem until the tracking process opens the camera.
+    descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        capability = bytearray(104)  # struct v4l2_capability from videodev2.h
+        fcntl.ioctl(descriptor, 0x80685600, capability, True)  # VIDIOC_QUERYCAP
+        flags = struct.unpack_from("=I", capability, 84)[0]
+        if flags & 0x80000000:  # V4L2_CAP_DEVICE_CAPS
+            flags = struct.unpack_from("=I", capability, 88)[0]
+        return bool(flags & (0x00000001 | 0x00001000))  # capture / capture mplane
+    finally:
+        os.close(descriptor)
+
+
+def check_runtime_guard(request):
+    guard = request.get("runtime_guard")
+    if guard is None:
+        return  # Existing CLI sessions do not have a Windows window owner.
+    if not isinstance(guard, dict) or not re.fullmatch(r"[a-f0-9]{32}", guard.get("token", "")):
+        raise ValueError("Invalid runtime startup guard.")
+    record = json.loads(Path(guard["path"]).read_text(encoding="utf-8-sig"))
+    if record.get("Token") != guard["token"] or record.get("Stopping") is not False:
+        raise RuntimeError("Runtime startup was cancelled by the launcher.")
+
+
+def run(args, *, env=None, check=True, timeout=None, capture_output=False, text=False):
+    return subprocess.run([str(x) for x in args], env=env, check=check, timeout=timeout,
+                          capture_output=capture_output, text=text)
 
 
 def run_diagnostic(args):
@@ -429,7 +458,7 @@ class Runtime:
             env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
             run(["apt-get", "update"], env=env)
             packages = ["ca-certificates", "python3", "python3-venv", "util-linux", "kmod",
-                        "acl", "usbutils", "v4l-utils", "udev", "bluez", "rfkill"]
+                        "acl", "usbutils", "v4l-utils", "udev", "bluez", "rfkill", "libasound2t64"]
             run(["apt-get", "install", "-y", "--no-install-recommends", *packages], env=env)
             if self.cfg.get("bluetooth") or self.cfg.get("gearvr"):
                 self.firmware("install")
@@ -468,7 +497,7 @@ class Runtime:
             else:
                 installer_args.append("--no-device-access")
             run(installer_args, env=env)
-            for group in ("video", "input", "plugdev", "bluetooth"):
+            for group in ("video", "input", "plugdev", "bluetooth", "audio"):
                 run(["groupadd", "-f", group])
                 run(["usermod", "-aG", group, self.user])
             # The upstream dependency installer creates the thin venv as root.
@@ -543,6 +572,9 @@ class Runtime:
         for node in (sysroot / "class/tty").glob("*"):
             if re.fullmatch(r"tty(?:ACM|USB)[0-9]+", node.name) and self.selected_usb(node):
                 nodes.append(devroot / node.name)
+        for node in (sysroot / "class/sound").glob("*"):
+            if re.fullmatch(r"(?:controlC\d+|pcmC\d+D\d+p)", node.name) and self.selected_usb(node):
+                nodes.append(devroot / "snd" / node.name)
         for device in (sysroot / "bus/usb/devices").glob("*"):
             if self.selected_usb(device):
                 try:
@@ -555,6 +587,8 @@ class Runtime:
 
     def prepare(self):
         self.root_required()
+        if self.settings.get("XR_AUDIO_OUTPUT", "none") not in ("", "none"):
+            run(["modprobe", "snd_usb_audio"], check=False)
         for module in csv_setting(self.settings, "XR_KERNEL_MODULES"):
             if not re.fullmatch(r"[A-Za-z0-9_-]+", module):
                 raise ValueError("Invalid kernel module: " + module)
@@ -563,25 +597,93 @@ class Runtime:
             run(["systemctl", "start", "bluetooth"])
             run(["rfkill", "unblock", "bluetooth"], check=False)
         run(["udevadm", "control", "--reload-rules"], check=False)
-        for subsystem in ("video4linux", "hidraw", "tty", "input"):
+        for subsystem in ("video4linux", "hidraw", "tty", "input", "sound"):
             run(["udevadm", "trigger", "--subsystem-match=" + subsystem], check=False)
         deadline = time.monotonic() + 8
+        waiting_reported = False
         while True:
+            # trigger only queues events. In particular, a delayed uaccess rule
+            # can remove our ACL after setfacl if we do not wait for it first.
+            try:
+                run(["udevadm", "settle", "--timeout=8"], timeout=10)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                raise RuntimeError("USB device setup did not finish within 8 seconds; "
+                                   "device permissions were not granted. Retry Start VR or check Diagnostics.") from error
             nodes, cameras, hids = self.device_nodes()
             missing_camera = self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras
             missing_hid = self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids
-            if not (missing_camera or missing_hid):
-                break
+            pending = [str(node) for node in nodes if not node.is_char_device()]
+            detail = ", ".join(pending) or ("camera" if missing_camera else "HID")
+            if not (missing_camera or missing_hid or pending):
+                try:
+                    for node in nodes:
+                        run(["setfacl", "-m", f"u:{self.user}:rw", node], timeout=5)
+                except subprocess.CalledProcessError:
+                    if all(node.is_char_device() for node in nodes):
+                        raise  # An ACL failure on an existing device is real.
+                    detail = "Selected device nodes changed while granting access"
+                else:
+                    # Root opening the camera says nothing about the runtime user's
+                    # permissions. Re-enumerate and probe in a fresh regular-user
+                    # process, also catching nodes replaced during USB attachment.
+                    request = base64.b64encode(json.dumps(self.cfg).encode()).decode("ascii")
+                    try:
+                        access = self.as_user([sys.executable, str(Path(__file__).resolve()), "device_access", request],
+                                              check=False, capture_output=True, text=True, timeout=10)
+                    except subprocess.TimeoutExpired as error:
+                        raise RuntimeError("Device access check timed out for " + self.user +
+                                           ". Retry Start VR or check Diagnostics.") from error
+                    if access.returncode == 0:
+                        camera = json.loads(access.stdout)["camera"]
+                        break
+                    detail = (access.stderr or access.stdout).strip() or "device access check failed"
             if time.monotonic() >= deadline:
-                raise RuntimeError("Selected camera/HID was not found. Check the hardware env, USB attach and -Action Doctor.")
+                raise RuntimeError("Selected USB camera/HID access is not ready for " + self.user + ": " + detail +
+                                   ". Check the hardware preset and Diagnostics; lsusb alone does not confirm usable device access.")
+            if not waiting_reported:
+                log("Waiting for the selected USB camera/HID device nodes and user access...")
+                waiting_reported = True
             time.sleep(0.25)
-        for node in nodes:
-            if not node.is_char_device():
-                raise RuntimeError("Device is missing or is not a character device: " + str(node))
-            run(["setfacl", "-m", f"u:{self.user}:rw", node])
-        log("Selected USB/input device access granted to " + self.user)
+        log("Selected USB/input device access verified for " + self.user)
+        if camera:
+            log("Capture camera: " + camera + " (V4L2 video capture, not metadata).")
         if self.cfg.get("bluetooth"):
             self.wait_for_bluetooth()
+
+    def device_access(self):
+        """Check only selected nodes, under the same account as the runtime."""
+        self.user_required()
+        nodes, cameras, hids = self.device_nodes()
+        if self.settings.get("XR_REQUIRE_CAMERA", "0") == "1" and not cameras:
+            raise FileNotFoundError("Selected USB camera disappeared during setup.")
+        if self.settings.get("XR_REQUIRE_HIDRAW", "0") == "1" and not hids:
+            raise FileNotFoundError("Selected USB HID disappeared during setup.")
+        unavailable = [str(node) for node in nodes
+                       if not node.is_char_device() or not os.access(node, os.R_OK | os.W_OK)]
+        if unavailable:
+            raise PermissionError("Read/write device access is unavailable to " + self.user + ": " +
+                                  ", ".join(unavailable))
+        return {"camera": self.capture_device()}
+
+    def capture_device(self):
+        requested = self.settings.get("XR_CAMERA_DEVICE", "")
+        if not requested and self.settings.get("XR_CAMERA_AUTO_SELECT", "0") != "1":
+            return ""  # Custom/dual-camera profiles may own their selection.
+        candidates = [Path(requested)] if requested else self.device_nodes()[1]
+        capture, errors = [], []
+        for candidate in candidates:
+            try:
+                if is_video_capture(candidate):
+                    capture.append(candidate)
+            except OSError as error:
+                errors.append(str(candidate) + ": " + str(error))
+        if len(capture) == 1:
+            return str(capture[0])
+        if len(capture) > 1:
+            raise RuntimeError("Multiple video capture nodes match the configured USB device: " +
+                               ", ".join(map(str, capture)) + ". Select XR_CAMERA_DEVICE explicitly; no unrelated camera was selected.")
+        detail = "; ".join(errors) or ", ".join(map(str, candidates)) or "no video nodes for the configured USB IDs"
+        raise RuntimeError("USB enumeration alone does not provide a working camera. No usable V4L2 capture node: " + detail)
 
     def firmware(self, operation, *, capture=False, timeout=None):
         helper = Path(__file__).with_name("wsl_firmware.py")
@@ -589,10 +691,18 @@ class Runtime:
             raise FileNotFoundError("Extract the complete updated Windows archive, including linux/wsl_firmware.py.")
         request = base64.b64encode(json.dumps(self.cfg).encode()).decode("ascii")
         args = [sys.executable, str(helper), operation, request]
-        if capture:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
-            return json.loads(result.stdout)
-        run(args, timeout=timeout)
+        try:
+            if capture:
+                result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
+                return json.loads(result.stdout)
+            run(args, timeout=timeout)
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or "").strip() if capture else "See the firmware error above."
+            raise RuntimeError(f"Firmware {operation} failed (exit {error.returncode}). " + detail) from None
+        except subprocess.TimeoutExpired as error:
+            # Keep timeout handling in the Bluetooth readiness loop, without
+            # putting the complete encoded installation request in the log.
+            raise subprocess.TimeoutExpired(["wsl_firmware.py", operation], error.timeout) from None
 
     def wait_for_bluetooth(self):
         seconds = integer_setting(self.settings, "XR_BLUETOOTH_READY_TIMEOUT", 1, 120)
@@ -621,7 +731,7 @@ class Runtime:
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
         raise RuntimeError(f"Bluetooth is enabled but no controller became ready in {seconds}s. "
                            f"{last_error} Check the selected USB dongle, kernel module, firmware and bluetooth.service. "
-                           "If Bluetooth is not needed, disable it in Settings (XR_BLUETOOTH=0).")
+                           "If Bluetooth is not needed, disable it in Controllers (XR_BLUETOOTH=0).")
 
     def controller_template(self, package):
         name = self.settings.get("XR_GEARVR_TEMPLATE", "")
@@ -631,24 +741,54 @@ class Runtime:
 
     def generate_profile(self):
         custom = self.config / "xr_client.json"
-        if custom.is_file():
+        mode = self.settings.get("XR_CONTROLLER_MODE", "")
+        if mode not in ("", "gearvr", "gestures", "no"):
+            raise ValueError("XR_CONTROLLER_MODE must be gearvr, gestures or no.")
+        if custom.is_file() and not mode:
             return custom
         package = self.current.resolve()
-        profile = self.settings.get("XR_PROFILE", "")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in (".", ".."):
-            raise ValueError("Select XR_PROFILE in the hardware env or provide config/xr_client.json.")
-        filename = profile if profile.endswith(".json") else profile + ".json"
-        data = json.loads(package_path(package, "bin/python/xr_client/configs/" + filename).read_text())
-        data["root_project"] = str(package)
-        data["log_dir"] = str(self.base / "logs")
+        if custom.is_file():
+            # Apply the selected mode to a copy, never rewrite a user profile.
+            data = json.loads(custom.read_text())
+            data.setdefault("root_project", str(package))
+            data.setdefault("log_dir", str(self.base / "logs"))
+        else:
+            profile = self.settings.get("XR_PROFILE", "")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in (".", ".."):
+                raise ValueError("Select XR_PROFILE in the hardware env or provide config/xr_client.json.")
+            filename = profile if profile.endswith(".json") else profile + ".json"
+            data = json.loads(package_path(package, "bin/python/xr_client/configs/" + filename).read_text())
+            data["root_project"] = str(package)
+            data["log_dir"] = str(self.base / "logs")
         controllers = self.config / "override_controller.json"
-        for service in data.get("post_gate_services", []):
-            if service.get("name") == "override_controller":
-                service["start_on_launch"] = (self.config / "controllers-ready").is_file()
-                service.setdefault("env", {}).update({
-                    "CONFIG_PATH": str(controllers),
-                    "PROVIDERS": self.settings.get("XR_GEARVR_PROVIDERS" if self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
-                })
+        if mode == "gearvr" and not controllers.is_file():
+            self.write(controllers, self.controller_template(package).read_text())
+        found_controller = False
+        for group in ("pre_gate_services", "post_gate_services", "foreground_services"):
+            if group not in data:
+                continue  # Preserve xr_client defaults for omitted custom sections.
+            if mode in ("gestures", "no"):
+                # Removing these also prevents gesture/manual toggle actions or
+                # inherited RUN_OVERRIDE_CONTROLLER=1 from starting the publisher.
+                data[group] = [service for service in data.get(group, [])
+                               if service.get("name") not in ("override_controller", "override_controller_service")]
+            if mode == "no":
+                data[group] = [service for service in data[group]
+                               if service.get("name") not in ("hand_tracking", "mercury_hand_tracking")
+                               and service.get("enable_env") != "RUN_HAND_TRACKING"]
+            for service in data.get(group, []):
+                if service.get("name") == "override_controller":
+                    found_controller = True
+                    service["start_on_launch"] = True if mode == "gearvr" else (self.config / "controllers-ready").is_file()
+                    if mode == "gearvr":
+                        service["enabled"] = True
+                        service["enable_env"] = "XR_GATE_CONTROLLER_INPUT"
+                    service.setdefault("env", {}).update({
+                        "CONFIG_PATH": str(controllers),
+                        "PROVIDERS": self.settings.get("XR_GEARVR_PROVIDERS" if mode == "gearvr" or self.cfg.get("gearvr") else "XR_CONTROLLER_PROVIDERS", ""),
+                    })
+        if mode == "gearvr" and not found_controller:
+            raise ValueError("The selected xr_client profile has no override_controller service for Gear VR Controllers.")
         path = self.base / "generated/profile.json"
         self.write(path, json.dumps(data, indent=2) + "\n")
         return path
@@ -657,7 +797,12 @@ class Runtime:
         self.user_required()
         if not self.status()["installed"]:
             raise RuntimeError("Run -Action Install first.")
-        handle = self.acquire_lock()
+        with self.acquire_lock() as handle:
+            self._start_locked(handle)
+
+    def _start_locked(self, handle):
+        # Lock before checking Stop's token, preventing late launches after detach.
+        check_runtime_guard(self.cfg)
         try:
             host = self.settings.get("XR_TCP_HOST", "127.0.0.1")
             port = integer_setting(self.settings, "XR_TCP_PORT")
@@ -675,7 +820,28 @@ class Runtime:
         profile = self.generate_profile()
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
+                   XR_CONTROLLER_MODE=self.settings.get("XR_CONTROLLER_MODE", ""),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+        camera = self.capture_device()
+        if camera:
+            # This is the capture binary's existing environment override. Do not
+            # edit release YAML or assume /dev/video0 remains the same device.
+            env["CPP_CAPTURE_VIDEO_DEVICE"] = camera
+            log("Capture will open " + camera)
+        if self.settings.get("XR_CONTROLLER_MODE") == "gearvr":
+            env["XR_GATE_CONTROLLER_INPUT"] = "1"
+        elif self.settings.get("XR_CONTROLLER_MODE") in ("gestures", "no"):
+            # Omitted custom sections inherit xr_client defaults. Disable their
+            # publishers too, while retaining the default capture/hand services.
+            env.update(RUN_OVERRIDE_CONTROLLER="0", RUN_OVERRIDE_CONTROLLER_SERVICE="0")
+        if self.settings.get("XR_CONTROLLER_MODE") == "no":
+            # Keep HMD tracking and the TCP server running, but do not consume
+            # a stale/shared physical-controller stream or derive gesture input.
+            env.update(RUN_HAND_TRACKING="0", RUNTIME_CONTROLLER_MODE="controller_only_pose_invalid",
+                       CONTROLLER_INPUT_MODE="hand_tracking_only", CONTROLLER_INPUT_TRANSPORT="none",
+                       RUNTIME_LEFT_HAND_GESTURES_ENABLED="0", RUNTIME_RIGHT_HAND_GESTURES_ENABLED="0",
+                       RUNTIME_DERIVE_HAND_GESTURES="0", RUNTIME_DERIVE_EXTRA_GESTURE_BUTTONS="0",
+                       HAND_SKELETON26_INPUT="none", HAND_SKELETON26_DERIVE_GESTURES="0")
         if self.settings.get("XR_HMD_MAX_AGE_MS"):
             age_ms = integer_setting(self.settings, "XR_HMD_MAX_AGE_MS", maximum=5000)
             env["MAX_HMD_AGE_MS"] = str(age_ms)
@@ -685,18 +851,24 @@ class Runtime:
         os.chdir(package)
         log(f"Application TCP: {host}:{port}")
         log("Stop with Ctrl+C in this console. Startup gate and calibration stay enabled.")
+        check_runtime_guard(self.cfg)
         self.run_managed(args, env, handle=handle)
 
     def run_managed(self, args, env, *, handle=None, kind="runtime"):
         if handle is None:
             handle = self.acquire_lock()
-        session = dict(process_identity(os.getpid()), session_id=uuid.uuid4().hex, session_kind=kind)
+        session = dict(process_identity(os.getpid()), session_id=uuid.uuid4().hex, session_kind=kind,
+                       started_ns=time.time_ns(), launch_token=self.cfg.get("runtime_guard", {}).get("token", ""))
         session_path = self.base / "runtime-session.json"
         self.write(session_path, json.dumps(session) + "\n")
         try:
             code = supervise_runtime(args, env, session, graceful_seconds=30 if kind == "runtime" else 2)
             if code and (kind != "runtime" or code not in (-signal.SIGTERM, -signal.SIGINT, 130, 143)):
-                raise RuntimeError("xr_client exited with code " + str(code))
+                if kind == "runtime":
+                    self.failure_logs(session["started_ns"])
+                label = {"runtime": "xr_client", "bluetooth_scan": "Bluetooth scan",
+                         "bluetooth_pair": "Bluetooth pairing"}.get(kind, kind)
+                raise RuntimeError(label + " exited with code " + str(code))
             return code
         finally:
             # If cleanup failed, keep metadata so Stop can recover the exact
@@ -705,6 +877,33 @@ class Runtime:
                 session_path.unlink(missing_ok=True)
             handle.close()
 
+    def failure_logs(self, started_ns):
+        """Bounded current-run service errors also reach the hidden runtime log."""
+        try:
+            paths = sorted((self.base / "logs").glob("*.log"), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        except OSError:
+            return
+        emitted = 0
+        for path in paths:
+            try:
+                if path.stat().st_mtime_ns < started_ns:
+                    continue
+                with path.open("rb") as stream:
+                    stream.seek(max(0, path.stat().st_size - 32768))
+                    lines = stream.read(32768).decode("utf-8", errors="replace").splitlines()
+                errors = [line for line in lines if re.search(r"error|failed|denied|not found|timeout", line, re.I)]
+                selected = (errors or lines)[-8:]
+                if not selected:
+                    continue
+                log("Last service output: " + path.name)
+                for line in selected:
+                    print(line[:1500], flush=True)
+                emitted += 1
+                if emitted >= 4:
+                    break
+            except OSError:
+                continue
+
     def stop(self):
         self.user_required()
         session = self.base / "runtime-session.json"
@@ -712,6 +911,15 @@ class Runtime:
         if not status.get("busy", status["running"]):
             log("The managed XR Gate runtime is already stopped.")
             return
+        if not session.is_file():
+            # A newly acquired runtime lock can precede session metadata while
+            # the profile is being generated. Do not mistake it for an old build.
+            deadline = time.monotonic() + 5
+            while self._lock_held() and not session.is_file() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not self._lock_held() and not session.is_file():
+                log("Runtime startup was cancelled before services were launched.")
+                return
         if not session.is_file():
             raise RuntimeError("This runtime was started by an older launcher. Stop it with Ctrl+C in its console.")
         saved = json.loads(session.read_text())
@@ -777,9 +985,11 @@ class Runtime:
         if self.status().get("busy", False):
             raise RuntimeError("Stop tracking before selecting or pairing controllers.")
         package = self.current.resolve()
-        helper = package / "bin/scripts/override_controller/bluetooth_controllers.py"
-        if not helper.is_file():
-            helper = Path(__file__).with_name("bluetooth_controllers.py")
+        # Launcher updates also update these helpers. Prefer the complete
+        # bundled pair over a potentially older downloaded Linux release.
+        helper = Path(__file__).with_name("bluetooth_controllers.py")
+        if not (helper.is_file() and helper.with_name("select_bluetooth_adapter.py").is_file()):
+            helper = package / "bin/scripts/override_controller/bluetooth_controllers.py"
         if not helper.is_file():
             helper = Path(__file__).resolve().parents[2] / "override_controller/scripts/linux/bluetooth_controllers.py"
         if not helper.is_file():
@@ -841,9 +1051,14 @@ def main(argv):
         return runtime.install()
     elif action == "prepare":
         runtime.prepare()
+    elif action == "device_access":
+        print(json.dumps(runtime.device_access()))
     elif action == "firmware":
         runtime.root_required()
         runtime.firmware("prepare")
+    elif action == "firmware_cleanup":
+        runtime.root_required()
+        runtime.firmware("cleanup", timeout=65)
     elif action == "run":
         runtime.start()
     elif action == "stop":

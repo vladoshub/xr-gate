@@ -61,22 +61,25 @@ prefix=Path(os.environ['XR_BUILD_SESSION_DIR'])/'sdk'
 release=dict(line.rstrip().split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
 release={k:v.strip('"') for k,v in release.items()}
 token=os.environ['XR_BUILD_DEPENDENCY_TOKEN']
-expected=f"{token}|{release['ID']}:{release['VERSION_ID']}|71d3237a093b60a27601c20e9ee6c3e52154e8b1|x86-64-v3"
+cpu_tag=os.environ['XR_CPU_CACHE_TAG']
+expected=f"{token}|{release['ID']}:{release['VERSION_ID']}|71d3237a093b60a27601c20e9ee6c3e52154e8b1|{cpu_tag}"
 (prefix/'XR_BUILD_ID').write_text(expected+'\n')
 env=dict(os.environ,XR_OPENCV_PREFIX=str(prefix))
 script=os.environ['TEST_OPENCV_SCRIPT']
 for _ in range(2):
     r=subprocess.run(['bash',script],env=env,capture_output=True,text=True)
     assert r.returncode==0,r.stderr
-for replacement in ['ci:123:2',expected.replace('x86-64-v3','native'),expected.replace(release['VERSION_ID'],'0.0')]:
+for replacement in ['ci:123:2',expected.replace(cpu_tag,'another-cpu'),expected.replace(release['VERSION_ID'],'0.0')]:
     (prefix/'XR_BUILD_ID').write_text(replacement+'\n')
     r=subprocess.run(['bash',script],env=env,capture_output=True,text=True)
     assert r.returncode==2,r.stderr
 """
         env = dict(self.env, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
                    TEST_OPENCV_SCRIPT=str(BUILD / "build_opencv.sh"))
-        result = self.session(code, env)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for profile in ("avx2", "generic"):
+            with self.subTest(profile=profile):
+                result = self.session(code, dict(env, XR_BUILD_CPU=profile))
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_runtime_preparation_is_idempotent_and_keeps_core(self):
         spec = importlib.util.spec_from_file_location("prepare_runtime_build",
@@ -115,7 +118,8 @@ from pathlib import Path
 names=['XR_BUILD_CPU','XR_CPU_TARGET','XR_CPU_TUNE','XR_OPENCV_CPU_BASELINE','VCPKG_TRIPLET','CFLAGS','CXXFLAGS','XR_CPU_CACHE_TAG']
 print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(Path(os.environ['XR_CPU_PROFILE_FILE']).read_text())}))
 """
-        for mode, march, tune, opencv in [("AVX2", "x86-64-v3", "generic", "AVX2"),
+        for mode, march, tune, opencv in [("GeNeRiC", "x86-64", "generic", "SSE2"),
+                                         ("AVX2", "x86-64-v3", "generic", "AVX2"),
                                          ("avx512", "x86-64-v4", "generic", "AVX512_SKX"),
                                          ("native", "native", "native", "NATIVE")]:
             with self.subTest(profile=mode):
@@ -134,6 +138,29 @@ print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(P
                 triplet = ROOT / "backends/basalt_vio/cmake/triplets" / (env["VCPKG_TRIPLET"] + ".cmake")
                 self.assertIn(f"-march={march} -mtune={tune}", triplet.read_text())
 
+    @unittest.skipUnless(shutil.which("gcc"), "GCC needed")
+    def test_generic_compiler_uses_sse2_without_avx_or_newer_sse(self):
+        code = r'''
+import os, shlex, subprocess
+from pathlib import Path
+source = """
+#if !defined(__x86_64__) || !defined(__SSE2__)
+#error x86-64 and SSE2 are required
+#endif
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__FMA__) || defined(__SSE3__) || defined(__SSSE3__) || defined(__SSE4_1__) || defined(__SSE4_2__)
+#error generic must not require instructions above the x86-64 baseline
+#endif
+int main(void) { return 0; }
+"""
+binary = Path(os.environ['XR_BUILD_SESSION_DIR']) / 'generic-smoke'
+subprocess.run(['gcc', *shlex.split(os.environ['CFLAGS']), '-x', 'c', '-', '-o', str(binary)],
+               input=source, text=True, check=True)
+subprocess.run([str(binary)], check=True)
+'''
+        # A host-native architecture flag must be overridden by the profile.
+        result = self.session(code, dict(self.env, XR_BUILD_CPU="generic", CFLAGS="-march=native"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_invalid_profile_stops_before_build_command(self):
         result = self.session("raise AssertionError('build must not start')", dict(self.env, XR_BUILD_CPU="invalid"))
         self.assertEqual(result.returncode, 2)
@@ -141,7 +168,8 @@ print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(P
         self.assertEqual(list((self.root / "build/.sessions").iterdir()), [])
 
     def test_local_output_directories_are_separate(self):
-        for profile, suffix in [("avx2", "out/xr-gate"), ("AvX512", "out/avx512/xr-gate"),
+        for profile, suffix in [("GeNeRiC", "out/generic/xr-gate"),
+                                ("avx2", "out/xr-gate"), ("AvX512", "out/avx512/xr-gate"),
                                 ("native", "out/native/xr-gate")]:
             env = dict(self.env, XR_ROOT_PROJECT=str(self.root), XR_OUT_PACKAGE_NAME="xr-gate", XR_BUILD_CPU=profile)
             for variable in ("XR_OUT_ROOT", "XR_OUT_BIN_ROOT"):
@@ -163,6 +191,34 @@ print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(P
         fresh.write_text(json.dumps(module.describe("avx512")))
         with self.assertRaisesRegex(ValueError, "another CPU profile"):
             module.check_output(self.root, fresh)
+        fresh.write_text(json.dumps(module.describe("generic")))
+        with self.assertRaisesRegex(ValueError, "another CPU profile"):
+            module.check_output(self.root, fresh)
+        (self.root / "BUILD_CPU_TARGET").write_text("x86-64\n")
+        (self.root / "BUILD_CPU_PROFILE.json").write_text(json.dumps(module.describe("generic")))
+        module.check_output(self.root, fresh)
+        fresh.write_text(json.dumps(module.describe("avx2")))
+        with self.assertRaisesRegex(ValueError, "another CPU profile"):
+            module.check_output(self.root, fresh)
+
+    def test_generic_runtime_accepts_baseline_cpu_and_rejects_missing_sse2(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        info = lambda flags: "flags : " + " ".join(sorted(flags)) + "\n"
+        generic = module.describe("generic", info(module.V1_FLAGS))
+        self.assertEqual(set(generic["required_features"]), module.V1_FLAGS)
+        self.assertFalse({"avx", "avx2", "fma", "sse3", "ssse3", "sse4_1", "sse4_2"}
+                         & set(generic["required_features"]))
+        marker = self.root / "BUILD_CPU_TARGET"
+        marker.write_text("x86-64\n")
+        module.check_package(self.root, info(module.V1_FLAGS))
+        module.check_package(self.root, info(module.V4_FLAGS))
+        with self.assertRaisesRegex(ValueError, "sse2"):
+            module.check_package(self.root, info(module.V1_FLAGS - {"sse2"}))
+        marker.write_text("x86-64-v3\n")
+        with self.assertRaisesRegex(ValueError, "missing CPU features"):
+            module.check_package(self.root, info(module.V1_FLAGS))
 
     def test_runtime_rejects_unsupported_avx512_and_native_cpu(self):
         spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")

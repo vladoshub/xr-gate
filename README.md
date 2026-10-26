@@ -1,4 +1,4 @@
-# XR Gate
+![XR Gate](docs/media/xr-gate.png)
 
 Experimental open-source XR runtime stack, built to run real VR/XR games and applications with spatial tracking and controller input, while also serving as a low-level AR/XR research platform.
 
@@ -13,9 +13,12 @@ Supported:
 
 [Quick Start Linux](#quick-start-linux)
 
-[Quick Start Windows](win/README.md)
+[Quick Start Windows](#quick-start-windows)
 
-For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones. See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
+[About custom display frequency and video adapters](#about-custom-display-frequency-and-video-adapters)
+
+[About input and controllers](#about-input-and-controllers)
+
 
 ## Supported devices
 
@@ -121,8 +124,55 @@ Do not use this project in unsafe environments. Make sure you have enough free s
 
 XR Gate is not affiliated with, endorsed by, or sponsored by XREAL, Valve, SteamVR, Monado, or any other vendor unless explicitly stated.
 
+# About custom display frequency and video adapters
+
+**Be careful when setting a custom frequency, as this is not a standard mode and correct operation is not guaranteed.**
+
+The screen refresh rate isn't limited to 60Hz. On Windows, you can configure it through the driver - for example, for NVIDIA, you can do this in the Control Panel.
+Also, consider the limitations of video adapters - my USB-C to HDMI adapter allowed me to overclock the refresh rate about 75Hz in SBS.
+Aslo example, for Xreal Ultra, you can set the refresh rate to 90Hz (it works in Linux), but for me, this only worked directly via USB-C without adapters. 
+So, if you want to connect your device directly to HDMI/DispayPort, you'll need an adapter, or if you don't have a port with USB-C Alt Mode.
+
+
+# About input and controllers
+You can use gestures and controllers.
+
+## Gestures
+Gestures try to emulate the controller as much as possible - dpad, trigger, grip, thumbstick, A, B and Menu buttons.
+
+See [GESTURES](runtime_adapters/xr_runtime_adapter/configs/GESTURES.md)
+
+## Bluetooth controlles
+Currently, two types of Bluetooth controllers are supported: those with and without an IMU.
+The difference is that controllers with an IMU allow you to track hand orientation from the IMU, which greatly improves sensitivity and accuracy. 
+Prediction when hands leave the camera's field of view is also partially supported (but requires calibration each time you launch).
+For Bluetooth, I strongly recommend using a separate adapter to reduce latency—for example, the ASUS USB-BT500.
+
+For Windows/WSL2 Bluetooth, the tested adapter is **ASUS USB-BT500** (`0b05:190e`). Use a dedicated USB Bluetooth adapter for XR Gate so Windows can keep using the system adapter for its keyboard, mouse and headphones.
+See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), including the MediaTek limitation in the tested WSL kernel.
+
+
+
+The controllers emulate the buttons of real VR controllers - at the moment, the Samsung Gear VR covers most of the main buttons and has a touch panel, and also has an IMU
+
+# Quick start Windows
+**If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
+
+Requires Windows 11. Default packages require AVX2; for the Linux/WSL runtime
+on CPUs without AVX2, build with the [`generic` CPU profile](docs/ubuntu-builds.md).
+
+Install SteamVR, open it once and close it. Download from [latest release](https://github.com/vladoshub/xr-gate/releases/latest) the last xr-gate-windows-wsl2-usbip.zip, connect device to PC and enable SBS mode
+if it is supported. Then Open XR-Gate.exe
+
+WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
+
 
 # Quick start Linux
+**If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
+
+Default packages require AVX2. CPUs without AVX2 can use the
+[`generic` CPU profile](docs/ubuntu-builds.md).
+
 Tested on Ubuntu 24.04 and Ubuntu 26.04
 
 ## 1. Unpack binary (once)
@@ -130,7 +180,7 @@ Tested on Ubuntu 24.04 and Ubuntu 26.04
 
 Download these artifacts:
 
-https://github.com/vladoshub/xr-gate/releases/latest
+[latest release](https://github.com/vladoshub/xr-gate/releases/latest)
 
 1. xr-gate-linux-x64.tar.gz
 
@@ -176,7 +226,10 @@ reboot
 ```
 
 
-## 2. Setting up controllerst (once | optional)
+## 2. Setting up INPUT | ONCE
+<details>
+  <summary>READ THIS STEP IF YOU HAVE CONTROLLERS (VR-PARK, SAMSUNG GEAR VR) OR WANT TO START WITH CONTROLLER EMULTATION</summary>
+
 
 
 **1. Without this, input will be limited to gestures (pinch, grab).**
@@ -219,7 +272,7 @@ The selected adapter is powered on and verified **before** the other adapters ar
 
 
 
-## Choose supported Bluetooth controllers (recomended)
+### Choose supported Bluetooth controllers (recomended)
 
 **If you are using controllers with IMU, before launching xr_client, place the controllers on a flat surface for initial calibration and leave them motionless until launch.**
 
@@ -291,7 +344,7 @@ sed -i \
 ```
 
 
-## Train new devices (Optional)
+### Train new devices (Optional)
 Train your devices.
 **Choose this option if you don't have any controllers from the list above or you want to use your own layout (for example, use the keyboard for control)**
 
@@ -308,271 +361,61 @@ If you use an external controller, you can continue to use controller input when
 
 When using external input, hands position and rotation from cameras, input from Wireless controllers and keyboard for rarely buttons
 
-
+</details>
 
 ## 3. Run xr_client
 
-**You must launch the client every time before launching SteamVR.**
+**At startup for device with support display manager, you need to select display frequency. For XREAL Ultra - 60Hz or 90Hz mode. 90HZ works only with USB-C directly on Xreal Ultra**
 
 
-At startup, you need to select 60Hz or 90Hz mode.
-If you have integrated graphics, a USB-C video output, and don't have a separate graphics card, you can try 90Hz mode. Otherwise, I recommend 60Hz.
-
-If 90HZ mode doesn't work for you, go back to 60HZ (you need to re-register the driver from section 3)
-
-It is also recommended to not cover the cameras and have sufficient lighting for tracking to work.
-
-**XREAL ULTRA (recomended, VIO)**
+**XREAL ULTRA | Recomended**
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-**XREAL ULTRA (no IMU mode, VO)**
-```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config xreal_ultra --no-imu
-```
+**Alternative**
 
-**UltraLeapUVC + nRF54L15 (experimental, VIO)**
 ```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config leap_motion_uvc_nrf54l15
-```
-
-**UltraLeapUVC (experimental, no IMU mod, VO)**
-```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config leap_motion_uvc
+./run_xr_client.sh --config xreal_ultra --no-imu #no IMU mode, VO | XREAL Ultra NO IMU
+./run_xr_client.sh --config leap_motion_uvc_nrf54l15 #experimental, VIO | LeapMotionUVC + nrf54l15 IMU
+./run_xr_client.sh --config leap_motion_uvc #experimental, no IMU mod, VO | LeapMotionUVC
 ```
 
 You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
-
 CTRL + C - exit from xr_client
 
 
-If you have completed the train override controller from the previous point, you can use the non-gesture input override. To do this, press 5 after launching.
+## 4. Monado | SteamVR
 
-**Tracking recommendations:**
+### SteamVR on Linux Fallback windowed mode (XREAL Ultra example)
 
-1. It is recommended not to cover the glasses' cameras. It is also recommended to use the glasses in a bright place.
+**Steam and SteamVR must be installed from the Steam website, not from Snap**
 
-2. To ensure successful positioning, it is recommended to make small head movements for a few seconds after the initial frame check when starting xr_client.
-
-3. The current hand tracking system isn't perfect, and it's generally recommended to use joysticks instead of gestures (enabling override_controller automatically disables gestures, and vice versa). It is not recommended to wave your arms quickly or block the view of your hands in front of the front camera.
-
----
-
-## Possible problems
-1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
-
-2. Hand or head tracking isn't working, or my pose is off somewhere - most likely, tracking received bad frames (not enough light) and can't calculate the pose correctly. 6DoF is  sensitive to video quality, especially during initialization when the backend starts, and can begin to exhibit cumulative errors (unlike hand tracking). It's recommended to restart the backend and slowly rotate your head for a couple of seconds when starting the backend to ensure proper initialization. Press "1" in xr_client to restart backends
-
-3. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep on XREAL Ultra). In the xr_client skip SBS mode selection. It was also noted that if the main display is connected via Type-C, the glasses may not work correctly in SBS.
-
-4. The glasses don't work in any mode - there may be a conflict with the main monitor - try reconnecting the main monitor or changing the frequency on the glasses in the display settings
-
-5. I had problems using Bluetooth controllers. Try re-enabling the controllers themselves.
-
----
-
-
-# SteamVR with XREAL Ultra
-
-Steam and SteamVR must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
-
-
-## Workaround for systems without built-in x11 (Ubuntu 26.04)
-
-### 1. Install LightDM + Xfce
-
-
-```bash
-sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository -y universe
-sudo apt update
-
-sudo apt install -y \
-  lightdm lightdm-gtk-greeter \
-  xfce4 xfce4-terminal dbus-x11 \
-  xserver-xorg xserver-xorg-input-libinput \
-  xserver-xorg-video-amdgpu
-```
-
-### 1a. Additional for NVIDIA GPU
-```bash
-bash <<'BASH'
-set -e
-
-LIGHTDM_NATIVE_ARCH="$(dpkg --print-architecture)"
-
-read -r LIGHTDM_NV_GL LIGHTDM_NV_VERSION < <(
-  dpkg-query -W \
-    -f='${Package} ${Architecture} ${Version} ${db:Status-Status}\n' \
-    'libnvidia-gl*' 2>/dev/null |
-  awk -v arch="$LIGHTDM_NATIVE_ARCH" \
-    '$2 == arch && $4 == "installed" {print $1, $3; exit}'
-)
-
-LIGHTDM_NV_XORG="xserver-xorg-video-nvidia${LIGHTDM_NV_GL#libnvidia-gl}"
-
-sudo apt install -y "${LIGHTDM_NV_XORG}=${LIGHTDM_NV_VERSION}"
-
-test -f /usr/lib/xorg/modules/drivers/nvidia_drv.so
-BASH
-```
-
-### 2. Enable lightdm
-
-```bash
-sudo mkdir -p /etc/lightdm/lightdm.conf.d
-
-sudo tee /etc/lightdm/lightdm.conf.d/90-xfce.conf >/dev/null <<'EOF'
-[Seat:*]
-greeter-session=lightdm-gtk-greeter
-user-session=xfce
-EOF
-
-sudo dpkg-reconfigure lightdm
-```
-
-Choose lightdm and:
-
-
-```bash
-sudo systemctl enable lightdm.service --force
-sudo systemctl set-default graphical.target
-sudo reboot
-```
-
-
-### 2a. Additional install blueman for convenience and Bluetooth control
-
-
-```bash
-sudo apt update
-sudo apt install -y bluez blueman rfkill
-
-sudo systemctl enable --now bluetooth.service
-sudo rfkill unblock bluetooth
-bluetoothctl power on
-```
-
-
-
-
-### Run xr_client
+**Before every start SteamVR you should run XR Gate**
 
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-## Use SteamVR
+Register SteamVR driver in extended mode (once)
 
-###  Register OpenVR driver (once)
-
-For direct USB4/iGPU path, tested with HX370 iGPU:
-
-90HZ
-```bash
 cd ~/xr-gate-release/xr-gate
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=90 \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
-
-60HZ
 ```bash
-cd ~/xr-gate-release/xr-gate
-XR_TARGET_DEVICE=xreal_ultra \
+XR_OPENVR_DISPLAY_MODE=extended_sbs \
+XR_OPENVR_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
+XR_OPENVR_LAUNCH_MODE=none \
+./run_openvr.sh
 ```
 
-For NVIDIA dGPU with HDMI/DisplayPort -> Type-C DP adapter, 60 Hz is the safer default:
+Then run Steam VR
 
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_OPENVR_REGISTER_METHOD=manual \
-XR_OPENVR_RUNTIME_MODE=steamvr \
-XR_TARGET_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_DISPLAY_MODE=direct \
-./devices/common/linux/scripts/openvr_driver/register_driver.sh
-```
+[SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
 
-**Start xr_client before run SteamVR**
-
-### Start on Integrated GPU with USB-C video output without discrete GPU in system
-
-Tested on HX370
-
-
-Just start Steam and start SteamVR. After you can start SteamVR apps/games.
-
-
-### Start on Discrete GPU
-
-Tested on RTX6000 Pro Blackwell
-
-
-In most cases, you will need an adapter to run the glasses with a dGPU.
-
-Check displays:
-
-```bash
-xrandr --query | grep " connected"
-```
-
-Example output:
-
-```text
-DP-6 connected primary 7680x2160+0+1080
-DP-4 connected 3840x1080+1920+0
-```
-
-Here:
-
-```text
-DP-4 = glasses (3840x1080)
-DP-6 = main monitor
-```
-
-Run direct mode (tested on Nvidia):
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_OPENVR_DGPU_GPU_VENDOR=nvidia \
-XR_OPENVR_DGPU_OUTPUT=DP-4 \
-XR_OPENVR_LAUNCH_MODE=steam \
-XR_OPENVR_CLEAR_LOGS=1 \
-XR_DISPLAY_FREQUENCY_HZ=60 \
-./run_openvr_dgpu_direct.sh 60
-```
-
-
-Start SteamVR. After you can start SteamVR apps/games.
-
-
-After finishing the work, I recommend restoring the glasses to their normal state to avoid problems during future launches or if you have an issue with xr_client or the SteamVR driver:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_STEAMVR_RESTORE_OUTPUT=DP-4 \
-XR_STEAMVR_RESTORE_MAIN_OUTPUT=DP-6 \
-XR_STEAMVR_RESTORE_LAYOUT=right-of \
-./run_openvr_restore_desktop.sh
-```
-
-### Some demo
+### Some demo OpenVR
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -589,10 +432,9 @@ Stereo overlay (need running xr_video backend)
 ./run_steamvr_video_overlay.sh
 ```
 
----
 
 
-# Monado/OpenXR with XREAL Ultra
+### Monado/OpenXR on Linux windowed mode (XREAL Ultra example)
 
 
 Run xr_client
@@ -601,106 +443,14 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-## Choose monitor mode
-
-### A. Monado with main monitor — Auto disable main monitor
-
-Example for 90 Hz XREAL Ultra:
-
 ```bash
 cd ~/xr-gate-release/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-XR_TRACKING_MONADO_XCB_RATE_HZ=90 \
-./devices/xreal_ultra/linux/scripts/monado_driver/double_display_fix.sh
-```
-
-After stopping Monado driver with `Ctrl+C`, the main display should be restored.
-
-### B. Monado with main monitor — Manually disable main monitor
-
-Check displays:
-
-```bash
-xrandr --query | grep " connected"
-```
-
-Example output:
-
-```text
-DP-6 connected primary 7680x2160+0+1080
-DisplayPort-1 connected 3840x1080+1920+0
-```
-
-Here:
-
-```text
-DisplayPort-1 = glasses
-DP-6 = main display
-```
-
-Disable main display:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-XR_TRACKING_MAIN_OUTPUT=DP-6 \
-devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh off-main
-```
-
-Run Monado driver:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-devices/common/linux/scripts/monado_driver/start_monado_driver.sh
-```
-
-
-Enable main display again:
-
-```bash
-cd ~/xr-gate-release/xr-gate
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-XR_TRACKING_MAIN_OUTPUT=DP-6 \
-devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
-```
-
-
-### C. Monado with main monitor in system — XCB windowed mode (work with main monitor)
-
-```bash
-sudo apt install xdotool wmctrl
-
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
+XR_DISPLAY_FREQUENCY_HZ=60 \
 XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
 ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
-```
-
-### D. Monado without main monitor in system
-
-```bash
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen \
-devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
 ### Start OpenXR demo
@@ -708,7 +458,7 @@ devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```bash
 cd ~/xr-gate-release/xr-gate
 sudo apt install libopenxr-utils
-XR_RUNTIME_JSON=~/xr-gate-release/xr-gate/bin/drivers/monado_driver/openxr_monado_xrgate.json \
+XR_RUNTIME_JSON=~/xr-gate-release/xr-gate/bin/drivers/xreal_ultra/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
 
@@ -718,6 +468,29 @@ Check /readme/xrizer.md
 
 ---
 
+
+**Tracking recommendations:**
+
+1. It is recommended not to cover the glasses' cameras. It is also recommended to use the glasses in a bright place.
+
+2. To ensure successful positioning, it is recommended to make small head movements for a few seconds after the initial frame check when starting xr_client.
+
+3. The current hand tracking system isn't perfect, and it's generally recommended to use joysticks instead of gestures (enabling override_controller automatically disables gestures, and vice versa). It is not recommended to wave your arms quickly or block the view of your hands in front of the front camera.
+
+---
+
+# Possible problems
+1. xr_client fails frame check on startup. Solution: restart xr_client, re-insert glasses, or restart
+
+2. Hand or head tracking isn't working, or my pose is off somewhere - most likely, tracking received bad frames (not enough light) and can't calculate the pose correctly. 6DoF is  sensitive to video quality, especially during initialization when the backend starts, and can begin to exhibit cumulative errors (unlike hand tracking). It's recommended to restart the backend and slowly rotate your head for a couple of seconds when starting the backend to ensure proper initialization. Press "1" in xr_client to restart backends
+
+3. The glasses don't work in any SBS mode - it could be anything. Try reconnecting the glasses and manually enabling SBS (hold the Brightness Up (+) button on the right temple for 3 seconds until you hear a beep on XREAL Ultra). In the xr_client skip SBS mode selection. It was also noted that if the main display is connected via Type-C, the glasses may not work correctly in SBS.
+
+4. The glasses don't work in any mode - there may be a conflict with the main monitor - try reconnecting the main monitor or changing the frequency on the glasses in the display settings
+
+5. I had problems using Bluetooth controllers. Try re-enabling the controllers themselves.
+
+---
 
 # Linux build:
 
@@ -734,6 +507,18 @@ Build the complete multi-profile package (vendor components included by default)
 ```bash
 XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
+
+For x86-64 CPUs without AVX2, build a portable SSE2-baseline package (also works
+when building on a newer CPU):
+
+```bash
+XR_BUILD_CPU=generic XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+The result is in `out/generic/xr-gate/`. In GitHub Actions choose
+`cpu_profile=generic`; with ACT replace `--input cpu_profile=avx2` below with
+`--input cpu_profile=generic`. AVX2 remains the default. See
+[CPU profiles and runtime compatibility](docs/ubuntu-builds.md).
 
 Build the complete multi-profile package (vendor components included by default):
 ```bash
@@ -793,7 +578,7 @@ cd out/xr-gate
 `run_xr_client.sh` intentionally has no implicit hardware profile. Calling it
 without `--config` prints the packaged profile list and exits.
 
-## Runtime package
+# Runtime package
 
 The portable runtime package is built under:
 
@@ -810,21 +595,21 @@ The default profile set is controlled by `XR_PACKAGE_PROFILES`. For advanced
 packaging, `XR_PACKAGE_DEVICE_TARGETS` and `XR_PACKAGE_CONFIG_PROFILES` can be
 overridden independently.
 
-## Main components
+# Main components
 
-### `capture_service_cpp`
+## `capture_service_cpp`
 
 C++ camera/IMU capture backend. The active camera, layout, IMU, and transport settings come from the selected runtime profile.
 
-### `capture_client`
+## `capture_client`
 
 Standalone Python reader SDK for runtime streams. It is used by recorders, calibration tools, debug viewers, and Python-side experiments.
 
-### `backends/`
+## `backends/`
 
 Tracking and perception backends, including hand tracking, video, spatial mapping/scanning, 3DoF, and 6DoF integration paths.
 
-### `xr_runtime_adapter`
+## `xr_runtime_adapter`
 
 Runtime normalization layer. It consumes backend streams, applies transforms/prediction/stale checks, and republishes runtime-ready HMD, controller, hand, video, and spatial data.
 
@@ -832,15 +617,15 @@ Applications can opt into a read-only TCP JSON stream for HMD/hand/controller
 state with `RUNTIME_APP_TCP=1` (off by default). See
 [Application TCP/UDP and video access](runtime_adapters/xr_runtime_adapter/docs/application_network_api.md).
 
-### `xr_client`
+## `xr_client`
 
 Process orchestrator for starting, stopping, and supervising the runtime stack.
 
-### `drivers/` and `apps/`
+## `drivers/` and `apps/`
 
 SteamVR/OpenVR, Monado/OpenXR, optional xrizer integration, and experimental SteamVR applications/overlays.
 
-## Source layout
+# Source layout
 
 ```text
 shared/include/                 shared ABI/contracts
@@ -863,7 +648,7 @@ Upstream code belongs under `third_party/`. Project-owned code is stored normall
 
 More documentation is in the `readme/` folder.
 
-## Optional GPL tools
+# Optional GPL tools
 
 `xrizer` is an optional third-party GPL-3.0-or-later tool. It is not built by default and is not part of the core binary release.
 
@@ -876,7 +661,7 @@ XR_BUILD_ONLY=xrizer ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 
 See `readme/xrizer.md`.
 
-## License
+# License
 
 Project-owned source code is licensed under the MIT License. See `LICENSE`.
 
@@ -884,7 +669,7 @@ Third-party files, adapted code, SDKs, binaries, configuration templates, models
 
 See `THIRD_PARTY_NOTICES.md` for the component inventory and packaging rules.
 
-## Third-party code and references
+# Third-party code and references
 
 The project uses or can build against these third-party components:
 
@@ -897,3 +682,5 @@ The project uses or can build against these third-party components:
 - gearVRC — reference for GearVR provider behavior and configuration ideas in override_controller.
 - mercury_steamvr_driver — optional source for Mercury hand-tracking ONNX models; not included in the core repository/release.
 - xrizer — optional GPL-3.0-or-later OpenVR-to-OpenXR compatibility tool; not built by default.
+
+Driver builds and device-specific paths: [DEVICE_PACKAGES.md](drivers/DEVICE_PACKAGES.md).

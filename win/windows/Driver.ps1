@@ -1,5 +1,13 @@
 # Driver selection shared by the GUI and command-line installer.
 $script:ResolvedDriverRoot = ''
+$script:WindowsBundleNames = @('xr-gate-windows-wsl2-usbip.zip', 'xr-gate-windows-wsl-usbip.zip', 'xr-gate-windows.zip')
+. (Join-Path $PSScriptRoot 'DriverDevices.ps1')
+function Get-XrWindowsBundleName($Release) {
+    foreach ($name in $script:WindowsBundleNames) {
+        if (@($Release.assets | Where-Object { $_.name -ceq $name }).Count) { return $name }
+    }
+    return $null
+}
 function Get-XrDriverConfiguration([string]$Path) {
     # Driver JSON deliberately contains debugMode and DebugMode. PS 5.1's
     # PSCustomObject conversion cannot represent both names; use a dictionary.
@@ -12,14 +20,15 @@ function Get-XrDriverConfiguration([string]$Path) {
         $data = $parser.DeserializeObject($text)
     }
     if ($data -isnot [Collections.IDictionary] -or !$data.ContainsKey('xr_tracking')) {
-        throw 'The installed driver settings have no xr_tracking section. Run Install / continue.'
+        throw 'The installed driver settings have no xr_tracking section. Run Install.'
     }
     $current = $data['xr_tracking']
     if ($current -isnot [Collections.IDictionary] -or !$current.ContainsKey('displayFrequency') -or
         !$current.ContainsKey('isDisplayOnDesktop') -or $current['isDisplayOnDesktop'] -isnot [bool]) {
-        throw 'The installed driver frequency/display settings are invalid. Run Install / continue.'
+        throw 'The installed driver frequency/display settings are invalid. Run Install.'
     }
-    return @{FrequencyHz=[int]$current['displayFrequency']; OnDesktop=[bool]$current['isDisplayOnDesktop']}
+    $device = if ($current.ContainsKey('deviceProfile')) { [string]$current['deviceProfile'] } else { '' }
+    return @{FrequencyHz=[int]$current['displayFrequency']; OnDesktop=[bool]$current['isDisplayOnDesktop']; Device=$device}
 }
 function Test-XrDriverRegistration([string]$DriverPath) {
     if (!$DriverPath) { return $false }
@@ -88,39 +97,43 @@ function Resolve-DriverFrequency([int[]]$Available, [int]$Detected = 0) {
 }
 function Get-AutomaticDriverBundle($Release, [string]$Cache) {
     $roots = @($PSScriptRoot | Split-Path -Parent)
+    if (Test-XrCustomRuntimeSource $Release) { return Get-XrCustomSourceDriverRoot $roots[0] }
     # A complete local Windows package is authoritative even when its pinned
     # Ubuntu runtime tag has no Windows archive (or still uses the old name).
     $localManifest = Join-Path $roots[0] 'bundle.json'
     if (Test-Path -LiteralPath $localManifest -PathType Leaf) {
         $localBundle = Get-Content -Encoding UTF8 -Raw -LiteralPath $localManifest | ConvertFrom-Json
-        if ($localBundle.schema -eq 1 -and ($localBundle.release_tag -eq 'latest' -or $localBundle.release_tag -eq $Release.tag_name)) { return $roots[0] }
+        if ($localBundle.schema -in @(1, 2) -and ($localBundle.release_tag -eq 'latest' -or $localBundle.release_tag -eq $Release.tag_name)) { return $roots[0] }
     }
     if (Test-Path -LiteralPath $Cache) {
         if ($Release.assets.Count) {
             # A reinstall must honor the current asset digest even when an asset
             # was replaced under the same release tag.
-            $bundleName = if (@($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows-wsl-usbip.zip' }).Count) { 'xr-gate-windows-wsl-usbip.zip' } else { 'xr-gate-windows.zip' }
+            $bundleName = Get-XrWindowsBundleName $Release
+            if (!$bundleName) { throw ('Release ' + $Release.tag_name + ' contains no Windows driver bundle. Download the complete Windows package.') }
             $currentAsset = Select-ReleaseAsset $Release $bundleName
             $directoryName = [IO.Path]::GetFileNameWithoutExtension($bundleName)
             $roots += Join-Path $Cache ('windows-' + ([string]$currentAsset.digest).Substring(7,12) + '/' + $directoryName)
         } else {
             # Start VR can use the last installed bundle without a network call.
-            $roots += @(Get-ChildItem -LiteralPath $Cache -Directory -Filter 'windows-*' |
-                Sort-Object LastWriteTime -Descending | ForEach-Object { Join-Path $_.FullName 'xr-gate-windows-wsl-usbip' })
-            $roots += @(Get-ChildItem -LiteralPath $Cache -Directory -Filter 'windows-*' |
-                Sort-Object LastWriteTime -Descending | ForEach-Object { Join-Path $_.FullName 'xr-gate-windows' })
+            $cached = @(Get-ChildItem -LiteralPath $Cache -Directory -Filter 'windows-*' | Sort-Object LastWriteTime -Descending)
+            foreach ($bundleName in $script:WindowsBundleNames) {
+                $directoryName = [IO.Path]::GetFileNameWithoutExtension($bundleName)
+                $roots += @($cached | ForEach-Object { Join-Path $_.FullName $directoryName })
+            }
         }
     }
     foreach ($root in $roots) {
         $manifest = Join-Path $root 'bundle.json'
         if (!(Test-Path -LiteralPath $manifest)) { continue }
         $bundle = Get-Content -Encoding UTF8 -Raw -LiteralPath $manifest | ConvertFrom-Json
-        if ($bundle.schema -eq 1 -and ($bundle.release_tag -eq 'latest' -or $bundle.release_tag -eq $Release.tag_name)) {
+        if ($bundle.schema -in @(1, 2) -and ($bundle.release_tag -eq 'latest' -or $bundle.release_tag -eq $Release.tag_name)) {
             return $root
         }
     }
     if (!$Release.assets.Count) { $Release = Get-ReleaseInfo ([string]$Release.tag_name) }
-    $bundleName = if (@($Release.assets | Where-Object { $_.name -ceq 'xr-gate-windows-wsl-usbip.zip' }).Count) { 'xr-gate-windows-wsl-usbip.zip' } else { 'xr-gate-windows.zip' }
+    $bundleName = Get-XrWindowsBundleName $Release
+    if (!$bundleName) { throw ('Release ' + $Release.tag_name + ' contains no Windows driver bundle. Download the complete Windows package.') }
     $asset = Select-ReleaseAsset $Release $bundleName
     $archive = Save-ReleaseAsset $asset $Cache
     $directory = Join-Path $Cache ('windows-' + ([string]$asset.digest).Substring(7,12))
@@ -132,8 +145,8 @@ function Get-AutomaticDriverBundle($Release, [string]$Cache) {
 }
 function Select-AutomaticDriverFrequency($Release, [string]$Cache) {
     $script:ResolvedDriverRoot = Get-AutomaticDriverBundle $Release $Cache
-    $bundle = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $script:ResolvedDriverRoot 'bundle.json') | ConvertFrom-Json
-    $available = @($bundle.variants | Where-Object { $_.display_mode -eq $script:State.DisplayMode } |
+    $variants = @(Get-XrDeviceDriverVariants $script:ResolvedDriverRoot)
+    $available = @($variants | Where-Object { $_.display_mode -eq $script:State.DisplayMode } |
         ForEach-Object { [int]$_.frequency_hz })
     $display = Find-AutomaticXrDisplay @(Get-DesktopDisplays)
     $detected = if ($display) { [int]$display.Frequency } else { 0 }
@@ -154,12 +167,14 @@ function Select-AutomaticDriverFrequency($Release, [string]$Cache) {
         $script:State.DisplayDeviceId = [string]$display.DeviceId
         $script:State.DisplayDeviceName = [string]$display.DeviceName
     }
-    Write-Step ('Automatic Windows driver: ' + $script:State.FrequencyHz + ' Hz / ' + $script:State.DisplayMode)
+    Write-Step ('Automatic Windows driver: ' + (Get-XrDriverDeviceId) + ' / ' + $script:State.FrequencyHz + ' Hz / ' + $script:State.DisplayMode)
 }
 function Install-SelectedWindowsDriver([string]$Package, [string]$Tag) {
+    $device = Get-XrDriverDeviceId
+    if (!(Test-XrDriverForSelectedDevice $Package)) { throw "The Windows driver does not match selected device '$device'." }
     $dllHash = (Get-FileHash -LiteralPath (Join-Path $Package 'bin/win64/driver_xr_tracking.dll') -Algorithm SHA256).Hash.Substring(0,12)
     $settingsHash = (Get-FileHash -LiteralPath (Join-Path $Package 'resources/settings/default.vrsettings') -Algorithm SHA256).Hash.Substring(0,12)
-    $directory = Join-Path $script:StateDir ('drivers\' + $Tag + '-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '-' + $dllHash + $settingsHash)
+    $directory = Join-Path $script:StateDir ('drivers\' + $device + '\' + $Tag + '-' + $script:State.FrequencyHz + 'Hz-' + $script:State.DisplayMode + '-' + $dllHash + $settingsHash)
     $target = Join-Path $directory 'xr_tracking'
     if (!(Test-Path -LiteralPath (Join-Path $target 'driver.vrdrivermanifest'))) {
         New-Item -ItemType Directory -Force $directory | Out-Null
@@ -172,13 +187,14 @@ function Install-SelectedWindowsDriver([string]$Package, [string]$Tag) {
         }
     }
     $script:State.DriverPath = $target
+    $script:State.DriverDevice = $device
     $script:State.ReleaseTag = $Tag
     Save-State
 }
 function Update-AutomaticWindowsDriver {
     if (!$script:State.ReleaseTag) { throw 'Run Install before starting VR.' }
     $tag = [string]$script:State.ReleaseTag
-    $release = [pscustomobject]@{tag_name=$tag; assets=@()}
+    $release = [pscustomobject]@{tag_name=$tag; assets=@(); xr_runtime_source=[string]($script:State['RuntimeSourceKind'])}
     $cache = Join-Path $script:StateDir ('cache\' + $tag)
     Select-AutomaticDriverFrequency $release $cache
     $settings = Join-Path $script:State.DriverPath 'resources/settings/default.vrsettings'
@@ -186,7 +202,8 @@ function Update-AutomaticWindowsDriver {
     if (Test-Path -LiteralPath $settings) {
         $current = Get-XrDriverConfiguration $settings
         $matches = ($current.FrequencyHz -eq [int]$script:State.FrequencyHz -and
-                    $current.OnDesktop -eq ($script:State.DisplayMode -eq 'extended_sbs'))
+                    $current.OnDesktop -eq ($script:State.DisplayMode -eq 'extended_sbs') -and
+                    $current.Device -ceq (Get-XrDriverDeviceId))
     }
     if (!$matches) {
         Assert-SteamVrStopped

@@ -9,9 +9,13 @@ config = json.loads(os.environ["XR_TEST_BLUETOOTH_SESSION"])
 controllers = config["adapters"]
 selected = next(iter(controllers))  # Intentionally defaults to the built-in.
 devices = config["devices"]
+discoverable = config.get("discoverable_devices", {})
+scanning = False
 mode = config.get("mode", "")
 log = Path(config["log"])
 available = True
+connect_attempts = {}
+aborted_links = {}
 print("Agent registered", flush=True)
 
 
@@ -52,6 +56,15 @@ for line in sys.stdin:
         emit("Agent is already registered")
         continue
     if action == "scan":
+        scanning = command[1] == "on"
+        if scanning:
+            devices[selected].update(discoverable.get(selected, {}))
+        else:
+            # Model BlueZ dropping transient, unpaired BLE objects when the
+            # discovery client stops. Pairing must finish before this point.
+            for mac in discoverable.get(selected, {}):
+                if not devices[selected].get(mac, {}).get("paired"):
+                    devices[selected].pop(mac, None)
         state = "started" if command[1] == "on" else "stopped"
         emit("Discovery " + state)
         # Foreign-adapter events must not become selectable device-list entries.
@@ -69,6 +82,10 @@ for line in sys.stdin:
         emit("Device " + mac + " not available")
         continue
     if action == "info":
+        if aborted_links.get(mac, 0):
+            aborted_links[mac] -= 1
+            if not aborted_links[mac]:
+                device["connected"] = False
         properties = "\n".join("\t" + key.capitalize() + ": " + ("yes" if device.get(key) else "no")
                                for key in ("paired", "trusted", "connected"))
         emit("Device " + mac + " (public)\n\tName: " + device["name"] +
@@ -76,7 +93,9 @@ for line in sys.stdin:
         if mode == "drop-after-info":
             available = False
     elif action == "pair":
-        if mode == "pair-timeout":
+        if config.get("require_discovery_for_pair") and not scanning:
+            emit("Failed to pair: discovery was stopped too early")
+        elif mode == "pair-timeout":
             emit("Attempting to pair with " + mac)
         elif mode == "pair-error":
             emit("Failed to pair: org.bluez.Error.AuthenticationFailed")
@@ -88,6 +107,17 @@ for line in sys.stdin:
         device["trusted"] = True
         emit("Changing " + mac + " trust succeeded")
     elif action == "connect":
+        connect_attempts[mac] = connect_attempts.get(mac, 0) + 1
+        if config.get("require_discovery_for_connect") and not scanning:
+            emit("Failed to connect: org.bluez.Error.Failed le-connection-abort-by-local")
+            continue
+        failure = config.get("connect_failure", "le-connection-abort-by-local")
+        if connect_attempts[mac] <= config.get("connect_failures", 0):
+            if config.get("abort_disconnect_after_info"):
+                device["connected"] = True
+                aborted_links[mac] = config["abort_disconnect_after_info"]
+            emit("Failed to connect: org.bluez.Error.Failed " + failure)
+            continue
         device["connected"] = True
         emit("Connection successful")
     else:

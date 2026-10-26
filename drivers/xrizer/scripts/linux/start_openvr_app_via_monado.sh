@@ -56,12 +56,14 @@ XRIZER_RUNTIME_DIR="$(expand_path "${XRIZER_RUNTIME_DIR:-$XR_BIN_ROOT/drivers/xr
 [[ -d "$XRIZER_RUNTIME_DIR" ]] || fail "xrizer runtime dir not found: $XRIZER_RUNTIME_DIR. Run drivers/xrizer/scripts/linux/install_xrizer.sh"
 
 if [[ -z "${XR_RUNTIME_JSON:-}" ]]; then
+  device="${XR_MONADO_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}"
+  [[ "$device" =~ ^[a-z0-9][a-z0-9_.]*$ ]] || { echo "Invalid Monado device: $device" >&2; exit 2; }
   candidates=(
-    "$XR_BIN_ROOT/drivers/monado_driver/openxr_monado_xrgate.json"
-    "$ROOT_PROJECT/bin/drivers/monado_driver/openxr_monado_xrgate.json"
+    "$XR_BIN_ROOT/drivers/$device/monado_driver/openxr_monado_xrgate.json"
+    "$ROOT_PROJECT/bin/drivers/$device/monado_driver/openxr_monado_xrgate.json"
     "$ROOT_PROJECT/third_party/monado_driver/build/xr_tracking_relwithdebinfo/openxr_monado-dev.json"
-    "$ROOT_PROJECT/bin/drivers/monado_driver/openxr_monado-dev.json"
-    "$XR_BIN_ROOT/drivers/monado_driver/openxr_monado-dev.json"
+    "$ROOT_PROJECT/bin/drivers/$device/monado_driver/openxr_monado-dev.json"
+    "$XR_BIN_ROOT/drivers/$device/monado_driver/openxr_monado-dev.json"
     "/usr/share/openxr/1/openxr_monado.json"
   )
   for c in "${candidates[@]}"; do

@@ -8,7 +8,9 @@ set -euo pipefail
 #   bin/drivers/monado_driver/start.sh
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}}"
+PACKAGED_MONADO_DEVICE=""
+if [[ -f "$SCRIPT_DIR/device-profile" ]]; then read -r PACKAGED_MONADO_DEVICE < "$SCRIPT_DIR/device-profile"; fi
+XR_MONADO_DEVICE="${XR_MONADO_DEVICE:-${XR_MONADO_DRIVER_DEVICE:-${PACKAGED_MONADO_DEVICE:-${XR_DEVICE_TARGET:-${XR_TARGET_DEVICE:-generic}}}}}"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE,,}"
 XR_MONADO_DEVICE="${XR_MONADO_DEVICE//-/_}"
 case "$XR_MONADO_DEVICE" in
@@ -18,6 +20,8 @@ if [[ ! "$XR_MONADO_DEVICE" =~ ^[a-z0-9][a-z0-9_.]*$ ]]; then
   echo "[start_monado_driver][ERROR] invalid XR_MONADO_DEVICE=$XR_MONADO_DEVICE" >&2
   exit 2
 fi
+
+export XR_MONADO_DEVICE
 
 expand_path() {
   local path="$1"
@@ -161,68 +165,25 @@ run_service_with_xcb_output_placement() {
 find_project_root() {
   local d="$SCRIPT_DIR"
   while [[ "$d" != "/" && -n "$d" ]]; do
-    if [[ -d "$d/shared/include" && -d "$d/drivers/monado_driver" ]]; then
+    if [[ -d "$d/bin/drivers/$XR_MONADO_DEVICE/monado_driver" || \
+          ( -d "$d/shared/include" && -d "$d/drivers/monado_driver" ) ]]; then
       printf '%s\n' "$d"
       return 0
     fi
     d="$(dirname "$d")"
   done
-
-  # Runtime package fallback: <package>/bin/drivers/monado_driver/start.sh
-  local package_candidate=""
-  package_candidate="$(cd "$SCRIPT_DIR/../../.." >/dev/null 2>&1 && pwd || true)"
-  if [[ -n "$package_candidate" && -d "$package_candidate/bin/drivers/monado_driver" ]]; then
-    printf '%s\n' "$package_candidate"
-    return 0
-  fi
-
-  d="$SCRIPT_DIR"
-  while [[ "$d" != "/" && -n "$d" ]]; do
-    if [[ -n "$XR_MONADO_DEVICE" \
-          && -f "$d/devices/$XR_MONADO_DEVICE/$XR_MONADO_DEVICE.env" \
-          && -d "$d/bin/drivers/monado_driver" ]]; then
-      printf '%s\n' "$d"
-      return 0
-    fi
-
-    # Generic fallback for future single-device packages. This keeps the runtime
-    # driver start script from hard-coding xreal_ultra as the only package shape.
-    if [[ -d "$d/bin/drivers/monado_driver" && -d "$d/devices" ]]; then
-      local env_files=()
-      local candidate=""
-      while IFS= read -r candidate; do
-        env_files+=("$candidate")
-      done < <(find "$d/devices" -mindepth 2 -maxdepth 2 -type f -name '*.env' 2>/dev/null | sort)
-      if [[ "${#env_files[@]}" -eq 1 ]]; then
-        printf '%s\n' "$d"
-        return 0
-      fi
-    fi
-    d="$(dirname "$d")"
-  done
-
-  # Local installed source-tree fallback: <root>/bin/drivers/monado_driver/start.sh
-  d="$SCRIPT_DIR"
-  while [[ "$d" != "/" && -n "$d" ]]; do
-    if [[ -d "$d/third_party/monado_driver" && -d "$d/bin/drivers/monado_driver" ]]; then
-      printf '%s\n' "$d"
-      return 0
-    fi
-    d="$(dirname "$d")"
-  done
-
   return 1
 }
 
 ROOT_PROJECT="$(expand_path "${ROOT_PROJECT:-$(find_project_root || true)}")"
 if [[ -z "$ROOT_PROJECT" || ! -d "$ROOT_PROJECT" ]]; then
-  fail "cannot determine ROOT_PROJECT. Set ROOT_PROJECT=/home/vlados/src/xr_tracking"
+  fail "cannot determine ROOT_PROJECT. Set ROOT_PROJECT to the XR Gate source or runtime package root."
 fi
 
 THIRD_PARTY_DIR="$(expand_path "${THIRD_PARTY_DIR:-$ROOT_PROJECT/third_party}")"
 MONADO_DIR="$(expand_path "${MONADO_DIR:-$THIRD_PARTY_DIR/monado_driver}")"
 BUILD_DIR="$(expand_path "${BUILD_DIR:-$MONADO_DIR/build/xr_tracking_relwithdebinfo}")"
-BIN_DIR="$(expand_path "${BIN_DIR:-${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/drivers/monado_driver}")"
+BIN_DIR="$(expand_path "${BIN_DIR:-${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/drivers/$XR_MONADO_DEVICE/monado_driver}")"
 
 resolve_display_config() {
   local explicit="${XR_MONADO_DISPLAY_CONFIG:-${XR_DISPLAY_CONFIG:-}}"
@@ -234,6 +195,8 @@ resolve_display_config() {
   fi
 
   local candidates=(
+    "$BIN_DIR/configs/display/$XR_MONADO_DEVICE.yaml"
+    "$ROOT_PROJECT/drivers/monado_driver/profiles/$XR_MONADO_DEVICE.yaml"
     "$BIN_DIR/configs/display/default.yaml"
     "$SCRIPT_DIR/../../configs/display/default.yaml"
     "$ROOT_PROJECT/drivers/monado_driver/configs/display/default.yaml"
@@ -367,8 +330,16 @@ load_controller_input_config() {
   fi
 }
 
-load_display_config
-load_display_profile
+if [[ -n "${XR_MONADO_DISPLAY_CONFIG:-${XR_DISPLAY_CONFIG:-}}" || \
+      -f "$BIN_DIR/configs/display/$XR_MONADO_DEVICE.yaml" || \
+      -f "$ROOT_PROJECT/drivers/monado_driver/profiles/$XR_MONADO_DEVICE.yaml" ]]; then
+  load_display_config
+  load_display_profile
+else
+  # Device defaults override the shared generic YAML; caller values win.
+  load_display_profile
+  load_display_config
+fi
 load_controller_input_config
 
 # One hardware-independent settings file shared with application launch helpers.

@@ -42,6 +42,11 @@ try {
     $driver = Join-Path $temporary 'managed-driver'
     New-Item -ItemType Directory $driver | Out-Null
     '{"name":"xr-test"}' | Set-Content -LiteralPath (Join-Path $driver 'driver.vrdrivermanifest')
+    $driverSettings = Join-Path $driver 'resources/settings/default.vrsettings'
+    New-Item -ItemType Directory -Force (Split-Path -Parent $driverSettings) | Out-Null
+    @{xr_tracking=@{deviceProfile=(Get-XrDriverDeviceId); displayFrequency=[int]$script:State.FrequencyHz;
+        isDisplayOnDesktop=($script:State.DisplayMode -eq 'extended_sbs')}} | ConvertTo-Json -Depth 5 |
+        Set-Content -LiteralPath $driverSettings -Encoding UTF8
     $script:State.DriverPath = $driver
     $beforeWarnings = $script:ActionWarnings.Count
     Register-XrDriver -AllowDeferred

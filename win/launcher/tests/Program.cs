@@ -10,17 +10,43 @@ static void MustReject(Action action, string message)
     throw new Exception(message);
 }
 
+if (args.Length > 0 && args[0] == "--audio-receiver-fixture")
+{
+    Console.OutputEncoding = new UTF8Encoding(false);
+    Console.WriteLine("ready");
+    if (args[1] == "hang") await Task.Delay(Timeout.Infinite);
+    using var input = Console.OpenStandardInput();
+    if (args[1] is "ack" or "badack")
+    {
+        using var output = Console.OpenStandardOutput();
+        var prefix = new byte[4];
+        while (await input.ReadAsync(prefix.AsMemory(0, 1)) > 0)
+        {
+            await input.ReadExactlyAsync(prefix.AsMemory(1));
+            int length = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(prefix);
+            await input.ReadExactlyAsync(new byte[length]);
+            if (args[1] == "badack") Array.Clear(prefix);
+            await output.WriteAsync(prefix); await output.FlushAsync();
+        }
+        return;
+    }
+    var block = new byte[4096]; int size, total = 0;
+    while ((size = await input.ReadAsync(block)) > 0) total += size;
+    Console.WriteLine(total);
+    return;
+}
 string source = args.Length > 0 ? Path.GetFullPath(args[0]) : throw new ArgumentException("Pass the win source directory.");
 string folder = Path.Combine(Path.GetTempPath(), "xr-gate-launcher-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(folder);
 try
 {
+    SetupTests.Run(folder);
     Directory.CreateDirectory(Path.Combine(folder, "hardware"));
     File.Copy(Path.Combine(source, ".env.example"), Path.Combine(folder, ".env.example"));
     File.Copy(Path.Combine(source, "hardware/xreal_ultra.env"), Path.Combine(folder, "hardware/xreal_ultra.env"));
     string env = Path.Combine(folder, ".env"), state = Path.Combine(folder, "state.json");
     File.WriteAllText(state, JsonSerializer.Serialize(new { FrequencyHz = 90, GearVR = true, BluetoothInstanceId = "saved-dongle", Distribution = "Ubuntu-24.04" }));
-    File.WriteAllText(env, "# My advanced configuration\nXR_TCP_PORT=45999\nXR_STEAMVR_PATH=\"D:\\Games O'Brien\\SteamVR\"\n");
+    File.WriteAllText(env, "# My advanced configuration\nXR_TCP_PORT=45999\nXR_GEARVR=1\nXR_BLUETOOTH=1\nXR_STEAMVR_PATH=\"D:\\Games O'Brien\\SteamVR\"\n");
     var settings = LauncherSettings.Load(folder, state);
     Check(settings.FrequencyHz == "90" && settings.GearVr && settings.BluetoothEnabled, "Saved hardware/controller selections were lost.");
     Check(settings.SteamVrPath == @"D:\Games O'Brien\SteamVR", "Quoted Windows path did not survive parsing.");
@@ -50,6 +76,10 @@ try
     Check(staleRejected, "Stale success/setup metadata masked a crashed process.");
     AuditTests.Run(source, folder);
     BluetoothSettingsTests.Run(source, folder);
+    HardwareControllerTests.Run(source, folder);
+    InstallSourceTests.Run(source, folder);
+    ArtworkTests.Run(folder);
+    await AudioTests.RunAsync(source, folder);
     string encoded = ScriptCommand.Encode(@"C:\O'Brien\XR Gate\XrGate-Wsl.ps1", "Run", @"C:\result.json", true, false);
     string command = Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
     Check(command.Contains("O''Brien") && command.Contains("-StartSteamVR") && command.Contains("-ResultPath 'C:\\result.json'"), "Paths or action arguments were not passed literally.");
@@ -78,6 +108,15 @@ try
               logs.Any(line => line.Contains("Проверка предупреждения")) &&
               logs.Any(line => line.Contains("Проверка сообщения об ошибке")), "A PowerShell host/warning/error message was lost or its Cyrillic text was corrupted.");
         Check(!logs.Any(line => line.Contains("CLIXML") || line.Contains("<Objs") || line.Contains("<ToString>")), "Raw PowerShell CLIXML was displayed in the activity log.");
+        int beforeQuiet = logs.Count;
+        Check((await runner.RunAsync("Status", quiet: true)).Success && logs.Count == beforeQuiet,
+            "Read-only background status flooded the activity log or lost its structured result.");
+        string deletionFixture = "param([string]$Action,[switch]$Launcher,[string]$ResultPath,[string]$DeleteDistributionName)\n" +
+            "if ($Action -ne 'Delete' -or $DeleteDistributionName -cne 'Ubuntu-24.04') { throw 'Wrong confirmed distribution' }\n" +
+            "[IO.File]::WriteAllText($ResultPath, '{\"exit_code\":0,\"next_step\":\"\",\"message\":\"fixture only\",\"warnings\":[],\"data\":{\"deleted\":true}}')\nexit 0\n";
+        File.WriteAllText(Path.Combine(bridge, "XrGate-Wsl.ps1"), deletionFixture, new UTF8Encoding(true));
+        Check((await runner.RunAsync("Delete", parameters: new Dictionary<string, string> { ["DeleteDistributionName"] = "Ubuntu-24.04" })).Data.GetProperty("deleted").GetBoolean(),
+            "The process bridge lost the exact confirmed Ubuntu deletion target.");
         File.WriteAllText(Path.Combine(bridge, "XrGate-Wsl.ps1"), script.Replace("exit 0", "Start-Sleep -Seconds 30\nexit 0"), new UTF8Encoding(true));
         bool timedOut = false;
         try { await runner.RunAsync("Doctor", timeLimit: TimeSpan.FromSeconds(2)).WaitAsync(TimeSpan.FromSeconds(8)); }
