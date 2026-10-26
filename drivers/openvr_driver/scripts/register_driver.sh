@@ -115,7 +115,7 @@ package_device_profile() {
   python3 - "$1/resources/settings/default.vrsettings" <<'PY_PROFILE'
 import json, sys
 with open(sys.argv[1], encoding="utf-8-sig") as stream:
-    print(json.load(stream).get("xr_tracking", {}).get("deviceProfile", ""))
+    print(json.load(stream).get("xr_tracking", {}).get("deviceProfile", "generic"))
 PY_PROFILE
 }
 PACKAGED_OPENVR_DEVICE=""
@@ -267,6 +267,8 @@ patch_steamvr_user_settings() {
 
   python3 - "$package_settings" "$XR_OPENVR_DISPLAY_FREQUENCY_HZ" "$XR_OPENVR_DISPLAY_MODE" <<'PY'
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -321,12 +323,23 @@ paths = [
     Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/config/steamvr.vrsettings",
 ]
 
+# Follow custom OpenVR config locations too.
+registry = Path(os.environ.get("XR_OPENVRPATHS_FILE", str(Path.home() / ".config/openvr/openvrpaths.vrpath")))
+config_paths = []
+if registry.exists():
+    for folder in json.loads(registry.read_text()).get("config", []):
+        config_paths.append(Path(folder).expanduser() / "steamvr.vrsettings")
+paths = config_paths + paths
+paths = list(dict.fromkeys(p.resolve() for p in paths))
+paths = [p for p in paths if p.exists()] or config_paths[:1] or [Path.home() / ".local/share/Steam/config/steamvr.vrsettings"]
+position = {key: int(os.environ[env]) for key, env in
+            (("windowX", "XR_OPENVR_WINDOW_X"), ("windowY", "XR_OPENVR_WINDOW_Y"))
+            if env in os.environ}
+preserve_position = os.environ.get("XR_OPENVR_PRESERVE_WINDOW_POSITION") == "1"
 updated_any = False
 for path in paths:
-    if not path.exists():
-        continue
     try:
-        data = json.loads(path.read_text() or "{}")
+        data = json.loads(path.read_text() or "{}") if path.exists() else {}
     except Exception as exc:
         print(f"[register_driver][WARN] skip invalid SteamVR settings {path}: {exc}", file=sys.stderr)
         continue
@@ -340,12 +353,16 @@ for path in paths:
 
     for key in xr_display_keys:
         if key in xr_defaults:
+            if preserve_position and key in ("windowX", "windowY") and key in xr:
+                continue
             xr[key] = xr_defaults[key]
     for key in xr_controller_keys:
         if key in xr_defaults:
             xr[key] = xr_defaults[key]
     for key in steamvr_display_keys:
         if key in steamvr_defaults:
+            if preserve_position and key in ("windowX", "windowY") and key in steamvr:
+                continue
             steamvr[key] = steamvr_defaults[key]
 
     # Keep the per-package controller render-model policy authoritative as well.
@@ -378,12 +395,24 @@ for path in paths:
         steamvr["debugMode"] = False
         steamvr["DebugMode"] = False
 
+    extended = mode == "extended_sbs"
+    steamvr["allowFallbackMirrorWindowLinux"] = extended
+    data.setdefault("direct_mode", {})["enable"] = not extended
+    xr.update(position)
+    # Keep the compositor window aligned with the driver's existing or selected position.
+    for key in ("windowX", "windowY"):
+        if key in xr:
+            steamvr[key] = xr[key]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = path.with_name(path.name + ".before-xr-gate")
+    if path.exists() and not backup.exists():
+        shutil.copy2(path, backup)
     path.write_text(json.dumps(data, indent=2) + "\n")
     updated_any = True
     print(f"[register_driver] patched SteamVR settings: {path}")
 
 if not updated_any:
-    print("[register_driver] no existing SteamVR user settings found to patch")
+    sys.exit("[register_driver][ERROR] no SteamVR settings could be updated")
 PY
 }
 

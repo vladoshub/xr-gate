@@ -202,6 +202,26 @@ cd ~/src/xr_tracking/out/xr-gate
 
 # SteamVR / OpenVR
 
+## Windowed SBS — universal Linux launcher
+
+Keep `./run_xr_client.sh` running in another terminal. With the glasses already
+in physical SBS/60 Hz mode, run from the release directory:
+
+```bash
+XR_OPENVR_DISPLAY_MODE=extended_sbs \
+XR_DISPLAY_FREQUENCY_HZ=60 \
+./run_openvr.sh
+```
+
+No NVIDIA/AMD vendor or display connector is required. This enables the Linux
+window fallback and selects an installed driver at the requested frequency,
+including releases that only contain direct driver packages. Use
+`XR_OPENVR_DEVICE=xreal_ultra` if multiple profiles are installed and none is
+registered yet. Steam is closed before settings are changed.
+
+For optional GPU selection, X11 output placement, Direct Mode, and experimental
+Wayland windowed operation, see [SteamVR Linux](../steamvr-linux.md).
+
 ## 1. Register OpenVR driver — 90 Hz direct mode
 
 Use this for direct USB4/iGPU path. Tested with HX370 iGPU.

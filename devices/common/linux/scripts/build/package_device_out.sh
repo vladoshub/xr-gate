@@ -575,6 +575,9 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/drivers/openvr_driver/scripts/register_driver.sh" \
     "$XR_OUT_BIN_ROOT/scripts/drivers/openvr_driver/register_driver.sh"
   copy_runtime_file \
+    "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/start_openvr.py" \
+    "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr.py"
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/start_openvr_dgpu_direct.sh" \
     "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   copy_runtime_file \
@@ -651,6 +654,7 @@ write_app_launchers() {
   write_root_launcher "record_emulation_hands.sh" "bin/python/tools/record_emulation_hands.py"
   write_root_launcher "gesture_debug.sh" "bin/python/tools/xr_gate_gesture_debug.py"
   write_root_launcher "emulation_tool.sh" "bin/runtime_adapters/xr_runtime_adapter/xr_emulation_tool"
+  write_root_launcher "run_openvr.sh" "bin/scripts/drivers/steam_vr/start_openvr.py"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"

@@ -366,6 +366,11 @@ def main() -> int:
         xr["displayDebugMode"] = False
         steamvr["directMode"] = True
 
+    # Linux needs an explicit opt-in to a compositor window when DRM acquisition fails.
+    extended = args.display_mode == "extended_sbs"
+    steamvr["allowFallbackMirrorWindowLinux"] = extended
+    data.setdefault("direct_mode", {})["enable"] = not extended
+
     output = args.output or args.settings
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data, indent=2) + "\n")

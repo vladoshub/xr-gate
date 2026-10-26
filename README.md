@@ -425,12 +425,37 @@ If you have completed the train override controller from the previous point, you
 ---
 
 
-# SteamVR with XREAL Ultra
+# SteamVR on Linux Fallback windowed mode (XREAL Ultra example)
 
-Steam and SteamVR must be installed from the Steam website, not from Snap. Use an X11/Xorg session.
+**Steam and SteamVR must be installed from the Steam website, not from Snap**
+
+**Before every start SteamVR you should run XR Gate**
+
+```bash
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config xreal_ultra
+```
+
+Register SteamVR driver in extended mode (once)
+
+cd ~/xr-gate-release/xr-gate
+```bash
+XR_OPENVR_DISPLAY_MODE=extended_sbs \
+XR_OPENVR_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=60 \
+XR_OPENVR_LAUNCH_MODE=none \
+./run_openvr.sh
+```bash
+
+Then run Steam VR
+
+[SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
 
-## Workaround for systems without built-in x11 (Ubuntu 26.04)
+
+# SteamVR on Linux Direct Mode (XREAL Ultra example)
+
+**Workaround for systems without built-in x11 (Ubuntu 26.04)**
 
 ### 1. Install LightDM + Xfce
 
@@ -661,7 +686,8 @@ XR_STEAMVR_RESTORE_LAYOUT=right-of \
 ./run_openvr_restore_desktop.sh
 ```
 
-### Some demo
+
+## Some demo OpenVR
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -681,7 +707,7 @@ Stereo overlay (need running xr_video backend)
 ---
 
 
-# Monado/OpenXR with XREAL Ultra
+# Monado/OpenXR on Linux windowed mode (XREAL Ultra example)
 
 
 Run xr_client
@@ -690,7 +716,20 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-## Choose monitor mode
+```bash
+cd ~/xr-gate-release/xr-gate
+
+XR_TARGET_DEVICE=xreal_ultra \
+XR_MONADO_DEVICE=xreal_ultra \
+XR_DISPLAY_FREQUENCY_HZ=60 \
+XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
+./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+
+
+# Monado/OpenXR on Linux (XREAL Ultra example)
+
 
 ### A. Monado with main monitor — Auto disable main monitor
 
@@ -765,22 +804,7 @@ devices/xreal_ultra/linux/scripts/monado_driver/main_display_control.sh on-main
 ```
 
 
-### C. Monado with main monitor in system — XCB windowed mode (work with main monitor)
-
-```bash
-sudo apt install xdotool wmctrl
-
-cd ~/xr-gate-release/xr-gate
-
-XR_TARGET_DEVICE=xreal_ultra \
-XR_MONADO_DEVICE=xreal_ultra \
-XR_DISPLAY_FREQUENCY_HZ=90 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
-XR_TRACKING_MONADO_XCB_OUTPUT=DisplayPort-1 \
-./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
-```
-
-### D. Monado without main monitor in system
+### C. Monado without main monitor in system
 
 ```bash
 cd ~/xr-gate-release/xr-gate
