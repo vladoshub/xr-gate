@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private bool resourcesReleased;
     private bool resourcesMayBeOwned;
     private Func<string, CancellationToken, Task<ActionResult>>? smokeAction;
+    private Func<string, CancellationToken, Task>? smokeWslLease;
 
     public MainWindow(string bundleRoot, bool smokeTest = false)
     {
@@ -162,6 +163,15 @@ public partial class MainWindow : Window
         return await activeTask;
     }
 
+    private Task KeepUbuntuForActionAsync(string action, string distribution, CancellationToken cancellation)
+    {
+        // Install owns WSL setup and Ubuntu's first login. A readiness probe
+        // before it can time out on the Windows WSL stub and prevent setup.
+        if (action is "Install" or "Stop" or "Delete" or "Status" or "Doctor" or "Display") return Task.CompletedTask;
+        if (smokeWslLease is not null) return smokeWslLease(distribution, cancellation);
+        return smokeAction is null ? keeper.EnsureAsync(distribution, allowMissing: false, cancellation: cancellation) : Task.CompletedTask;
+    }
+
     private async Task<bool> PerformAsync(string action, bool steamVr, bool console, bool saveSettings)
     {
         bool trackingAction = action is "Run" or "Restart";
@@ -186,7 +196,7 @@ public partial class MainWindow : Window
             bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop" or "Delete");
             if (writesSettings && !smoke) { settings.Save(root); ControllerSettingsSaved(); }
             var actionSettings = writesSettings || smokeAction is not null || action is "Stop" or "Delete" ? settings : LauncherSettings.Load(root);
-            if (smokeAction is null && action is not ("Stop" or "Delete" or "Status" or "Doctor" or "Display")) await keeper.EnsureAsync(actionSettings.Distribution, action is "Install" or "Status" or "Doctor", operationCancellation.Token);
+            await KeepUbuntuForActionAsync(action, actionSettings.Distribution, operationCancellation.Token);
             if (trackingAction) { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
             if (action is "Run" or "Restart" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,

@@ -15,8 +15,16 @@ public partial class MainWindow
         UpdateRecoveryUi();
         VerifyArtworkUi();
         await VerifyInstallSourceUiAsync();
-        await VerifySetupUiAsync();
-        await VerifyFirstLoginUiAsync();
+        // Model a fresh Windows installation where wsl.exe exists but its
+        // distribution inventory hangs. Install and first-login continuation
+        // must reach the installer without requiring a ready WSL lease.
+        smokeWslLease = (_, _) => throw new TimeoutException("fixture WSL inventory did not respond");
+        try
+        {
+            await VerifySetupUiAsync();
+            await VerifyFirstLoginUiAsync();
+        }
+        finally { smokeWslLease = null; }
         await VerifyHotkeysUiAsync();
         await VerifyRuntimeObservationAsync();
         if (!MainTabs.Items.Cast<TabItem>().Select(tab => tab.Header?.ToString()).SequenceEqual(new[] { "Run", "Controllers", "Audio", "Settings", "Tools" }) || Icon is null)
@@ -319,6 +327,8 @@ public partial class MainWindow
         await ExecuteAsync("Status", saveSettings: false);
         if (!StartButton.IsEnabled || InstallButton.Content as string != "Update" || Equals(InstallButton.Tag, true) || setupProgress.Pending)
             throw new InvalidOperationException("Complete setup did not enable Start VR and change Install to Update.");
+        if (await ExecuteAsync("Run", steamVr: true) || StatusDetail.Text != "fixture WSL inventory did not respond" || runtimeMayBeRunning)
+            throw new InvalidOperationException("Start VR bypassed the WSL lease or reported tracking after a failed WSL probe.");
         ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "NOT CONNECTED", display_selected = true, display_connected = false }));
         if (StartButton.IsEnabled || InstallButton.IsEnabled || !DisplayButton.IsEnabled)
             throw new InvalidOperationException("Disconnect left Start VR or Install enabled.");
