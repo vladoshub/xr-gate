@@ -218,8 +218,8 @@ class BluetoothSession:
             self.ctl("scan", "off")
 
 
-def device_info(mac, session):
-    text = session.ctl("info", mac)
+def device_info(mac, session, seconds=None):
+    text = session.ctl("info", mac) if seconds is None else session.ctl("info", mac, seconds=seconds)
     result = {"address": address(mac)}
     for key in ("Name", "Alias", "Paired", "Trusted", "Connected"):
         match = re.search(r"^\s*" + key + r":\s*(.*?)\s*$", text, re.M)
@@ -357,9 +357,9 @@ def save_config(path, value):
             temporary.unlink(missing_ok=True)
 
 
-def available_device_info(mac, session):
+def available_device_info(mac, session, seconds=None):
     try:
-        return device_info(mac, session)
+        return device_info(mac, session) if seconds is None else device_info(mac, session, seconds=seconds)
     except RuntimeError as error:
         # Only a missing device may be rediscovered. Adapter loss, command
         # failures and malformed properties must still abort the operation.
@@ -373,11 +373,17 @@ def pairing_devices(choices, session, scan_seconds):
     selected = {side: available_device_info(mac, session) if mac else None
                 for side, mac in choices.items()}
     missing = [mac for side, mac in choices.items() if mac and selected[side] is None]
-    if not missing:
+    pending = [mac for side, mac in choices.items() if mac and
+               (selected[side] is None or not selected[side].get("connected"))]
+    if not pending:
         yield selected
         return
-    log("Rediscovering selected controllers: " + ", ".join(missing) +
-        f". Put them in pairing mode; searching for {scan_seconds:g}s...")
+    if missing:
+        log("Rediscovering selected controllers: " + ", ".join(missing) +
+            f". Put them in pairing mode; searching for {scan_seconds:g}s...")
+    else:
+        log("Refreshing BLE advertisements for selected controllers: " + ", ".join(pending) +
+            f". Wake the controllers and keep them near the selected adapter; searching for {scan_seconds:g}s...")
     session.ctl("scan", "on")
     try:
         session.exchange(None, None, scan_seconds, collect=True)
@@ -387,11 +393,50 @@ def pairing_devices(choices, session, scan_seconds):
         if missing:
             raise RuntimeError("Selected controllers not found on this adapter: " + ", ".join(missing) +
                                ". Put them in pairing mode and retry Connect & save.")
-        # Unpaired BLE objects can disappear when discovery stops. Keep this
-        # client's scan and agent alive until pairing and connection finish.
+        # Cached objects do not guarantee a fresh BLE advertising report.
+        # Keep our discovery session and agent until all connections finish.
         yield selected
     finally:
         session.ctl("scan", "off")
+
+
+def connect_controller(mac, session, seconds=20, attempts=3):
+    """Retry only BlueZ's transient local abort, on this adapter and MAC."""
+    deadline = time.monotonic() + seconds
+    advice = ("Wake the controller and keep it near the selected adapter, then retry Connect & save. "
+              "If the adapter remains unresponsive, unplug and reconnect that USB adapter.")
+    last_error = "connection timed out"
+    for attempt in range(1, attempts + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            session.ctl("connect", mac, seconds=remaining)
+            return
+        except RuntimeError as error:
+            if "le-connection-abort-by-local" not in str(error):
+                raise
+            last_error = str(error)
+            if attempt == attempts:
+                break
+            log(f"Connection interrupted locally for {mac}; refreshing BLE advertisements and retrying "
+                f"({attempt + 1}/{attempts}). Keep the controller awake.")
+            # BlueZ can briefly report Connected=yes after a failed Connect.
+            # Wait for that failed link to close before another attempt; it
+            # must never be mistaken for successful controller setup.
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"Bluetooth connection recovery timed out for {mac}: {last_error}. {advice}") from error
+                current = available_device_info(mac, session, seconds=min(2, remaining))
+                if current is not None and not current.get("connected"):
+                    break
+                session.exchange(None, None, min(.2, remaining), collect=True)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                # Discovery remains owned by pairing_devices throughout.
+                session.exchange(None, None, min(.5, remaining), collect=True)
+    raise RuntimeError(f"Bluetooth connection failed for {mac} after {attempt} attempt(s): {last_error}. {advice}")
 
 
 def pair_and_save(config_path, template_path, left, right, session, scan_seconds=8):
@@ -415,7 +460,7 @@ def pair_and_save(config_path, template_path, left, right, session, scan_seconds
                     raise RuntimeError("Pairing did not complete: " + mac + ". Put the controller in pairing mode and retry.")
             session.ctl("trust", mac)
             if not device_info(mac, session).get("connected"):
-                session.ctl("connect", mac, seconds=20)
+                connect_controller(mac, session)
             final = device_info(mac, session)
             if not all(final.get(k) for k in ("paired", "trusted", "connected")):
                 raise RuntimeError("Controller is not paired, trusted and connected: " + mac)

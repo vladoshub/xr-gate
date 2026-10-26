@@ -14,6 +14,8 @@ scanning = False
 mode = config.get("mode", "")
 log = Path(config["log"])
 available = True
+connect_attempts = {}
+aborted_links = {}
 print("Agent registered", flush=True)
 
 
@@ -80,6 +82,10 @@ for line in sys.stdin:
         emit("Device " + mac + " not available")
         continue
     if action == "info":
+        if aborted_links.get(mac, 0):
+            aborted_links[mac] -= 1
+            if not aborted_links[mac]:
+                device["connected"] = False
         properties = "\n".join("\t" + key.capitalize() + ": " + ("yes" if device.get(key) else "no")
                                for key in ("paired", "trusted", "connected"))
         emit("Device " + mac + " (public)\n\tName: " + device["name"] +
@@ -101,6 +107,17 @@ for line in sys.stdin:
         device["trusted"] = True
         emit("Changing " + mac + " trust succeeded")
     elif action == "connect":
+        connect_attempts[mac] = connect_attempts.get(mac, 0) + 1
+        if config.get("require_discovery_for_connect") and not scanning:
+            emit("Failed to connect: org.bluez.Error.Failed le-connection-abort-by-local")
+            continue
+        failure = config.get("connect_failure", "le-connection-abort-by-local")
+        if connect_attempts[mac] <= config.get("connect_failures", 0):
+            if config.get("abort_disconnect_after_info"):
+                device["connected"] = True
+                aborted_links[mac] = config["abort_disconnect_after_info"]
+            emit("Failed to connect: org.bluez.Error.Failed " + failure)
+            continue
         device["connected"] = True
         emit("Connection successful")
     else:
