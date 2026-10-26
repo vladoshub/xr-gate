@@ -114,9 +114,10 @@ class PackageTest(unittest.TestCase):
         names = package.namelist()
         prefix = packager.ROOT_NAME + "/"
         self.assertFalse(any(len(Path(name).parts) == 2 and Path(name).suffix in (".md", ".html") for name in names))
-        for name in ("README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html", "GESTURES.html", "IMAGE-ASSETS.md"):
+        for name in ("README.md", "README.ru.md", "START-HERE.html", "START-HERE.ru.html", "GESTURES.html", "GESTURES.ru.html", "IMAGE-ASSETS.md"):
             self.assertIn(prefix + "docs/" + name, names)
-        self.assertIn(b"<svg", package.read(prefix + "docs/GESTURES.html"))
+        for name in ("GESTURES.html", "GESTURES.ru.html"):
+            self.assertIn(b"<svg", package.read(prefix + "docs/" + name))
         self.assertIn(b"MIT License", package.read(prefix + "docs/IMAGE-ASSETS.md"))
         self.assertEqual(package.read(prefix + "docs/licenses/fixture/NOTICE.txt"), b"fixture runtime notice")
         self.assertFalse(any(name.startswith(prefix + "licenses/") for name in names))

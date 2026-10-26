@@ -594,7 +594,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            OpenDocumentation("GESTURES.html");
+            string language = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru" ? "GESTURES.ru.html" : "GESTURES.html";
+            OpenDocumentation(language);
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }
