@@ -1,8 +1,11 @@
-function Get-DesktopDisplays {
+function Get-XrNativeDesktopDisplays {
     if (!('XrGateWsl.DisplayNative' -as [type])) {
         Add-Type -Path (Join-Path $PSScriptRoot 'DisplayNative.cs')
     }
-    $displays = @([XrGateWsl.DisplayNative]::Enumerate())
+    return [XrGateWsl.DisplayNative]::Enumerate()
+}
+function Get-DesktopDisplays {
+    $displays = @(Get-XrNativeDesktopDisplays)
     if (Get-XrSetting 'XR_DISPLAY_MODEL_NAME') {
         # DeviceString is frequently "Generic PnP Monitor"; use the same EDID
         # friendly name exposed by WmiMonitorID, keyed to the exact monitor instance.

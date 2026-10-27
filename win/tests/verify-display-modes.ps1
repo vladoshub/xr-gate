@@ -10,20 +10,17 @@ function Must-Reject([scriptblock]$Action, [string]$Message) {
     Assert $rejected $Message
 }
 
-# Exercise native-enumeration/WMI joining without reading actual Windows devices.
-Add-Type @'
-namespace XrGateWsl {
-    public static class DisplayNative {
-        public static object[] Displays;
-        public static object[] Enumerate() { return Displays; }
-    }
+# The release workflow runs verify-env.ps1 first in the same PowerShell process.
+# Keep its real interop type loaded and replace only the native enumeration call.
+if (!('XrGateWsl.DisplayNative' -as [type])) {
+    Add-Type -Path (Join-Path $root 'windows/DisplayNative.cs')
 }
-'@
+function Get-XrNativeDesktopDisplays { return $script:NativeDisplays }
 $ultraId = '\\?\DISPLAY#MRG3136#5&3376c635&0&UID4354#{monitor-interface}'
 $mainId = '\\?\DISPLAY#ACR0D1F#5&3376c635&0&UID4358#{monitor-interface}'
 $ultra = [pscustomobject]@{DeviceName='\\.\DISPLAY3';DeviceId=$ultraId;Name='Generic PnP Monitor';Width=3840;Height=1080;Frequency=90}
 $main = [pscustomobject]@{DeviceName='\\.\DISPLAY1';DeviceId=$mainId;Name='Z57';Width=3840;Height=1080;Frequency=90}
-[XrGateWsl.DisplayNative]::Displays = @($main, $ultra)
+$script:NativeDisplays = @($main, $ultra)
 $script:EdidName = 'Air 2 Ultra'
 function Get-CimInstance {
     param($Namespace, $ClassName, $ErrorAction)
@@ -66,7 +63,7 @@ Assert-XrSbsEnabled
 $ultra.Height = 1200
 Must-Reject { Assert-XrSbsEnabled } 'SBS validation checked only the width.'
 $ultra.Height = 1080
-[XrGateWsl.DisplayNative]::Displays = @($main)
+$script:NativeDisplays = @($main)
 $status = Get-XrSetupObservation $false $true
 Assert (!$status.display_connected -and $null -eq $status.sbs_enabled -and $null -eq $status.display_width) 'An absent display was falsely identified as SBS OFF.'
 $script:Settings.Remove('SBS_RESOLUTION')
