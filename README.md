@@ -413,8 +413,13 @@ XR_OPENVR_LAUNCH_MODE=none \
 Start SteamVR. If its stereo window appears on the wrong display, install the
 window tools and run this helper in another terminal:
 
+Install once the window tools:
 ```bash
 sudo apt install xdotool x11-xserver-utils
+```
+
+Then run helper:
+```bash
 cd ~/xr-gate-release/xr-gate
 ./move_openvr_window.sh
 ```
