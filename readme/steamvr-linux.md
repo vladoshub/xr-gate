@@ -79,18 +79,30 @@ marked `non-desktop=1` and disabled from the desktop. Without an output, physica
 display preparation is left to the system. The existing
 `run_openvr_dgpu_direct.sh` remains available for its established dGPU setup.
 
-## Wayland
+## Window placement and Wayland
 
-Windowed SBS on Wayland is **experimental and not hardware-verified**. The
-launcher allows it without running `xrandr` or requiring a connector. SteamVR may
-present its fallback window through XWayland; actual operation and window
-placement depend on SteamVR, the graphics driver, and your Wayland compositor.
-The successful X11 test does not establish Wayland compatibility.
+If the stereo window opens on the wrong display, install the X11 tools and run:
 
-Enable the headset display and choose its resolution, refresh rate, and window
-placement in your compositor's settings or rules. Omit `XR_OPENVR_OUTPUT` and
-`XR_OPENVR_DGPU_OUTPUT`: `xrandr` cannot configure physical Wayland outputs.
-Saved X11 window coordinates may not be honored by the Wayland compositor.
+```bash
+sudo apt install xdotool x11-xserver-utils
+./move_openvr_window.sh
+```
+
+Select the headset display once and keep the helper running. It moves the window
+again after a SteamVR restart or a display position change. Use `--choose` to pick
+another display. `XR_OPENVR_WINDOW_OUTPUT` optionally selects a display by name.
+
+Windowed SBS through XWayland has been tested on Ubuntu 26.04 with XREAL Ultra;
+other Wayland compositors may block window positioning. If SteamVR fails using
+native Wayland, fully exit Steam and start it through XWayland:
+
+```bash
+env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam
+```
+
+Enable the headset display and configure its resolution and refresh rate in your
+desktop settings. `xrandr` queries XWayland coordinates here; it does not configure
+physical Wayland outputs.
 
 For **Direct Mode**, Wayland support is a separate question: SteamVR needs the
 compositor/driver's DRM leasing support. See Valve's

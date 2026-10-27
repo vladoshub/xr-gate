@@ -399,10 +399,10 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-Register SteamVR driver in extended mode (once)
+Register the SteamVR driver in extended mode once:
 
-cd ~/xr-gate-release/xr-gate
 ```bash
+cd ~/xr-gate-release/xr-gate
 XR_OPENVR_DISPLAY_MODE=extended_sbs \
 XR_OPENVR_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
@@ -410,7 +410,28 @@ XR_OPENVR_LAUNCH_MODE=none \
 ./run_openvr.sh
 ```
 
-Then run Steam VR
+Start SteamVR. If its stereo window appears on the wrong display, install the
+window tools and run this helper in another terminal:
+
+```bash
+sudo apt install xdotool x11-xserver-utils
+cd ~/xr-gate-release/xr-gate
+./move_openvr_window.sh
+```
+
+Select the headset display when prompted and keep the helper running. It remembers
+the display and moves the window again after a SteamVR restart. To select another
+display, run `./move_openvr_window.sh --choose`.
+
+On **Wayland**, if SteamVR fails in windowed mode, fully exit Steam and start it through
+XWayland before launching SteamVR:
+
+```bash
+env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam
+```
+
+Window placement depends on the Wayland compositor; keep the headset display enabled
+as an extended desktop display.
 
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 

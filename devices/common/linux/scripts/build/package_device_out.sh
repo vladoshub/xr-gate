@@ -578,6 +578,9 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/start_openvr.py" \
     "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr.py"
   copy_runtime_file \
+    "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/move_openvr_window.sh" \
+    "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/move_openvr_window.sh"
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/drivers/steam_vr/scripts/linux/start_openvr_dgpu_direct.sh" \
     "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   copy_runtime_file \
@@ -655,6 +658,7 @@ write_app_launchers() {
   write_root_launcher "gesture_debug.sh" "bin/python/tools/xr_gate_gesture_debug.py"
   write_root_launcher "emulation_tool.sh" "bin/runtime_adapters/xr_runtime_adapter/xr_emulation_tool"
   write_root_launcher "run_openvr.sh" "bin/scripts/drivers/steam_vr/start_openvr.py"
+  write_root_launcher "move_openvr_window.sh" "bin/scripts/drivers/steam_vr/move_openvr_window.sh"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
   write_root_launcher "run_openvr_dgpu_direct_60.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct_60.sh"
   write_root_launcher "download_mercury_models.sh" "devices/common/linux/scripts/mercury_hand_tracking/download_mercury_models.sh"
@@ -876,6 +880,16 @@ The generic dependency installer is:
 ./devices/common/linux/scripts/runtime/install_runtime_deps_ubuntu.sh
 ```
 
+To move a windowed SteamVR display to the headset (X11/XWayland):
+
+```bash
+sudo apt install xdotool x11-xserver-utils
+./move_openvr_window.sh
+```
+
+Select the headset display and keep the helper running. Run with `--choose` to
+select a different display.
+
 Mercury hand-tracking models remain a separately distributed optional artifact.
 Install them into `bin/hand-tracking-models/mercury`.
 
@@ -941,6 +955,8 @@ copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulatio
 # Quick package sanity checks.
 required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
+  "$XR_OUT_ROOT/move_openvr_window.sh"
+  "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/move_openvr_window.sh"
   "$XR_OUT_ROOT/runtime_adapters/xr_runtime_adapter/configs/emulation-controller.json"
   "$XR_OUT_ROOT/devices/common/common.env"
   "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
