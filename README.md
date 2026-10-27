@@ -474,6 +474,13 @@ XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
 ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
+Move the application window to the headset display if the window is on another monitor.
+
+Also you can run OpenVR games through any OpenXR runtime without running SteamVR.
+Check /readme/xrizer.md
+
+
+
 ### Start OpenXR demo
 
 ```bash
@@ -482,10 +489,6 @@ sudo apt install libopenxr-utils
 XR_RUNTIME_JSON=~/xr-gate-release/xr-gate/bin/drivers/xreal_ultra/monado_driver/openxr_monado_xrgate.json \
 hello_xr -G Vulkan
 ```
-
-
-Also you can run OpenVR games through any OpenXR runtime without running SteamVR.
-Check /readme/xrizer.md
 
 ---
 
