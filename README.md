@@ -388,7 +388,7 @@ CTRL + C - exit from xr_client
 
 ## 4. Monado | SteamVR
 
-### SteamVR on Linux Fallback windowed mode (XREAL Ultra example)
+### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
 
@@ -455,7 +455,7 @@ Stereo overlay (need running xr_video backend)
 
 
 
-### Monado/OpenXR on Linux windowed mode (XREAL Ultra example)
+### Monado/OpenXR on Linux windowed mode (XREAL Ultra 60HZ example)
 
 
 Run xr_client
