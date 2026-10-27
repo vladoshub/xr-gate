@@ -1,4 +1,4 @@
-function Get-XrSetupObservation([bool]$LinuxInstalled) {
+function Get-XrSetupObservation([bool]$LinuxInstalled, [bool]$DeviceConnected = $false, [switch]$RememberDisplay) {
     $driverReady = $false
     if ($script:State.DriverPath) {
         try {
@@ -14,15 +14,26 @@ function Get-XrSetupObservation([bool]$LinuxInstalled) {
         try { $registered = Test-XrDriverRegistration ([string]$script:State.DriverPath) }
         catch { $registered = $false }
     }
-    $selected = [bool]($DisplayName -or $script:State.DisplayDeviceId)
+    $selected = [bool]($DisplayName -or ($script:State.DisplayDeviceId -and (Test-XrSavedDisplayDevice)))
     $connected = $false
     $displayNumber = ''
-    if ($selected) {
+    if ($selected -or $DeviceConnected) {
         try {
-            $display = Select-DesktopDisplay -Displays @(Get-DesktopDisplays) -Name $DisplayName -SavedId ([string]$script:State.DisplayDeviceId)
+            $displays = @(Get-DesktopDisplays)
+            $display = Find-AutomaticXrDisplay $displays -SavedOnly:(!$DeviceConnected)
             $connected = $null -ne $display
-            if ($display.DeviceName -match 'DISPLAY(\d+)$') { $displayNumber = $Matches[1] }
+            if ($connected) {
+                $selected = $true
+                if ($display.DeviceName -match 'DISPLAY(\d+)$') { $displayNumber = $Matches[1] }
+            }
         } catch { $connected = $false }
+    }
+    # Polling stays read-only. Explicit startup must report persistence errors.
+    if ($RememberDisplay -and $connected) {
+        $script:State.DisplayDeviceId = [string]$display.DeviceId
+        $script:State.DisplayDeviceName = [string]$display.DeviceName
+        $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
+        Save-State
     }
     return @{setup_complete=($LinuxInstalled -and $driverReady -and $registered -and !$script:State.InstallPending);
         driver_ready=$driverReady; driver_registered=$registered; display_selected=$selected; display_connected=$connected;

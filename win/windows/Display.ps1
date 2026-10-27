@@ -62,6 +62,7 @@ function Set-SbsDisplay($Display) {
     Set-XrDisplaySettings -X ([int]$Display.X) -Y ([int]$Display.Y) -Mode extended_sbs
     $script:State.DisplayDeviceId = [string]$Display.DeviceId
     $script:State.DisplayDeviceName = [string]$Display.DeviceName
+    $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
     $script:State.DisplayMode = 'extended_sbs'
     Save-State
     Write-Step ('SBS output: ' + $Display.DeviceName + ', ' + $Display.Width + 'x' + $Display.Height + ' @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
@@ -86,6 +87,7 @@ function Choose-SbsDisplay([switch]$SelectOnly) {
     if ($SelectOnly) {
         $script:State.DisplayDeviceId = [string]$selected.DeviceId
         $script:State.DisplayDeviceName = [string]$selected.DeviceName
+        $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
         if ([int]$selected.Frequency -gt 1) { $script:State.FrequencyHz = [int]$selected.Frequency }
         Save-State
         Write-Step ('Selected glasses display: ' + $selected.DeviceName + ' @ ' + $selected.Frequency + ' Hz.')

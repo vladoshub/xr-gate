@@ -12,7 +12,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 ROOT_NAME = "xr-gate-windows-wsl2-usbip"
 REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             ".env.example", "windows/Environment.ps1",
-            "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
+            "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DriverCleanup.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
             "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1", "windows/Delete.ps1", "windows/FirstLogin.ps1", "windows/SteamVr.ps1", "windows/Restart.ps1", "windows/RuntimeSources.ps1",
             "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/runtime_progress.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
             "docs/README.md", "docs/README.ru.md", "docs/START-HERE.html", "docs/START-HERE.ru.html", "docs/GESTURES.html", "docs/GESTURES.ru.html", "docs/IMAGE-ASSETS.md")
@@ -50,9 +50,12 @@ def device_selection(devices):
 
 
 def hardware_preset(env):
-    match = re.search(r"(?m)^XR_HARDWARE_ENV=(.+)$", env)
-    relative = PurePosixPath(match.group(1).strip().strip("\"'")) if match else None
-    if not relative or relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
+    match = re.search(r"(?m)^XR_HARDWARE_ENV=([^\r\n]*)$", env)
+    value = match.group(1).strip().strip("\"'") if match else ""
+    if not value:
+        return None
+    relative = PurePosixPath(value)
+    if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
         raise ValueError("XR_HARDWARE_ENV must select a preset inside the Windows bundle.")
     return relative.as_posix()
 
@@ -110,8 +113,11 @@ def verify_installer(package):
     if exe[:2] != b"MZ":
         raise ValueError("The launcher is not a Windows executable.")
     env = package.read(f"{ROOT_NAME}/.env.example").decode("utf-8-sig")
-    if f"{ROOT_NAME}/{hardware_preset(env)}" not in names:
+    preset = hardware_preset(env)
+    if preset and f"{ROOT_NAME}/{preset}" not in names:
         raise ValueError("Hardware preset missing from bundle.")
+    if not any(name.startswith(f"{ROOT_NAME}/hardware/") and name.endswith(".env") for name in names):
+        raise ValueError("No hardware presets are available for device selection.")
     verify_artwork(package)
     return hashlib.sha256(exe).hexdigest()
 
@@ -218,16 +224,18 @@ def build(source, drivers, output, frequencies, modes, release_tag="latest", *, 
         bundle = Path(temporary) / ROOT_NAME
         launcher_metadata = copy_installer(source, bundle, launcher, release_tag)
         env = (bundle / ".env.example").read_text(encoding="utf-8")
-        preset = bundle / hardware_preset(env)
-        content = preset.read_text(encoding="utf-8")
-        values = dict(re.findall(r"(?m)^(XR_[A-Z_]+)=(.*)$", content))
-        hz = values.get("XR_DISPLAY_FREQUENCY_HZ", "")
-        preferred = (int(hz), values.get("XR_DISPLAY_MODE", "")) if hz.isdigit() else None
-        if preferred not in variants:
-            preferred = variants[0]
-        for key, value in (("XR_DISPLAY_FREQUENCY_HZ", str(preferred[0])), ("XR_DISPLAY_MODE", preferred[1])):
-            content = re.sub(r"(?m)^" + key + "=.*$", key + "=" + value, content)
-        preset.write_text(content, encoding="utf-8", newline="\n")
+        selected_preset = hardware_preset(env)
+        if selected_preset:
+            preset = bundle / selected_preset
+            content = preset.read_text(encoding="utf-8")
+            values = dict(re.findall(r"(?m)^(XR_[A-Z_]+)=(.*)$", content))
+            hz = values.get("XR_DISPLAY_FREQUENCY_HZ", "")
+            preferred = (int(hz), values.get("XR_DISPLAY_MODE", "")) if hz.isdigit() else None
+            if preferred not in variants:
+                preferred = variants[0]
+            for key, value in (("XR_DISPLAY_FREQUENCY_HZ", str(preferred[0])), ("XR_DISPLAY_MODE", preferred[1])):
+                content = re.sub(r"(?m)^" + key + "=.*$", key + "=" + value, content)
+            preset.write_text(content, encoding="utf-8", newline="\n")
         entries = []
         for device in selected:
             for hz, mode in variants:

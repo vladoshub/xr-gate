@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $windowsRoot = Split-Path -Parent $PSScriptRoot
 $sourceRoot = Split-Path -Parent $windowsRoot
 . (Join-Path $windowsRoot 'XrGate-Wsl.ps1') -Action Help *> $null
+$script:Settings['XR_TARGET_DEVICE'] = 'xreal_ultra'
 function Assert($Condition, [string]$Message) { if (!$Condition) { throw $Message } }
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('xr-gate-contracts-' + [Guid]::NewGuid())
 $previousLocalAppData = $env:LOCALAPPDATA

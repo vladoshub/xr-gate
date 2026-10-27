@@ -2,6 +2,7 @@
 $script:ResolvedDriverRoot = ''
 $script:WindowsBundleNames = @('xr-gate-windows-wsl2-usbip.zip', 'xr-gate-windows-wsl-usbip.zip', 'xr-gate-windows.zip')
 . (Join-Path $PSScriptRoot 'DriverDevices.ps1')
+. (Join-Path $PSScriptRoot 'DriverCleanup.ps1')
 function Get-XrWindowsBundleName($Release) {
     foreach ($name in $script:WindowsBundleNames) {
         if (@($Release.assets | Where-Object { $_.name -ceq $name }).Count) { return $name }
@@ -52,15 +53,27 @@ function Ensure-XrDriverRegistration {
         Save-State
     }
 }
-function Find-AutomaticXrDisplay([object[]]$Displays) {
+function Test-XrSavedDisplayDevice {
+    try {
+        $device = Get-XrDriverDeviceId
+        if ($script:State.Contains('DisplayTargetDevice') -and $script:State.DisplayTargetDevice) { return $script:State.DisplayTargetDevice -ceq $device }
+        if ($script:State.DriverPath) {
+            $previous = Get-XrDriverConfiguration (Join-Path $script:State.DriverPath 'resources/settings/default.vrsettings')
+            return $previous.Device -ceq $device
+        }
+    } catch { }
+    return $false
+}
+function Find-AutomaticXrDisplay([object[]]$Displays, [switch]$SavedOnly) {
     if ($DisplayName) { return Select-DesktopDisplay -Displays $Displays -Name $DisplayName }
-    if ($script:State.DisplayDeviceId) {
+    if ($script:State.DisplayDeviceId -and (Test-XrSavedDisplayDevice)) {
         $saved = @($Displays | Where-Object { $_.DeviceId -eq $script:State.DisplayDeviceId })
         if ($saved.Count -eq 1) {
             if (@($Displays | Where-Object { $_.DeviceName -eq $saved[0].DeviceName }).Count -eq 1) { return $saved[0] }
             return $null
         }
     }
+    if ($SavedOnly) { return $null }
     $label = Get-XrSetting 'XR_DISPLAY_MATCH'
     $candidates = @()
     if ($label) {
@@ -92,8 +105,9 @@ function Resolve-DriverFrequency([int[]]$Available, [int]$Detected = 0) {
     $matches = @($Available | Where-Object { $Detected -gt 0 -and [Math]::Abs($_ - $Detected) -le 1 } |
         Sort-Object { [Math]::Abs($_ - $Detected) })
     if ($matches.Count) { return @{Frequency=[int]$matches[0]; Fallback=$false} }
-    if ($Available -notcontains 60) { throw 'This package has no matching driver and no 60 Hz fallback. Download a Windows package that includes 60 Hz.' }
-    return @{Frequency=60; Fallback=$true}
+    if (!$Available.Count) { throw 'This device has no driver for the selected display mode.' }
+    $fallback = if ($Available -contains 60) { 60 } else { [int]($Available | Sort-Object | Select-Object -First 1) }
+    return @{Frequency=$fallback; Fallback=$true}
 }
 function Get-AutomaticDriverBundle($Release, [string]$Cache) {
     $roots = @($PSScriptRoot | Split-Path -Parent)
@@ -143,6 +157,17 @@ function Get-AutomaticDriverBundle($Release, [string]$Cache) {
     }
     return $root
 }
+function Select-InstallationDriver($Release, [string]$Cache) {
+    # Installation is independent of connected displays and never changes one.
+    $script:ResolvedDriverRoot = Get-AutomaticDriverBundle $Release $Cache
+    $available = @(Get-XrDeviceDriverVariants $script:ResolvedDriverRoot | Where-Object { $_.display_mode -eq 'extended_sbs' } |
+        ForEach-Object { [int]$_.frequency_hz } | Sort-Object -Unique)
+    if (!$available.Count) { throw ('No extended SBS SteamVR driver for device ' + (Get-XrDriverDeviceId) + '. Download a Windows package containing an SBS variant for this device.') }
+    $script:State.DisplayMode = 'extended_sbs'
+    $script:State.FrequencyHz = if ($available -contains 60) { 60 } else { [int]$available[0] }
+    if ($script:State.FrequencyHz -ne 60) { Write-XrWarning ('No 60 Hz SBS driver for this device. Installing the available ' + $script:State.FrequencyHz + ' Hz SBS driver.') }
+    Write-Step ('Installation driver: ' + (Get-XrDriverDeviceId) + ' / ' + $script:State.FrequencyHz + ' Hz / extended_sbs. Display selection is needed only to start VR.')
+}
 function Select-AutomaticDriverFrequency($Release, [string]$Cache) {
     $script:ResolvedDriverRoot = Get-AutomaticDriverBundle $Release $Cache
     $variants = @(Get-XrDeviceDriverVariants $script:ResolvedDriverRoot)
@@ -154,18 +179,19 @@ function Select-AutomaticDriverFrequency($Release, [string]$Cache) {
     if ($selection.Fallback) {
         $reason = if ($display) { 'The glasses report ' + $detected + ' Hz; no matching driver is included.' }
                   else { 'The glasses refresh rate could not be identified safely.' }
-        Write-XrWarning ($reason + ' Using the 60 Hz driver.')
-        if ($display -and [Math]::Abs($detected - 60) -gt 1) {
+        Write-XrWarning ($reason + ' Using the ' + $selection.Frequency + ' Hz driver.')
+        if ($display -and [Math]::Abs($detected - $selection.Frequency) -gt 1) {
             Assert-SteamVrStopped
             if (!('XrGateWsl.DisplayNative' -as [type])) { $null = Get-DesktopDisplays }
-            [XrGateWsl.DisplayNative]::SetFrequency([string]$display.DeviceName, 60)
-            Write-XrWarning ('Changed only the selected glasses output ' + $display.DeviceName + ' to 60 Hz.')
+            [XrGateWsl.DisplayNative]::SetFrequency([string]$display.DeviceName, [int]$selection.Frequency)
+            Write-XrWarning ('Changed only the selected glasses output ' + $display.DeviceName + ' to ' + $selection.Frequency + ' Hz.')
         }
     }
     $script:State.FrequencyHz = [int]$selection.Frequency
     if ($display) {
         $script:State.DisplayDeviceId = [string]$display.DeviceId
         $script:State.DisplayDeviceName = [string]$display.DeviceName
+        $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
     }
     Write-Step ('Automatic Windows driver: ' + (Get-XrDriverDeviceId) + ' / ' + $script:State.FrequencyHz + ' Hz / ' + $script:State.DisplayMode)
 }
@@ -186,7 +212,18 @@ function Install-SelectedWindowsDriver([string]$Package, [string]$Tag) {
             if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
         }
     }
+    if ($script:State.Contains('DisplayDeviceId') -and $script:State.DisplayDeviceId -and
+        (!$script:State.Contains('DisplayTargetDevice') -or !$script:State.DisplayTargetDevice)) {
+        # Preserve the old display's device identity before replacing the driver.
+        # An unknown legacy association must not route a different device to it.
+        try {
+            $previous = Get-XrDriverConfiguration (Join-Path $script:State.DriverPath 'resources/settings/default.vrsettings')
+            $script:State.DisplayTargetDevice = $previous.Device
+        } catch { $script:State.DisplayDeviceId = ''; $script:State.DisplayDeviceName = '' }
+    }
     $script:State.DriverPath = $target
+    [IO.File]::WriteAllText((Join-Path $target 'xr-gate-installed.json'),
+        (@{schema=1;owner='XR Gate Windows launcher';device=$device} | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
     $script:State.DriverDevice = $device
     $script:State.ReleaseTag = $Tag
     Save-State

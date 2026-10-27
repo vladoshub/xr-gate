@@ -1,5 +1,5 @@
 function Get-XrDriverDeviceId {
-    $device = (Get-XrSetting 'XR_TARGET_DEVICE' 'generic').Trim().ToLowerInvariant().Replace('-', '_')
+    $device = (Get-XrSetting 'XR_TARGET_DEVICE').Trim().ToLowerInvariant().Replace('-', '_')
     if (!$device -or $device -cnotmatch '^[a-z0-9][a-z0-9_.]*$' -or $device.EndsWith('.')) {
         throw 'Set XR_TARGET_DEVICE to the driver device identifier in the selected Hardware preset.'
     }

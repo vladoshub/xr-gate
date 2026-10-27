@@ -279,11 +279,13 @@ public partial class MainWindow
     {
         int installs = 0, prompts = 0;
         bool setupComplete = false;
+        settings.HardwareEnv = ""; settings.ApplyHardwarePreset(root); InitializeHardwareUi();
         readiness.Known = true; readiness.Installed = installed = false;
         readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = false;
+        readiness.HardwareConnected = false;
         UpdateReadinessUi();
-        if (InstallButton.IsEnabled || Equals(InstallButton.Tag, true) || StartButton.IsEnabled || !DisplayButton.IsEnabled || !Equals(DisplayButton.Tag, true))
-            throw new InvalidOperationException("Fresh setup must allow display selection and block Install/Start VR.");
+        if (InstallButton.IsEnabled || Equals(InstallButton.Tag, true) || StartButton.IsEnabled || DisplayButton.IsEnabled || Equals(DisplayButton.Tag, true))
+            throw new InvalidOperationException("Fresh setup must have no selected device and block Install/Display/Start VR.");
         smokeConfirmation = _ => { prompts++; return true; };
         smokeAction = (action, _) =>
         {
@@ -300,11 +302,15 @@ public partial class MainWindow
             }) });
         };
         await BeginInstallationAsync();
-        if (installs != 0 || prompts != 0) throw new InvalidOperationException("Install ignored the missing display.");
-        readiness.DisplaySelected = readiness.DisplayConnected = true;
+        if (installs != 0 || prompts != 0) throw new InvalidOperationException("Install ignored the missing device preset.");
+        settings.HardwareEnv = hardwareChoices.First().Path; settings.ApplyHardwarePreset(root); InitializeHardwareUi();
         UpdateReadinessUi();
-        if (!InstallButton.IsEnabled || StartButton.IsEnabled || !Equals(InstallButton.Tag, true) || Equals(DisplayButton.Tag, true))
-            throw new InvalidOperationException("Choosing a display must enable Install before WSL is installed.");
+        if (!InstallButton.IsEnabled || StartButton.IsEnabled || !Equals(InstallButton.Tag, true) || DisplayButton.IsEnabled)
+            throw new InvalidOperationException("A chosen preset must enable Install without hardware or display, but keep display selection unavailable.");
+        ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "CONNECTED", display_selected = false, display_connected = false }));
+        if (!DisplayButton.IsEnabled || !Equals(DisplayButton.Tag, true)) throw new InvalidOperationException("A connected device with no automatic display did not enable and pulse manual selection.");
+        ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "CONNECTED", display_selected = true, display_connected = true }));
+        if (!DisplayButton.IsEnabled || Equals(DisplayButton.Tag, true)) throw new InvalidOperationException("An automatically selected display still requested manual selection.");
         SetBusy("Install");
         if (InstallButton.IsEnabled || Equals(InstallButton.Tag, true))
             throw new InvalidOperationException("Install must stop blinking while unavailable during setup.");
@@ -330,8 +336,8 @@ public partial class MainWindow
         if (await ExecuteAsync("Run", steamVr: true) || StatusDetail.Text != "fixture WSL inventory did not respond" || runtimeMayBeRunning)
             throw new InvalidOperationException("Start VR bypassed the WSL lease or reported tracking after a failed WSL probe.");
         ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "NOT CONNECTED", display_selected = true, display_connected = false }));
-        if (StartButton.IsEnabled || InstallButton.IsEnabled || !DisplayButton.IsEnabled)
-            throw new InvalidOperationException("Disconnect left Start VR or Install enabled.");
+        if (StartButton.IsEnabled || !InstallButton.IsEnabled || DisplayButton.IsEnabled || Equals(DisplayButton.Tag, true))
+            throw new InvalidOperationException("Disconnect must block Start VR/display selection while keeping preset-based Update available.");
         FlushLog();
         var before = LogBox.Document.Blocks.Count;
         calibrationNotices.Reset();

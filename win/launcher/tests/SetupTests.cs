@@ -6,12 +6,15 @@ internal static class SetupTests
     public static void Run(string folder)
     {
         static void Check(bool value, string message) { if (!value) throw new Exception(message); }
-        for (int bits = 0; bits < 32; bits++)
+        for (int bits = 0; bits < 128; bits++)
         {
             var state = new LauncherReadiness { Known = (bits & 1) != 0, Installed = (bits & 2) != 0,
-                DisplaySelected = (bits & 4) != 0, DisplayConnected = (bits & 8) != 0, DeviceConnected = (bits & 16) != 0 };
-            Check(state.CanStart == (bits == 31), "Start VR ignored an incomplete prerequisite: " + bits);
-            Check(state.CanInstall == ((bits & 12) == 12), "Install must require a selected, connected display independently of WSL: " + bits);
+                DisplaySelected = (bits & 4) != 0, DisplayConnected = (bits & 8) != 0, DeviceConnected = (bits & 16) != 0,
+                HardwareSelected = (bits & 32) != 0, HardwareConnected = (bits & 64) != 0 };
+            Check(state.CanStart == ((bits & 63) == 63), "Start VR ignored an incomplete prerequisite: " + bits);
+            Check(state.CanInstall == state.HardwareSelected, "Install must require a device preset, independently of connection/display: " + bits);
+            Check(state.CanSelectDisplay == (state.HardwareSelected && (state.DeviceConnected || state.HardwareConnected)), "Display selection ignored device presence: " + bits);
+            Check(state.NeedsDisplaySelection == (state.CanSelectDisplay && (!state.DisplaySelected || !state.DisplayConnected)), "Display selection hint ignored a known output or missing hardware: " + bits);
         }
         var pending = new SetupProgress(true, "Ubuntu-24.04", "restart_windows");
         string path = Path.Combine(folder, "setup", "setup-progress.json");
@@ -62,6 +65,9 @@ internal static class SetupTests
         bool emptyRejected = false;
         try { DistributionRemoval.Load(removalState); } catch (InvalidDataException) { emptyRejected = true; }
         Check(emptyRejected, "A display-only or deleted installation could unregister Ubuntu.");
-        Console.WriteLine("OK: display-before-install gating, complete Start VR prerequisites, resumed setup and calibration notices.");
+        File.WriteAllText(removalState, JsonSerializer.Serialize(new { Distribution = "Ubuntu-24.04", LinuxUser = "", InstallPending = false, DriverPath = "saved-driver" }));
+        var driversOnly = DistributionRemoval.Load(removalState);
+        Check(!driversOnly.RemoveUbuntu && driversOnly.Confirmation.Contains("SteamVR driver copies") && !driversOnly.Confirmation.Contains("ALL files"), "Leftover driver cleanup was unavailable or claimed it would delete an unowned Ubuntu.");
+        Console.WriteLine("OK: preset-before-install gating, connected-device display selection, complete Start VR prerequisites, resumed setup and deletion notices.");
     }
 }

@@ -184,9 +184,9 @@ class PackageTest(unittest.TestCase):
             packager.build(WIN, root / "drivers", archive, "90", "direct", launcher=executable)
             with ZipFile(archive) as package:
                 env = package.read("xr-gate-windows-wsl2-usbip/.env.example").decode()
-                preset = package.read("xr-gate-windows-wsl2-usbip/" + packager.hardware_preset(env)).decode()
-                self.assertIn("XR_DISPLAY_FREQUENCY_HZ=90", preset)
-                self.assertIn("XR_DISPLAY_MODE=direct", preset)
+                self.assertIsNone(packager.hardware_preset(env))
+                self.assertIn("XR_HARDWARE_ENV=\n", env)
+                self.assertIn("xr-gate-windows-wsl2-usbip/hardware/xreal_ultra.env", package.namelist())
             with self.assertRaises(ValueError):
                 packager.verify(archive, "60 90", "direct")
             with self.assertRaises(FileNotFoundError):

@@ -70,7 +70,7 @@ $script:State = [ordered]@{
     FrequencyHz = (Get-XrInteger 'XR_DISPLAY_FREQUENCY_HZ' 1 1000)
     DisplayMode = (Get-XrSetting 'XR_DISPLAY_MODE'); DisplayOption = (Get-XrSetting 'XR_DISPLAY_OPTION')
     GearVR = $false; DriverPath = ''; RegisteredDriver = ''
-    DisplayDeviceId = ''; DisplayDeviceName = ''
+    DisplayDeviceId = ''; DisplayDeviceName = ''; DisplayTargetDevice = ''
 }
 $script:LinuxExitCode = 0
 $script:LinuxHelperPath = ''
@@ -274,6 +274,53 @@ function Invoke-Elevated([string]$Task, [string[]]$BusIds = @()) {
         }
     }
 }
+function Invoke-XrSetupCommand([string]$File, [string[]]$Arguments) {
+    # Keep native diagnostics for the structured UAC result: the elevated
+    # console can close before the launcher can show its stdout or stderr.
+    $tail = New-Object 'System.Collections.Generic.Queue[string]'
+    $previousExit = Get-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    $previousExitValue = if ($previousExit) { $previousExit.Value } else { $null }
+    $ErrorActionPreference = 'Continue' # PowerShell 5.1 wraps native stderr in ErrorRecord.
+    $global:LASTEXITCODE = $null
+    try {
+        & $File @Arguments 2>&1 | ForEach-Object {
+            $line = $_.ToString() -replace '\x00', ''
+            Write-Host $line
+            if ($line.Trim()) {
+                $tail.Enqueue($line)
+                if ($tail.Count -gt 20) { $null = $tail.Dequeue() }
+            }
+        }
+        $code = $global:LASTEXITCODE
+    } finally {
+        if ($previousExit) { $global:LASTEXITCODE = $previousExitValue }
+        else { Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
+    }
+    if ($null -eq $code) { throw ("Could not start $File. " + ($tail.ToArray() -join [Environment]::NewLine)) }
+    return [pscustomobject]@{ExitCode=[int]$code; Output=@($tail.ToArray())}
+}
+function Update-XrWsl([string]$Wsl, [int]$RetryDelayMilliseconds = 2000) {
+    $firstFailure = ''
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $result = Invoke-XrSetupCommand $Wsl @('--update','--web-download')
+        $script:NativeExitCode = $result.ExitCode
+        if ($result.ExitCode -in @(0,3010)) {
+            if ($attempt -gt 1) { Write-XrWarning ('WSL update completed on the automatic retry. Initial diagnostic: ' + $firstFailure) }
+            return $result.ExitCode
+        }
+        $details = ($result.Output -join [Environment]::NewLine).Trim()
+        if (!$details) { $details = 'WSL returned no diagnostic output.' }
+        $failure = ('WSL --update --web-download failed (exit ' + $result.ExitCode + '). ' + $details)
+        # Allow one recovery attempt for exit 1, as another Install click would.
+        if ($result.ExitCode -ne 1 -or $attempt -eq 2) {
+            if ($firstFailure) { $failure = $firstFailure + [Environment]::NewLine + $failure }
+            throw $failure
+        }
+        $firstFailure = $failure
+        Write-Step ($failure + ' Retrying WSL update once...')
+        Start-Sleep -Milliseconds $RetryDelayMilliseconds
+    }
+}
 function Invoke-AdminTask {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'This internal action requires elevation.' }
@@ -295,8 +342,7 @@ function Invoke-AdminTask {
         }
     }
     if ($needsRestart) { return 20 }
-    Invoke-Native (Get-Tool 'wsl.exe') @('--update','--web-download') @(0,3010)
-    if ($script:NativeExitCode -eq 3010) { return 20 }
+    if ((Update-XrWsl (Get-Tool 'wsl.exe')) -eq 3010) { return 20 }
     try { $null = Get-Tool 'usbipd.exe' } catch {
         Invoke-Native (Get-Tool 'winget.exe') @('install','--exact','--id','dorssel.usbipd-win','--silent','--accept-package-agreements','--accept-source-agreements','--disable-interactivity') @(0,3010)
         if ($script:NativeExitCode -eq 3010) { return 20 }
@@ -875,11 +921,11 @@ try {
     Load-State
     if ($Action -eq 'Delete') {
         Remove-XrDistribution $DeleteDistributionName
-        Complete-XrAction 0 ('Ubuntu distribution ' + $DeleteDistributionName + ' and its Linux data were deleted. Click Install to set up XR Gate again.')
+        Complete-XrAction 0 'The saved XR Gate installation and launcher-owned SteamVR driver copies were removed. Click Install to set up XR Gate again.'
     }
     if ($Action -eq 'DeviceStatus') {
         $script:ActionData = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
-        $setup = Get-XrSetupObservation $false
+        $setup = Get-XrSetupObservation $false ($script:ActionData.device_status -ne 'NOT CONNECTED')
         foreach ($key in @('display_selected','display_connected','display_number')) { $script:ActionData[$key] = $setup[$key] }
         $script:ActionData | ConvertTo-Json -Compress
         Complete-XrAction 0
@@ -893,8 +939,11 @@ try {
             distribution=[string]$script:State.Distribution; release=[string]$script:State.ReleaseTag;
             runtime_download_url=[string]$script:State.RuntimeDownloadUrl; runtime_source=[string]$script:State.RuntimeSourceKind;
             frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode;
-            can_delete=([bool]$script:State.LinuxUser -or [bool]$script:State.InstallPending)}
-        $setup = Get-XrSetupObservation ([bool]$status.installed)
+            can_delete=([bool]$script:State.LinuxUser -or [bool]$script:State.InstallPending -or [bool]$script:State.DriverPath -or [bool]$script:State.RegisteredDriver)}
+        $device = $null
+        try { $device = Get-XrDeviceObservation -Devices @(Get-UsbDevices) }
+        catch { Write-XrWarning ('Device status is unavailable: ' + $_.Exception.Message) }
+        $setup = Get-XrSetupObservation ([bool]$status.installed) ([bool]$device -and $device.device_status -ne 'NOT CONNECTED')
         foreach ($key in $setup.Keys) { $script:ActionData[$key] = $setup[$key] }
         $script:ActionData['starting'] = $false
         $windowRecord = Read-RuntimeWindow
@@ -912,18 +961,13 @@ try {
         $script:ActionData['display_frequency_hz'] = $displayObservation.frequency_hz
         $script:ActionData['display_name'] = $displayObservation.display_name
         $script:ActionData['display_detection_message'] = $displayObservation.message
-        try {
-            $device = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
-            foreach ($key in $device.Keys) { $script:ActionData[$key] = $device[$key] }
-        } catch { Write-XrWarning ('Device status is unavailable: ' + $_.Exception.Message) }
+        if ($device) { foreach ($key in $device.Keys) { $script:ActionData[$key] = $device[$key] } }
         $script:ActionData | ConvertTo-Json -Compress
         Complete-XrAction 0
     }
     if ($Action -eq 'Install') {
-        $displaySetup = Get-XrSetupObservation $false
-        if (!$displaySetup.display_selected -or !$displaySetup.display_connected) {
-            throw 'Select the connected glasses display number before Install.'
-        }
+        if (!(Get-XrSetting 'XR_HARDWARE_ENV')) { throw 'Choose Hardware preset in Settings, or connect a supported device so XR Gate can select one, before Install.' }
+        $null = Get-XrDriverDeviceId
         $script:State.InstallPending = $true
         $script:State.InstallNextStep = ''
         Save-State
@@ -951,7 +995,7 @@ try {
         $modelsArchive = Save-XrRuntimeArchive $modelsAsset $cache
         if ($source.Kind -ne 'release') { $release.tag_name = $source.Kind + '-' + ([string]$runtimeAsset.digest).Substring(7,12) }
         Write-Step ("Selected release: " + $release.tag_name)
-        if ((Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { Select-AutomaticDriverFrequency $release $cache }
+        Select-InstallationDriver $release $cache
         $driverPackage = Get-DriverPackage $release $cache
         $request = New-LinuxRequest
         $request.tag = [string]$release.tag_name
@@ -969,6 +1013,7 @@ try {
         }
         Install-SelectedWindowsDriver $driverPackage ([string]$release.tag_name)
         Register-XrDriver -AllowDeferred
+        $script:ActionData = @{distribution=[string]$script:State.Distribution; frequency_hz=[int]$script:State.FrequencyHz; display_mode=[string]$script:State.DisplayMode}
         Write-Host 'Installation complete. Next: enable SBS, select the matching Hz in Windows, then click Start VR. See docs/START-HERE.html.' -ForegroundColor Green
         Complete-XrAction 0 'Installation complete. Click Start VR.'
     }
@@ -999,7 +1044,9 @@ try {
         'Restart' { Restart-XrTracking }
         'Run' {
             if ($Launcher -and $StartSteamVR) {
-                $setup = Get-XrSetupObservation $true
+                $device = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
+                if ($device.device_status -eq 'NOT CONNECTED') { throw 'Connect the selected supported XR device before starting VR.' }
+                $setup = Get-XrSetupObservation $true $true -RememberDisplay
                 if (!$setup.setup_complete) { throw 'Finish Install before starting VR.' }
                 if (!$setup.display_selected -or !$setup.display_connected) { throw 'Select the connected glasses display before starting VR.' }
             }

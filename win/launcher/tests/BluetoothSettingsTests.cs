@@ -15,6 +15,8 @@ internal static class BluetoothSettingsTests
         File.WriteAllText(Path.Combine(root, "hardware/custom.env"), preset.Replace("XR_BLUETOOTH_USB_ID=0b05:190e", "XR_BLUETOOTH_USB_ID=1234:abcd"));
         string state = Path.Combine(root, "state.json"), env = Path.Combine(root, ".env");
         var settings = LauncherSettings.Load(root, state);
+        settings.HardwareEnv = "hardware/xreal_ultra.env";
+        settings.SaveHardwareSelection(root);
         Check(settings.BluetoothUsbId == "0b05:190e" && settings.BluetoothBusId == "", "The profile did not supply automatic ASUS selection.");
         Check(!settings.BluetoothEnabled, "The default adapter identity enabled Bluetooth by itself.");
         settings.HardwareEnv = "hardware/custom.env";

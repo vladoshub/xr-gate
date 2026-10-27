@@ -62,6 +62,9 @@ jobs:
       - name: Device-specific driver selection, refresh and cache
         shell: powershell
         run: '& ./win/tests/verify-driver-devices.ps1'
+      - name: Remove only launcher-owned SteamVR driver copies
+        shell: powershell
+        run: '& ./win/tests/verify-driver-cleanup.ps1'
       - name: Bluetooth firmware setup and selected-dongle recovery
         shell: powershell
         run: '& ./win/tests/verify-bluetooth-firmware.ps1'
@@ -80,7 +83,7 @@ jobs:
       - name: Hidden runtime output and exit diagnostics
         shell: powershell
         run: '& ./win/tests/verify-runtime-output.ps1'
-      - name: Display selection before installation and setup readiness
+      - name: Automatic/manual display selection and setup readiness
         shell: powershell
         run: '& ./win/tests/verify-setup-display.ps1'
       - name: Session cleanup ignores damaged or changed settings
@@ -89,7 +92,7 @@ jobs:
       - name: Confirmed Ubuntu deletion and cleanup before unregistering
         shell: powershell
         run: '& ./win/tests/verify-delete.ps1'
-      - name: First Ubuntu login and dynamic user detection
+      - name: WSL update recovery, first Ubuntu login and dynamic user detection
         shell: powershell
         run: '& ./win/tests/verify-first-login.ps1'
       - name: Graceful SteamVR shutdown and bounded cleanup

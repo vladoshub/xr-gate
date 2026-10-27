@@ -194,6 +194,7 @@ public partial class MainWindow : Window
                 keeper.Dispose();
             }
             bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop" or "Delete");
+            if (action == "Install") { settings.FrequencyHz = "60"; settings.DisplayMode = "extended_sbs"; }
             if (writesSettings && !smoke) { settings.Save(root); ControllerSettingsSaved(); }
             var actionSettings = writesSettings || smokeAction is not null || action is "Stop" or "Delete" ? settings : LauncherSettings.Load(root);
             await KeepUbuntuForActionAsync(action, actionSettings.Distribution, operationCancellation.Token);
@@ -202,6 +203,13 @@ public partial class MainWindow : Window
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,
                 timeLimit: action == "Test" ? TimeSpan.FromSeconds(actionSettings.StartTimeoutSeconds + 5) : null);
             nextStep = result.NextStep;
+            if (action == "Install" && result.Success && result.Data.ValueKind == JsonValueKind.Object &&
+                result.Data.TryGetProperty("frequency_hz", out var installedFrequency) && installedFrequency.TryGetInt32(out int hz))
+            {
+                settings.FrequencyHz = hz.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                settings.DisplayMode = "extended_sbs";
+                if (!smoke) settings.Save(root);
+            }
             if (action == "Install") firstLoginSession = FirstLoginSession.Read(result.Data);
             if (action == "Install") SaveSetupProgress(new(!result.Success, settings.Distribution, nextStep));
             pausedDistribution = result.Data.ValueKind == JsonValueKind.Object && result.Data.TryGetProperty("distribution", out var distro)
@@ -239,7 +247,7 @@ public partial class MainWindow : Window
                 "Run" => steamVr ? "VR is ready" : "Tracking started",
                 "Restart" => "Tracking restarted",
                 "Stop" => "Tracking stopped",
-                "Delete" => "Ubuntu deleted",
+                "Delete" => "XR Gate installation deleted",
                 "Install" => installed ? "Installation complete" : "Finish setup",
                 "Status" => runtimeMayBeRunning ? "Tracking is running" : readiness.CanStart ? "Ready to start" : "Next setup step",
                 _ => action + " complete"

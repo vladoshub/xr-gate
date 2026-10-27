@@ -23,6 +23,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     private string? deviceImageOverride;
     private Dictionary<string, string> controllerImageOverrides = new(StringComparer.OrdinalIgnoreCase);
     public string HardwareEnv { get; set; } = "";
+    public bool HardwareSelected => !string.IsNullOrWhiteSpace(HardwareEnv);
     public bool AutoDetectHardware { get; set; } = true;
     public string DeviceName { get; private set; } = "XR device";
     public string DeviceImage { get; private set; } = "";
@@ -191,8 +192,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         {
             HardwareEnv = hardware, Distribution = Choice("XR_DISTRIBUTION", "Distribution", "Ubuntu-24.04"),
             AutoDetectHardware = overrides.ContainsKey("XR_AUTO_DETECT_HARDWARE") ? Flag("XR_AUTO_DETECT_HARDWARE", true) : !overrides.ContainsKey("XR_HARDWARE_ENV"),
-            DeviceName = Get("XR_DEVICE_NAME", Get("XR_TARGET_DEVICE", "XR device")),
-            DeviceImage = Get("XR_DEVICE_IMAGE"), ControllerImages = ReadControllerImages(values),
+            DeviceName = hardware.Length == 0 ? "No device selected" : Get("XR_DEVICE_NAME", Get("XR_TARGET_DEVICE", "XR device")),
+            DeviceImage = hardware.Length == 0 ? "" : Get("XR_DEVICE_IMAGE"), ControllerImages = ReadControllerImages(values),
             ControllerProfileLabel = Get("XR_CONTROLLER_PROFILE_LABEL", "Configured BLE / IMU controller profile"),
             ReleaseTag = Get("XR_RELEASE_TAG", "latest"), UsbBusIds = Get("XR_USB_BUS_IDS"),
             RuntimeDownloadUrl = Get("XR_RUNTIME_URL"), RuntimeLocalPath = Get("XR_RUNTIME_LOCAL_PATH"),
@@ -272,9 +273,9 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         if (HardwareEnv.Trim() == loadedHardware) return;
         RememberEdits();
         var selected = Load(root, hardwareOverride: HardwareEnv.Trim(), defaultsOnly: true);
-        var profile = ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
-        DeviceName = deviceNameOverride ?? selected.DeviceName;
-        DeviceImage = deviceImageOverride ?? selected.DeviceImage;
+        var profile = HardwareSelected ? ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true) : new Dictionary<string, string>();
+        DeviceName = HardwareSelected ? deviceNameOverride ?? selected.DeviceName : "No device selected";
+        DeviceImage = HardwareSelected ? deviceImageOverride ?? selected.DeviceImage : "";
         ControllerImages = new Dictionary<string, string>(selected.ControllerImages, StringComparer.OrdinalIgnoreCase);
         foreach (var pair in controllerImageOverrides) ControllerImages[pair.Key] = pair.Value;
         string Keep(string key, string current, string inherited) => explicitKeys.Contains(key) ? current : inherited;
@@ -319,7 +320,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         if (DisplayMode is not ("direct" or "extended_sbs")) throw new FormatException("Display mode must be direct or extended_sbs.");
         foreach (string id in UsbBusIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) ValidateBusId(id);
         ValidateControllerSettings();
-        ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
+        if (HardwareSelected) ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
         string path = Path.Combine(root, ".env");
         string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
         // Preserve advanced settings and comments, including keys the GUI does not expose.
@@ -339,6 +340,27 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         baseline = values;
+    }
+
+    // A detected/manual device choice must survive reopening without saving
+    // unfinished values in the other tabs.
+    public void SaveHardwareSelection(string root)
+    {
+        ValidateLiteral(HardwareEnv);
+        ApplyHardwarePreset(root);
+        if (HardwareSelected) ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true);
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        { ["XR_HARDWARE_ENV"] = HardwareEnv.Trim(), ["XR_AUTO_DETECT_HARDWARE"] = AutoDetectHardware ? "1" : "0" };
+        string path = Path.Combine(root, ".env");
+        string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
+        string updated = UpdateEnv(original, values);
+        if (updated != original)
+        {
+            string temporary = path + ".hardware-" + Guid.NewGuid().ToString("N");
+            try { File.WriteAllText(temporary, updated, new UTF8Encoding(false)); File.Move(temporary, path, true); }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+        foreach (var pair in values) { explicitKeys.Add(pair.Key); baseline[pair.Key] = pair.Value; }
     }
 
     private Dictionary<string, string> ControllerValues() => new(StringComparer.OrdinalIgnoreCase)
