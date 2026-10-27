@@ -24,11 +24,26 @@
    <Grid x:Name="DeviceHeader" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0" MaxWidth="350">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
     <Image x:Name="DeviceArtwork" Grid.Column="0" Width="96" Height="68" Stretch="Uniform" Margin="0,0,10,0" Visibility="Collapsed" />
-    <Viewbox x:Name="DisconnectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform"
-     ToolTip="Connect an XR device to begin." AutomationProperties.Name="No XR device connected">
-     <Canvas Width="200" Height="86">
-      <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
-      <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
+    <Viewbox x:Name="UnselectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform"
+     ToolTip="Connect a supported XR device or choose a hardware preset in Settings." AutomationProperties.Name="No XR device selected">
+     <Canvas Width="200" Height="140">
+      <!-- Draw the large question mark first so it stays behind the glasses. -->
+      <Path Data="M65,34 C65,2 135,2 135,36 C135,59 100,58 100,82 V88" Stroke="#6B7280" StrokeThickness="18" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+      <Ellipse Canvas.Left="90" Canvas.Top="111" Width="20" Height="20" Fill="#6B7280" />
+      <Canvas Canvas.Top="44">
+       <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+       <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
+      </Canvas>
+     </Canvas>
+    </Viewbox>
+    <Viewbox x:Name="DisconnectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform" Visibility="Collapsed"
+     ToolTip="Connect the configured XR device." AutomationProperties.Name="Configured XR device not connected">
+     <Canvas Width="200" Height="140">
+      <!-- Separate plug and socket, with a visible gap between them. -->
+      <Path Data="M4,70 H28 M70,58 H84 M70,82 H84 M70,47 H40 Q28,47 28,59 V81 Q28,93 40,93 H70 Z M196,70 H172 M128,47 H160 Q172,47 172,59 V81 Q172,93 160,93 H128 Z"
+       Stroke="{StaticResource Accent}" StrokeThickness="5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+      <Path Data="M106,21 V34 M106,106 V119 M89,29 L96,39 M123,29 L116,39 M89,111 L96,101 M123,111 L116,101"
+       Stroke="#8994A4" StrokeThickness="4.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
      </Canvas>
     </Viewbox>
     <StackPanel Grid.Column="1" VerticalAlignment="Center">
