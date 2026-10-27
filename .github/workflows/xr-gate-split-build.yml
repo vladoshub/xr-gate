@@ -880,6 +880,8 @@ jobs:
           & ./win/tests/verify-bluetooth-selection.ps1
           & ./win/tests/verify-usb-timeout.ps1
           & ./win/tests/verify-device-lifecycle.ps1
+          & ./win/tests/verify-setup-display.ps1
+          & ./win/tests/verify-display-modes.ps1
           & ./win/tests/verify-release-platforms.ps1
           & ./win/tests/verify-runtime-sources.ps1
       - name: Test Bluetooth side selection and configuration updates

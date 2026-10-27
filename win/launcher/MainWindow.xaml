@@ -24,15 +24,35 @@
    <Grid x:Name="DeviceHeader" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0" MaxWidth="350">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
     <Image x:Name="DeviceArtwork" Grid.Column="0" Width="96" Height="68" Stretch="Uniform" Margin="0,0,10,0" Visibility="Collapsed" />
-    <Viewbox x:Name="DisconnectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform"
-     ToolTip="Connect an XR device to begin." AutomationProperties.Name="No XR device connected">
-     <Canvas Width="200" Height="86">
-      <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
-      <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
+    <Viewbox x:Name="UnselectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform"
+     ToolTip="Connect a supported XR device or choose a hardware preset in Settings." AutomationProperties.Name="No XR device selected">
+     <Canvas Width="200" Height="140">
+      <!-- Draw the large question mark first so it stays behind the glasses. -->
+      <Path Data="M65,34 C65,2 135,2 135,36 C135,59 100,58 100,82 V88" Stroke="#6B7280" StrokeThickness="18" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+      <Ellipse Canvas.Left="90" Canvas.Top="111" Width="20" Height="20" Fill="#6B7280" />
+      <Canvas Canvas.Top="44">
+       <Path Data="{StaticResource GlassesOutline}" Stroke="{StaticResource Accent}" StrokeThickness="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+       <Path Data="{StaticResource GlassesCameras}" Fill="{StaticResource Accent}" />
+      </Canvas>
+     </Canvas>
+    </Viewbox>
+    <Viewbox x:Name="DisconnectedArtwork" Grid.Column="0" Width="96" Height="68" Margin="0,0,10,0" Stretch="Uniform" Visibility="Collapsed"
+     ToolTip="Connect the configured XR device." AutomationProperties.Name="Configured XR device not connected">
+     <Canvas Width="200" Height="140">
+      <!-- Separate plug and socket, with a visible gap between them. -->
+      <Path Data="M4,70 H28 M70,58 H84 M70,82 H84 M70,47 H40 Q28,47 28,59 V81 Q28,93 40,93 H70 Z M196,70 H172 M128,47 H160 Q172,47 172,59 V81 Q172,93 160,93 H128 Z"
+       Stroke="{StaticResource Accent}" StrokeThickness="5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+      <Path Data="M106,21 V34 M106,106 V119 M89,29 L96,39 M123,29 L116,39 M89,111 L96,101 M123,111 L116,101"
+       Stroke="#8994A4" StrokeThickness="4.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
      </Canvas>
     </Viewbox>
     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-     <TextBlock Text="{Binding DeviceName, StringFormat='Device: {0}'}" ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5" />
+     <DockPanel>
+      <TextBlock x:Name="DeviceSbsStatus" DockPanel.Dock="Right" Visibility="Collapsed" FontSize="17" FontWeight="SemiBold" Foreground="#FFD08A" />
+      <TextBlock ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5">
+       <Run Text="Device: " /><Run x:Name="DeviceNameRun" Text="{Binding DeviceName, Mode=OneWay}" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="17" />
+      </TextBlock>
+     </DockPanel>
      <TextBlock x:Name="DeviceConnectionStatus" Text="—" HorizontalAlignment="Center" Margin="0,6,0,0" FontWeight="SemiBold">
      <TextBlock.Style>
       <Style TargetType="TextBlock">
@@ -59,7 +79,7 @@
   <Border Grid.Row="1" Background="#18283B" CornerRadius="10" Padding="18" Margin="0,0,0,18">
    <StackPanel>
     <TextBlock x:Name="StatusTitle" Text="Ready to set up" FontWeight="SemiBold" FontSize="17" />
-    <TextBlock x:Name="StatusDetail" Text="Connect the glasses and select their display number, then install XR Gate and start VR." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,6,0,0" />
+    <TextBlock x:Name="StatusDetail" Text="Connect a supported device or choose Hardware preset in Settings, then install XR Gate. Display selection is needed only to start VR." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,6,0,0" />
     <TextBlock x:Name="SetupNoticeText" FontSize="20" FontWeight="Bold" Foreground="#FFD08A" TextWrapping="Wrap" Margin="0,12,0,0" Visibility="Collapsed" />
     <TextBlock x:Name="WarningText" Foreground="#FFD08A" TextWrapping="Wrap" Margin="0,7,0,0" Visibility="Collapsed" />
     <Button x:Name="NextStepButton" Content="Continue" Click="NextStep_Click" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,12,0,0" />
@@ -83,18 +103,18 @@
      <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel>
        <StackPanel x:Name="ActionPanel">
-        <Button x:Name="DisplayButton" ToolTipService.ShowOnDisabled="True" Content="Select glasses display" Click="Display_Click" ToolTip="Select the glasses display number so XR Gate can read its refresh rate." />
-        <Button x:Name="InstallButton" ToolTipService.ShowOnDisabled="True" Content="Install" Click="Install_Click" ToolTip="Install or update WSL, Ubuntu, XR Gate and the matching SteamVR driver." />
+        <Button x:Name="DisplayButton" ToolTipService.ShowOnDisabled="True" Content="Select glasses display" Click="Display_Click" ToolTip="Connect the XR device, then select its display if automatic selection fails. Needed only to start VR." />
+        <Button x:Name="InstallButton" ToolTipService.ShowOnDisabled="True" Content="Install" Click="Install_Click" ToolTip="Choose a Hardware preset, then install WSL, Ubuntu, XR Gate and a default SBS driver. No display selection required." />
         <Button x:Name="StartButton" ToolTipService.ShowOnDisabled="True" Content="Start VR" Click="Start_Click" ToolTip="F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
         <Button x:Name="RestartButton" ToolTipService.ShowOnDisabled="True" Content="Restart tracking" Click="Restart_Click" ToolTip="F7: restart XR Gate inside Ubuntu without restarting SteamVR or detaching USB." />
         <Button x:Name="RefreshStatusButton" ToolTipService.ShowOnDisabled="True" Content="Refresh status" Click="Refresh_Click" ToolTip="Refresh installation, device and tracking status without starting a session." Background="#18253A" />
        </StackPanel>
-       <Button x:Name="StopButton" ToolTipService.ShowOnDisabled="True" Content="Stop tracking &amp; return USB" Click="Stop_Click" ToolTip="F6: stop XR Gate, request SteamVR exit and return the selected USB devices to Windows." Background="#4A2932" Margin="0,4,0,15" />
-       <Button x:Name="DeleteButton" ToolTipService.ShowOnDisabled="True" Content="Delete" Click="Delete_Click" Background="#4A2932" ToolTip="Delete the saved XR Gate Ubuntu distribution and all its Linux data." Margin="0,0,0,15" />
+       <Button x:Name="StopButton" ToolTipService.ShowOnDisabled="True" Content="Stop tracking &amp; return USB" Click="Stop_Click" ToolTip="F6: stop XR Gate, request SteamVR exit and return the selected USB devices to Windows." Background="{StaticResource StopAccent}" Margin="0,4,0,15" />
+       <Button x:Name="DeleteButton" ToolTipService.ShowOnDisabled="True" Content="Delete" Click="Delete_Click" Background="#4A2932" ToolTip="Delete the saved Ubuntu distribution, its Linux data and SteamVR driver copies installed by XR Gate." Margin="0,0,0,15" />
        <TextBlock Text="STARTUP" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
        <TextBlock Text="Tracking runs in the background. Enable Show command prompt in Settings before starting to use console calibration and manual controls." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,16" />
        <TextBlock Text="REFRESH RATE" Foreground="#79A5C7" FontSize="11" FontWeight="SemiBold" />
-       <TextBlock Text="The driver follows the glasses refresh rate. If a matching variant is unavailable, XR Gate selects 60 Hz and shows a warning." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,12" />
+       <TextBlock Text="Install uses a 60 Hz SBS driver when available, otherwise the lowest available SBS frequency for the selected device. Start VR can match the connected glasses refresh rate automatically." Foreground="#A9BBD2" TextWrapping="Wrap" Margin="0,7,6,12" />
       </StackPanel>
      </ScrollViewer>
      <Border Grid.Column="2" Background="#080E18" CornerRadius="8" Padding="14">
@@ -113,9 +133,10 @@
      <StackPanel x:Name="ControllersPanel" MaxWidth="760" HorizontalAlignment="Left" SourceUpdated="ControllerSetting_SourceUpdated">
       <TextBlock Text="Controllers" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" />
       <TextBlock Text="Controller input" />
-      <ComboBox x:Name="ControllerModeBox" SelectedValuePath="Id" SelectedValue="{Binding ControllerMode, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+      <ComboBox x:Name="ControllerModeBox" SelectedValuePath="Id" SelectedValue="{Binding ControllerMode, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" />
       <TextBlock Text="Gestures uses optical hands (default). Gear VR Controllers uses physical controllers. No enables head tracking without controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
       <CheckBox x:Name="BluetoothEnabledBox" Content="Enable Bluetooth" IsChecked="{Binding BluetoothEnabled, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
+      <TextBlock Text="For better tracking performance, use a dedicated external Bluetooth adapter." Foreground="#ACBED5" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
       <TextBlock Text="Bluetooth USB BUSID (optional; overrides VID:PID)" /><TextBox x:Name="BluetoothBusIdBox" Text="{Binding BluetoothBusId, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
       <TextBlock Text="Bluetooth VID:PID (used when BUSID is empty)" /><TextBox x:Name="BluetoothUsbIdBox" Text="{Binding BluetoothUsbId, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
       <TextBlock Text="For automatic Bluetooth selection, clear BUSID and set VID:PID. Clear both to keep the saved adapter. Camera / IMU BUSIDs keep their saved selection when empty." Foreground="#8FA6C3" TextWrapping="Wrap" />
@@ -127,9 +148,9 @@
         <TextBlock Text="Bluetooth controllers" FontWeight="SemiBold" />
         <TextBlock Text="Select by name; MAC addresses distinguish controllers with identical names. Not selected disables that side in the saved controller config." TextWrapping="Wrap" Foreground="#ACBED5" Margin="0,8,0,12" />
         <TextBlock Text="Left controller" />
-        <ComboBox x:Name="LeftBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+        <ComboBox x:Name="LeftBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" />
         <TextBlock Text="Right controller" />
-        <ComboBox x:Name="RightBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" />
+        <ComboBox x:Name="RightBluetoothController" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectedValuePath="Address" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" />
         <WrapPanel>
          <Button Content="Connect &amp; save" Click="SaveBluetoothControllers_Click" Margin="0,0,8,0" />
          <Button Content="Scan again" Click="Pair_Click" Margin="0" />
@@ -154,10 +175,10 @@
         <StackPanel x:Name="AudioDeviceFields" IsEnabled="{Binding IsChecked, ElementName=AudioEnabledBox}">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
          <StackPanel><TextBlock Text="Windows audio source" />
-          <ComboBox x:Name="WindowsAudioSource" SelectedValuePath="Id" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="AudioSelection_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" ToolTip="{Binding SelectedItem.Id, RelativeSource={RelativeSource Self}}" />
+          <ComboBox x:Name="WindowsAudioSource" SelectedValuePath="Id" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="AudioSelection_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" ToolTip="{Binding SelectedItem.Id, RelativeSource={RelativeSource Self}}" />
          </StackPanel>
          <StackPanel Grid.Column="2"><TextBlock Text="Audio output in Ubuntu" />
-          <ComboBox x:Name="WslAudioOutput" SelectedValuePath="Id" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="AudioSelection_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,6,0,12" ToolTip="{Binding SelectedItem.Id, RelativeSource={RelativeSource Self}}" />
+          <ComboBox x:Name="WslAudioOutput" SelectedValuePath="Id" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="AudioSelection_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" ToolTip="{Binding SelectedItem.Id, RelativeSource={RelativeSource Self}}" />
          </StackPanel>
         </Grid>
         <Button x:Name="RefreshAudioDevicesButton" Content="Refresh audio devices" Click="RefreshAudioDevices_Click" HorizontalAlignment="Left" />
@@ -174,7 +195,7 @@
        <StackPanel>
         <TextBlock Text="Hardware preset" />
         <DockPanel><Button Content="Browse…" Click="BrowseHardware_Click" DockPanel.Dock="Right" Margin="8,5,0,13" Padding="10,7" />
-         <ComboBox x:Name="HardwarePresetBox" SelectedValuePath="Path" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="HardwarePreset_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="#F2F5F8" Margin="0,5,0,13" ToolTip="{Binding SelectedItem.Path, RelativeSource={RelativeSource Self}}" />
+         <ComboBox x:Name="HardwarePresetBox" SelectedValuePath="Path" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" SelectionChanged="HardwarePreset_Changed" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,5,0,13" ToolTip="{Binding SelectedItem.Path, RelativeSource={RelativeSource Self}}" />
         </DockPanel>
         <CheckBox x:Name="AutoDetectHardwareBox" Content="Detect hardware automatically" IsChecked="{Binding AutoDetectHardware}" Click="AutoDetectHardware_Click" />
         <TextBlock x:Name="HardwareDetectionStatus" Text="Presets are loaded from hardware/*.env. You can always choose another preset." Foreground="#8FA6C3" TextWrapping="Wrap" Margin="0,0,0,12" />
@@ -213,6 +234,14 @@
 
       <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
        <StackPanel>
+        <TextBlock Text="Device display protection" FontSize="18" FontWeight="SemiBold" />
+        <CheckBox x:Name="ProtectDeviceDisplayBox" Content="Protect device display during tracking" IsChecked="{Binding ProtectDeviceDisplay, UpdateSourceTrigger=PropertyChanged}" Click="ProtectDeviceDisplay_Click" Margin="0,10,0,8" />
+        <TextBlock Text="Keeps the mouse pointer and ordinary windows off the selected secondary XR display while tracking is active. Protection is released when tracking stops. Changes are saved automatically." Foreground="#ACBED5" TextWrapping="Wrap" />
+        <TextBlock x:Name="DisplayProtectionStatus" Text="Protection is idle until tracking starts." Foreground="#8FA6C3" TextWrapping="Wrap" Margin="0,8,0,0" />
+       </StackPanel>
+      </Border>
+      <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
+       <StackPanel>
         <TextBlock Text="Hotkeys" FontSize="18" FontWeight="SemiBold" />
         <CheckBox x:Name="GlobalHotkeysBox" Content="Enable global hotkeys" IsChecked="{Binding GlobalHotkeys, UpdateSourceTrigger=PropertyChanged}" Click="GlobalHotkeys_Click" Margin="0,10,0,8" />
         <TextBlock Text="F5 — Start VR" />
@@ -222,7 +251,6 @@
        </StackPanel>
       </Border>
       <WrapPanel Margin="0,16,0,0">
-       <Button x:Name="SaveSettingsButton" Content="Save settings" Click="SaveSettings_Click" Background="{StaticResource Accent}" Foreground="#082A28" Margin="0,0,10,10" />
        <Button Content="List USB devices" Click="ListUsb_Click" Margin="0,0,10,10" />
        <Button x:Name="AdvancedSettingsButton" Content="Open advanced settings" Click="Advanced_Click" Margin="0,0,10,10" />
       </WrapPanel>
@@ -253,9 +281,11 @@
    <Button x:Name="AboutButton" Content="About" Click="About_Click" ToolTip="About XR Gate, contact information and installed versions."
     HorizontalAlignment="Right" VerticalAlignment="Top" Padding="18,10" Margin="0,0,0,8" Background="#152034" />
   </Grid>
-  <DockPanel Grid.Row="3" Margin="0,18,0,0">
-   <TextBlock DockPanel.Dock="Right" FontSize="11" Margin="16,0,0,0"><Hyperlink x:Name="ProjectLink" NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
-   <TextBlock Text="Windows x64  ·  .NET included  ·  WSL stays active while this launcher is open" Foreground="#6F87A5" FontSize="11" />
-  </DockPanel>
+  <Grid x:Name="FooterBar" Grid.Row="3" Margin="0,18,0,0">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+   <TextBlock Text="Windows x64  ·  .NET included  ·  WSL stays active while this launcher is open" Foreground="#6F87A5" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,16,0" />
+   <Button x:Name="SaveSettingsButton" Grid.Column="1" Content="Save settings" Click="SaveSettings_Click" Background="{StaticResource Accent}" Foreground="#082A28" Margin="0" Padding="16,8" HorizontalAlignment="Center" />
+   <TextBlock Grid.Column="2" FontSize="11" Margin="16,0,0,0" HorizontalAlignment="Right" VerticalAlignment="Center"><Hyperlink x:Name="ProjectLink" NavigateUri="https://github.com/vladoshub/xr-gate" RequestNavigate="Project_RequestNavigate" Foreground="#83CFC5">github.com/vladoshub/xr-gate</Hyperlink></TextBlock>
+  </Grid>
  </Grid>
 </Window>

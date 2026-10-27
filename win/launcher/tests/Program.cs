@@ -41,6 +41,7 @@ Directory.CreateDirectory(folder);
 try
 {
     SetupTests.Run(folder);
+    SbsModeTests.Run(folder);
     Directory.CreateDirectory(Path.Combine(folder, "hardware"));
     File.Copy(Path.Combine(source, ".env.example"), Path.Combine(folder, ".env.example"));
     File.Copy(Path.Combine(source, "hardware/xreal_ultra.env"), Path.Combine(folder, "hardware/xreal_ultra.env"));
@@ -79,6 +80,7 @@ try
     HardwareControllerTests.Run(source, folder);
     InstallSourceTests.Run(source, folder);
     ArtworkTests.Run(folder);
+    DisplayProtectionTests.Run(folder);
     await AudioTests.RunAsync(source, folder);
     string encoded = ScriptCommand.Encode(@"C:\O'Brien\XR Gate\XrGate-Wsl.ps1", "Run", @"C:\result.json", true, false);
     string command = Encoding.Unicode.GetString(Convert.FromBase64String(encoded));

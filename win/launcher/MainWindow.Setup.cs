@@ -37,18 +37,22 @@ public partial class MainWindow
 
     private void UpdateReadinessUi()
     {
+        readiness.HardwareSelected = settings.HardwareSelected;
+        readiness.SbsResolution = settings.SbsResolution;
         UpdateHeaderArtwork();
+        UpdateDisplayProtection();
         bool available = busyAction.Length == 0 && configurationProblem is null && !closing;
         StartButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanStart;
         StartButton.ToolTip = readiness.CanStart ? "F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." : readiness.NextStep;
         RestartButton.IsEnabled = available && (runtimeMayBeRunning || installed && resourcesMayBeOwned);
         InstallButton.Content = installed ? "Update" : "Install";
         InstallButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanInstall;
-        InstallButton.ToolTip = readiness.CanInstall ? "Install or update WSL, Ubuntu, XR Gate and the SteamVR driver for the selected display." : "Select the connected glasses display number first so XR Gate can read its refresh rate.";
-        DisplayButton.IsEnabled = available && !runtimeMayBeRunning;
+        InstallButton.ToolTip = readiness.CanInstall ? "Install or update WSL, Ubuntu and XR Gate for the selected device. Uses 60 Hz SBS when available; display selection is needed only to start VR." : "Connect a supported device or choose Hardware preset in Settings first.";
+        DisplayButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanSelectDisplay;
+        DisplayButton.ToolTip = readiness.CanSelectDisplay ? "Select the glasses display if automatic selection failed. Needed to start VR; installation does not require a display." : "Connect the selected supported XR device to choose its display.";
         DeleteButton.IsEnabled = available && (canDeleteInstallation || installed || setupProgress.Pending);
         Pulse(InstallButton, InstallButton.IsEnabled && !installed);
-        Pulse(DisplayButton, DisplayButton.IsEnabled && (!readiness.DisplaySelected || !readiness.DisplayConnected));
+        Pulse(DisplayButton, DisplayButton.IsEnabled && readiness.NeedsDisplaySelection);
         if (!available || !readiness.Known) return;
         string hint = runtimeMayBeRunning ? "Click Stop tracking & return USB when finished." : readiness.NextStep;
         if (hint == lastNextStepHint) return;
@@ -69,7 +73,7 @@ public partial class MainWindow
     private async Task InstallCoreAsync(bool confirmed, bool firstLoginContinuation)
     {
         if (busyAction.Length > 0 || closing || configurationProblem is not null || runtimeMayBeRunning) return;
-        if (!readiness.CanInstall) { UpdateReadinessUi(); ShowSetupPrompt("CONNECT THE GLASSES AND SELECT THEIR DISPLAY NUMBER. THEN CLICK INSTALL."); return; }
+        if (!readiness.CanInstall) { UpdateReadinessUi(); ShowSetupPrompt("CONNECT A SUPPORTED XR DEVICE OR CHOOSE HARDWARE PRESET IN SETTINGS. THEN CLICK INSTALL."); return; }
         if (!confirmed && !Confirm("XR Gate will install WSL 2, Ubuntu and the required XR components if they are missing. Administrator permission and a Windows restart may be required. Continue?")) return;
         if (!firstLoginContinuation) CancelFirstLoginWait();
         SetupNoticeText.Visibility = Visibility.Collapsed;

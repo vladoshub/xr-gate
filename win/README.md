@@ -8,9 +8,22 @@ Install SteamVR, open it once and close it. Download and extract from the 'Relea
 
 ## Start
 
-1. **Select glasses display** — Connect the glasses. In Windows choose Extend these displays and enable the glasses’ SBS mode. In Run, click Select glasses display and choose their display number. Install stays disabled until the selected display is connected.
-2. **Install** — Confirm installation of WSL, Ubuntu and XR Gate. Create the Ubuntu account if prompted (see below). Installation continues after you type `exit`. Restart only when XR Gate requests it; after reboot, reopen XR Gate to continue unfinished setup. Install becomes Update when setup is complete.
-3. **Start VR** — Available after installation, display selection and device connection. USB connects automatically. Stop tracking & return USB, or close the launcher, to stop the session, request SteamVR exit and return the devices.
+1. **Hardware preset** — No device is selected initially. Connect a supported device for automatic detection and saving, or choose a preset in Settings. Manual choices are saved too. Install / Update requires a selected preset.
+2. **Install** — Confirm installation of WSL, Ubuntu and XR Gate. No connected display is required. The selected device gets a 60 Hz SBS driver, or its lowest available SBS frequency when 60 Hz is absent. Create the Ubuntu account if prompted; after `exit`, installation continues automatically. Restart only when requested. Install becomes Update when setup is complete.
+3. **Select glasses display** — Before starting VR, connect the XR device, enable SBS and choose Extend these displays in Windows. A uniquely matched display is selected automatically. Otherwise the button becomes available and blinks: choose the glasses display manually. It is disabled without a connected supported device.
+4. **Start VR** — Available after installation, display selection and device connection. USB connects automatically. Stop tracking & return USB, or close the launcher, to stop the session, request SteamVR exit and return the devices.
+
+## Display identity and SBS mode
+
+The Air 2 Ultra profile requires both the EDID model code `MRG3136` and EDID name `Air 2 Ultra`. These checks also apply to saved/manual display choices. Other profiles can optionally set `XR_DISPLAY_MODEL_ID` and `XR_DISPLAY_MODEL_NAME`; every configured condition must match. `XR_DISPLAY_MATCH` remains available for profiles without these exact identity checks. Model codes identify a device model/revision, not an individual unit; the values above were observed on an Air 2 Ultra and may need adjustment for another revision or firmware.
+
+An optional hardware-profile setting, `SBS_RESOLUTION=3840x1080`, requires that exact current Windows output resolution before Start VR/F5. A different known resolution shows **(SBS OFF)** after the device name and disables VR startup; a matching resolution removes the label. A missing/unknown display mode also blocks startup, without falsely showing SBS OFF. The launch script checks again before tracking startup and immediately before launching SteamVR. Install and tracking without SteamVR remain available. Omit or leave `SBS_RESOLUTION` empty for devices that always use one display mode. For custom devices use their own required `WIDTHxHEIGHT`.
+
+## Glasses display protection
+
+Settings → **Protect device display during tracking** is on by default and saves automatically. During XR Gate startup/tracking, the pointer stays on ordinary monitors and windows that enter the selected glasses display are returned to the desktop. Stop, an observed tracking exit, disabling the checkbox or closing the launcher releases protection. An idle launcher does not block the screen.
+
+Protection applies to a separate secondary extended SBS display. It excludes the primary monitor and SteamVR compositor, and does not change display modes or positions. Elevated applications and exclusive fullscreen can bypass this desktop guard. If SteamVR fails when an application enters fullscreen on another monitor, collect `vrcompositor.txt` and `vrserver.txt` to identify the cause.
 
 ## Ubuntu account
 
@@ -18,10 +31,10 @@ Choose your own Linux username and password in the Ubuntu window. Password chara
 
 ## Tabs
 
-- **Run** — Display selection, Install / Update, Start VR, Restart tracking, Stop, status and Activity Log. Restart tracking restarts XR Gate inside Ubuntu while keeping SteamVR and USB connected. Buttons include hover hints. Delete removes the saved Ubuntu distribution and all its Linux data after confirmation. Blinking buttons show the next setup step.
+- **Run** — Display selection, Install / Update, Start VR, Restart tracking, Stop, status and Activity Log. Restart tracking keeps SteamVR and USB connected. Delete removes the saved Ubuntu distribution, its Linux data and driver copies installed in the XR Gate launcher cache, after confirmation. Driver registrations at other locations are preserved. Blinking buttons show the next step.
 - **Controllers** — Gestures is the default; Bluetooth is off. No selects head tracking without hand/controller input. Fields save automatically. For Gear VR Controllers, enable Bluetooth, pair and select the left and/or right controller, then Connect & save. Calibration instructions appear once per stage in Activity Log.
 - **Audio** — Enable is on by default; turn it off to disable sound and keep device choices. Start VR keeps an available saved Ubuntu output or selects the first available one. Playback only; no microphone.
-- **Settings** — Hardware preset, display and launch settings. Hotkeys: F5 starts VR, F6 stops tracking and returns USB, F7 restarts tracking while keeping SteamVR running. Global hotkeys work while XR Gate is open, including when minimized; the checkbox saves automatically. Show command prompt is off by default; enable it before starting for console calibration commands.
+- **Settings** — Hardware preset, display and launch settings. Save settings is in the center of the bottom bar. Hotkeys: F5 starts VR, F6 stops tracking and returns USB, F7 restarts tracking while keeping SteamVR running. Global hotkeys work while XR Gate is open, including when minimized; the checkbox saves automatically. Show command prompt is off by default; enable it before starting for console calibration commands.
 - **Tools** — Diagnostics, driver registration and tracking checks. List USB devices stays in Settings.
 
 **Installation source:** Settings → URL XR Gate shows the runtime download URL. Local path XR Gate overrides it: select the runtime `.tar.gz` or a folder containing `xr-gate-ubuntu-24.04-linux-x64.tar.gz` and `hand-tracking-models-mercury.tar.gz`. Custom download URLs also use the models archive beside the runtime. Save settings, then Install / Update.

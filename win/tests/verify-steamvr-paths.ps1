@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'XrGate-Wsl.ps1') -Action Help *> $null
+# Registration uses a device-specific driver; fresh launcher defaults select no hardware.
+$script:Settings['XR_TARGET_DEVICE'] = 'fixture'
 function Assert($Condition, [string]$Message) { if (!$Condition) { throw $Message } }
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('xr-gate-steamvr-' + [Guid]::NewGuid())
 $previousLocalAppData = $env:LOCALAPPDATA

@@ -119,9 +119,8 @@ XR_STEAMVR_PATH="D:\A folder\SteamVR"
     Assert ($selection.Frequency -eq 60 -and $selection.Fallback) 'Unsupported glasses frequency did not fall back to 60 Hz.'
     $selection = Resolve-DriverFrequency -Available @(60,90) -Detected 0
     Assert ($selection.Frequency -eq 60 -and $selection.Fallback) 'Unknown glasses frequency silently selected another monitor frequency.'
-    $bad = $false
-    try { Resolve-DriverFrequency -Available @(90) -Detected 120 } catch { $bad = $true }
-    Assert $bad 'A package without the required fallback silently selected 90 Hz.'
+    $selection = Resolve-DriverFrequency -Available @(90) -Detected 120
+    Assert ($selection.Frequency -eq 90 -and $selection.Fallback) 'A device without 60 Hz did not use its available fallback.'
     $DisplayName = ''; $script:State.DisplayDeviceId = ''
     $script:Settings['XR_DISPLAY_MATCH'] = 'Custom headset'
     $glasses = [pscustomobject]@{DeviceName='DISPLAY7'; DeviceId='custom-1'; Name='Custom headset'; Width=2520; Height=1440; Frequency=72; Primary=$false}

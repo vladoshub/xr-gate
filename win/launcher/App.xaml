@@ -3,10 +3,50 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <Application.Resources>
   <SolidColorBrush x:Key="Accent" Color="#37D6BD" />
+  <SolidColorBrush x:Key="StopAccent" Color="#4A2932" />
+  <SolidColorBrush x:Key="InputSurface" Color="#F2F5F8" />
+  <Style x:Key="ScrollTrackButton" TargetType="RepeatButton">
+   <Setter Property="Focusable" Value="False" />
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" /></ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="ScrollThumb" TargetType="Thumb">
+   <Setter Property="Background" Value="{StaticResource InputSurface}" />
+   <Setter Property="MinHeight" Value="24" />
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb">
+    <Border x:Name="ThumbSurface" Background="{TemplateBinding Background}" CornerRadius="5" Margin="2" Opacity="0.82" />
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ThumbSurface" Property="Opacity" Value="1" /></Trigger>
+     <Trigger Property="IsDragging" Value="True"><Setter TargetName="ThumbSurface" Property="Opacity" Value="1" /></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style TargetType="ScrollBar">
+   <Setter Property="Width" Value="14" /><Setter Property="Background" Value="Transparent" /><Setter Property="Focusable" Value="False" />
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
+    <Grid Background="{TemplateBinding Background}">
+     <Track x:Name="PART_Track" Orientation="{TemplateBinding Orientation}" IsDirectionReversed="True"
+      Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" ViewportSize="{TemplateBinding ViewportSize}"
+      Value="{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+      <Track.DecreaseRepeatButton><RepeatButton x:Name="Decrease" Style="{StaticResource ScrollTrackButton}" Command="ScrollBar.PageUpCommand" /></Track.DecreaseRepeatButton>
+      <Track.Thumb><Thumb x:Name="Scroller" Style="{StaticResource ScrollThumb}" /></Track.Thumb>
+      <Track.IncreaseRepeatButton><RepeatButton x:Name="Increase" Style="{StaticResource ScrollTrackButton}" Command="ScrollBar.PageDownCommand" /></Track.IncreaseRepeatButton>
+     </Track>
+    </Grid>
+    <ControlTemplate.Triggers>
+     <Trigger Property="Orientation" Value="Horizontal">
+      <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
+      <Setter TargetName="Scroller" Property="MinHeight" Value="0" /><Setter TargetName="Scroller" Property="MinWidth" Value="24" />
+      <Setter TargetName="Decrease" Property="Command" Value="ScrollBar.PageLeftCommand" /><Setter TargetName="Increase" Property="Command" Value="ScrollBar.PageRightCommand" />
+     </Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Scroller" Property="Opacity" Value="0.35" /></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+   <Style.Triggers><Trigger Property="Orientation" Value="Horizontal"><Setter Property="Width" Value="Auto" /><Setter Property="Height" Value="14" /></Trigger></Style.Triggers>
+  </Style>
   <LinearGradientBrush x:Key="BrandAccent" StartPoint="0,0" EndPoint="1,1">
    <GradientStop Color="#BAFFF0" Offset="0" /><GradientStop Color="#37D6BD" Offset="0.6" /><GradientStop Color="#1AAFA0" Offset="1" />
   </LinearGradientBrush>
-  <!-- Original vector artwork. The disconnected visor shares Start VR's accent. -->
+  <!-- Original vector artwork. The unselected visor shares Start VR's accent. -->
   <Geometry x:Key="GlassesOutline">M24,27 L33,15 Q36,11 43,13 L52,16 M176,27 L167,15 Q164,11 157,13 L148,16 M16,29 Q48,20 82,27 L91,35 L87,59 Q85,70 73,72 H35 Q23,72 20,62 Z M184,29 Q152,20 118,27 L109,35 L113,59 Q115,70 127,72 H165 Q177,72 180,62 Z M91,37 Q100,31 109,37</Geometry>
   <GeometryGroup x:Key="GlassesCameras">
    <EllipseGeometry Center="42,43" RadiusX="2.5" RadiusY="2.5" />

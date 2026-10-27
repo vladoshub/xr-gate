@@ -19,6 +19,7 @@ public partial class MainWindow
             readiness.Known = true;
             installed = readiness.Installed = false;
             readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = true;
+            readiness.DisplayWidth = 3840; readiness.DisplayHeight = 1080;
             runtimeMayBeRunning = resourcesMayBeOwned = false;
             smokeAction = (action, _) =>
             {
@@ -28,7 +29,7 @@ public partial class MainWindow
                 return Task.FromResult(new ActionResult { ExitCode = 0, Data = JsonSerializer.SerializeToElement(new
                 {
                     installed = true, setup_complete = true, running = fixtureRunning,
-                    display_selected = true, display_connected = true, device_status = "SHARED"
+                    display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, device_status = "SHARED"
                 }) });
             };
             SetBusy("");
@@ -68,7 +69,7 @@ public partial class MainWindow
                     return new ActionResult { ExitCode = 0, Data = JsonSerializer.SerializeToElement(new
                     {
                         installed = true, setup_complete = true, running = false,
-                        display_selected = true, display_connected = true, device_status = "SHARED"
+                        display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, device_status = "SHARED"
                     }) };
                 };
                 runtimeMayBeRunning = resourcesMayBeOwned = launch == "Restart"; SetBusy("");

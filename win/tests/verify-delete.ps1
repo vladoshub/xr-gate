@@ -10,7 +10,7 @@ $script:Calls = New-Object 'System.Collections.Generic.List[string]'
 $script:Failure = ''; $script:Registered = @('Ubuntu-24.04','Ubuntu-other','docker-desktop')
 function Reset-Fixture {
     $script:State = [ordered]@{Distribution='Ubuntu-24.04';LinuxUser='fixture';ReleaseTag='v1';InstallPending=$false;
-        InstallNextStep='';AttachedUsbInstanceIds=@('selected');CleanupSettings=@{};DisplayDeviceId='saved-display'}
+        InstallNextStep='';AttachedUsbInstanceIds=@('selected');CleanupSettings=@{};DisplayDeviceId='saved-display';DriverPath='saved-driver';RegisteredDriver='saved-driver'}
     Save-State; $script:Calls.Clear(); $script:Failure = ''
 }
 function Get-XrRegisteredDistributions { return $script:Registered }
@@ -29,6 +29,7 @@ function Invoke-Linux($Operation, $Request, [switch]$AsRoot) {
 function New-LinuxRequest { return @{} }
 function Stop-RuntimeWindow { $script:Calls.Add('stop-window') }
 function Disconnect-SelectedUsb { $script:Calls.Add('return-usb'); if ($script:Failure -eq 'usb') { throw 'fixture USB cleanup failed' } }
+function Remove-XrManagedDrivers { $script:Calls.Add('remove-drivers'); if ($script:Failure -eq 'drivers') { throw 'fixture driver cleanup failed' }; return 2 }
 function Get-Tool($Name) { return $Name }
 function Invoke-Native($File, $Arguments) {
     Assert ($File -eq 'wsl.exe' -and $Arguments.Count -eq 2 -and $Arguments[0] -eq '--unregister' -and $Arguments[1] -ceq 'Ubuntu-24.04') 'Deletion targeted an unconfirmed distribution or all of WSL.'
@@ -41,7 +42,7 @@ try {
         try { Remove-XrDistribution $target } catch { $rejected = $true }
         Assert ($rejected -and $script:Calls.Count -eq 0) 'An absent, changed or invalid confirmation changed the installation.'
     }
-    foreach ($failureCase in @('linux','usb','firmware','unregister')) {
+    foreach ($failureCase in @('linux','usb','firmware','drivers','unregister')) {
         Reset-Fixture; $script:Failure = $failureCase
         $rejected = $false
         try { Remove-XrDistribution 'Ubuntu-24.04' } catch { $rejected = $true }
@@ -51,9 +52,10 @@ try {
     Reset-Fixture
     [IO.File]::WriteAllText((Get-RuntimeWindowPath), 'fixture old runtime')
     Remove-XrDistribution 'Ubuntu-24.04'
-    Assert (($script:Calls -join ',') -eq 'cancel-startup,stop-linux,stop-window,return-usb,release-firmware,unregister') 'Deletion did not clean tracking, USB and firmware before unregistering.'
+    Assert (($script:Calls -join ',') -eq 'cancel-startup,stop-linux,stop-window,return-usb,release-firmware,remove-drivers,unregister') 'Deletion did not clean tracking, USB, firmware and drivers before unregistering Ubuntu.'
     $saved = Get-Content -Raw -LiteralPath $script:StateFile | ConvertFrom-Json
-    Assert (!$saved.LinuxUser -and !$saved.InstallPending -and !$saved.AttachedUsbInstanceIds.Count -and $saved.DisplayDeviceId -eq 'saved-display') 'Successful deletion left stale setup state or erased the display choice.'
+    Assert (!$saved.LinuxUser -and !$saved.InstallPending -and !$saved.AttachedUsbInstanceIds.Count -and !$saved.DriverPath -and !$saved.RegisteredDriver -and $saved.DisplayDeviceId -eq 'saved-display') 'Successful deletion left stale setup/driver state or erased the display choice.'
+    Assert ($script:ActionData.drivers_removed -eq 2) 'Driver cleanup was not included in the deletion result.'
     Assert (!(Test-Path -LiteralPath (Get-RuntimeWindowPath)) -and $script:ActionData.deleted) 'Deletion retained a runtime owner or did not report success.'
     Reset-Fixture; $script:State.LinuxUser = ''; $script:State.InstallPending = $true; Save-State
     Remove-XrDistribution 'Ubuntu-24.04'
@@ -61,5 +63,10 @@ try {
     Reset-Fixture; $script:Registered = @('Ubuntu-other','docker-desktop')
     Remove-XrDistribution 'Ubuntu-24.04'
     Assert ('stop-linux' -notin $script:Calls -and 'unregister' -notin $script:Calls -and !$script:State.LinuxUser) 'Already absent Ubuntu prevented clearing its stale XR Gate state.'
+    Reset-Fixture; $script:State.LinuxUser = ''; Save-State
+    function Get-XrManagedDriverPaths { return @('owned-leftover') }
+    function Get-XrRegisteredDistributions { throw 'Driver-only deletion must not probe or unregister a WSL distribution.' }
+    Remove-XrDistribution 'Ubuntu-24.04'
+    Assert ('remove-drivers' -in $script:Calls -and 'unregister' -notin $script:Calls -and !$script:ActionData.distribution_deleted) 'Cleaning leftover drivers deleted or depended on an unowned Ubuntu installation.'
     Write-Host 'OK: confirmed exact-distribution deletion, stop/USB ordering, failed cleanup retention and unfinished/absent installations.'
 } finally { Remove-Item -Recurse -Force -LiteralPath $temporary }

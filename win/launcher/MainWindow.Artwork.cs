@@ -9,9 +9,14 @@ public partial class MainWindow
 {
     private void UpdateHeaderArtwork()
     {
+        readiness.SbsResolution = settings.SbsResolution;
+        DeviceSbsStatus.Text = readiness.SbsOff ? " (SBS OFF)" : "";
+        DeviceSbsStatus.Visibility = readiness.SbsOff ? Visibility.Visible : Visibility.Collapsed;
+        DeviceSbsStatus.ToolTip = readiness.SbsOff ? $"Enable SBS. Required display resolution: {settings.SbsResolution}. Current: {readiness.DisplayWidth}x{readiness.DisplayHeight}." : null;
         var paths = HeaderArtwork.Select(root, settings, readiness.DeviceConnected, runtimeMayBeRunning);
         SetHeaderArtwork(DeviceArtwork, paths.Device, settings.DeviceName);
-        DisconnectedArtwork.Visibility = readiness.DeviceConnected ? Visibility.Collapsed : Visibility.Visible;
+        UnselectedArtwork.Visibility = settings.HardwareSelected ? Visibility.Collapsed : Visibility.Visible;
+        DisconnectedArtwork.Visibility = settings.HardwareSelected && !readiness.DeviceConnected ? Visibility.Visible : Visibility.Collapsed;
         SetHeaderArtwork(ControllerArtwork, paths.Controller,
             settings.ControllerMode == "gestures" ? "Hand gestures" : settings.ControllerProfileLabel);
     }

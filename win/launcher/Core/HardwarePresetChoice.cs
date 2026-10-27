@@ -9,7 +9,8 @@ public sealed record ControllerModeChoice(string Id, string Label)
 
 public sealed record HardwarePresetChoice(string Path, string Name, IReadOnlySet<string> UsbIds)
 {
-    public string Label => Name + " — " + System.IO.Path.GetFileName(Path);
+    public static HardwarePresetChoice None { get; } = new("", "Select a device…", new HashSet<string>());
+    public string Label => Path.Length == 0 ? Name : Name + " — " + System.IO.Path.GetFileName(Path);
 
     public static List<HardwarePresetChoice> Load(string root, string selected, Action<string>? warning = null)
     {

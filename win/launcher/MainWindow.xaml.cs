@@ -71,6 +71,7 @@ public partial class MainWindow : Window
         audio = new AudioBridge(root, Log);
         InitializeAudioUi();
         InitializeControllerAutoSave();
+        InitializeDisplayProtection();
         logTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         logTimer.Tick += (_, _) => FlushLog();
         logTimer.Start();
@@ -194,14 +195,22 @@ public partial class MainWindow : Window
                 keeper.Dispose();
             }
             bool writesSettings = saveSettings && action is not ("Doctor" or "Status" or "Test" or "Stop" or "Delete");
+            if (action == "Install") { settings.FrequencyHz = "60"; settings.DisplayMode = "extended_sbs"; }
             if (writesSettings && !smoke) { settings.Save(root); ControllerSettingsSaved(); }
             var actionSettings = writesSettings || smokeAction is not null || action is "Stop" or "Delete" ? settings : LauncherSettings.Load(root);
             await KeepUbuntuForActionAsync(action, actionSettings.Distribution, operationCancellation.Token);
-            if (trackingAction) { runtimeMayBeRunning = true; BeginCalibrationProgress(); }
+            if (trackingAction) { runtimeMayBeRunning = true; UpdateDisplayProtection(); BeginCalibrationProgress(); }
             if (action is "Run" or "Restart" or "Usb" or "BluetoothScan" or "Pair" or "Controllers") resourcesMayBeOwned = true;
             ActionResult result = await RunActionAsync(action, steamVr, console, operationCancellation.Token,
                 timeLimit: action == "Test" ? TimeSpan.FromSeconds(actionSettings.StartTimeoutSeconds + 5) : null);
             nextStep = result.NextStep;
+            if (action == "Install" && result.Success && result.Data.ValueKind == JsonValueKind.Object &&
+                result.Data.TryGetProperty("frequency_hz", out var installedFrequency) && installedFrequency.TryGetInt32(out int hz))
+            {
+                settings.FrequencyHz = hz.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                settings.DisplayMode = "extended_sbs";
+                if (!smoke) settings.Save(root);
+            }
             if (action == "Install") firstLoginSession = FirstLoginSession.Read(result.Data);
             if (action == "Install") SaveSetupProgress(new(!result.Success, settings.Distribution, nextStep));
             pausedDistribution = result.Data.ValueKind == JsonValueKind.Object && result.Data.TryGetProperty("distribution", out var distro)
@@ -209,7 +218,7 @@ public partial class MainWindow : Window
             if (nextStep == "restart_ubuntu") keeper.Dispose();
 
             if (action == "Delete" && result.Success) ApplyDeletedInstallation();
-            if (result.Success && action == "Stop") runtimeMayBeRunning = false;
+            if (result.Success && action == "Stop") { runtimeMayBeRunning = false; UpdateDisplayProtection(); }
             if (result.Success && action is "Stop" or "Detach") resourcesMayBeOwned = false;
             if (result.Success && action == "BluetoothScan") ApplyBluetoothDevices(result.Data);
             if (action == "Status" && result.Success) ApplyStatus(result.Data);
@@ -239,7 +248,7 @@ public partial class MainWindow : Window
                 "Run" => steamVr ? "VR is ready" : "Tracking started",
                 "Restart" => "Tracking restarted",
                 "Stop" => "Tracking stopped",
-                "Delete" => "Ubuntu deleted",
+                "Delete" => "XR Gate installation deleted",
                 "Install" => installed ? "Installation complete" : "Finish setup",
                 "Status" => runtimeMayBeRunning ? "Tracking is running" : readiness.CanStart ? "Ready to start" : "Next setup step",
                 _ => action + " complete"
@@ -330,6 +339,7 @@ public partial class MainWindow : Window
         var value = default(JsonElement);
         runtimeMayBeRunning = data.TryGetProperty("running", out value) && value.GetBoolean();
         runtimeMayBeRunning |= data.TryGetProperty("starting", out var starting) && starting.ValueKind == JsonValueKind.True;
+        UpdateDisplayProtection();
         UpdateHeaderArtwork();
         if (!diagnosticLog) return;
         if (data.TryGetProperty("frequency_hz", out value)) Log("[Launcher] Configured driver: " + value + " Hz.");
@@ -481,6 +491,7 @@ public partial class MainWindow : Window
 
     private void ApplyDeviceObservation(JsonElement data)
     {
+        ObserveDisplayProtection(data);
         if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("device_status", out var status))
         {
             // Keep compatibility with helpers that report USB attachment as SHARED.
@@ -494,6 +505,11 @@ public partial class MainWindow : Window
         {
             if (data.TryGetProperty("display_selected", out var selected)) readiness.DisplaySelected = selected.ValueKind == JsonValueKind.True;
             if (data.TryGetProperty("display_connected", out var connected)) readiness.DisplayConnected = connected.ValueKind == JsonValueKind.True;
+            if (data.TryGetProperty("display_connected", out _))
+            {
+                readiness.DisplayWidth = readiness.DisplayConnected && data.TryGetProperty("display_width", out var width) && width.ValueKind == JsonValueKind.Number && width.TryGetInt32(out int w) && w > 0 ? w : null;
+                readiness.DisplayHeight = readiness.DisplayConnected && data.TryGetProperty("display_height", out var height) && height.ValueKind == JsonValueKind.Number && height.TryGetInt32(out int h) && h > 0 ? h : null;
+            }
         }
         UpdateReadinessUi();
     }
@@ -706,6 +722,7 @@ public partial class MainWindow : Window
     {
         if (resourcesReleased) return;
         ReleaseHotkeys();
+        displayGuard?.Dispose();
         CancelFirstLoginWait();
         controllerSaveTimer.Stop();
         deviceTimer.Stop();

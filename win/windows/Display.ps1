@@ -1,8 +1,75 @@
-function Get-DesktopDisplays {
+function Get-XrNativeDesktopDisplays {
     if (!('XrGateWsl.DisplayNative' -as [type])) {
         Add-Type -Path (Join-Path $PSScriptRoot 'DisplayNative.cs')
     }
-    return @([XrGateWsl.DisplayNative]::Enumerate())
+    return [XrGateWsl.DisplayNative]::Enumerate()
+}
+function Get-DesktopDisplays {
+    $displays = @(Get-XrNativeDesktopDisplays)
+    if (Get-XrSetting 'XR_DISPLAY_MODEL_NAME') {
+        # DeviceString is frequently "Generic PnP Monitor"; use the same EDID
+        # friendly name exposed by WmiMonitorID, keyed to the exact monitor instance.
+        $names = @{}
+        foreach ($monitor in @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop | Where-Object Active)) {
+            $key = Get-XrMonitorIdentityKey ([string]$monitor.InstanceName) -Wmi
+            if (!$key) { continue }
+            $name = -join ($monitor.UserFriendlyName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ })
+            if ($names.ContainsKey($key)) { $names[$key] = '' } else { $names[$key] = $name.Trim() }
+        }
+        foreach ($display in $displays) {
+            $key = Get-XrMonitorIdentityKey ([string]$display.DeviceId)
+            $name = if ($key -and $names.ContainsKey($key)) { [string]$names[$key] } else { '' }
+            $display | Add-Member -NotePropertyName EdidName -NotePropertyValue $name -Force
+            if ($name) { $display.Name = $name }
+        }
+    }
+    return $displays
+}
+function Get-XrMonitorIdentityKey([string]$DeviceId, [switch]$Wmi) {
+    $path = $DeviceId.Replace('#', '\') -replace '^\\\\\?\\', ''
+    if ($path -notmatch '^DISPLAY\\([^\\]+)\\([^\\]+)') { return '' }
+    $model = $Matches[1]; $instance = $Matches[2]
+    if ($Wmi) { $instance = $instance -replace '_\d+$', '' }
+    return ($model + '\' + $instance).ToUpperInvariant()
+}
+function Test-XrDisplayIdentity($Display) {
+    $model = (Get-XrSetting 'XR_DISPLAY_MODEL_ID').Trim()
+    $name = (Get-XrSetting 'XR_DISPLAY_MODEL_NAME').Trim()
+    if ($model) {
+        $key = Get-XrMonitorIdentityKey ([string]$Display.DeviceId)
+        if (!$key -or ($key -split '\\')[0] -ine $model) { return $false }
+    }
+    if ($name) {
+        if (!$Display.PSObject.Properties['EdidName'] -or ([string]$Display.EdidName).Trim() -ine $name) { return $false }
+    }
+    return $true
+}
+function Get-XrSbsObservation($Display) {
+    $resolution = (Get-XrSetting 'SBS_RESOLUTION').Trim()
+    $required = [bool]$resolution
+    $enabled = if ($required) { $null } else { $true }
+    $width = $null; $height = $null
+    if ($resolution -and $resolution -notmatch '^([1-9][0-9]{0,4})[xX]([1-9][0-9]{0,4})$') {
+        throw 'SBS_RESOLUTION must be WIDTHxHEIGHT, for example 3840x1080, or empty.'
+    }
+    if ($required) { $expectedWidth = [int]$Matches[1]; $expectedHeight = [int]$Matches[2] }
+    if ($null -ne $Display -and $Display.PSObject.Properties['Width'] -and $Display.PSObject.Properties['Height'] -and
+        [int]$Display.Width -gt 0 -and [int]$Display.Height -gt 0) {
+        $width = [int]$Display.Width; $height = [int]$Display.Height
+        if ($required) { $enabled = ($width -eq $expectedWidth -and $height -eq $expectedHeight) }
+    }
+    return @{sbs_required=$required; sbs_enabled=$enabled; sbs_resolution=$resolution; display_width=$width; display_height=$height}
+}
+function Assert-XrSbsEnabled {
+    $resolution = (Get-XrSetting 'SBS_RESOLUTION').Trim()
+    if (!$resolution) { return }
+    $display = Find-AutomaticXrDisplay @(Get-DesktopDisplays)
+    $mode = Get-XrSbsObservation $display
+    if (!$display) { throw 'Select and connect the configured XR display before starting VR.' }
+    if ($null -eq $mode.sbs_enabled) { throw 'The selected XR display resolution is unknown. Refresh its status before starting VR.' }
+    if ($mode.sbs_enabled -ne $true) {
+        throw ('SBS is off. Enable SBS on the device and select ' + $mode.sbs_resolution + ' in Windows Display settings. Current: ' + $mode.display_width + 'x' + $mode.display_height + '.')
+    }
 }
 function Select-DesktopDisplay([object[]]$Displays, [string]$Name = '', [string]$SavedId = '') {
     if ($Name) {
@@ -17,6 +84,7 @@ function Select-DesktopDisplay([object[]]$Displays, [string]$Name = '', [string]
     if (@($Displays | Where-Object { $_.DeviceName -eq $matches[0].DeviceName }).Count -ne 1) {
         throw 'Use Extend these displays in Windows instead of Duplicate, then click Select glasses display.'
     }
+    if (!(Test-XrDisplayIdentity $matches[0])) { throw 'The selected display does not match this hardware profile: monitor model code and EDID name must match.' }
     return $matches[0]
 }
 function Assert-SbsDisplay($Display) {
@@ -62,6 +130,7 @@ function Set-SbsDisplay($Display) {
     Set-XrDisplaySettings -X ([int]$Display.X) -Y ([int]$Display.Y) -Mode extended_sbs
     $script:State.DisplayDeviceId = [string]$Display.DeviceId
     $script:State.DisplayDeviceName = [string]$Display.DeviceName
+    $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
     $script:State.DisplayMode = 'extended_sbs'
     Save-State
     Write-Step ('SBS output: ' + $Display.DeviceName + ', ' + $Display.Width + 'x' + $Display.Height + ' @ ' + $Display.Frequency + ' Hz, X=' + $Display.X + ', Y=' + $Display.Y)
@@ -86,6 +155,7 @@ function Choose-SbsDisplay([switch]$SelectOnly) {
     if ($SelectOnly) {
         $script:State.DisplayDeviceId = [string]$selected.DeviceId
         $script:State.DisplayDeviceName = [string]$selected.DeviceName
+        $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
         if ([int]$selected.Frequency -gt 1) { $script:State.FrequencyHz = [int]$selected.Frequency }
         Save-State
         Write-Step ('Selected glasses display: ' + $selected.DeviceName + ' @ ' + $selected.Frequency + ' Hz.')

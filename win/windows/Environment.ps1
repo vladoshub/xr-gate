@@ -9,13 +9,16 @@ function Read-XrEnv([string]$Path, [switch]$Required) {
     foreach ($raw in [IO.File]::ReadAllLines($Path, [Text.Encoding]::UTF8)) {
         $number++; $line = $raw.Trim()
         if (!$line -or $line.StartsWith('#')) { continue }
-        if ($line -notmatch '^(XR_[A-Za-z0-9_]+)=(.*)$') { throw "${Path}:${number}: expected XR_KEY=value" }
+        if ($line -notmatch '^(XR_[A-Za-z0-9_]+|SBS_RESOLUTION)=(.*)$') { throw "${Path}:${number}: expected XR_KEY=value or SBS_RESOLUTION=WIDTHxHEIGHT" }
         $key = $Matches[1]; $value = $Matches[2].Trim()
         if ($value.StartsWith('"') -or $value.StartsWith("'")) {
             if ($value.Length -lt 2 -or $value[$value.Length - 1] -ne $value[0]) { throw "${Path}:${number}: unclosed quote" }
             $value = $value.Substring(1, $value.Length - 2)
         }
         if ($value.Contains('$') -or $value.Contains('`')) { throw "${Path}:${number}: use literal values" }
+        if ($key -eq 'SBS_RESOLUTION' -and $value.Trim() -and $value.Trim() -notmatch '^[1-9][0-9]{0,4}[xX][1-9][0-9]{0,4}$') {
+            throw "${Path}:${number}: SBS_RESOLUTION must be WIDTHxHEIGHT, for example 3840x1080, or empty."
+        }
         $values[$key] = $value
     }
     return $values
@@ -65,7 +68,7 @@ function Initialize-XrStopSettings([string]$Root, [string]$StateFile = '') {
         if ($saved.PSObject.Properties['CleanupSettings'] -and $saved.CleanupSettings) {
             $script:Settings = @{}
             foreach ($property in $saved.CleanupSettings.PSObject.Properties) {
-                if ($property.Name -notmatch '^XR_[A-Za-z0-9_]+$' -or $property.Value -isnot [string]) { throw 'Invalid cleanup settings in state.json.' }
+                if ($property.Name -notmatch '^(XR_[A-Za-z0-9_]+|SBS_RESOLUTION)$' -or $property.Value -isnot [string]) { throw 'Invalid cleanup settings in state.json.' }
                 $script:Settings[$property.Name] = [string]$property.Value
             }
             $script:SettingOverrides = @{}

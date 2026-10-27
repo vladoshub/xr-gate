@@ -18,15 +18,30 @@ public sealed record SetupProgress(bool Pending = false, string Distribution = "
 public sealed class LauncherReadiness
 {
     public bool Known { get; set; }
+    public bool HardwareSelected { get; set; }
+    public bool HardwareConnected { get; set; }
     public bool Installed { get; set; }
     public bool DisplaySelected { get; set; }
     public bool DisplayConnected { get; set; }
     public bool DeviceConnected { get; set; }
-    public bool CanInstall => DisplaySelected && DisplayConnected;
-    public string NextStep => !Known ? "Click Refresh status to check setup." :
-        !CanInstall ? "Click Select glasses display and choose the glasses display number." : !Installed ? "Click Install to finish setup." :
-        !DeviceConnected ? "Connect the configured XR device." : "Click Start VR. USB devices connect automatically.";
-    public bool CanStart => Known && Installed && DisplaySelected && DisplayConnected && DeviceConnected;
+    public DisplayResolution? SbsResolution { get; set; }
+    public int? DisplayWidth { get; set; }
+    public int? DisplayHeight { get; set; }
+    public bool? SbsEnabled => SbsResolution is null ? true :
+        !DisplayConnected || DisplayWidth is null || DisplayHeight is null ? null :
+        DisplayWidth == SbsResolution.Width && DisplayHeight == SbsResolution.Height;
+    public bool SbsOff => SbsEnabled == false;
+    public bool CanInstall => HardwareSelected;
+    public bool CanSelectDisplay => HardwareSelected && (HardwareConnected || DeviceConnected);
+    public bool NeedsDisplaySelection => CanSelectDisplay && (!DisplaySelected || !DisplayConnected);
+    public string NextStep => !HardwareSelected ? "Connect a supported XR device or choose Hardware preset in Settings." :
+        !Known ? "Click Refresh status to check setup." : !Installed ? "Click Install to finish setup." :
+        !DeviceConnected ? "Connect the configured XR device." : NeedsDisplaySelection
+        ? "Click Select glasses display; the glasses display could not be selected automatically."
+        : SbsEnabled != true ? SbsOff ? $"Enable SBS on the device and select {SbsResolution} in Windows Display settings."
+            : "Click Refresh status to read the selected display's SBS mode."
+        : "Click Start VR. USB devices connect automatically.";
+    public bool CanStart => Known && HardwareSelected && Installed && DisplaySelected && DisplayConnected && DeviceConnected && SbsEnabled == true;
 }
 
 public sealed record CalibrationNotice(string Message, bool Complete = false);

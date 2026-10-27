@@ -1,3 +1,11 @@
+## Windows setup and device selection
+
+- Start with no selected hardware; save automatic and manual choices immediately.
+- Enable Install / Update after selecting a hardware preset, independently of display selection. Install a device-specific 60 Hz SBS driver, or the lowest available SBS frequency.
+- Select unambiguous connected displays automatically; enable and pulse manual selection only for connected supported hardware when needed. Keep saved display choices tied to the device.
+- Delete launcher-owned SteamVR registrations and cached copies with Ubuntu; preserve other driver locations and allow cleaning driver leftovers without WSL.
+- Move Save settings to the footer; improve scrollbar visibility and add the external Bluetooth adapter hint.
+
 ## Windows WSL2 package name
 
 - Rename the release archive, extracted folder and CI artifacts to xr-gate-windows-wsl2-usbip.

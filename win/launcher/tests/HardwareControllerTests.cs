@@ -13,6 +13,10 @@ internal static class HardwareControllerTests
         string env = Path.Combine(root, ".env"), state = Path.Combine(root, "state.json");
         File.WriteAllText(state, JsonSerializer.Serialize(new { GearVR = true, BluetoothInstanceId = "saved-system-adapter" }));
         var settings = LauncherSettings.Load(root, state);
+        Check(!settings.HardwareSelected && settings.HardwareEnv == "" && settings.AutoDetectHardware && settings.DeviceName == "No device selected",
+            "A fresh installation selected a device before detection/manual selection.");
+        settings.HardwareEnv = "hardware/xreal_ultra.env";
+        settings.SaveHardwareSelection(root);
         Check(settings.ControllerMode == "gestures" && !settings.BluetoothEnabled && !settings.ShowCommandPrompt && settings.GlobalHotkeys, "Gestures, Bluetooth-off, hidden-console or enabled hotkey defaults were lost.");
         settings.ControllerMode = "gestures";
         settings.ShowCommandPrompt = true;
@@ -68,6 +72,19 @@ internal static class HardwareControllerTests
         settings.AutoDetectHardware = false; settings.Save(root);
         Check(!LauncherSettings.Load(root, state).AutoDetectHardware && LauncherSettings.Load(root, state).HardwareEnv == "hardware/fixture.env",
             "Manual override did not survive restart.");
+        File.WriteAllText(env, "# Keep unfinished tabs private\nXR_TCP_PORT=45999\n");
+        settings = LauncherSettings.Load(root, state);
+        settings.FrequencyHz = "unfinished"; settings.Distribution = "unfinished distribution";
+        settings.HardwareEnv = "hardware/fixture.env";
+        settings.SaveHardwareSelection(root);
+        var detected = LauncherSettings.Load(root, state);
+        Check(detected.HardwareEnv == "hardware/fixture.env" && detected.AutoDetectHardware && detected.DeviceName == "Fixture XR" &&
+            detected.FrequencyHz == "60" && detected.Distribution == "Ubuntu-24.04" && File.ReadAllText(env).Contains("XR_TCP_PORT=45999"),
+            "Detected hardware was not saved immediately, or it saved unfinished/unrelated fields.");
+        detected.AutoDetectHardware = false; detected.HardwareEnv = "hardware/xreal_ultra.env"; detected.SaveHardwareSelection(root);
+        Check(!LauncherSettings.Load(root, state).AutoDetectHardware && LauncherSettings.Load(root, state).HardwareSelected, "Manual device selection did not persist.");
+        detected.HardwareEnv = ""; detected.SaveHardwareSelection(root);
+        Check(!LauncherSettings.Load(root, state).HardwareSelected && LauncherSettings.Load(root, state).DeviceName == "No device selected", "Clearing the hardware selection restored a default device.");
         Console.WriteLine("OK: controller mode, console setting, hardware enumeration, matching and manual overrides.");
     }
 }

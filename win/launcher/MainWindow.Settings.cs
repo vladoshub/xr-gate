@@ -54,6 +54,10 @@ public partial class MainWindow
             settings.HardwareEnv = selected;
             if (configurationProblem is null) settings.ApplyHardwarePreset(root);
             else if (!string.IsNullOrWhiteSpace(settings.HardwareEnv) && settings.HardwareEnv != recoveryHardware) ReloadConfiguration(settings.HardwareEnv);
+            if (configurationProblem is null && !smoke) settings.SaveHardwareSelection(root);
+            installed = readiness.Installed = readiness.Known = readiness.DeviceConnected = readiness.DisplaySelected = readiness.DisplayConnected = false;
+            UpdateHardwarePresence();
+            UpdateReadinessUi();
             UpdateHeaderArtwork();
             AutoDetectHardwareBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
             HardwareDetectionStatus.Text = "Manual preset selected. Automatic detection will not replace it.";
@@ -70,7 +74,14 @@ public partial class MainWindow
             string relative = Path.GetRelativePath(root, dialog.FileName);
             string hardware = relative.StartsWith(".." + Path.DirectorySeparatorChar) ? dialog.FileName : relative;
             if (configurationProblem is not null) ReloadConfiguration(hardware);
-            else { settings.AutoDetectHardware = false; settings.HardwareEnv = hardware; settings.ApplyHardwarePreset(root); InitializeHardwareUi(); }
+            else
+            {
+                settings.AutoDetectHardware = false; settings.HardwareEnv = hardware; settings.ApplyHardwarePreset(root);
+                if (!smoke) settings.SaveHardwareSelection(root);
+                installed = readiness.Installed = readiness.Known = readiness.DeviceConnected = readiness.DisplaySelected = readiness.DisplayConnected = false;
+                InitializeHardwareUi(); UpdateReadinessUi();
+            }
+            AutoDetectHardwareBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
         }
         catch (Exception error) { StatusDetail.Text = error.Message; Log("ERROR: " + error.Message); }
     }
