@@ -17,6 +17,8 @@ function Get-XrSetupObservation([bool]$LinuxInstalled, [bool]$DeviceConnected = 
     $selected = [bool]($DisplayName -or ($script:State.DisplayDeviceId -and (Test-XrSavedDisplayDevice)))
     $connected = $false
     $displayNumber = ''
+    $displayOutput = ''
+    $displayIdentity = ''
     if ($selected -or $DeviceConnected) {
         try {
             $displays = @(Get-DesktopDisplays)
@@ -24,6 +26,8 @@ function Get-XrSetupObservation([bool]$LinuxInstalled, [bool]$DeviceConnected = 
             $connected = $null -ne $display
             if ($connected) {
                 $selected = $true
+                $displayOutput = [string]$display.DeviceName
+                $displayIdentity = [string]$display.DeviceId
                 if ($display.DeviceName -match 'DISPLAY(\d+)$') { $displayNumber = $Matches[1] }
             }
         } catch { $connected = $false }
@@ -37,6 +41,7 @@ function Get-XrSetupObservation([bool]$LinuxInstalled, [bool]$DeviceConnected = 
     }
     return @{setup_complete=($LinuxInstalled -and $driverReady -and $registered -and !$script:State.InstallPending);
         driver_ready=$driverReady; driver_registered=$registered; display_selected=$selected; display_connected=$connected;
-        display_number=$displayNumber; install_pending=([bool]$script:State.InstallPending -or ($LinuxInstalled -and (!$driverReady -or !$registered)));
+        display_number=$displayNumber; display_name=$displayOutput; display_device_id=$displayIdentity;
+        install_pending=([bool]$script:State.InstallPending -or ($LinuxInstalled -and (!$driverReady -or !$registered)));
         install_next_step=[string]$script:State.InstallNextStep}
 }

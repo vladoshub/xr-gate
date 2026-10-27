@@ -99,6 +99,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         }
     }
     public bool GlobalHotkeys { get; set; } = true;
+    public bool ProtectDeviceDisplay { get; set; } = true;
     public bool ShowCommandPrompt { get; set; }
     public bool AutoDriverFrequency { get; set; } = true;
     public string FrequencyHz { get; set; } = "60";
@@ -203,6 +204,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             ControllerMode = controllerMode.Length > 0 ? controllerMode :
                 Flag("XR_GEARVR", saved.GetValueOrDefault("GearVR", "False").Equals("True", StringComparison.OrdinalIgnoreCase)) ? "gearvr" : "gestures",
             GlobalHotkeys = Flag("XR_GLOBAL_HOTKEYS", true),
+            ProtectDeviceDisplay = Flag("XR_PROTECT_DEVICE_DISPLAY", true),
             ShowCommandPrompt = Flag("XR_SHOW_COMMAND_PROMPT", false),
             AutoDriverFrequency = Flag("XR_AUTO_DRIVER_FREQUENCY", true),
             FrequencyHz = Choice("XR_DISPLAY_FREQUENCY_HZ", "FrequencyHz", "60"),
@@ -255,6 +257,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             ["XR_GEARVR"] = GearVr ? "1" : "0", ["XR_AUTO_DRIVER_FREQUENCY"] = AutoDriverFrequency ? "1" : "0",
             ["XR_CONTROLLER_MODE"] = ControllerMode, ["XR_SHOW_COMMAND_PROMPT"] = ShowCommandPrompt ? "1" : "0",
             ["XR_GLOBAL_HOTKEYS"] = GlobalHotkeys ? "1" : "0",
+            ["XR_PROTECT_DEVICE_DISPLAY"] = ProtectDeviceDisplay ? "1" : "0",
             ["XR_DISPLAY_FREQUENCY_HZ"] = FrequencyHz.Trim(), ["XR_DISPLAY_MODE"] = DisplayMode.Trim(),
             ["XR_DISPLAY_NAME"] = DisplayName.Trim(), ["XR_STEAMVR_PATH"] = SteamVrPath.Trim(),
             ["XR_CONTROLLER_CONFIG"] = ControllerConfig.Trim(),
@@ -421,6 +424,22 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         string path = Path.Combine(root, ".env");
         string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
         string temporary = path + ".hotkeys-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(temporary, UpdateEnv(original, values), new UTF8Encoding(false));
+            File.Move(temporary, path, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        explicitKeys.Add(key); baseline[key] = values[key];
+    }
+
+    public void SaveDisplayProtection(string root)
+    {
+        const string key = "XR_PROTECT_DEVICE_DISPLAY";
+        var values = new Dictionary<string, string> { [key] = ProtectDeviceDisplay ? "1" : "0" };
+        string path = Path.Combine(root, ".env");
+        string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "# Settings saved by XR Gate Launcher.\n";
+        string temporary = path + ".display-protection-" + Guid.NewGuid().ToString("N");
         try
         {
             File.WriteAllText(temporary, UpdateEnv(original, values), new UTF8Encoding(false));

@@ -27,11 +27,14 @@ Choose-SbsDisplay -SelectOnly
 Assert ($script:Saved -eq 1 -and $script:State.DisplayDeviceId -eq 'glasses' -and $script:State.FrequencyHz -eq 90) 'Pre-install selection did not save the actual display identity and Hz.'
 $status = Get-XrSetupObservation $false
 Assert ($status.display_selected -and $status.display_connected -and $status.display_number -eq '3' -and !$status.setup_complete) 'Selecting a display required Linux or falsely marked setup complete.'
+Assert ($status.display_name -eq '\\.\DISPLAY3' -and $status.display_device_id -eq 'glasses') 'Display protection did not receive the exact selected output and monitor identity.'
 $script:State.DriverPath = 'XR_GATE_MISSING_SETUP_DRIVE:\driver'
 Assert ((Get-XrSetupObservation $false).display_connected) 'A stale driver drive blocked pre-install display selection.'
 $script:State.DriverPath = ''
 $script:Displays = @($script:Displays[0])
 Assert (!(Get-XrSetupObservation $false).display_connected) 'An unplugged saved display was treated as present.'
+$disconnected = Get-XrSetupObservation $false
+Assert (!$disconnected.display_name -and !$disconnected.display_device_id) 'An unplugged display retained a protection target.'
 $script:Displays += [pscustomobject]@{DeviceName='\\.\DISPLAY3'; DeviceId='glasses'; Name='Fixture glasses'; Width=3840; Height=1080; Frequency=90; X=1920; Y=0}
 $script:State.DisplayDeviceId = ''; $script:State.DisplayDeviceName = ''
 $before = $script:Saved

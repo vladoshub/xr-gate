@@ -926,7 +926,7 @@ try {
     if ($Action -eq 'DeviceStatus') {
         $script:ActionData = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
         $setup = Get-XrSetupObservation $false ($script:ActionData.device_status -ne 'NOT CONNECTED')
-        foreach ($key in @('display_selected','display_connected','display_number')) { $script:ActionData[$key] = $setup[$key] }
+        foreach ($key in @('display_selected','display_connected','display_number','display_name','display_device_id')) { $script:ActionData[$key] = $setup[$key] }
         $script:ActionData | ConvertTo-Json -Compress
         Complete-XrAction 0
     }

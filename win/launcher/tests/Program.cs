@@ -79,6 +79,7 @@ try
     HardwareControllerTests.Run(source, folder);
     InstallSourceTests.Run(source, folder);
     ArtworkTests.Run(folder);
+    DisplayProtectionTests.Run(folder);
     await AudioTests.RunAsync(source, folder);
     string encoded = ScriptCommand.Encode(@"C:\O'Brien\XR Gate\XrGate-Wsl.ps1", "Run", @"C:\result.json", true, false);
     string command = Encoding.Unicode.GetString(Convert.FromBase64String(encoded));

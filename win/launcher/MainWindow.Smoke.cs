@@ -14,6 +14,7 @@ public partial class MainWindow
         configurationProblem = null;
         UpdateRecoveryUi();
         VerifyArtworkUi();
+        await VerifyDisplayProtectionUiAsync();
         await VerifyInstallSourceUiAsync();
         // Model a fresh Windows installation where wsl.exe exists but its
         // distribution inventory hangs. Install and first-login continuation

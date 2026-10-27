@@ -231,6 +231,14 @@
 
       <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
        <StackPanel>
+        <TextBlock Text="Device display protection" FontSize="18" FontWeight="SemiBold" />
+        <CheckBox x:Name="ProtectDeviceDisplayBox" Content="Protect device display during tracking" IsChecked="{Binding ProtectDeviceDisplay, UpdateSourceTrigger=PropertyChanged}" Click="ProtectDeviceDisplay_Click" Margin="0,10,0,8" />
+        <TextBlock Text="Keeps the mouse pointer and ordinary windows off the selected secondary XR display while tracking is active. Protection is released when tracking stops. Changes are saved automatically." Foreground="#ACBED5" TextWrapping="Wrap" />
+        <TextBlock x:Name="DisplayProtectionStatus" Text="Protection is idle until tracking starts." Foreground="#8FA6C3" TextWrapping="Wrap" Margin="0,8,0,0" />
+       </StackPanel>
+      </Border>
+      <Border Background="#18283B" CornerRadius="8" Padding="16" Margin="0,16,0,0">
+       <StackPanel>
         <TextBlock Text="Hotkeys" FontSize="18" FontWeight="SemiBold" />
         <CheckBox x:Name="GlobalHotkeysBox" Content="Enable global hotkeys" IsChecked="{Binding GlobalHotkeys, UpdateSourceTrigger=PropertyChanged}" Click="GlobalHotkeys_Click" Margin="0,10,0,8" />
         <TextBlock Text="F5 — Start VR" />

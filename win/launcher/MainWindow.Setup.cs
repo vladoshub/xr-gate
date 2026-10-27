@@ -39,6 +39,7 @@ public partial class MainWindow
     {
         readiness.HardwareSelected = settings.HardwareSelected;
         UpdateHeaderArtwork();
+        UpdateDisplayProtection();
         bool available = busyAction.Length == 0 && configurationProblem is null && !closing;
         StartButton.IsEnabled = available && !runtimeMayBeRunning && readiness.CanStart;
         StartButton.ToolTip = readiness.CanStart ? "F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." : readiness.NextStep;

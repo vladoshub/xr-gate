@@ -13,6 +13,12 @@ Install SteamVR, open it once and close it. Download and extract from the 'Relea
 3. **Select glasses display** — Before starting VR, connect the XR device, enable SBS and choose Extend these displays in Windows. A uniquely matched display is selected automatically. Otherwise the button becomes available and blinks: choose the glasses display manually. It is disabled without a connected supported device.
 4. **Start VR** — Available after installation, display selection and device connection. USB connects automatically. Stop tracking & return USB, or close the launcher, to stop the session, request SteamVR exit and return the devices.
 
+## Glasses display protection
+
+Settings → **Protect device display during tracking** is on by default and saves automatically. During XR Gate startup/tracking, the pointer stays on ordinary monitors and windows that enter the selected glasses display are returned to the desktop. Stop, an observed tracking exit, disabling the checkbox or closing the launcher releases protection. An idle launcher does not block the screen.
+
+Protection applies to a separate secondary extended SBS display. It excludes the primary monitor and SteamVR compositor, and does not change display modes or positions. Elevated applications and exclusive fullscreen can bypass this desktop guard. If SteamVR fails when an application enters fullscreen on another monitor, collect `vrcompositor.txt` and `vrserver.txt` to identify the cause.
+
 ## Ubuntu account
 
 Choose your own Linux username and password in the Ubuntu window. Password characters are not displayed while typing. After the Linux shell appears, type `exit`; keep XR Gate open and installation will continue automatically. If it stays paused, finish account setup, type `exit`, then click Install. No restart is needed unless explicitly requested.
