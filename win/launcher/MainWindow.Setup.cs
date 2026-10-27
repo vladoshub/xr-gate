@@ -38,6 +38,7 @@ public partial class MainWindow
     private void UpdateReadinessUi()
     {
         readiness.HardwareSelected = settings.HardwareSelected;
+        readiness.SbsResolution = settings.SbsResolution;
         UpdateHeaderArtwork();
         UpdateDisplayProtection();
         bool available = busyAction.Length == 0 && configurationProblem is null && !closing;

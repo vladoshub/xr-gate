@@ -69,14 +69,16 @@ function Find-AutomaticXrDisplay([object[]]$Displays, [switch]$SavedOnly) {
     if ($script:State.DisplayDeviceId -and (Test-XrSavedDisplayDevice)) {
         $saved = @($Displays | Where-Object { $_.DeviceId -eq $script:State.DisplayDeviceId })
         if ($saved.Count -eq 1) {
-            if (@($Displays | Where-Object { $_.DeviceName -eq $saved[0].DeviceName }).Count -eq 1) { return $saved[0] }
-            return $null
+            if (@($Displays | Where-Object { $_.DeviceName -eq $saved[0].DeviceName }).Count -ne 1) { return $null }
+            if (Test-XrDisplayIdentity $saved[0]) { return $saved[0] }
         }
     }
     if ($SavedOnly) { return $null }
     $label = Get-XrSetting 'XR_DISPLAY_MATCH'
     $candidates = @()
-    if ($label) {
+    if ((Get-XrSetting 'XR_DISPLAY_MODEL_ID') -or (Get-XrSetting 'XR_DISPLAY_MODEL_NAME')) {
+        $candidates = @($Displays | Where-Object { Test-XrDisplayIdentity $_ })
+    } elseif ($label) {
         $candidates = @($Displays | Where-Object {
             $_.Name.IndexOf($label, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
             $_.DeviceId.IndexOf($label, [StringComparison]::OrdinalIgnoreCase) -ge 0

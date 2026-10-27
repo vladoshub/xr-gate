@@ -505,6 +505,11 @@ public partial class MainWindow : Window
         {
             if (data.TryGetProperty("display_selected", out var selected)) readiness.DisplaySelected = selected.ValueKind == JsonValueKind.True;
             if (data.TryGetProperty("display_connected", out var connected)) readiness.DisplayConnected = connected.ValueKind == JsonValueKind.True;
+            if (data.TryGetProperty("display_connected", out _))
+            {
+                readiness.DisplayWidth = readiness.DisplayConnected && data.TryGetProperty("display_width", out var width) && width.ValueKind == JsonValueKind.Number && width.TryGetInt32(out int w) && w > 0 ? w : null;
+                readiness.DisplayHeight = readiness.DisplayConnected && data.TryGetProperty("display_height", out var height) && height.ValueKind == JsonValueKind.Number && height.TryGetInt32(out int h) && h > 0 ? h : null;
+            }
         }
         UpdateReadinessUi();
     }

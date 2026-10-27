@@ -86,6 +86,9 @@ jobs:
       - name: Automatic/manual display selection and setup readiness
         shell: powershell
         run: '& ./win/tests/verify-setup-display.ps1'
+      - name: Exact EDID identity and optional SBS mode launch prerequisites
+        shell: powershell
+        run: '& ./win/tests/verify-display-modes.ps1'
       - name: Session cleanup ignores damaged or changed settings
         shell: powershell
         run: '& ./win/tests/verify-cleanup-settings.ps1'

@@ -39,9 +39,12 @@ function Get-XrSetupObservation([bool]$LinuxInstalled, [bool]$DeviceConnected = 
         $script:State.DisplayTargetDevice = Get-XrDriverDeviceId
         Save-State
     }
+    $mode = Get-XrSbsObservation $(if ($connected) { $display } else { $null })
     return @{setup_complete=($LinuxInstalled -and $driverReady -and $registered -and !$script:State.InstallPending);
         driver_ready=$driverReady; driver_registered=$registered; display_selected=$selected; display_connected=$connected;
         display_number=$displayNumber; display_name=$displayOutput; display_device_id=$displayIdentity;
+        display_width=$mode.display_width; display_height=$mode.display_height;
+        sbs_required=$mode.sbs_required; sbs_enabled=$mode.sbs_enabled; sbs_resolution=$mode.sbs_resolution;
         install_pending=([bool]$script:State.InstallPending -or ($LinuxInstalled -and (!$driverReady -or !$registered)));
         install_next_step=[string]$script:State.InstallNextStep}
 }

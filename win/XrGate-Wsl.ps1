@@ -926,7 +926,7 @@ try {
     if ($Action -eq 'DeviceStatus') {
         $script:ActionData = Get-XrDeviceObservation -Devices @(Get-UsbDevices)
         $setup = Get-XrSetupObservation $false ($script:ActionData.device_status -ne 'NOT CONNECTED')
-        foreach ($key in @('display_selected','display_connected','display_number','display_name','display_device_id')) { $script:ActionData[$key] = $setup[$key] }
+        foreach ($key in @('display_selected','display_connected','display_number','display_name','display_device_id','display_width','display_height','sbs_required','sbs_enabled','sbs_resolution')) { $script:ActionData[$key] = $setup[$key] }
         $script:ActionData | ConvertTo-Json -Compress
         Complete-XrAction 0
     }
@@ -1050,6 +1050,7 @@ try {
                 if (!$setup.setup_complete) { throw 'Finish Install before starting VR.' }
                 if (!$setup.display_selected -or !$setup.display_connected) { throw 'Select the connected glasses display before starting VR.' }
             }
+            if ($StartSteamVR) { Assert-XrSbsEnabled }
             if ((Get-XrSetting 'XR_AUTO_DRIVER_FREQUENCY') -eq '1') { Update-AutomaticWindowsDriver }
             if ($StartSteamVR -and !(Get-Process vrserver,vrcompositor -ErrorAction SilentlyContinue)) {
                 if ($script:State.DisplayMode -eq 'extended_sbs') { Update-SavedSbsDisplay }
@@ -1074,7 +1075,9 @@ try {
             if ($StartSteamVR) {
                 Ensure-XrDriverRegistration
                 Write-XrTrackingGuidance 'SteamVR will start when head tracking is ready.'
-                Wait-XrStream $TimeoutSeconds -RuntimeWindow $runtimeWindow; Start-Process 'steam://rungameid/250820'
+                Wait-XrStream $TimeoutSeconds -RuntimeWindow $runtimeWindow
+                Assert-XrSbsEnabled
+                Start-Process 'steam://rungameid/250820'
             }
         }
         'Runtime' { Invoke-Linux -Operation run -Request (New-LinuxRequest) }

@@ -13,6 +13,12 @@ Install SteamVR, open it once and close it. Download and extract from the 'Relea
 3. **Select glasses display** — Before starting VR, connect the XR device, enable SBS and choose Extend these displays in Windows. A uniquely matched display is selected automatically. Otherwise the button becomes available and blinks: choose the glasses display manually. It is disabled without a connected supported device.
 4. **Start VR** — Available after installation, display selection and device connection. USB connects automatically. Stop tracking & return USB, or close the launcher, to stop the session, request SteamVR exit and return the devices.
 
+## Display identity and SBS mode
+
+The Air 2 Ultra profile requires both the EDID model code `MRG3136` and EDID name `Air 2 Ultra`. These checks also apply to saved/manual display choices. Other profiles can optionally set `XR_DISPLAY_MODEL_ID` and `XR_DISPLAY_MODEL_NAME`; every configured condition must match. `XR_DISPLAY_MATCH` remains available for profiles without these exact identity checks. Model codes identify a device model/revision, not an individual unit; the values above were observed on an Air 2 Ultra and may need adjustment for another revision or firmware.
+
+An optional hardware-profile setting, `SBS_RESOLUTION=3840x1080`, requires that exact current Windows output resolution before Start VR/F5. A different known resolution shows **(SBS OFF)** after the device name and disables VR startup; a matching resolution removes the label. A missing/unknown display mode also blocks startup, without falsely showing SBS OFF. The launch script checks again before tracking startup and immediately before launching SteamVR. Install and tracking without SteamVR remain available. Omit or leave `SBS_RESOLUTION` empty for devices that always use one display mode. For custom devices use their own required `WIDTHxHEIGHT`.
+
 ## Glasses display protection
 
 Settings → **Protect device display during tracking** is on by default and saves automatically. During XR Gate startup/tracking, the pointer stays on ordinary monitors and windows that enter the selected glasses display are returned to the desktop. Stop, an observed tracking exit, disabling the checkbox or closing the launcher releases protection. An idle launcher does not block the screen.

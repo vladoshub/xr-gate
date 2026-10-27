@@ -14,6 +14,7 @@ public partial class MainWindow
         configurationProblem = null;
         UpdateRecoveryUi();
         VerifyArtworkUi();
+        await VerifySbsUiAsync();
         await VerifyDisplayProtectionUiAsync();
         await VerifyInstallSourceUiAsync();
         // Model a fresh Windows installation where wsl.exe exists but its
@@ -159,6 +160,7 @@ public partial class MainWindow
         int deletes = 0;
         installed = readiness.Installed = true; readiness.Known = true;
         readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = true;
+        readiness.DisplayWidth = 3840; readiness.DisplayHeight = 1080;
         UpdateReadinessUi();
         smokeConfirmation = message =>
         {
@@ -299,7 +301,7 @@ public partial class MainWindow
             {
                 installed = setupComplete, setup_complete = setupComplete, running = false,
                 install_pending = !setupComplete, install_next_step = "restart_windows",
-                display_selected = true, display_connected = true, device_status = "CONNECTED"
+                display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, device_status = "CONNECTED"
             }) });
         };
         await BeginInstallationAsync();
@@ -310,7 +312,7 @@ public partial class MainWindow
             throw new InvalidOperationException("A chosen preset must enable Install without hardware or display, but keep display selection unavailable.");
         ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "CONNECTED", display_selected = false, display_connected = false }));
         if (!DisplayButton.IsEnabled || !Equals(DisplayButton.Tag, true)) throw new InvalidOperationException("A connected device with no automatic display did not enable and pulse manual selection.");
-        ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "CONNECTED", display_selected = true, display_connected = true }));
+        ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { device_status = "CONNECTED", display_selected = true, display_connected = true, display_width = 3840, display_height = 1080 }));
         if (!DisplayButton.IsEnabled || Equals(DisplayButton.Tag, true)) throw new InvalidOperationException("An automatically selected display still requested manual selection.");
         SetBusy("Install");
         if (InstallButton.IsEnabled || Equals(InstallButton.Tag, true))
@@ -363,6 +365,7 @@ public partial class MainWindow
                 readiness.Known = true;
                 installed = readiness.Installed = runtimeMayBeRunning = resourcesMayBeOwned = false;
                 readiness.DisplaySelected = readiness.DisplayConnected = readiness.DeviceConnected = true;
+                readiness.DisplayWidth = 3840; readiness.DisplayHeight = 1080;
                 UpdateReadinessUi();
                 smokeConfirmation = _ => { confirmations++; return true; };
                 smokeFirstLoginWait = (_, cancellation) => releaseLogin.Task.WaitAsync(cancellation);
@@ -385,7 +388,7 @@ public partial class MainWindow
                     return Task.FromResult(new ActionResult { ExitCode = 0, Data = JsonSerializer.SerializeToElement(new
                     {
                         installed = complete, setup_complete = complete, running = false,
-                        display_selected = true, display_connected = true, device_status = "CONNECTED"
+                        display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, device_status = "CONNECTED"
                     }) });
                 };
                 await BeginInstallationAsync();
@@ -446,7 +449,7 @@ public partial class MainWindow
         JsonElement stopped = JsonSerializer.SerializeToElement(new
         {
             installed = true, setup_complete = true, running = false, starting = false,
-            display_selected = true, display_connected = true, device_status = "SHARED",
+            display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, device_status = "SHARED",
             runtime_exit_message = "fixture camera unavailable", runtime_log_tail = new[] { "capture failed" }
         });
         smokeAction = async (action, cancellation) =>

@@ -41,6 +41,7 @@ Directory.CreateDirectory(folder);
 try
 {
     SetupTests.Run(folder);
+    SbsModeTests.Run(folder);
     Directory.CreateDirectory(Path.Combine(folder, "hardware"));
     File.Copy(Path.Combine(source, ".env.example"), Path.Combine(folder, ".env.example"));
     File.Copy(Path.Combine(source, "hardware/xreal_ultra.env"), Path.Combine(folder, "hardware/xreal_ultra.env"));

@@ -9,6 +9,10 @@ public partial class MainWindow
 {
     private void UpdateHeaderArtwork()
     {
+        readiness.SbsResolution = settings.SbsResolution;
+        DeviceSbsStatus.Text = readiness.SbsOff ? " (SBS OFF)" : "";
+        DeviceSbsStatus.Visibility = readiness.SbsOff ? Visibility.Visible : Visibility.Collapsed;
+        DeviceSbsStatus.ToolTip = readiness.SbsOff ? $"Enable SBS. Required display resolution: {settings.SbsResolution}. Current: {readiness.DisplayWidth}x{readiness.DisplayHeight}." : null;
         var paths = HeaderArtwork.Select(root, settings, readiness.DeviceConnected, runtimeMayBeRunning);
         SetHeaderArtwork(DeviceArtwork, paths.Device, settings.DeviceName);
         UnselectedArtwork.Visibility = settings.HardwareSelected ? Visibility.Collapsed : Visibility.Visible;

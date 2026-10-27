@@ -8,6 +8,7 @@ Select the connected glasses display → Install → Start VR. Install asks for 
 - **Controllers:** input mode, Bluetooth pairing and training.
 - **Audio:** saved Windows source and Ubuntu playback output, including No audio.
 - **Settings:** hardware preset, display and Show command prompt.
+- **SBS:** optional `SBS_RESOLUTION=WIDTHxHEIGHT` in the hardware env controls Start VR/F5 readiness using the current Windows display dimensions. A known mismatch appends `(SBS OFF)` to the device label; a matching mode has no suffix. Unknown/disconnected modes block VR without an OFF label. Missing/empty settings disable the extra mode check. PowerShell checks the mode again before VR startup. The Ultra profile additionally requires EDID model `MRG3136` AND EDID name `Air 2 Ultra`; both checks also apply to saved/manual display choices.
 - **Protect device display during tracking** (Settings, on by default): while XR Gate is starting or tracking, keeps the mouse pointer and ordinary windows off the selected secondary SBS display. Stop, an observed runtime exit, disabling the checkbox or closing the launcher releases protection. It stays idle while the launcher is simply open. The primary monitor and SteamVR compositor are excluded; other desktop monitors remain usable. Selection uses the exact monitor interface identity, including after reconnects, and never guesses a screen from its number or resolution.
 - **Tools:** diagnostics, driver registration and tracking checks.
 

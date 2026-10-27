@@ -21,12 +21,14 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     private string? profileLabelOverride;
     private string? deviceNameOverride;
     private string? deviceImageOverride;
+    private string? sbsResolutionOverride;
     private Dictionary<string, string> controllerImageOverrides = new(StringComparer.OrdinalIgnoreCase);
     public string HardwareEnv { get; set; } = "";
     public bool HardwareSelected => !string.IsNullOrWhiteSpace(HardwareEnv);
     public bool AutoDetectHardware { get; set; } = true;
     public string DeviceName { get; private set; } = "XR device";
     public string DeviceImage { get; private set; } = "";
+    public DisplayResolution? SbsResolution { get; private set; }
     public Dictionary<string, string> ControllerImages { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
     public string ControllerProfileLabel { get; private set; } = "Configured BLE / IMU controller profile";
     public string Distribution { get; set; } = "Ubuntu-24.04";
@@ -134,15 +136,15 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             number++;
             string line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#')) continue;
-            Match match = Regex.Match(line, @"^(XR_[A-Za-z0-9_]+)=(.*)$");
-            if (!match.Success) throw new SettingsReadException(path, $"{path}:{number}: expected XR_KEY=value.");
+            Match match = Regex.Match(line, @"^(XR_[A-Za-z0-9_]+|SBS_RESOLUTION)=(.*)$");
+            if (!match.Success) throw new SettingsReadException(path, $"{path}:{number}: expected XR_KEY=value or SBS_RESOLUTION=WIDTHxHEIGHT.");
             string value = match.Groups[2].Value.Trim();
             if (value.StartsWith('"') || value.StartsWith('\''))
             {
                 if (value.Length < 2 || value[^1] != value[0]) throw new SettingsReadException(path, $"{path}:{number}: unclosed quote.");
                 value = value[1..^1];
             }
-            try { ValidateLiteral(value); }
+            try { ValidateLiteral(value); if (match.Groups[1].Value == "SBS_RESOLUTION") DisplayResolution.Parse(value); }
             catch (FormatException error) { throw new SettingsReadException(path, $"{path}:{number}: " + error.Message, error); }
             result[match.Groups[1].Value] = value;
         }
@@ -195,6 +197,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             AutoDetectHardware = overrides.ContainsKey("XR_AUTO_DETECT_HARDWARE") ? Flag("XR_AUTO_DETECT_HARDWARE", true) : !overrides.ContainsKey("XR_HARDWARE_ENV"),
             DeviceName = hardware.Length == 0 ? "No device selected" : Get("XR_DEVICE_NAME", Get("XR_TARGET_DEVICE", "XR device")),
             DeviceImage = hardware.Length == 0 ? "" : Get("XR_DEVICE_IMAGE"), ControllerImages = ReadControllerImages(values),
+            SbsResolution = hardware.Length == 0 ? null : DisplayResolution.Parse(Get("SBS_RESOLUTION")),
             ControllerProfileLabel = Get("XR_CONTROLLER_PROFILE_LABEL", "Configured BLE / IMU controller profile"),
             ReleaseTag = Get("XR_RELEASE_TAG", "latest"), UsbBusIds = Get("XR_USB_BUS_IDS"),
             RuntimeDownloadUrl = Get("XR_RUNTIME_URL"), RuntimeLocalPath = Get("XR_RUNTIME_LOCAL_PATH"),
@@ -224,6 +227,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         settings.profileLabelOverride = overrides.GetValueOrDefault("XR_CONTROLLER_PROFILE_LABEL");
         settings.deviceNameOverride = overrides.GetValueOrDefault("XR_DEVICE_NAME");
         settings.deviceImageOverride = overrides.GetValueOrDefault("XR_DEVICE_IMAGE");
+        settings.sbsResolutionOverride = overrides.GetValueOrDefault("SBS_RESOLUTION");
         settings.controllerImageOverrides = ReadControllerImages(overrides);
         settings.baseline = settings.GuiValues();
         if (!defaultsOnly)
@@ -279,6 +283,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         var profile = HardwareSelected ? ReadEnv(Path.GetFullPath(HardwareEnv.Trim(), root), true) : new Dictionary<string, string>();
         DeviceName = HardwareSelected ? deviceNameOverride ?? selected.DeviceName : "No device selected";
         DeviceImage = HardwareSelected ? deviceImageOverride ?? selected.DeviceImage : "";
+        SbsResolution = HardwareSelected ? selected.SbsResolution : null;
+        if (HardwareSelected && sbsResolutionOverride is not null) SbsResolution = DisplayResolution.Parse(sbsResolutionOverride);
         ControllerImages = new Dictionary<string, string>(selected.ControllerImages, StringComparer.OrdinalIgnoreCase);
         foreach (var pair in controllerImageOverrides) ControllerImages[pair.Key] = pair.Value;
         string Keep(string key, string current, string inherited) => explicitKeys.Contains(key) ? current : inherited;
@@ -473,7 +479,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         var lines = new List<string>();
         foreach (string line in original.Replace("\r\n", "\n").TrimEnd('\n').Split('\n'))
         {
-            Match match = Regex.Match(line.TrimStart(), @"^(XR_[A-Za-z0-9_]+)=");
+            Match match = Regex.Match(line.TrimStart(), @"^(XR_[A-Za-z0-9_]+|SBS_RESOLUTION)=");
             string key = match.Groups[1].Value;
             if (match.Success && removed?.Contains(key) == true) continue;
             if (match.Success && values.TryGetValue(key, out string? value))

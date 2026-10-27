@@ -47,9 +47,12 @@
      </Canvas>
     </Viewbox>
     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-     <TextBlock ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5">
-      <Run Text="Device: " /><Run x:Name="DeviceNameRun" Text="{Binding DeviceName, Mode=OneWay}" Foreground="{StaticResource StopAccent}" FontWeight="SemiBold" FontSize="17" />
-     </TextBlock>
+     <DockPanel>
+      <TextBlock x:Name="DeviceSbsStatus" DockPanel.Dock="Right" Visibility="Collapsed" FontSize="17" FontWeight="SemiBold" Foreground="#FFD08A" />
+      <TextBlock ToolTip="{Binding DeviceName}" FontSize="16" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#ACBED5">
+       <Run Text="Device: " /><Run x:Name="DeviceNameRun" Text="{Binding DeviceName, Mode=OneWay}" Foreground="{StaticResource StopAccent}" FontWeight="SemiBold" FontSize="17" />
+      </TextBlock>
+     </DockPanel>
      <TextBlock x:Name="DeviceConnectionStatus" Text="—" HorizontalAlignment="Center" Margin="0,6,0,0" FontWeight="SemiBold">
      <TextBlock.Style>
       <Style TargetType="TextBlock">

@@ -10,6 +10,7 @@ public partial class MainWindow
     private async Task VerifyDisplayProtectionUiAsync()
     {
         bool enabled = settings.ProtectDeviceDisplay, active = runtimeMayBeRunning;
+        int? originalWidth = readiness.DisplayWidth, originalHeight = readiness.DisplayHeight;
         string hardware = settings.HardwareEnv, mode = settings.DisplayMode;
         string name = protectedDisplayName, id = protectedDisplayId, observedHardware = protectedHardware;
         bool selected = readiness.DisplaySelected, connected = readiness.DisplayConnected, device = readiness.DeviceConnected;
@@ -17,7 +18,7 @@ public partial class MainWindow
         var previousAction = smokeAction;
         JsonElement Observation(bool running = false, bool starting = false) => JsonSerializer.SerializeToElement(new
         {
-            display_selected = true, display_connected = true, display_name = @"\\.\DISPLAY7", display_device_id = "fixture-monitor",
+            display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, display_name = @"\\.\DISPLAY7", display_device_id = "fixture-monitor",
             device_status = "TRACKING", running, starting
         });
         try
@@ -41,7 +42,7 @@ public partial class MainWindow
             if (!displayProtectionRequested) throw new InvalidOperationException("Re-enabling protection during tracking did not take effect.");
             ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { display_selected = true, display_connected = false }));
             if (displayProtectionRequested) throw new InvalidOperationException("Unplugging the selected display retained protection.");
-            ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { display_selected = true, display_connected = true, display_name = @"\\.\DISPLAY7" }));
+            ApplyDeviceObservation(JsonSerializer.SerializeToElement(new { display_selected = true, display_connected = true, display_width = 3840, display_height = 1080, display_name = @"\\.\DISPLAY7" }));
             if (displayProtectionRequested) throw new InvalidOperationException("A helper without an exact monitor identity enabled protection.");
             ApplyDeviceObservation(Observation());
             if (!displayProtectionRequested) throw new InvalidOperationException("Reconnecting the exact display did not restore protection.");
@@ -83,6 +84,7 @@ public partial class MainWindow
             runtimeMayBeRunning = active;
             protectedDisplayName = name; protectedDisplayId = id; protectedHardware = observedHardware;
             readiness.DisplaySelected = selected; readiness.DisplayConnected = connected; readiness.DeviceConnected = device;
+            readiness.DisplayWidth = originalWidth; readiness.DisplayHeight = originalHeight;
             readiness.Known = known; readiness.Installed = ready; installed = wasInstalled; canDeleteInstallation = canDelete;
             ProtectDeviceDisplayBox.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateTarget();
             SetBusy("");
