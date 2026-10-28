@@ -9,7 +9,53 @@ import shutil
 import subprocess
 import sys
 
-from start_openvr import connected_outputs, is_wayland
+
+def is_wayland(env):
+    return env.get("XDG_SESSION_TYPE") == "wayland" or bool(env.get("WAYLAND_DISPLAY"))
+
+
+def connected_outputs(query):
+    """Read display names, EDIDs and available modes from xrandr --prop."""
+    outputs = []
+    current = None
+    reading_edid = False
+    for line in query.splitlines():
+        header = re.match(r"^(\S+) (connected|disconnected)(?:\s|$)(.*)", line)
+        if header:
+            current = None
+            reading_edid = False
+            if header[2] == "connected":
+                geometry = re.search(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", header[3])
+                current = dict(name=header[1], primary=bool(re.search(r"\bprimary\b", header[3])),
+                               active=bool(geometry), edid_hex="", model="", modes={},
+                               mode=f"{geometry[1]}x{geometry[2]}" if geometry else None)
+                outputs.append(current)
+            continue
+        if current is None:
+            continue
+        if reading_edid:
+            edid_line = re.fullmatch(r"\s+([0-9a-fA-F]{32})\s*", line)
+            if edid_line:
+                current["edid_hex"] += edid_line[1]
+                continue
+            reading_edid = False
+        if re.fullmatch(r"\s+EDID:\s*", line):
+            reading_edid = True
+        mode = re.match(r"^\s+(\S+)\s+(.+)", line)
+        if mode:
+            rates = re.findall(r"(?:^|\s)([0-9]+(?:\.[0-9]+)?)[*+]*(?=\s|$)", mode[2])
+            if re.match(r"^\d+x\d+", mode[1]) and rates:
+                current["modes"][mode[1]] = [float(rate) for rate in rates]
+            if re.search(r"(?:^|\s)[0-9.]+\*", mode[2]):
+                current["mode"] = mode[1]
+    for output in outputs:
+        edid = bytes.fromhex(output.pop("edid_hex"))
+        for offset in range(54, 126, 18):
+            if edid[offset:offset + 5] == b"\x00\x00\x00\xfc\x00":
+                output["model"] = edid[offset + 5:offset + 18].decode(
+                    "ascii", errors="replace").strip("\x00 \r\n")
+                break
+    return outputs
 
 
 def choose_output(prompt, outputs):
@@ -69,16 +115,27 @@ def main():
     headsets = [item for item in outputs if item["name"] != monitor["name"]]
     print("\nChoose the headset display.")
     headset = choose_output("Headset", headsets)
-    rates = headset["modes"].get(args.resolution, [])
-    if not rates:
+    # XRandR mode names may include a rate suffix (for example a mode created
+    # with --newmode). Match the requested geometry and rate, then preserve
+    # the actual mode name for both xrandr and the SteamVR launcher.
+    resolution_modes = {
+        name: rates for name, rates in headset["modes"].items()
+        if re.fullmatch(re.escape(args.resolution) + r"(?:[_.-].*)?", name)
+    }
+    if not resolution_modes:
         available = ", ".join(headset["modes"]) or "none"
         raise ValueError(f"{headset['name']} does not advertise {args.resolution}. "
                          f"Enable the headset's SBS mode first. Available modes: {available}.")
-    if not any(math.isclose(rate, args.frequency, abs_tol=0.15) for rate in rates):
-        available = ", ".join(f"{rate:g}" for rate in rates)
+    matches = [name for name, rates in resolution_modes.items()
+               if any(math.isclose(rate, args.frequency, abs_tol=0.15) for rate in rates)]
+    if not matches:
+        available = ", ".join(f"{rate:g}" for rate in sorted({
+            rate for rates in resolution_modes.values() for rate in rates
+        }))
         raise ValueError(f"{args.resolution} does not offer {args.frequency:g} Hz. Available rates: {available} Hz.")
+    mode_name = min(matches, key=lambda name: (name != args.resolution, name != headset["mode"]))
     command = ["xrandr", "--output", monitor["name"], "--primary", "--pos", "0x0",
-               "--output", headset["name"], "--mode", args.resolution,
+               "--output", headset["name"], "--mode", mode_name,
                "--rate", f"{args.frequency:g}", "--right-of", monitor["name"]]
     print("\nApplying: " + shlex.join(command), flush=True)
     subprocess.run(command, check=True)
@@ -89,7 +146,7 @@ def main():
                       f"XR_OPENVR_OUTPUT={headset['name']}",
                       f"XR_OPENVR_DISPLAY_FREQUENCY_HZ={args.frequency:g}",
                       f"XR_DISPLAY_FREQUENCY_HZ={args.frequency:g}",
-                      f"XR_OPENVR_DGPU_MODE={args.resolution}",
+                      f"XR_OPENVR_DGPU_MODE={mode_name}",
                       "XR_OPENVR_LAUNCH_MODE=steamvr", "./run_openvr.sh"]))
 
 

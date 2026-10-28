@@ -65,6 +65,10 @@ number. The script checks advertised modes before changing displays and prints
 the `run_openvr.sh` command with the selected output, resolution and frequency
 to align the SteamVR window with its new position.
 
+The helper also recognizes existing XRandR modes with a suffix, such as
+`3840x1080_70_test`, by resolution and refresh rate. Register custom timings
+separately before running it; creating a mode does not confirm headset support.
+
 Works with AMD and NVIDIA through X11 RandR; requires `python3` and `xrandr`
 (`x11-xserver-utils` on Ubuntu/Debian). It does not require `xdotool`, root,
 `nvidia-settings`, or a driver rebuild. On Wayland, use the desktop display
