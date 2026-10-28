@@ -660,7 +660,8 @@ write_app_launchers() {
   write_root_launcher "record_emulation_hands.sh" "bin/python/tools/record_emulation_hands.py"
   write_root_launcher "gesture_debug.sh" "bin/python/tools/xr_gate_gesture_debug.py"
   write_root_launcher "emulation_tool.sh" "bin/runtime_adapters/xr_runtime_adapter/xr_emulation_tool"
-  write_root_launcher "run_openvr.sh" "bin/scripts/drivers/steam_vr/start_openvr.py"
+  copy_runtime_file "$XR_ROOT_PROJECT/openvr_helper.sh" "$XR_OUT_ROOT/openvr_helper.sh"
+  copy_runtime_file "$XR_ROOT_PROJECT/run_openvr.sh" "$XR_OUT_ROOT/run_openvr.sh"
   copy_runtime_file "$XR_ROOT_PROJECT/configure_openvr_display.sh" "$XR_OUT_ROOT/configure_openvr_display.sh"
   write_root_launcher "move_openvr_window.sh" "bin/scripts/drivers/steam_vr/move_openvr_window.sh"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
@@ -894,7 +895,7 @@ display mode and placement problems:
 
 Choose the reference monitor, then the headset by EDID name, output or number.
 The reference monitor becomes primary and the headset is placed to its right.
-Use the launch command printed by the script to align the SteamVR window.
+Use the registration command printed by the script to align the SteamVR window.
 Requires python3 and xrandr; no xdotool. On Wayland use desktop display settings.
 
 To move a windowed SteamVR display to the headset (X11/XWayland):
@@ -907,9 +908,12 @@ sudo apt install xdotool x11-xserver-utils
 Select the headset display and keep the helper running. Run with `--choose` to
 select a different display.
 
-On Wayland, `run_openvr.sh` launches windowed SBS through XWayland. Registration
-with `XR_OPENVR_LAUNCH_MODE=none` cannot save that environment for future launches:
-fully exit Steam and start it manually with
+`openvr_helper.sh` configures and registers the driver by default, without starting
+or stopping Steam. Close SteamVR before registration; Steam may remain open.
+Use `--steam` or `--steamvr` to start either explicitly. On Wayland, optional
+windowed SBS launches use XWayland and require Steam to be closed first.
+Registration cannot save that environment for future manual launches: fully exit
+Steam and start it manually with
 `env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam`.
 GNOME Wayland/NVIDIA remains experimental; compare with X11 if frames stall.
 `XR_DISPLAY_FREQUENCY_HZ` accepts fractional rates and reuses an installed package
@@ -919,14 +923,14 @@ Configure the physical headset display to the same supported rate.
 For Direct Mode on X11:
 
 ```bash
-XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./run_openvr.sh
+XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./openvr_helper.sh --steamvr
 ```
 
 Choose the headset display once; `--choose-output` selects again. The launcher
 remembers its EDID, sets `non-desktop=1`, and disables its desktop output before
 SteamVR attempts exclusive acquisition. Use `XR_OPENVR_OUTPUT=DP-2` for explicit
 selection. Direct Mode needs no window-moving helper or xdotool.
-`XR_OPENVR_LAUNCH_MODE=none` only registers Direct Mode settings without changing displays;
+Without `--steamvr`/`--steam`, the helper only registers Direct Mode settings without changing displays;
 `XR_OPENVR_SET_DISPLAY=0` skips it. Physical output selection is X11-only.
 In extended SBS, Alyx's desktop mirror can be disabled with `-nowindow` in its
 game launch options.
@@ -996,6 +1000,8 @@ copy_file "$XR_ROOT_PROJECT/runtime_adapters/xr_runtime_adapter/configs/emulatio
 # Quick package sanity checks.
 required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
+  "$XR_OUT_ROOT/openvr_helper.sh"
+  "$XR_OUT_ROOT/run_openvr.sh"
   "$XR_OUT_ROOT/configure_openvr_display.sh"
   "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/configure_openvr_display.py"
   "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr.py"

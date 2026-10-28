@@ -399,16 +399,19 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-Register the SteamVR driver in extended mode once:
+Close SteamVR and register its driver in extended mode once (Steam may remain open):
 
 ```bash
 cd ~/xr-gate-release/xr-gate
 XR_OPENVR_DISPLAY_MODE=extended_sbs \
 XR_OPENVR_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
-XR_OPENVR_LAUNCH_MODE=none \
-./run_openvr.sh
+./openvr_helper.sh
 ```
+
+The helper only configures and registers the driver by default. Add `--steam` or
+`--steamvr` to the command to start Steam or SteamVR after registration. The old
+`run_openvr.sh` name remains an alias with the same default behavior.
 
 Set the frequency to match the headset's actual display mode; fractional values
 are accepted. An installed `60HZ` driver package can be reused at another rate
@@ -424,7 +427,7 @@ starting SteamVR to avoid display problems:
 
 Choose the reference monitor (e.g. `ARZOPA`), then the headset (e.g. `Air 2 Ultra`)
 by name or number. The monitor becomes primary and the headset moves to its right.
-Use the launch command printed by the script. Requires `python3` and `xrandr`;
+Use the registration command printed by the script. Requires `python3` and `xrandr`;
 no `xdotool`. On **Wayland**, arrange displays in the desktop settings instead.
 
 Start SteamVR. If its stereo window appears on the wrong display, install the
@@ -452,8 +455,9 @@ windowed SteamVR:
 env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam
 ```
 
-`run_openvr.sh` selects XWayland automatically when it launches Steam; `none` only
-registers the driver. GNOME Wayland/NVIDIA remains experimental: if frames stall,
+`openvr_helper.sh --steamvr` selects XWayland automatically when it launches Steam;
+Steam must be closed first. Registration alone cannot set the environment of a
+future Steam launch. GNOME Wayland/NVIDIA remains experimental: if frames stall,
 test an X11 desktop session.
 
 Window placement depends on the Wayland compositor; keep the headset display enabled
@@ -465,7 +469,7 @@ If Alyx's desktop mirror covers the stereo window in `extended_sbs`, add
 For **Direct Mode on X11**, run:
 
 ```bash
-XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./run_openvr.sh
+XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./openvr_helper.sh --steamvr
 ```
 
 Choose the headset display once. The launcher remembers it and prepares it for

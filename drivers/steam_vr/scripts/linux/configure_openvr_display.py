@@ -141,13 +141,12 @@ def main():
     subprocess.run(command, check=True)
     print(f"\nPlaced {headset['model'] or headset['name']} to the right of "
           f"{monitor['model'] or monitor['name']}.")
-    print("To start SteamVR with matching window coordinates and refresh rate, run:")
+    print("To register the driver with matching window coordinates and refresh rate, run:")
     print(shlex.join(["env", "XR_OPENVR_DISPLAY_MODE=extended_sbs",
                       f"XR_OPENVR_OUTPUT={headset['name']}",
                       f"XR_OPENVR_DISPLAY_FREQUENCY_HZ={args.frequency:g}",
                       f"XR_DISPLAY_FREQUENCY_HZ={args.frequency:g}",
-                      f"XR_OPENVR_DGPU_MODE={mode_name}",
-                      "XR_OPENVR_LAUNCH_MODE=steamvr", "./run_openvr.sh"]))
+                      f"XR_OPENVR_DGPU_MODE={mode_name}", "./openvr_helper.sh"]))
 
 
 if __name__ == "__main__":

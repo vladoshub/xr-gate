@@ -548,8 +548,8 @@ esac
         script.parent.mkdir(parents=True)
         shutil.copy2(LAUNCHER, script)
         script.chmod(0o755)
-        wrapper = self.package / "run_openvr.sh"
-        wrapper.write_text('#!/bin/sh\nexec "$(dirname "$0")/bin/scripts/drivers/steam_vr/start_openvr.py" "$@"\n')
+        wrapper = self.package / "openvr_helper.sh"
+        shutil.copy2(ROOT / "openvr_helper.sh", wrapper)
         wrapper.chmod(0o755)
         env = dict(self.env)
         env.pop("XR_PACKAGE_ROOT")
@@ -557,12 +557,12 @@ esac
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.config.exists())
 
-    def test_running_steam_can_block_changes(self):
+    def test_running_steamvr_blocks_changes(self):
         self.driver()
         self.stub("pgrep", "exit 0\n")
-        result = self.run_launcher(XR_OPENVR_STOP_STEAM="0")
+        result = self.run_launcher()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Close SteamVR and Steam", result.stderr)
+        self.assertIn("Close SteamVR", result.stderr)
         self.assertFalse(self.config.exists())
 
     def test_explicit_registrar_and_missing_override(self):

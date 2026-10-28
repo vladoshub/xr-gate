@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch a packaged OpenVR driver without assuming a GPU or display connector."""
+"""Configure a packaged OpenVR driver; optionally launch Steam or SteamVR."""
 import argparse
 import hashlib
 import json
@@ -9,11 +9,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import time
 
 
 def log(message):
-    print(f"[start_openvr] {message}", file=sys.stderr, flush=True)
+    print(f"[openvr_helper] {message}", file=sys.stderr, flush=True)
 
 
 def read_json(path):
@@ -94,24 +93,21 @@ def select_driver(root, hz, mode):
     return driver.resolve(), device or "generic"
 
 
-def stop_steam():
-    names = ("steam", "steamwebhelper", "vrserver", "vrcompositor", "vrmonitor")
+def any_process_running(names):
+    for name in names:
+        result = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", name],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode == 0:
+            return True
+        if result.returncode != 1:
+            raise ValueError(f"Could not check whether {name} is running (pgrep failed).")
+    return False
 
-    def running():
-        return any(subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", name],
-                                  stdout=subprocess.DEVNULL).returncode == 0 for name in names)
 
-    if not running():
-        return
-    if os.environ.get("XR_OPENVR_STOP_STEAM", "auto").lower() in ("0", "false", "no", "off"):
-        raise ValueError("Close SteamVR and Steam before changing display settings.")
-    log("Closing Steam before updating display settings.")
-    subprocess.run(["steam", "-shutdown"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-    deadline = time.monotonic() + 15
-    while running():
-        if time.monotonic() >= deadline:
-            raise ValueError("Steam/SteamVR is still running; close it and retry.")
-        time.sleep(0.5)
+def require_steamvr_closed():
+    # Avoid racing with vrserver while it reads or writes its configuration.
+    if any_process_running(("vrserver", "vrcompositor", "vrmonitor")):
+        raise ValueError("Close SteamVR before configuring the driver. Steam can remain open.")
 
 
 def is_wayland(env):
@@ -274,6 +270,16 @@ def restore_direct_output(output):
             log(f"Could not restore {output['name']}: {exc}")
 
 
+def set_window_position_from_output(output, env):
+    query = subprocess.check_output(["xrandr", "--query"], text=True)
+    if not re.search(r"^" + re.escape(output) + r" connected(?:\s|$)", query, re.M):
+        raise ValueError(f"Output {output} is not connected; check xrandr --query.")
+    match = re.search(r"^" + re.escape(output) + r" connected(?: primary)? \d+x\d+([+-]\d+)([+-]\d+)", query, re.M)
+    if not match:
+        raise ValueError(f"Cannot determine desktop coordinates for {output}; enable the display first.")
+    env["XR_OPENVR_WINDOW_X"], env["XR_OPENVR_WINDOW_Y"] = match.groups()
+
+
 def prepare_display(mode, hz, env):
     output = env.get("XR_OPENVR_OUTPUT") or env.get("XR_OPENVR_DGPU_OUTPUT")
     if is_wayland(env):
@@ -295,11 +301,7 @@ def prepare_display(mode, hz, env):
     resolution = env.get("XR_OPENVR_DGPU_MODE", f"{xr['windowWidth']}x{xr['windowHeight']}")
     subprocess.run(["xrandr", "--output", output, "--set", "non-desktop", "0"], check=True)
     subprocess.run(["xrandr", "--output", output, "--mode", resolution, "--rate", f"{hz:g}"], check=True)
-    query = subprocess.check_output(["xrandr", "--query"], text=True)
-    match = re.search(r"^" + re.escape(output) + r" connected(?: primary)? \d+x\d+([+-]\d+)([+-]\d+)", query, re.M)
-    if not match:
-        raise ValueError(f"Cannot determine desktop coordinates for {output}.")
-    env["XR_OPENVR_WINDOW_X"], env["XR_OPENVR_WINDOW_Y"] = match.groups()
+    set_window_position_from_output(output, env)
 
 
 def gpu_environment(env):
@@ -329,6 +331,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("frequency", nargs="?", help="Refresh rate in Hz (default: 60)")
     parser.add_argument("--choose-output", action="store_true", help="Choose the Direct Mode headset display again (X11)")
+    launch_options = parser.add_mutually_exclusive_group()
+    launch_options.add_argument("--steam", dest="launch", action="store_const", const="steam",
+                                help="Start Steam after registration")
+    launch_options.add_argument("--steamvr", dest="launch", action="store_const", const="steamvr",
+                                help="Start SteamVR after registration")
     args = parser.parse_args()
     raw_mode = os.environ.get("XR_OPENVR_DISPLAY_MODE", "direct").lower().replace("-", "_")
     mode = {"extended": "extended_sbs", "sbs": "extended_sbs", "windowed": "extended_sbs",
@@ -339,7 +346,7 @@ def main():
                os.environ.get("XR_DISPLAY_FREQUENCY_HZ") or args.frequency or "60")
     if not math.isfinite(hz) or not 1 <= hz <= 1000:
         raise ValueError("Display frequency must be finite and in range 1..1000 Hz.")
-    launch = os.environ.get("XR_OPENVR_LAUNCH_MODE", "steamvr").lower()
+    launch = args.launch or os.environ.get("XR_OPENVR_LAUNCH_MODE", "none").lower()
     if launch not in ("steamvr", "steam", "none"):
         raise ValueError("XR_OPENVR_LAUNCH_MODE must be steamvr, steam, or none.")
     if args.choose_output and (mode != "direct" or launch == "none" or os.environ.get("XR_OPENVR_SET_DISPLAY") == "0"):
@@ -362,8 +369,7 @@ def main():
                XR_OPENVR_DEVICE=profile, XR_OPENVR_DISPLAY_MODE=mode,
                XR_OPENVR_DISPLAY_FREQUENCY_HZ=f"{hz:g}", XR_DISPLAY_FREQUENCY_HZ=f"{hz:g}",
                XR_OPENVR_PRESERVE_WINDOW_POSITION="1")
-    gpu_environment(env)
-    # Validate Wayland output requests before closing any application.
+    # Validate output requests before changing anything.
     wayland = is_wayland(env)
     if wayland and (
             env.get("XR_OPENVR_OUTPUT") or env.get("XR_OPENVR_DGPU_OUTPUT") or args.choose_output):
@@ -375,23 +381,36 @@ def main():
     if windowed_wayland and launch != "none" and not env.get("DISPLAY"):
         raise ValueError("Wayland windowed SBS requires XWayland (DISPLAY is unset). "
                          "Enable XWayland or use XR_OPENVR_LAUNCH_MODE=none to register only.")
-    stop_steam()
+    require_steamvr_closed()
+    if launch != "none":
+        steam_running = any_process_running(("steam", "steamwebhelper"))
+        if steam_running and windowed_wayland:
+            raise ValueError("Close Steam completely before launching windowed SBS through XWayland.")
+        if steam_running:
+            log("Steam is already running; it may not inherit GPU or display environment overrides.")
+        gpu_environment(env)
     direct_output = None
     try:
         if prepare_direct:
             direct_output = select_direct_output(env, args.choose_output)
             env["XR_OPENVR_OUTPUT"] = direct_output["name"]
             log(f"Preparing {direct_output['name']} for Direct Mode (non-desktop=1, desktop output off).")
-        if mode != "direct" or prepare_direct:
+        if launch == "none" and mode == "extended_sbs":
+            output = env.get("XR_OPENVR_OUTPUT") or env.get("XR_OPENVR_DGPU_OUTPUT")
+            if output:
+                # Registration reads the existing position without changing display settings.
+                set_window_position_from_output(output, env)
+        elif mode != "direct" or prepare_direct:
             prepare_display(mode, hz, env)
         elif mode == "direct" and wayland:
             log("Wayland Direct Mode requires DRM leasing support from the desktop compositor and GPU driver; XWayland cannot prepare physical outputs.")
         log(f"driver={driver} device={profile} mode={mode} frequency={hz:g}Hz")
         subprocess.run(["bash", str(registrar)], env=env, check=True)
         if launch == "none":
-            log("Configuration complete; launch skipped.")
+            log("Driver configured and registered. Steam and SteamVR were not started.")
             if windowed_wayland:
-                log("Wayland: registration does not save the launch environment. For manual launches, fully exit Steam, then run: "
+                log("Wayland: XWayland windowed SBS is experimental. Registration does not save the launch environment. "
+                    "For manual launches, fully exit Steam, then run: "
                     "env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam")
             return
         if direct_output:
