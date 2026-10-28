@@ -483,18 +483,17 @@ bluetoothctl power on
 
 
 
-
-**Steam and SteamVR must be installed from the Steam website, not from Snap**
-
-**Before every start SteamVR you should run XR Gate**
+### Start XR Gate every runs before SteamVR and Monado
 
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
+**Steam and SteamVR must be installed from the Steam website, not from Snap**
 
-### SteamVR on Linux Direct mode (Direct connection to IGPU via USB-C - XREAL Ultra 90HZ example)
+### SteamVR
+#### SteamVR on Linux Direct mode (Direct connection to IGPU via USB-C - XREAL Ultra 90HZ example)
 
 
 **For device with integrated graphics (IGPU) and USB-C ALT Mode**
@@ -507,7 +506,7 @@ XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_
 
 Then just run Steam
 
-### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
+#### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
 
 Close SteamVR and register once its driver in extended mode once (Steam may remain open):
 
@@ -537,7 +536,7 @@ Then just run Steam
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
 
-### Some demo OpenVR
+#### Some demo OpenVR
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -600,7 +599,7 @@ Check /readme/xrizer.md
 
 
 
-### Start OpenXR demo
+#### Start OpenXR demo
 
 ```bash
 cd ~/xr-gate-release/xr-gate
