@@ -351,6 +351,7 @@ def main() -> int:
     # use config.display.refresh_hz only when no frequency override was supplied.
     xr["displayFrequency"] = args.display_frequency
     steamvr["displayFrequency"] = args.display_frequency
+    steamvr["preferredRefreshRate"] = args.display_frequency
 
     if args.display_mode == "extended_sbs":
         xr["isDisplayOnDesktop"] = True

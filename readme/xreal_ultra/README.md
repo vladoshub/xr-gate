@@ -210,14 +210,15 @@ in physical SBS/60 Hz mode, run from the release directory:
 ```bash
 XR_OPENVR_DISPLAY_MODE=extended_sbs \
 XR_DISPLAY_FREQUENCY_HZ=60 \
-./run_openvr.sh
+./openvr_helper.sh
 ```
 
 No NVIDIA/AMD vendor or display connector is required. This enables the Linux
 window fallback and selects an installed driver at the requested frequency,
 including releases that only contain direct driver packages. Use
 `XR_OPENVR_DEVICE=xreal_ultra` if multiple profiles are installed and none is
-registered yet. Steam is closed before settings are changed.
+registered yet. Close SteamVR before registration; Steam can remain open. Add
+`--steam` or `--steamvr` to start it after the driver is configured.
 
 For optional GPU selection, X11 output placement, Direct Mode, and experimental
 Wayland windowed operation, see [SteamVR Linux](../steamvr-linux.md).
