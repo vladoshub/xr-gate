@@ -509,7 +509,7 @@ XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_
 
 Then just run Steam
 
-### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
+### SteamVR on Linux Fallback windowed mode (Universal method - XREAL Ultra 60HZ example)
 
 Close SteamVR and register once its driver in extended mode once (Steam may remain open):
 
