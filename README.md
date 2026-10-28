@@ -388,7 +388,6 @@ CTRL + C - exit from xr_client
 
 ## 4. Monado | SteamVR
 
-### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
 
@@ -399,7 +398,105 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-Close SteamVR and register its driver in extended mode once (Steam may remain open):
+### Switch to X11 on Ubuntu 26.04
+<details>
+  <summary>READ THIS STEP IF YOUR OS WORK ON WAYLAND</summary>
+
+**Workaround for systems without built-in x11 (Ubuntu 26.04)**
+
+### 1. Install LightDM + Xfce
+
+
+```bash
+sudo apt update
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y universe
+sudo apt update
+
+sudo apt install -y \
+  lightdm lightdm-gtk-greeter \
+  xfce4 xfce4-terminal dbus-x11 \
+  xserver-xorg xserver-xorg-input-libinput \
+  xserver-xorg-video-amdgpu
+```
+
+### 1a. Additional for NVIDIA GPU
+```bash
+bash <<'BASH'
+set -e
+
+LIGHTDM_NATIVE_ARCH="$(dpkg --print-architecture)"
+
+read -r LIGHTDM_NV_GL LIGHTDM_NV_VERSION < <(
+  dpkg-query -W \
+    -f='${Package} ${Architecture} ${Version} ${db:Status-Status}\n' \
+    'libnvidia-gl*' 2>/dev/null |
+  awk -v arch="$LIGHTDM_NATIVE_ARCH" \
+    '$2 == arch && $4 == "installed" {print $1, $3; exit}'
+)
+
+LIGHTDM_NV_XORG="xserver-xorg-video-nvidia${LIGHTDM_NV_GL#libnvidia-gl}"
+
+sudo apt install -y "${LIGHTDM_NV_XORG}=${LIGHTDM_NV_VERSION}"
+
+test -f /usr/lib/xorg/modules/drivers/nvidia_drv.so
+BASH
+```
+
+### 2. Enable lightdm
+
+```bash
+sudo mkdir -p /etc/lightdm/lightdm.conf.d
+
+sudo tee /etc/lightdm/lightdm.conf.d/90-xfce.conf >/dev/null <<'EOF'
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=xfce
+EOF
+
+sudo dpkg-reconfigure lightdm
+```
+
+Choose lightdm and:
+
+
+```bash
+sudo systemctl enable lightdm.service --force
+sudo systemctl set-default graphical.target
+sudo reboot
+```
+
+
+### 2a. Additional install blueman for convenience and Bluetooth control
+
+
+```bash
+sudo apt update
+sudo apt install -y bluez blueman rfkill
+
+sudo systemctl enable --now bluetooth.service
+sudo rfkill unblock bluetooth
+bluetoothctl power on
+```
+
+</details>
+
+
+
+### SteamVR on Linux Direct mode (XREAL Ultra 90HZ direct connection to IGPU via USB-C)
+
+**For device with integrated graphics (IGPU) and USB-C ALT Mode**
+
+```bash
+XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_ultra ./openvr_helper.sh --steamvr
+```
+
+
+### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
+
+Close SteamVR and register once its driver in extended mode once (Steam may remain open):
+
+**This action needs to be repeated if your device or update frequency has changed**
 
 ```bash
 cd ~/xr-gate-release/xr-gate
@@ -409,15 +506,7 @@ XR_DISPLAY_FREQUENCY_HZ=60 \
 ./openvr_helper.sh
 ```
 
-The helper only configures and registers the driver by default. Add `--steam` or
-`--steamvr` to the command to start Steam or SteamVR after registration. The old
-`run_openvr.sh` name remains an alias with the same default behavior.
-
-Set the frequency to match the headset's actual display mode; fractional values
-are accepted. An installed `60HZ` driver package can be reused at another rate
-without rebuilding.
-
-On **X11 (AMD or NVIDIA)**, it is recommended to configure the headset before
+On **X11** it is recommended to configure the headset before
 starting SteamVR to avoid display problems:
 
 ```bash
@@ -425,57 +514,9 @@ starting SteamVR to avoid display problems:
 ./configure_openvr_display.sh 3840x1080 90  # optional explicit rate
 ```
 
-Choose the reference monitor (e.g. `ARZOPA`), then the headset (e.g. `Air 2 Ultra`)
-by name or number. The monitor becomes primary and the headset moves to its right.
-Use the registration command printed by the script. Requires `python3` and `xrandr`;
-no `xdotool`. On **Wayland**, arrange displays in the desktop settings instead.
+If some apps in steam desktop mirror covers the stereo window in `extended_sbs`, add
+`-nowindow` to APP → **Properties → Launch Options** in Steam.
 
-Start SteamVR. If its stereo window appears on the wrong display, install the
-window tools and run this helper in another terminal:
-
-Install once the window tools:
-```bash
-sudo apt install xdotool x11-xserver-utils
-```
-
-Then run helper:
-```bash
-cd ~/xr-gate-release/xr-gate
-./move_openvr_window.sh
-```
-
-Select the headset display when prompted and keep the helper running. It remembers
-the display and moves the window again after a SteamVR restart. To select another
-display, run `./move_openvr_window.sh --choose`.
-
-On **Wayland**, fully exit Steam and start it through XWayland before launching
-windowed SteamVR:
-
-```bash
-env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam
-```
-
-`openvr_helper.sh --steamvr` selects XWayland automatically when it launches Steam;
-Steam must be closed first. Registration alone cannot set the environment of a
-future Steam launch. GNOME Wayland/NVIDIA remains experimental: if frames stall,
-test an X11 desktop session.
-
-Window placement depends on the Wayland compositor; keep the headset display enabled
-as an extended desktop display.
-
-If Alyx's desktop mirror covers the stereo window in `extended_sbs`, add
-`-nowindow` to **Half-Life: Alyx → Properties → Launch Options**.
-
-For **Direct Mode on X11**, run:
-
-```bash
-XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./openvr_helper.sh --steamvr
-```
-
-Choose the headset display once. The launcher remembers it and prepares it for
-exclusive SteamVR display acquisition on each start. Use `--choose-output` to
-choose again, or `XR_OPENVR_OUTPUT=DP-2` to select explicitly. Direct Mode does
-not require `move_openvr_window.sh` or `xdotool`.
 
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
@@ -508,14 +549,32 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
+On **X11** it is recommended to configure the headset before
+starting apps to avoid display problems:
+
+```bash
+./configure_openvr_display.sh 3840x1080     # 60 Hz by default
+./configure_openvr_display.sh 3840x1080 90  # optional explicit rate
+```
+
 ```bash
 cd ~/xr-gate-release/xr-gate
 
 XR_TARGET_DEVICE=xreal_ultra \
 XR_MONADO_DEVICE=xreal_ultra \
 XR_DISPLAY_FREQUENCY_HZ=60 \
-XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb \
+XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen  \
 ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+
+**If you run with: XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb_fullscreen run apps from device display for correct displaying**:
+
+**If you run with: XR_TRACKING_MONADO_COMPOSITOR_MODE=xcb move window to device display area and use this command to enable fullscreen - run and click on your window app**:
+
+```bash
+sudo apt install xdotool wmctrl #install wmctrl once
+wmctrl -r :SELECT: -b remove,fullscreen
 ```
 
 Move the application window to the headset display if the window is on another monitor.
