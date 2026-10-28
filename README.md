@@ -19,7 +19,7 @@ Supported:
 
 [About input and controllers](#about-input-and-controllers)
 
-[Linux build](linux-build)
+[Linux build:](linux-build:)
 
 
 ## Supported devices
