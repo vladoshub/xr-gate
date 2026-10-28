@@ -388,15 +388,15 @@ CTRL + C - exit from xr_client
 
 ## 4. Monado | SteamVR
 
+### Switch to X11 if your Display server is wayland - required once
 
 Check your Display server:
 ```bash
 echo $XDG_SESSION_TYPE
 ```
 
-### Switch to X11 if your Display server is wayland - required once
 <details>
-  <summary>READ THIS STEP IF YOUR OS WORK WITH WAYLAND</summary>
+  <summary>READ THIS STEP IF YOUR DISPLAY SERVER IS WAYLAND</summary>
 
 **Workaround for Ubuntu 24.04**
 
