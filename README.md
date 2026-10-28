@@ -389,15 +389,6 @@ CTRL + C - exit from xr_client
 ## 4. Monado | SteamVR
 
 
-**Steam and SteamVR must be installed from the Steam website, not from Snap**
-
-**Before every start SteamVR you should run XR Gate**
-
-```bash
-cd ~/xr-gate-release/xr-gate
-./run_xr_client.sh --config xreal_ultra
-```
-
 Check your Display server:
 ```bash
 echo $XDG_SESSION_TYPE
@@ -490,6 +481,17 @@ bluetoothctl power on
 
 </details>
 
+
+
+
+**Steam and SteamVR must be installed from the Steam website, not from Snap**
+
+**Before every start SteamVR you should run XR Gate**
+
+```bash
+cd ~/xr-gate-release/xr-gate
+./run_xr_client.sh --config xreal_ultra
+```
 
 
 ### SteamVR on Linux Direct mode (Direct connection to IGPU via USB-C - XREAL Ultra 90HZ example)
