@@ -394,7 +394,7 @@ Check your Display server:
 echo $XDG_SESSION_TYPE
 ```
 
-### Switch to X11 if your Display server is wayland
+### Switch to X11 if your Display server is wayland - required once
 <details>
   <summary>READ THIS STEP IF YOUR OS WORK WITH WAYLAND</summary>
 
