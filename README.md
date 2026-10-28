@@ -500,6 +500,7 @@ cd ~/xr-gate-release/xr-gate
 
 <details>
   <summary>For device with integrated graphics (IGPU) and USB-C ALT Mode</summary>
+
 **For Xreal Ultra you should enable high refresh rate**
 
 ```bash
