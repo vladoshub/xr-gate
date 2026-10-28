@@ -482,17 +482,20 @@ bluetoothctl power on
 </details>
 
 
+### Start XR Gate
 
-### Start XR Gate every runs before SteamVR and Monado
+**Start XR Gate every runs before SteamVR and Monado**
 
 ```bash
 cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-**Steam and SteamVR must be installed from the Steam website, not from Snap**
 
 ### SteamVR
+
+**Steam and SteamVR must be installed from the Steam website, not from Snap**
+
 #### SteamVR on Linux Direct mode (Direct connection to IGPU via USB-C - XREAL Ultra 90HZ example)
 
 
