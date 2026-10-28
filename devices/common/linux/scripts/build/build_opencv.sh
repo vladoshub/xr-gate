@@ -21,29 +21,10 @@ fi
 if [[ -d "$prefix" && -n "$(find "$prefix" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   echo "[opencv][ERROR] refusing an existing SDK without current-build identity: $prefix" >&2; exit 2
 fi
-src="$XR_BUILD_SESSION_DIR/opencv/source"
+src="$ROOT_PROJECT/third_party/opencv"
 build="$XR_BUILD_SESSION_DIR/opencv/build"
-mkdir -p "$src" "$prefix"
-git -C "$src" init -q
-git -C "$src" remote add origin https://github.com/opencv/opencv.git
-git -C "$src" fetch --depth=1 origin "$OPENCV_COMMIT"
-git -C "$src" checkout --detach FETCH_HEAD
-[[ "$(git -C "$src" rev-parse HEAD)" == "$OPENCV_COMMIT" ]]
-# This generator is run by a separate `cmake -P` build command. Parent configure
-# policy flags do not reach it; OpenCV 4.10 still requests CMake 2.8 in that path.
-python3 - "$src/cmake/OpenCVGenPkgconfig.cmake" <<'PY'
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old = "cmake_minimum_required(VERSION 2.8.12.2)"
-new = "# XR Gate: CMake 4 compatibility for the script-mode pkg-config generator.\ncmake_minimum_required(VERSION 3.10)"
-if text.count(old) == 1:
-    path.write_text(text.replace(old, new, 1))
-elif new not in text:
-    raise SystemExit("Unrecognized OpenCV pkg-config generator; refusing to patch it")
-PY
+mkdir -p "$prefix"
+bash "$SCRIPT_DIR/prepare_opencv_source.sh" "$src" "$OPENCV_COMMIT"
 cmake -S "$src" -B "$build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
   -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \

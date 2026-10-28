@@ -82,6 +82,8 @@ env:
   DEBIAN_FRONTEND: noninteractive
   BUILD_JOBS: "2"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  # Local builds keep OpenCV build trees by default; CI/act use disposable jobs.
+  XR_KEEP_OPENCV_BUILD: "0"
   XR_BUILD_CPU: ${{ github.event_name == 'workflow_dispatch' && inputs.cpu_profile || 'avx2' }}
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
@@ -254,6 +256,7 @@ jobs:
             devices/common/linux/scripts/build/install_device_out.sh
             devices/common/linux/scripts/build/with_build_session.sh
             devices/common/linux/scripts/build/build_opencv.sh
+            devices/common/linux/scripts/build/prepare_opencv_source.sh
             devices/common/linux/scripts/build/opencv_env.sh
             devices/common/linux/scripts/build/install_xr_gate_out.sh
             devices/common/linux/scripts/build/package_device_out.sh

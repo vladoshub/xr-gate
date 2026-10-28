@@ -57,12 +57,30 @@ The builder must also support the chosen instructions for build-time helper tool
 
 Every invocation of `install_xr_gate_out.sh` / `install_device_out.sh` starts a
 new random directory under `build/.sessions/`. Native build trees, ccache,
-vcpkg binary packages and downloads live there and are removed on exit,
-including a failed build. Interrupted directories are never restored or reused.
-A reboot or a new invocation always starts with empty caches. Source checkouts
-under `third_party/` can be retained; they are not compiled dependency caches.
+vcpkg binary packages and downloads live there. OpenCV's `opencv/build/` and
+`opencv/install/` directories are kept on exit by default, including after a
+failed build (`XR_KEEP_OPENCV_BUILD=1`). The script logs their retained path.
+All other session files and caches are removed. If no OpenCV build was created,
+the entire session directory is removed.
+
+Set `XR_KEEP_OPENCV_BUILD=0` to remove the entire session on exit instead:
+
+```bash
+XR_KEEP_OPENCV_BUILD=0 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+OpenCV sources are checked out in `third_party/opencv/` and remain there with
+either setting, like other third-party source checkouts. Later builds reuse the
+checkout at the pinned commit and do not download it again if that commit is
+already present. The CMake compatibility patch is applied idempotently. No forced
+checkout or clean is used; conflicting developer edits stop the build.
+
+Retaining OpenCV build products does not enable incremental SDK builds: every
+invocation starts with empty compiler/package caches and a new build/SDK path.
+Old or interrupted session directories are never restored or reused. The split
+GitHub Actions workflow (also used by `act`) sets `XR_KEEP_OPENCV_BUILD=0` explicitly.
 Do not invoke two builds concurrently in the same checkout: upstream integration
-edits the Basalt and Monado source trees.
+edits the OpenCV, Basalt and Monado source trees.
 
 GitHub Actions builds OpenCV once **per Ubuntu ABI, workflow run and attempt**.
 The SDK is an intermediate artifact, not an `actions/cache` entry. Downstream
@@ -111,7 +129,7 @@ sudo apt-get install -y build-essential cmake ninja-build pkg-config binutils cc
 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-The normal script creates and removes its build session automatically. Direct
+The normal script manages its build session and OpenCV retention automatically. Direct
 `backends/basalt_vio/scripts/linux/install_basalt.sh` and
 `capture_service_cpp/scripts/linux/build_capture_service_cpp.sh` calls also create
 fresh sessions. For an intentionally scoped build, for example:

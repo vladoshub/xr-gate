@@ -21,7 +21,8 @@ class NativeBuildTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU="avx2")
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
-                     "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
+                     "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_KEEP_OPENCV_BUILD",
+                     "XR_OPENCV_PREFIX"):
             self.env.pop(name, None)
 
     def session(self, script, env=None):
@@ -48,6 +49,141 @@ print(json.dumps({k:os.environ[k] for k in ['XR_BUILD_SESSION_DIR','VCPKG_BINARY
         failed = self.session("import os; print(os.environ['XR_BUILD_SESSION_DIR']); raise SystemExit(7)")
         self.assertEqual(failed.returncode, 7)
         self.assertFalse(Path(failed.stdout.strip()).exists())
+
+    def test_opencv_is_kept_by_default_on_success_and_failure_without_reusing_caches(self):
+        code = """
+import json, os
+from pathlib import Path
+session = Path(os.environ['XR_BUILD_SESSION_DIR'])
+assert not (session/'opencv').exists()
+assert not (Path(os.environ['CCACHE_DIR'])/'old-result').exists()
+for name in ('opencv/build/object.o', 'opencv/install/lib/libopencv_core.a', 'build/other.o'):
+    path = session/name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+(Path(os.environ['CCACHE_DIR'])/'old-result').touch()
+print(json.dumps(str(session)))
+raise SystemExit(int(os.environ['TEST_EXIT_STATUS']))
+"""
+        sessions = []
+        for status in (0, 7):
+            with self.subTest(status=status):
+                result = self.session(code, dict(self.env, TEST_EXIT_STATUS=str(status)))
+                self.assertEqual(result.returncode, status, result.stderr)
+                session = Path(json.loads(result.stdout))
+                sessions.append(session)
+                self.assertEqual({path.name for path in session.iterdir()}, {"opencv"})
+                self.assertTrue((session / "opencv/build/object.o").exists())
+                self.assertTrue((session / "opencv/install/lib/libopencv_core.a").exists())
+                self.assertIn(str(session / "opencv"), result.stderr)
+        self.assertNotEqual(*sessions)
+
+    def test_opencv_retention_can_be_disabled_without_removing_source_checkout(self):
+        code = """
+import os
+from pathlib import Path
+session = Path(os.environ['XR_BUILD_SESSION_DIR'])
+for name in ('opencv/build/object.o', 'opencv/install/lib/libopencv_core.a'):
+    path = session/name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+source = Path(os.environ['ROOT_PROJECT'])/'third_party/opencv/source.cpp'
+source.parent.mkdir(parents=True, exist_ok=True)
+source.touch()
+print(session)
+raise SystemExit(int(os.environ['TEST_EXIT_STATUS']))
+"""
+        for status in (0, 7):
+            with self.subTest(status=status):
+                result = self.session(code, dict(self.env, XR_KEEP_OPENCV_BUILD="0",
+                                                TEST_EXIT_STATUS=str(status)))
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertFalse(Path(result.stdout.strip()).exists())
+                self.assertTrue((self.root / "third_party/opencv/source.cpp").exists())
+
+    def test_invalid_opencv_retention_stops_before_build_command(self):
+        result = self.session("raise AssertionError('build must not start')",
+                              dict(self.env, XR_KEEP_OPENCV_BUILD="invalid"))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("XR_KEEP_OPENCV_BUILD must be 0 or 1", result.stderr)
+        self.assertFalse((self.root / "build").exists())
+
+    def opencv_source_fixture(self):
+        upstream = self.root / "upstream"
+        upstream.mkdir()
+        subprocess.run(["git", "init", "-q", str(upstream)], check=True)
+        generator = upstream / "cmake/OpenCVGenPkgconfig.cmake"
+        generator.parent.mkdir()
+        generator.write_text("cmake_minimum_required(VERSION 2.8.12.2)\n")
+        subprocess.run(["git", "-C", str(upstream), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(upstream), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "commit", "-qm", "Fixture"], check=True)
+        commit = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
+        return upstream, commit
+
+    @unittest.skipUnless(shutil.which("git"), "Git needed")
+    def test_opencv_source_checkout_and_cmake_patch_are_reused_without_network(self):
+        upstream, commit = self.opencv_source_fixture()
+        source = self.root / "third_party/opencv"
+        command = ["bash", str(BUILD / "prepare_opencv_source.sh"), str(source), commit, str(upstream)]
+        first = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        generator = source / "cmake/OpenCVGenPkgconfig.cmake"
+        patched = generator.read_bytes()
+        self.assertIn(b"cmake_minimum_required(VERSION 3.10)", patched)
+        # A second invocation must work even when the upstream is unavailable.
+        shutil.rmtree(upstream)
+        second = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(generator.read_bytes(), patched)
+        self.assertEqual(subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"],
+                                                text=True).strip(), commit)
+
+    def test_opencv_source_preparation_preserves_non_git_directory(self):
+        source = self.root / "third_party/opencv"
+        source.mkdir(parents=True)
+        existing = source / "source.cpp"
+        existing.write_text("developer source\n")
+        result = subprocess.run(["bash", str(BUILD / "prepare_opencv_source.sh"), str(source),
+                                 "71d3237a093b60a27601c20e9ee6c3e52154e8b1"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("nonempty source directory", result.stderr)
+        self.assertEqual(existing.read_text(), "developer source\n")
+        self.assertFalse((source / ".git").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "Git needed")
+    def test_failed_opencv_build_keeps_third_party_sources_and_build_products(self):
+        upstream, commit = self.opencv_source_fixture()
+        source = self.root / "third_party/opencv"
+        subprocess.run(["git", "clone", "-q", str(upstream), str(source)], check=True)
+        scripts = self.root / "test scripts"
+        scripts.mkdir()
+        # Only replace the pinned revision with our local fixture; exercise the
+        # real builder and session cleanup without downloading/compiling OpenCV.
+        builder = scripts / "build_opencv.sh"
+        builder.write_text((BUILD / builder.name).read_text().replace(
+            "71d3237a093b60a27601c20e9ee6c3e52154e8b1", commit))
+        shutil.copy2(BUILD / "prepare_opencv_source.sh", scripts)
+        cmake = scripts / "cmake"
+        cmake.write_text("#!/usr/bin/env python3\n"
+                         "import os, sys\nfrom pathlib import Path\n"
+                         "build = Path(sys.argv[sys.argv.index('-B') + 1])\n"
+                         "build.mkdir(parents=True)\n(build/'CMakeCache.txt').touch()\n"
+                         "Path(os.environ['TEST_SESSION_PATH']).write_text(os.environ['XR_BUILD_SESSION_DIR'])\n"
+                         "raise SystemExit(9)\n")
+        cmake.chmod(0o755)
+        session_path = self.root / "session-path"
+        result = self.session("import os, subprocess; raise SystemExit(subprocess.call(['bash', os.environ['TEST_BUILDER']]))",
+                              dict(self.env, PATH=str(scripts) + os.pathsep + self.env['PATH'],
+                                   TEST_BUILDER=str(builder), TEST_SESSION_PATH=str(session_path)))
+        self.assertEqual(result.returncode, 9, result.stderr)
+        session = Path(session_path.read_text())
+        self.assertTrue((session / "opencv/build/CMakeCache.txt").exists())
+        self.assertTrue((session / "opencv/install").is_dir())
+        self.assertTrue((source / "cmake/OpenCVGenPkgconfig.cmake").exists())
+        self.assertFalse((session / "opencv/source").exists())
+        self.assertEqual({path.name for path in session.iterdir()}, {"opencv"})
 
     def test_sdk_reuse_requires_same_run_attempt_distro_and_cpu(self):
         code = r"""

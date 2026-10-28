@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
-# One invocation owns all compiler/package caches. Nothing is restored next time.
+# One invocation owns all compiler/package caches. Retained OpenCV builds are
+# available for inspection, but are never restored by a later invocation.
 set -euo pipefail
 [[ $# -gt 0 ]] || { echo "usage: $0 command [args...]" >&2; exit 2; }
 root="${ROOT_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)}"
 export ROOT_PROJECT="$root"
+export XR_KEEP_OPENCV_BUILD="${XR_KEEP_OPENCV_BUILD:-1}"
+case "$XR_KEEP_OPENCV_BUILD" in
+  0|1) ;;
+  *) echo "[build-session][ERROR] XR_KEEP_OPENCV_BUILD must be 0 or 1" >&2; exit 2 ;;
+esac
 mkdir -p "$root/build/.sessions"
 session="$(mktemp -d "$root/build/.sessions/run.XXXXXXXX")"
-cleanup() { rm -rf -- "$session"; }
+cleanup() {
+  local status=$?
+  if [[ "$XR_KEEP_OPENCV_BUILD" == "1" && -d "$session/opencv" ]]; then
+    find "$session" -mindepth 1 -maxdepth 1 ! -name opencv -exec rm -rf -- {} +
+    echo "[build-session] kept OpenCV build/SDK: $session/opencv (XR_KEEP_OPENCV_BUILD=0 disables retention)" >&2
+  else
+    rm -rf -- "$session"
+  fi
+  return "$status"
+}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
