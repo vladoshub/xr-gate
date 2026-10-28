@@ -498,9 +498,8 @@ cd ~/xr-gate-release/xr-gate
 
 ### SteamVR on Linux Direct mode (Direct connection to IGPU via USB-C - XREAL Ultra 90HZ example)
 
-
-**For device with integrated graphics (IGPU) and USB-C ALT Mode**
-
+<details>
+  <summary>For device with integrated graphics (IGPU) and USB-C ALT Mode</summary>
 **For Xreal Ultra you should enable high refresh rate**
 
 ```bash
@@ -508,6 +507,8 @@ XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_
 ```
 
 Then just run Steam
+</details>
+
 
 ### SteamVR on Linux Fallback windowed mode (Universal method - XREAL Ultra 60HZ example)
 
