@@ -16,14 +16,20 @@ and the saved driver window position. With several device profiles installed, it
 uses the currently registered profile when unambiguous; otherwise specify
 `XR_OPENVR_DEVICE=<profile>`.
 
-The launcher prefers an `extended_sbs` driver package at the selected frequency.
-If only a direct package at that frequency exists, it registers that package and
-overrides the display settings. It never silently substitutes another frequency
-or device. No driver rebuild is necessary for this mode switch.
+The launcher prefers a package at the selected frequency and display mode. If
+none exists, it reuses a package for the same device and overrides its runtime
+settings. A `60HZ` package can therefore run at 90, 72, or 59.94 Hz without
+rebuilding the driver or changing the package files. If several fallback
+packages exist, the selected display mode is preferred, then the lowest default
+frequency. `DRIVER_PACKAGE=<path/to/xr_tracking>` selects a package explicitly.
+The physical display must support and use the requested resolution and rate.
 
 Steam is closed gracefully before updating settings. If it does not exit, the
 launcher stops and asks you to close it. Existing settings are backed up once as
 `steamvr.vrsettings.before-xr-gate`; unrelated runtime/calibration settings are kept.
+The driver frequency and SteamVR's `preferredRefreshRate` are both set to the
+selected rate. The latter controls the requested display mode; SteamVR can still
+report a different runtime frequency, so this does not guarantee correct timing.
 
 The windowed path sets:
 
@@ -41,6 +47,30 @@ refresh synchronization, or exclusive presentation. Tested on Ubuntu 26.04/X11
 with NVIDIA and XREAL Air 2 Ultra at 3840×1080/60 Hz.
 
 ## Optional display and GPU selection
+
+### Interactive display setup (X11)
+
+Recommended before starting SteamVR to avoid display mode and placement problems:
+
+```bash
+./configure_openvr_display.sh 3840x1080     # defaults to 60 Hz
+./configure_openvr_display.sh 3840x1080 90  # optional explicit rate
+```
+
+Enable the headset's SBS mode first. Choose the reference monitor (e.g. `ARZOPA`),
+then the headset (e.g. `Air 2 Ultra`), using its EDID name, connector or list number.
+The reference monitor becomes primary at `0,0`; the headset is placed to its right
+at the requested resolution and rate. Ambiguous names require a connector or
+number. The script checks advertised modes before changing displays and prints
+the `run_openvr.sh` command with the selected output, resolution and frequency
+to align the SteamVR window with its new position.
+
+Works with AMD and NVIDIA through X11 RandR; requires `python3` and `xrandr`
+(`x11-xserver-utils` on Ubuntu/Debian). It does not require `xdotool`, root,
+`nvidia-settings`, or a driver rebuild. On Wayland, use the desktop display
+settings instead; XWayland cannot configure physical outputs this way.
+
+### Explicit display and GPU overrides
 
 On **X11**, an explicit output lets the launcher enable the display, set its mode
 and rate, and align the compositor window with its actual desktop coordinates:
@@ -65,6 +95,13 @@ distinguish between two GPUs from the same vendor. `XR_OPENVR_VK_ICD_FILENAMES`
 can point to an explicit ICD manifest. The older `XR_OPENVR_DGPU_VENDOR` and
 `XR_OPENVR_DGPU_OUTPUT` names are accepted too.
 
+On AMD, the default `auto` also needs no vendor flag. Install the system's Mesa
+Vulkan driver (RADV). Explicit `XR_OPENVR_GPU_VENDOR=amd` discovers installed
+`radeon_icd*.json` manifests, retaining both 32-bit and 64-bit variants when
+present. Explicit `VK_DRIVER_FILES` takes precedence over `VK_ICD_FILENAMES`.
+For several AMD GPUs, `XR_OPENVR_DRI_PRIME` can select a GPU with the `amd`
+override; vendor selection alone cannot distinguish them.
+
 `XR_OPENVR_LAUNCH_MODE=steam` opens only Steam; `none` applies settings without
 launching. The default is `steamvr`.
 
@@ -74,9 +111,35 @@ launching. The default is `steamvr`.
 XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./run_openvr.sh
 ```
 
-This turns off the window fallback again. If an X11 output is specified, it is
-marked `non-desktop=1` and disabled from the desktop. Without an output, physical
-display preparation is left to the system. The existing
+On **X11**, choose the headset display from the list on the first launch. The
+launcher sets `non-desktop=1` and removes that output from the desktop before
+starting SteamVR. SteamVR then attempts exclusive display acquisition; this
+preparation alone does not guarantee DRM/Vulkan support from the GPU driver.
+No window-moving helper or `xdotool` is needed for Direct Mode.
+
+The choice is remembered per device using the display's EDID, so a connector
+rename does not select an unrelated monitor. Run with `--choose-output` to choose
+again, or set `XR_OPENVR_OUTPUT=DP-2` explicitly. Without EDID, choose each time
+or use an explicit output. A first launch without a terminal requires that
+explicit output. Use the launcher for each Direct Mode start to prepare the
+display again after a reboot.
+
+`XR_OPENVR_LAUNCH_MODE=none` only registers Direct Mode settings and leaves the
+display unchanged. `XR_OPENVR_SET_DISPLAY=0` skips automatic display preparation
+when it is already handled elsewhere. Wayland keeps its native launch
+environment and requires the desktop compositor's DRM leasing support; physical
+output selection through XWayland is unavailable.
+
+If preparation, registration, or execution of Steam fails, the launcher attempts
+to restore the selected output's original desktop state. It does not monitor
+SteamVR after Steam starts. To restore a display manually after closing SteamVR:
+
+```bash
+xrandr --output DP-2 --set non-desktop 0
+xrandr --output DP-2 --auto
+```
+
+Replace `DP-2` with the selected connector. The existing
 `run_openvr_dgpu_direct.sh` remains available for its established dGPU setup.
 
 ## Window placement and Wayland
@@ -92,13 +155,27 @@ Select the headset display once and keep the helper running. It moves the window
 again after a SteamVR restart or a display position change. Use `--choose` to pick
 another display. `XR_OPENVR_WINDOW_OUTPUT` optionally selects a display by name.
 
-Windowed SBS through XWayland has been tested on Ubuntu 26.04 with XREAL Ultra;
-other Wayland compositors may block window positioning. If SteamVR fails using
-native Wayland, fully exit Steam and start it through XWayland:
+In `extended_sbs`, a game's desktop mirror can cover the headset's stereo window.
+For Half-Life: Alyx, add `-nowindow` in Steam's game launch options to disable that
+mirror. This is unnecessary for Direct Mode.
+
+On a Wayland desktop, `run_openvr.sh` starts a fresh Steam process through XWayland
+for `extended_sbs`. This avoids the native Wayland window-fallback assertion seen
+in SteamVR 2.18.4. It requires XWayland (`DISPLAY` must be set), and the desktop
+itself remains on Wayland. Direct Mode keeps its original launch environment.
+
+`XR_OPENVR_LAUNCH_MODE=none` only registers settings; it cannot persist environment
+variables for a future Steam launch. After registration, fully exit Steam and
+use this command whenever starting Steam manually on Wayland:
 
 ```bash
 env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam
 ```
+
+XWayland startup and window placement have worked on Ubuntu 26.04 with XREAL Ultra,
+but GNOME Wayland/NVIDIA has also shown frame stalls and compositor watchdog aborts.
+This remains experimental; compare with a native X11 session if frames stall.
+Other Wayland compositors may block window positioning.
 
 Enable the headset display and configure its resolution and refresh rate in your
 desktop settings. `xrandr` queries XWayland coordinates here; it does not configure

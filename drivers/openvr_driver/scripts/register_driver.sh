@@ -377,6 +377,9 @@ for path in paths:
     # file had stale frequency values.
     xr["displayFrequency"] = freq
     steamvr["displayFrequency"] = freq
+    # SteamVR uses a separate preferred-rate setting during display selection.
+    # displayFrequency alone leaves a stale/default request (often 90 Hz).
+    steamvr["preferredRefreshRate"] = freq
 
     if mode == "direct":
         xr["isDisplayOnDesktop"] = False

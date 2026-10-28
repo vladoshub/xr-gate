@@ -410,6 +410,23 @@ XR_OPENVR_LAUNCH_MODE=none \
 ./run_openvr.sh
 ```
 
+Set the frequency to match the headset's actual display mode; fractional values
+are accepted. An installed `60HZ` driver package can be reused at another rate
+without rebuilding.
+
+On **X11 (AMD or NVIDIA)**, it is recommended to configure the headset before
+starting SteamVR to avoid display problems:
+
+```bash
+./configure_openvr_display.sh 3840x1080     # 60 Hz by default
+./configure_openvr_display.sh 3840x1080 90  # optional explicit rate
+```
+
+Choose the reference monitor (e.g. `ARZOPA`), then the headset (e.g. `Air 2 Ultra`)
+by name or number. The monitor becomes primary and the headset moves to its right.
+Use the launch command printed by the script. Requires `python3` and `xrandr`;
+no `xdotool`. On **Wayland**, arrange displays in the desktop settings instead.
+
 Start SteamVR. If its stereo window appears on the wrong display, install the
 window tools and run this helper in another terminal:
 
@@ -428,15 +445,33 @@ Select the headset display when prompted and keep the helper running. It remembe
 the display and moves the window again after a SteamVR restart. To select another
 display, run `./move_openvr_window.sh --choose`.
 
-On **Wayland**, if SteamVR fails in windowed mode, fully exit Steam and start it through
-XWayland before launching SteamVR:
+On **Wayland**, fully exit Steam and start it through XWayland before launching
+windowed SteamVR:
 
 ```bash
 env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 SDL_VIDEODRIVER=x11 steam
 ```
 
+`run_openvr.sh` selects XWayland automatically when it launches Steam; `none` only
+registers the driver. GNOME Wayland/NVIDIA remains experimental: if frames stall,
+test an X11 desktop session.
+
 Window placement depends on the Wayland compositor; keep the headset display enabled
 as an extended desktop display.
+
+If Alyx's desktop mirror covers the stereo window in `extended_sbs`, add
+`-nowindow` to **Half-Life: Alyx → Properties → Launch Options**.
+
+For **Direct Mode on X11**, run:
+
+```bash
+XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=60 ./run_openvr.sh
+```
+
+Choose the headset display once. The launcher remembers it and prepares it for
+exclusive SteamVR display acquisition on each start. Use `--choose-output` to
+choose again, or `XR_OPENVR_OUTPUT=DP-2` to select explicitly. Direct Mode does
+not require `move_openvr_window.sh` or `xdotool`.
 
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
