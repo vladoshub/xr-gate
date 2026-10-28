@@ -398,9 +398,17 @@ cd ~/xr-gate-release/xr-gate
 ./run_xr_client.sh --config xreal_ultra
 ```
 
-### Switch to X11 on Ubuntu 26.04
+Check your Display server:
+```bash
+echo $XDG_SESSION_TYPE
+```
+
+### Switch to X11 if Display server is wayland
 <details>
-  <summary>READ THIS STEP IF YOUR OS WORK ON WAYLAND</summary>
+  <summary>READ THIS STEP IF YOUR OS WORK WITH WAYLAND</summary>
+
+**Workaround for Ubuntu 24.04**
+Logout and switch to x11
 
 **Workaround for systems without built-in x11 (Ubuntu 26.04)**
 
@@ -491,6 +499,7 @@ bluetoothctl power on
 XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_ultra ./openvr_helper.sh --steamvr
 ```
 
+Then just run Steam
 
 ### SteamVR on Linux Fallback windowed mode (XREAL Ultra 60HZ example)
 
@@ -517,6 +526,7 @@ starting SteamVR to avoid display problems:
 If some apps in steam desktop mirror covers the stereo window in `extended_sbs`, add
 `-nowindow` to APP → **Properties → Launch Options** in Steam.
 
+Then just run Steam
 
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
