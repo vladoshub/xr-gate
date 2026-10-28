@@ -403,11 +403,12 @@ Check your Display server:
 echo $XDG_SESSION_TYPE
 ```
 
-### Switch to X11 if Display server is wayland
+### Switch to X11 if your Display server is wayland
 <details>
   <summary>READ THIS STEP IF YOUR OS WORK WITH WAYLAND</summary>
 
 **Workaround for Ubuntu 24.04**
+
 Logout and switch to x11
 
 **Workaround for systems without built-in x11 (Ubuntu 26.04)**
