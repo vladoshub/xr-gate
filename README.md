@@ -492,9 +492,12 @@ bluetoothctl power on
 
 
 
-### SteamVR on Linux Direct mode (XREAL Ultra 90HZ direct connection to IGPU via USB-C)
+### SteamVR on Linux Direct mode (Direct connection to IGPU via USB-C - XREAL Ultra 90HZ example)
+
 
 **For device with integrated graphics (IGPU) and USB-C ALT Mode**
+
+**For Xreal Ultra you should enable high refresh rate**
 
 ```bash
 XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_ultra ./openvr_helper.sh --steamvr
