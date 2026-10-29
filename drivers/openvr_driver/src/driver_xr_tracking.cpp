@@ -1451,7 +1451,7 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
     hand_cfg_.render_model = get_string_setting(kHandControllerRenderModelKey, kHiddenHandControllerRenderModel);
     hand_cfg_.expose_system_button = get_bool_setting(kHandControllerExposeSystemButtonKey, false);
     hand_cfg_.input_mapping.expose_system_button = hand_cfg_.expose_system_button;
-    hand_cfg_.input_mapping.left_ab_xy_alias = get_bool_setting("handControllerLeftABXYAlias", true);
+    hand_cfg_.input_mapping.left_ab_xy_alias = get_bool_setting("handControllerLeftABXYAlias", false);
     hand_cfg_.input_mapping.trackpad_click_from_touch = get_bool_setting("handControllerTrackpadClickFromTouch", false);
     hand_cfg_.input_mapping.axis_activity_threshold = get_float_setting("handControllerInputAxisThreshold", 0.05f);
     hand_cfg_.input_mapping.analog_click_threshold = get_float_setting("handControllerInputClickThreshold", 0.55f);

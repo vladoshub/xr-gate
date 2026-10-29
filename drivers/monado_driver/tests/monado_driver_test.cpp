@@ -213,6 +213,7 @@ void test_touch_directions_and_clicks() {
 
 void test_left_face_alias_and_independent_buttons() {
   {
+    ScopedEnv alias("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", "1");
     Fixture f;
     auto& left = f.controller->sample.frame.left;
     left.buttons = xr_runtime::CONTROLLER_BUTTON_A;
@@ -237,16 +238,38 @@ void test_left_face_alias_and_independent_buttons() {
     assert(!input(f.right, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
     assert(!input(f.right, XRT_INPUT_TOUCH_Y_CLICK).value.boolean);
   }
-  ScopedEnv alias("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", "0");
+  ScopedEnv alias("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", nullptr);
   Fixture f;
   const uint64_t bits[] = {xr_runtime::CONTROLLER_BUTTON_A, xr_runtime::CONTROLLER_BUTTON_B,
                            xr_runtime::CONTROLLER_BUTTON_X, xr_runtime::CONTROLLER_BUTTON_Y};
   const xrt_input_name names[] = {XRT_INPUT_TOUCH_A_CLICK, XRT_INPUT_TOUCH_B_CLICK,
                                   XRT_INPUT_TOUCH_X_CLICK, XRT_INPUT_TOUCH_Y_CLICK};
-  for (size_t i = 0; i < 4; ++i) {
-    f.controller->sample.frame.left.buttons = bits[i];
-    f.left->update_inputs(f.left);
-    for (size_t j = 0; j < 4; ++j) assert(input(f.left, names[j]).value.boolean == (i == j));
+  const xrt_input_name touches[] = {XRT_INPUT_TOUCH_A_TOUCH, XRT_INPUT_TOUCH_B_TOUCH,
+                                    XRT_INPUT_TOUCH_X_TOUCH, XRT_INPUT_TOUCH_Y_TOUCH};
+  for (auto* device : {f.left, f.right}) {
+    auto& side = device == f.left ? f.controller->sample.frame.left : f.controller->sample.frame.right;
+    for (size_t i = 0; i < 4; ++i) {
+      side.buttons = bits[i];
+      side.touches = 0;
+      device->update_inputs(device);
+      for (size_t j = 0; j < 4; ++j) {
+        assert(input(device, names[j]).value.boolean == (i == j));
+        assert(input(device, touches[j]).value.boolean == (i == j));
+      }
+      side.buttons = 0;
+      side.touches = bits[i];
+      device->update_inputs(device);
+      for (size_t j = 0; j < 4; ++j) {
+        assert(!input(device, names[j]).value.boolean);
+        assert(input(device, touches[j]).value.boolean == (i == j));
+      }
+    }
+    side.touches = 0;
+    device->update_inputs(device);
+    for (size_t j = 0; j < 4; ++j) {
+      assert(!input(device, names[j]).value.boolean);
+      assert(!input(device, touches[j]).value.boolean);
+    }
   }
 }
 
@@ -296,7 +319,8 @@ void test_profile_order_and_index_bindings() {
       }
       auto& side = device == f.left ? f.controller->sample.frame.left : f.controller->sample.frame.right;
       side.trigger = 0.8f; side.grip = 0.6f;
-      side.buttons = xr_runtime::CONTROLLER_BUTTON_A | xr_runtime::CONTROLLER_BUTTON_THUMBSTICK;
+      side.buttons = (device == f.left ? xr_runtime::CONTROLLER_BUTTON_X : xr_runtime::CONTROLLER_BUTTON_A) |
+                     xr_runtime::CONTROLLER_BUTTON_THUMBSTICK;
       device->update_inputs(device);
       assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_A_CLICK).value.boolean);
       assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_TRIGGER_CLICK).value.boolean);
@@ -307,6 +331,26 @@ void test_profile_order_and_index_bindings() {
       assert(grip.active);
       assert(device->get_tracked_pose(device, grip.name, 0, &relation) == XRT_SUCCESS);
       assert(relation.pose.position.x == 0.4f);
+      const uint64_t faces[] = {xr_runtime::CONTROLLER_BUTTON_A, xr_runtime::CONTROLLER_BUTTON_B,
+                               xr_runtime::CONTROLLER_BUTTON_X, xr_runtime::CONTROLLER_BUTTON_Y};
+      for (size_t i = 0; i < 4; ++i) {
+        const bool first = i == (device == f.left ? 2u : 0u);
+        const bool second = i == (device == f.left ? 3u : 1u);
+        side.buttons = faces[i];
+        side.touches = 0;
+        device->update_inputs(device);
+        assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_A_CLICK).value.boolean == first);
+        assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_B_CLICK).value.boolean == second);
+        assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_A_TOUCH).value.boolean == first);
+        assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_B_TOUCH).value.boolean == second);
+        side.buttons = 0;
+        side.touches = faces[i];
+        device->update_inputs(device);
+        assert(!profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_A_CLICK).value.boolean);
+        assert(!profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_B_CLICK).value.boolean);
+        assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_A_TOUCH).value.boolean == first);
+        assert(profile_input(device, XRT_DEVICE_INDEX_CONTROLLER, XRT_INPUT_INDEX_B_TOUCH).value.boolean == second);
+      }
     }
   }
   {
@@ -361,12 +405,13 @@ void test_hand_gesture_input_fallback() {
   hand.flags |= xr_tracking::HAND_PINCH_VALID | xr_tracking::HAND_GRAB_VALID;
   hand.pinch_strength = 0.65f;
   hand.grab_strength = 0.75f;
-  hand.reserved0 = xr_runtime::CONTROLLER_BUTTON_A;
+  hand.reserved0 = xr_runtime::CONTROLLER_BUTTON_X;
   f.left->update_inputs(f.left);
   assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).active);
   assert(input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).value.vec1.x == 0.65f);
   assert(input(f.left, XRT_INPUT_TOUCH_SQUEEZE_VALUE).value.vec1.x == 0.75f);
   assert(input(f.left, XRT_INPUT_TOUCH_X_CLICK).value.boolean);
+  assert(!input(f.left, XRT_INPUT_TOUCH_A_CLICK).value.boolean);
   f.hand->available = false;
   f.left->update_inputs(f.left);
   assert(!input(f.left, XRT_INPUT_TOUCH_TRIGGER_VALUE).active);

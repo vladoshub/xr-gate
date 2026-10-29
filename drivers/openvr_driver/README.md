@@ -47,12 +47,17 @@ Settings in the `xr_tracking` section of `default.vrsettings`:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `handControllerLeftABXYAlias` | `true` | Alias left A/B and X/Y so existing runtime mappings also work with Touch/Index layouts. Disable for four independent left face buttons. |
+| `handControllerLeftABXYAlias` | `false` | Preserve independent A/B/X/Y inputs. Set `true` only for legacy profiles requiring left A/X and B/Y aliases. |
 | `handControllerTrackpadClickFromTouch` | `false` | Opt in to the old synthetic trackpad click for older custom bindings. Can make direction and general click actions fire together. |
 | `handControllerInputAxisThreshold` | `0.05` | Neutral axis region and threshold for synthesized stick touch. |
 | `handControllerInputClickThreshold` | `0.55` | Analog trigger/grip click threshold. |
 
 The physical-device mapping still belongs in the controller backend config.
+Assign the left face buttons to X/Y and the right face buttons to A/B there.
+The existing Index rebinding rules already use left X/Y for Index A/B actions;
+they do not require duplicate native A/B inputs. An explicitly saved `true` in
+SteamVR's per-user `steamvr.vrsettings` overrides the package default: remove
+that override or set it to `false` in the `xr_tracking` section.
 Application actions still belong to the game's bindings. Existing user-saved
 bindings take precedence over automatic rebinding; after upgrading, select the
 game's default bindings if an older generated/custom binding remains active.

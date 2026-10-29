@@ -14,7 +14,7 @@ Index, Vive и Simple Controller. Файл
 | Grip | Аналоговое значение, нажатие и касание хвата |
 | Thumbstick X/Y или D-pad | Координаты стика/панели и признак касания |
 | Thumbstick click или D-pad centre | Физическое нажатие стика/панели |
-| A/B слева | X/Y для Touch и Index; старые A/B также доступны |
+| X/Y слева | X/Y для Touch; левая пара A/B в привязках Index |
 | A/B справа | A/B |
 | Menu | Меню приложения |
 
@@ -39,14 +39,22 @@ Index, Vive и Simple Controller. Файл
 зарегистрированного драйвера. В секции `xr_tracking` доступны:
 
 ```json
-"handControllerLeftABXYAlias": true,
+"handControllerLeftABXYAlias": false,
 "handControllerTrackpadClickFromTouch": false,
 "handControllerInputAxisThreshold": 0.05,
 "handControllerInputClickThreshold": 0.55
 ```
 
-Это фрагмент существующей секции, а не весь JSON-файл. Если слева нужны четыре
-независимые кнопки A/B/X/Y, выключите `handControllerLeftABXYAlias`.
+Это фрагмент существующей секции, а не весь JSON-файл. По умолчанию A/B/X/Y
+передаются независимо. Назначьте левые физические кнопки на X/Y в конфиге
+источника ввода. Существующие привязки Index уже читают левую пару X/Y;
+дублировать её в A/B не требуется. Для старых профилей совместимость можно
+явно включить значением `handControllerLeftABXYAlias: true`.
+
+Если в пользовательском `steamvr.vrsettings` в секции `xr_tracking` ранее было
+сохранено значение `true`, оно имеет приоритет над умолчанием пакета. При
+закрытом SteamVR удалите этот параметр или поменяйте его на `false`.
+
 `handControllerInputAxisThreshold` задаёт нейтральную зону осей и порог
 активности для виртуального касания. `handControllerInputClickThreshold`
 задаёт порог аналогового курка/хвата; реальный флаг нажатия также учитывается.

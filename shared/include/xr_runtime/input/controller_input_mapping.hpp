@@ -10,7 +10,8 @@ namespace xr_runtime {
 
 // These are virtual controller semantics, independent of the physical backend.
 struct ControllerInputMappingConfig {
-  bool left_ab_xy_alias = true;
+  // Physical-to-virtual button assignments belong in the source config.
+  bool left_ab_xy_alias = false;
   bool trackpad_click_from_touch = false;
   bool expose_system_button = false;
   float axis_activity_threshold = 0.05f;

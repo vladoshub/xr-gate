@@ -53,7 +53,7 @@
     "coordinateMode": "runtime_ready",
     "debugMode": false,
     "DebugMode": false,
-    "handControllerLeftABXYAlias": true,
+    "handControllerLeftABXYAlias": false,
     "handControllerTrackpadClickFromTouch": false,
     "handControllerInputAxisThreshold": 0.05,
     "handControllerInputClickThreshold": 0.55

@@ -65,8 +65,11 @@ it does not add skeletal fingers or physical haptics.
 Monado and OpenVR share the generic input conversion in
 `shared/include/xr_runtime/input/controller_input_mapping.hpp`. Capacitive touch
 and direction do not imply a pad click. The physical switch drives pad/stick
-click; the legacy touch-to-click behavior is opt-in. Left A/B and X/Y are aliases
-by default, configurable for devices with four independent left face buttons.
+click; the legacy touch-to-click behavior is opt-in. A/B/X/Y keep their runtime
+identities by default. Assign physical buttons in the controller's input config:
+the Gear VR template maps left volume up/down to X/Y and right volume up/down to
+A/B. The Index compatibility profile reads left X/Y as its A/B buttons without
+duplicating native Touch inputs. Legacy left A/X and B/Y aliases are opt-in.
 Menu and System remain separate inputs. Trigger/grip analog values survive
 digital click flags; digital-only presses supply a full pull. Input flags and
 pose validity are independent.
@@ -78,7 +81,7 @@ The driver also has the same defaults when starting `monado-service` directly.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS` | `1` | Alias left A/X and B/Y; use `0` for independent inputs. |
+| `XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS` | `0` | Preserve independent inputs; use `1` only for legacy left A/X and B/Y aliases. |
 | `XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH` | `0` | Restore the old synthetic click for custom compatibility bindings. |
 | `XR_MONADO_CONTROLLER_AXIS_THRESHOLD` | `0.05` | Neutral axis region and virtual touch activity threshold. |
 | `XR_MONADO_CONTROLLER_CLICK_THRESHOLD` | `0.55` | Analog trigger/grip click threshold. |
@@ -91,6 +94,20 @@ keeps its own ordered binding table. Index squeeze force follows normalized
 grip value and trackpad force is binary physical-switch state; neither measures
 actual pressure. In Vive/WMR games, actions bound to pad click require a physical
 press by default. See [the Russian controller guide](docs/CONTROLLER_INPUT.ru.md).
+
+Existing saved Gear VR profiles are not overwritten by a template update. Stop
+the controller service, then run this once from the source checkout (a backup is
+created; device identities, calibration and other bindings are preserved):
+
+```bash
+python3 override_controller/scripts/linux/migrate_gearvr_face_buttons.py \
+  ~/.config/xr_tracking/override_controller/gearvr.json
+```
+
+Pass the actual selected profile path if it differs. Older custom or gesture
+profiles which still emit left A/B must be updated at their input source or use
+`XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS=1` explicitly. A previously exported `1`
+also overrides the new default; unset it or set it to `0` for independent inputs.
 
 Both controller poses and the optional hand fallback are already in runtime
 coordinates. The driver copies position, orientation and valid velocities

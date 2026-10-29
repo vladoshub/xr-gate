@@ -96,8 +96,29 @@ int main() {
       }
       neutral(map_controller_input(nullptr, left, cfg));
       side = sample(); neutral(map_controller_input(&side, left, cfg));
+
+      // A configured face button must never also press or touch another one.
+      const uint64_t faces[] = {CONTROLLER_BUTTON_A, CONTROLLER_BUTTON_B,
+                                CONTROLLER_BUTTON_X, CONTROLLER_BUTTON_Y};
+      for (size_t i = 0; i < 4; ++i) {
+        for (bool touch_only : {false, true}) {
+          side = sample();
+          if (touch_only) side.touches = faces[i]; else side.buttons = faces[i];
+          s = map_controller_input(&side, left, cfg);
+          const bool clicks[] = {s.a, s.b, s.x_button, s.y_button};
+          const bool touches[] = {s.a_touch, s.b_touch, s.x_touch, s.y_touch};
+          for (size_t j = 0; j < 4; ++j) {
+            require(clicks[j] == (!touch_only && i == j), "face presses must remain independent by default");
+            require(touches[j] == (i == j), "face touches must remain independent by default");
+          }
+          side.buttons = side.touches = 0;
+          neutral(map_controller_input(&side, left, cfg));
+        }
+      }
     }
 
+    // Legacy profiles can still request the old aliases explicitly.
+    cfg.left_ab_xy_alias = true;
     auto side = sample(); side.buttons = CONTROLLER_BUTTON_A | CONTROLLER_BUTTON_B;
     auto s = map_controller_input(&side, true, cfg);
     require(s.x_button && s.y_button && s.x_touch && s.y_touch, "left A/B must support Touch X/Y bindings");

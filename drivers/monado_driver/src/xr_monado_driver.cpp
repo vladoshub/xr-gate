@@ -7,6 +7,7 @@
 #include <xr_runtime/input/controller_input_mapping.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -134,6 +135,23 @@ static struct xrt_binding_input_pair touch_to_index_inputs[] = {
     {XRT_INPUT_INDEX_GRIP_POSE, XRT_INPUT_TOUCH_GRIP_POSE},
     {XRT_INPUT_INDEX_AIM_POSE, XRT_INPUT_TOUCH_AIM_POSE},
 };
+
+// Index calls both hands' face buttons A/B. Its left profile must read the
+// canonical Touch X/Y inputs without aliasing the published Touch A/B inputs.
+static auto touch_left_to_index_inputs = [] {
+  std::array<xrt_binding_input_pair, ARRAY_SIZE(touch_to_index_inputs)> inputs{};
+  std::copy(std::begin(touch_to_index_inputs), std::end(touch_to_index_inputs), inputs.begin());
+  for (auto& input : inputs) {
+    switch (input.device) {
+      case XRT_INPUT_TOUCH_A_CLICK: input.device = XRT_INPUT_TOUCH_X_CLICK; break;
+      case XRT_INPUT_TOUCH_A_TOUCH: input.device = XRT_INPUT_TOUCH_X_TOUCH; break;
+      case XRT_INPUT_TOUCH_B_CLICK: input.device = XRT_INPUT_TOUCH_Y_CLICK; break;
+      case XRT_INPUT_TOUCH_B_TOUCH: input.device = XRT_INPUT_TOUCH_Y_TOUCH; break;
+      default: break;
+    }
+  }
+  return inputs;
+}();
 
 // Native Touch is tried first by Monado. Keep rich alternatives before Simple.
 static struct xrt_binding_profile controller_binding_profiles[] = {
@@ -276,7 +294,8 @@ bool env_bool(const char* name, bool fallback) {
 
 xr_runtime::ControllerInputMappingConfig load_controller_input_config() {
   xr_runtime::ControllerInputMappingConfig cfg;
-  cfg.left_ab_xy_alias = env_bool("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", cfg.left_ab_xy_alias);
+  // Physical-to-virtual button assignments belong in controller configs.
+  cfg.left_ab_xy_alias = env_bool("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", false);
   cfg.trackpad_click_from_touch = env_bool("XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH", false);
   // Preserve Monado's existing system-button publication; menu is independent.
   cfg.expose_system_button = env_bool("XR_MONADO_CONTROLLER_EXPOSE_SYSTEM_BUTTON", true);
@@ -312,6 +331,13 @@ void configure_controller_binding_profiles(XrTrackingDevice* dev) {
     std::fprintf(stderr, "[xr_tracking_monado][WARN] invalid XR_MONADO_CONTROLLER_PROFILE_ORDER; using index,wmr,vive,simple\n");
     count = ARRAY_SIZE(controller_binding_profiles);
     std::copy(std::begin(controller_binding_profiles), std::end(controller_binding_profiles), dev->controller_profiles);
+  }
+  if (dev->left) {
+    for (size_t i = 0; i < count; ++i) {
+      if (dev->controller_profiles[i].name == XRT_DEVICE_INDEX_CONTROLLER) {
+        dev->controller_profiles[i].inputs = touch_left_to_index_inputs.data();
+      }
+    }
   }
   dev->base.binding_profiles = dev->controller_profiles;
   dev->base.binding_profile_count = count;

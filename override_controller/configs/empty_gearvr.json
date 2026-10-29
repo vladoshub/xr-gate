@@ -48,7 +48,7 @@
       "side": "left"
     },
     {
-      "action": "a",
+      "action": "x",
       "device_id": 1,
       "input": {
         "abs_direction": 0,
@@ -63,7 +63,7 @@
       "side": "left"
     },
     {
-      "action": "b",
+      "action": "y",
       "device_id": 1,
       "input": {
         "abs_direction": 0,
