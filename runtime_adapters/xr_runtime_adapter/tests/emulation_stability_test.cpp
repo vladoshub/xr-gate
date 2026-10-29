@@ -188,8 +188,8 @@ void flexion_neutral_and_specials(const Json& data) {
   auto cfg = em::config_from_json(data.at("profile"));
   const auto old_cfg = cfg;
   cfg.trigger_on_curl = cfg.grip_on_curl = true;
-  for (const auto item : {std::pair<int, uint64_t>{26, CONTROLLER_BUTTON_A},
-                          {28, CONTROLLER_BUTTON_B},
+  for (const auto item : {std::pair<int, uint64_t>{26, CONTROLLER_BUTTON_X},
+                          {28, CONTROLLER_BUTTON_Y},
                           {30, CONTROLLER_BUTTON_THUMBSTICK},
                           {31, CONTROLLER_BUTTON_THUMBSTICK}})
     check(buttons(data, cfg, item.first, "left") == item.second,
@@ -315,10 +315,10 @@ void closed_knuckle_is_not_a_pinch(const Json& data) {
   }
   check((output.right.buttons & 3) == 3,
         "false pinch from the fist blocked the following Trigger/Grip combination");
-  check(buttons(data, cfg, 26, "left") == CONTROLLER_BUTTON_A,
-        "real recorded A was rejected by the knuckle guard");
-  check(buttons(data, cfg, 28, "left") == CONTROLLER_BUTTON_B,
-        "real recorded B was rejected by the knuckle guard");
+  check(buttons(data, cfg, 26, "left") == CONTROLLER_BUTTON_X,
+        "real recorded X was rejected by the knuckle guard");
+  check(buttons(data, cfg, 28, "left") == CONTROLLER_BUTTON_Y,
+        "real recorded Y was rejected by the knuckle guard");
 }
 void final_yaw_output(const Json& data) {
   auto profile = data.at("profile");

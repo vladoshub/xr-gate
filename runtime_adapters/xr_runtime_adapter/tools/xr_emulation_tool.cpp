@@ -155,7 +155,7 @@ void calibrate_controls(const std::map<std::string, std::vector<em::HandMeasurem
                         Json& profile, const char* name) {
   const auto has = [&](const char* label) { return groups.count(label) != 0; };
   const bool middle_layout=profile.value("button_layout",std::string("legacy"))=="middle_grip";
-  const bool three_click=profile.value("thumbstick_click_gesture",std::string("layout_default"))=="three_fingers";
+  const bool three_click=profile.value("thumbstick_click_gesture",std::string("layout_default"))!="layout_default";
   if (middle_layout && (has("buttons_open") || has("buttons_closed") || has("trigger_closed"))) {
     const std::vector<std::pair<std::string,unsigned>> states=three_click
       ? std::vector<std::pair<std::string,unsigned>>{{"buttons_open",0},{"trigger_closed",1},
@@ -324,7 +324,13 @@ int main(int argc, char** argv) {
           }
         } else {
           xr_runtime::RuntimeControllerStateFrameV1 result{};
-          controller.apply(result, h.sequence ? &h : nullptr, number(frame.at("read_timestamp_ns")));
+          em::Vec3 viewer{};
+          const auto head=frame.value("hmd",Json());
+          const bool have_viewer=head.is_object() && head.value("pose_valid",false) &&
+              head.contains("position") && head.at("position").is_array() && head.at("position").size()==3;
+          if(have_viewer) viewer=head.at("position").get<em::Vec3>();
+          controller.apply(result, h.sequence ? &h : nullptr, number(frame.at("read_timestamp_ns")),
+                           0, false, have_viewer?&viewer:nullptr);
           output << Json{{"type", "emulation"}, {"label", frame.value("label", "free")},
               {"source_timestamp_ns", std::to_string(h.source_timestamp_ns)},
               {"left", controller_json(result.left, measurements[0], config.left, config.button_layout=="middle_grip")},

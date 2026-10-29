@@ -20,6 +20,9 @@ import app_tcp_server_test as harness
 TOOL = None
 STATE = {}
 
+def face_bits(bits, hand):
+    return ((bits & ~24) | (2048 if bits & 8 else 0) | (4096 if bits & 16 else 0)) if hand == 'left' else bits
+
 
 def coordinates(extended=0, thumb="up", tilt_x=0.0, tilt_y=0.0, left=False, finger_bends=None):
     joints = [[0.0, 0.0, 0.0] for _ in range(21)]
@@ -544,7 +547,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                     if "channel_mask" in expected:
                         self.assertEqual(int(out["buttons"]) & 3, expected["channel_mask"], context)
                     if "buttons" in expected:
-                        self.assertEqual(int(out["buttons"]), expected["buttons"], context)
+                        self.assertEqual(int(out["buttons"]), face_bits(expected["buttons"],name), context)
                         self.assertEqual(out["trigger"],0,context)
                         self.assertEqual(out["grip"],0,context)
 
@@ -600,7 +603,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 if pose["label"] == "thumb_rest_combo":
                     self.assertEqual(out["thumbstick"], [0,0], (phase,out))
                 if pose["label"] in ("button_a","button_b"):
-                    self.assertEqual(int(out["buttons"]), 8 if pose["label"]=="button_a" else 16, (phase,out))
+                    self.assertEqual(int(out["buttons"]), face_bits(8 if pose["label"]=="button_a" else 16,hand), (phase,out))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

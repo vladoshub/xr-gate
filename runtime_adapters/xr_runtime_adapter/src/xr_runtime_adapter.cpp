@@ -6545,10 +6545,12 @@ int main(int argc, char** argv) {
               &runtime_controller_synthesis_state,
               &controller_imu_history);
           if (emulation_controller) {
+            const xr_runtime_adapter::emulation::Vec3 gesture_viewer{
+                frame.hmd.px, frame.hmd.py, frame.hmd.pz};
             emulation_controller->apply(runtime_controller_state,
                 runtime_controller_hand ? &*runtime_controller_hand : nullptr,
                 static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
-                runtime_only_gesture_input_blocked);
+                runtime_only_gesture_input_blocked, frame.hmd_valid ? &gesture_viewer : nullptr);
           }
           report_controller_imu_alignment_status();
           report_controller_imu_calibration_progress(
