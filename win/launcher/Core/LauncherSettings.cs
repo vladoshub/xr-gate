@@ -94,7 +94,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         get => controllerMode;
         set
         {
-            if (value is not ("gearvr" or "gestures" or "no")) throw new FormatException("Choose Gear VR Controllers, Gestures or No.");
+            if (value is not ("gearvr" or "gestures" or "simple_gestures" or "no")) throw new FormatException("Choose Gear VR Controllers, a Gestures mode or No.");
             controllerMode = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ControllerMode)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GearVr)));
@@ -187,8 +187,8 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         string controllerMode = Get("XR_CONTROLLER_MODE");
         if (!overrides.ContainsKey("XR_CONTROLLER_MODE") && overrides.GetValueOrDefault("XR_GEARVR") is "0" or "1")
             controllerMode = overrides["XR_GEARVR"] == "1" ? "gearvr" : "gestures";
-        if (controllerMode is not ("" or "gearvr" or "gestures" or "no"))
-            throw new SettingsReadException(Path.Combine(root, ".env"), "XR_CONTROLLER_MODE must be gearvr, gestures or no, or empty for legacy settings.");
+        if (controllerMode is not ("" or "gearvr" or "gestures" or "simple_gestures" or "no"))
+            throw new SettingsReadException(Path.Combine(root, ".env"), "XR_CONTROLLER_MODE must be gearvr, gestures, simple_gestures or no, or empty for legacy settings.");
         string bluetoothInstance = Get("XR_BLUETOOTH_INSTANCE_ID", saved.GetValueOrDefault("BluetoothInstanceId", ""));
         if (bluetoothInstance.Length == 0) bluetoothInstance = saved.GetValueOrDefault("BluetoothInstanceId", "");
         var settings = new LauncherSettings
@@ -297,7 +297,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         BluetoothUsbId = Keep("XR_BLUETOOTH_USB_ID", BluetoothUsbId, selected.BluetoothUsbId);
         if (!explicitKeys.Contains("XR_BLUETOOTH") && (SavedBluetoothInstance.Length == 0 || profile.GetValueOrDefault("XR_BLUETOOTH") is "0" or "1")) BluetoothEnabled = selected.BluetoothEnabled;
         if (!explicitKeys.Contains("XR_CONTROLLER_MODE") && !explicitKeys.Contains("XR_GEARVR") &&
-            (profile.GetValueOrDefault("XR_GEARVR") is "0" or "1" || profile.GetValueOrDefault("XR_CONTROLLER_MODE") is "gearvr" or "gestures" or "no")) ControllerMode = selected.ControllerMode;
+            (profile.GetValueOrDefault("XR_GEARVR") is "0" or "1" || profile.GetValueOrDefault("XR_CONTROLLER_MODE") is "gearvr" or "gestures" or "simple_gestures" or "no")) ControllerMode = selected.ControllerMode;
         if (!explicitKeys.Contains("XR_AUTO_DRIVER_FREQUENCY")) AutoDriverFrequency = selected.AutoDriverFrequency;
         FrequencyHz = Keep("XR_DISPLAY_FREQUENCY_HZ", FrequencyHz, selected.FrequencyHz);
         DisplayMode = Keep("XR_DISPLAY_MODE", DisplayMode, selected.DisplayMode);

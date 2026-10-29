@@ -13,6 +13,49 @@ SPEC.loader.exec_module(linux)
 
 
 class ControllerModesTest(unittest.TestCase):
+    def test_simple_mode_roundtrip_and_adapter_environment_override(self):
+        for custom in (False, True):
+            with self.subTest(custom=custom), tempfile.TemporaryDirectory() as folder:
+                runtime, source = self.fixture(Path(folder), "simple_gestures", custom)
+                original = json.loads(source.read_text())
+                adapter = next(s for s in original["post_gate_services"] if s["name"] == "xr_runtime_adapter")
+                adapter["env"] = {"EMULATION_CONTROLLER":"1", "SIMPLE_GESTURES":"0", "KEEP":"yes"}
+                source.write_text(json.dumps(original)); before=source.read_bytes()
+                data=json.loads(runtime.generate_profile().read_text())
+                names=[s["name"] for group in ("pre_gate_services","post_gate_services","foreground_services") for s in data[group]]
+                self.assertNotIn("override_controller",names)
+                self.assertNotIn("override_controller_service",names)
+                env=next(s for s in data["post_gate_services"] if s["name"]=="xr_runtime_adapter")["env"]
+                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","KEEP":"yes"})
+                self.assertEqual(source.read_bytes(),before)
+                runtime.settings["XR_TCP_PORT"]="45810"; captured={}
+                runtime.run_managed=lambda args,env,handle:captured.update(env)
+                with (Path(folder)/"lock").open("w") as handle,patch.object(linux.socket,"socket"),patch.object(linux.os,"chdir"):
+                    runtime._start_locked(handle)
+                self.assertEqual(captured["SIMPLE_GESTURES"],"1")
+                self.assertEqual(captured["EMULATION_CONTROLLER"],"0")
+                self.assertEqual(captured["RUN_OVERRIDE_CONTROLLER"],"0")
+
+    def test_real_start_script_simple_flag_wins_and_no_mode_disables_both(self):
+        script=Path(__file__).resolve().parents[2]/"runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh"
+        with tempfile.TemporaryDirectory() as folder:
+            probe=Path(folder)/"adapter.py"
+            probe.write_text('#!/usr/bin/env python3\nimport json,sys\nprint("OPTIONS="+json.dumps(sys.argv[1:]))\n');probe.chmod(0o755)
+            cases=[({},"1",False),({"SIMPLE_GESTURES":"1","EMULATION_CONTROLLER":"1"},"0",True),
+                   ({"XR_CONTROLLER_MODE":"simple_gestures"},"0",True),
+                   ({"XR_CONTROLLER_MODE":"no","SIMPLE_GESTURES":"1"},"0",False)]
+            for extra,emulation,simple in cases:
+                env=dict(os.environ,ROOT_PROJECT=folder,XR_RUNTIME_ADAPTER_BIN=str(probe),AUTO_BUILD="0",
+                         SIMPLE_GESTURES="0",EMULATION_CONTROLLER="1",EMULATION_CONTROLLER_CONFIG="/not/a/profile.json",XR_CONTROLLER_MODE="")
+                env.update(extra)
+                result=subprocess.run(["bash",str(script)],env=env,text=True,capture_output=True,timeout=5)
+                self.assertEqual(result.returncode,0,result.stderr)
+                args=json.loads(next(x.removeprefix("OPTIONS=") for x in result.stdout.splitlines() if x.startswith("OPTIONS=")))
+                self.assertEqual(args.count("--emulation-controller"),1)
+                self.assertEqual(args[args.index("--emulation-controller")+1],emulation)
+                self.assertEqual("--simple-gestures" in args,simple)
+                if emulation=="0":self.assertNotIn("--emulation-controller-config",args)
+
     def fixture(self, root, mode, custom=False):
         runtime = linux.Runtime.__new__(linux.Runtime)
         runtime.base = root

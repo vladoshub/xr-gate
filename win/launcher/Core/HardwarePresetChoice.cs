@@ -4,7 +4,9 @@ namespace XrGate.Launcher.Core;
 
 public sealed record ControllerModeChoice(string Id, string Label)
 {
-    public static IReadOnlyList<ControllerModeChoice> All { get; } = [new("gearvr", "Gear VR Controllers"), new("gestures", "Gestures"), new("no", "No")];
+    public static IReadOnlyList<ControllerModeChoice> All { get; } = [
+        new("gearvr", "Gear VR Controllers"), new("gestures", "Gestures (controller emulation)"),
+        new("simple_gestures", "Gestures (grab / pinch)"), new("no", "No")];
 }
 
 public sealed record HardwarePresetChoice(string Path, string Name, IReadOnlySet<string> UsbIds)

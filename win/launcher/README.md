@@ -23,3 +23,11 @@ CI uses `.github/workflows/launcher-tests.yml` and `.github/workflows/xr-gate-sp
 Hardware settings belong in `win/hardware/*.env`; overrides belong in `.env`. Keep the bundled PowerShell and Linux helpers with the executable. See [the user guide](../README.md) and [Russian guide](../README.ru.md).
 
 Display protection does not change display topology, resolution, refresh rate, focus or SteamVR settings, and does not create an overlay over the compositor. Windows moved back to the desktop remain there after Stop. It is a desktop guard, not exclusive display ownership: elevated applications and exclusive fullscreen mode changes can bypass it. If SteamVR still fails when an application enters fullscreen on another monitor, collect `vrcompositor.txt` and `vrserver.txt`; protecting the XR screen does not establish the cause of that failure. Native hook and SteamVR behavior require testing on Windows with the actual displays.
+
+
+The Controllers list offers **Gestures (controller emulation)** (default) and
+**Gestures (grab / pinch)**. Existing `XR_CONTROLLER_MODE=gestures` settings keep
+the controller emulation mode; the original gestures use `simple_gestures`.
+The **Gestures** button opens the matching illustrated tab. **Support VR controllers**
+opens the Samsung Gear VR Controller layouts for LEFT and RIGHT and explains IMU-assisted tracking.
+Both guides work offline and ship in the Windows package.

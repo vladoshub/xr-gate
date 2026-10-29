@@ -1,0 +1,13 @@
+{
+  "source": "https://github.com/immersive-web/webxr-input-profiles",
+  "commit": "f4992299601614adbfefd398dc8e281556bb7444",
+  "file": "packages/assets/profiles/samsung-gearvr/none.glb",
+  "git_blob": "eb087c5fb4374cd9affca46e948d9a6a3474ae31",
+  "sha256": "2d4bf944b485ed5fa8ba92cfc31e8e0a307eb5e0ea798631696f829495180d7e",
+  "license": "MIT; Copyright (c) 2019 Amazon",
+  "changes": "Original static front and side rendering for XR Gate; no model geometry is bundled",
+  "outputs": {
+    "gearvr-controller-model.png": "f9d6c2667c166dddbe2fdaea1d78e60466f87463e4b4df785e6e3417f91dccc6",
+    "gearvr-controller-side.png": "3e3fb010490ce1a463d719d61f89684b09fad9e315dd51cfe56d7a33b1d4444b"
+  }
+}

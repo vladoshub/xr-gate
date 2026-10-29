@@ -621,16 +621,28 @@ public partial class MainWindow : Window
         try
         {
             string language = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru" ? "GESTURES.ru.html" : "GESTURES.html";
-            OpenDocumentation(language);
+            OpenDocumentation(language, settings.ControllerMode == "simple_gestures" ? "grab-pinch" : "controller-emulation");
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }
-    private void OpenDocumentation(string name)
+    private void SupportControllers_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string name = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru"
+                ? "SUPPORT-VR-CONTROLLERS.ru.html" : "SUPPORT-VR-CONTROLLERS.html";
+            OpenDocumentation(name);
+        }
+        catch (Exception exception) { StatusDetail.Text = exception.Message; }
+    }
+    private void OpenDocumentation(string name, string fragment = "")
     {
         string path = Path.Combine(root, "docs", name);
         // Source checkouts retain the editable documentation at the bundle root.
         if (!File.Exists(path)) path = Path.Combine(root, name);
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        if (!File.Exists(path)) throw new FileNotFoundException("Documentation file is missing.", path);
+        string target = fragment.Length == 0 ? path : new Uri(path).AbsoluteUri + "#" + fragment;
+        Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
     }
 
     private void Advanced_Click(object sender, RoutedEventArgs e)

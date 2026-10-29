@@ -7,7 +7,8 @@ public partial class MainWindow
 {
     private void VerifyArtworkUi()
     {
-        if (ReadmeButton.Content?.ToString() != "Readme" || GesturesButton.Content?.ToString() != "Gestures")
+        if (ReadmeButton.Content?.ToString() != "Readme" || GesturesButton.Content?.ToString() != "Gestures" ||
+            SupportControllersButton.Content?.ToString() != "Support VR controllers")
             throw new InvalidOperationException("The documentation buttons are missing.");
         bool connected = readiness.DeviceConnected, active = runtimeMayBeRunning;
         string mode = settings.ControllerMode, hardware = settings.HardwareEnv;
@@ -16,7 +17,8 @@ public partial class MainWindow
             string selectedHardware = hardwareChoices.First().Path;
             foreach (var state in new[] { (false, false, "gestures", false), (false, false, "gestures", true),
                 (true, false, "gestures", true), (true, true, "gestures", true), (true, true, "gearvr", true),
-                (true, true, "no", true), (false, false, "gearvr", true), (false, false, "gearvr", false) })
+                (true, true, "simple_gestures", true), (true, true, "no", true),
+                (false, false, "gearvr", true), (false, false, "gearvr", false) })
             {
                 readiness.DeviceConnected = state.Item1;
                 runtimeMayBeRunning = state.Item2;

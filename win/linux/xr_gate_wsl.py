@@ -742,8 +742,8 @@ class Runtime:
     def generate_profile(self):
         custom = self.config / "xr_client.json"
         mode = self.settings.get("XR_CONTROLLER_MODE", "")
-        if mode not in ("", "gearvr", "gestures", "no"):
-            raise ValueError("XR_CONTROLLER_MODE must be gearvr, gestures or no.")
+        if mode not in ("", "gearvr", "gestures", "simple_gestures", "no"):
+            raise ValueError("XR_CONTROLLER_MODE must be gearvr, gestures, simple_gestures or no.")
         if custom.is_file() and not mode:
             return custom
         package = self.current.resolve()
@@ -767,7 +767,7 @@ class Runtime:
         for group in ("pre_gate_services", "post_gate_services", "foreground_services"):
             if group not in data:
                 continue  # Preserve xr_client defaults for omitted custom sections.
-            if mode in ("gestures", "no"):
+            if mode in ("gestures", "simple_gestures", "no"):
                 # Removing these also prevents gesture/manual toggle actions or
                 # inherited RUN_OVERRIDE_CONTROLLER=1 from starting the publisher.
                 data[group] = [service for service in data.get(group, [])
@@ -777,6 +777,11 @@ class Runtime:
                                if service.get("name") not in ("hand_tracking", "mercury_hand_tracking")
                                and service.get("enable_env") != "RUN_HAND_TRACKING"]
             for service in data.get(group, []):
+                if service.get("name") == "xr_runtime_adapter" and mode:
+                    service.setdefault("env", {}).update({
+                        "SIMPLE_GESTURES": "1" if mode == "simple_gestures" else "0",
+                        "EMULATION_CONTROLLER": "0" if mode in ("simple_gestures", "no") else "1",
+                    })
                 if service.get("name") == "override_controller":
                     found_controller = True
                     service["start_on_launch"] = True if mode == "gearvr" else (self.config / "controllers-ready").is_file()
@@ -822,6 +827,10 @@ class Runtime:
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
                    XR_CONTROLLER_MODE=self.settings.get("XR_CONTROLLER_MODE", ""),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
+        mode = self.settings.get("XR_CONTROLLER_MODE", "")
+        if mode:
+            env.update(SIMPLE_GESTURES="1" if mode == "simple_gestures" else "0",
+                       EMULATION_CONTROLLER="0" if mode in ("simple_gestures", "no") else "1")
         camera = self.capture_device()
         if camera:
             # This is the capture binary's existing environment override. Do not
@@ -830,7 +839,7 @@ class Runtime:
             log("Capture will open " + camera)
         if self.settings.get("XR_CONTROLLER_MODE") == "gearvr":
             env["XR_GATE_CONTROLLER_INPUT"] = "1"
-        elif self.settings.get("XR_CONTROLLER_MODE") in ("gestures", "no"):
+        elif self.settings.get("XR_CONTROLLER_MODE") in ("gestures", "simple_gestures", "no"):
             # Omitted custom sections inherit xr_client defaults. Disable their
             # publishers too, while retaining the default capture/hand services.
             env.update(RUN_OVERRIDE_CONTROLLER="0", RUN_OVERRIDE_CONTROLLER_SERVICE="0")

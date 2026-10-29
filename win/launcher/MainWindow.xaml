@@ -15,7 +15,7 @@
  <Grid Margin="26">
   <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
   <Grid Margin="0,0,0,20">
-   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
    <StackPanel>
     <TextBlock FontSize="32" FontWeight="SemiBold" AutomationProperties.Name="XR Gate"><Run Text="XR" FontWeight="ExtraBold" FontStyle="Italic" Foreground="{StaticResource BrandAccent}" /><Run Text=" Gate" /></TextBlock>
     <TextBlock x:Name="ProductDescriptionText" Text="6DoF and Hand Tracking Stack" Foreground="#83A3C7" FontSize="11" Margin="2,3,0,0" />
@@ -68,13 +68,16 @@
     </StackPanel>
     <Image x:Name="ControllerArtwork" Grid.Column="2" Width="56" Height="68" Stretch="Uniform" Margin="10,0,0,0" Visibility="Collapsed" />
    </Grid>
-   <WrapPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
-    <Button Content="Open Ubuntu" Click="OpenUbuntu_Click" Margin="0,0,8,0" Background="#18253A" />
-    <StackPanel Orientation="Horizontal">
+   <StackPanel Grid.Column="2" Width="315" HorizontalAlignment="Right" VerticalAlignment="Center">
+    <WrapPanel HorizontalAlignment="Right" Margin="0,0,0,8">
+     <Button Content="Open Ubuntu" Click="OpenUbuntu_Click" Margin="0,0,8,0" Background="#18253A" />
      <Button x:Name="ReadmeButton" Content="Readme" Click="Guide_Click" ToolTip="Open the setup and troubleshooting instructions." Margin="0,0,8,0" Background="#18253A" />
-     <Button x:Name="GesturesButton" Content="Gestures" Click="Gestures_Click" ToolTip="Open the controller gesture guide." Margin="0" Background="#18253A" />
-    </StackPanel>
-   </WrapPanel>
+    </WrapPanel>
+    <WrapPanel HorizontalAlignment="Right">
+     <Button x:Name="GesturesButton" Content="Gestures" Click="Gestures_Click" ToolTip="Open the illustrated guide for both gesture modes." Margin="0,0,8,0" Background="#18253A" />
+     <Button x:Name="SupportControllersButton" Content="Support VR controllers" Click="SupportControllers_Click" ToolTip="Open controller layouts and tracking information." Background="#18253A" />
+    </WrapPanel>
+   </StackPanel>
   </Grid>
   <Border Grid.Row="1" Background="#18283B" CornerRadius="10" Padding="18" Margin="0,0,0,18">
    <StackPanel>
@@ -134,7 +137,7 @@
       <TextBlock Text="Controllers" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" />
       <TextBlock Text="Controller input" />
       <ComboBox x:Name="ControllerModeBox" SelectedValuePath="Id" SelectedValue="{Binding ControllerMode, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" />
-      <TextBlock Text="Gestures uses optical hands (default). Gear VR Controllers uses physical controllers. No enables head tracking without controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
+      <TextBlock Text="Gestures (controller emulation) is the default. Gestures (grab / pinch) uses the original hand gestures. Gear VR Controllers uses physical controllers. No enables head tracking without controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
       <CheckBox x:Name="BluetoothEnabledBox" Content="Enable Bluetooth" IsChecked="{Binding BluetoothEnabled, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
       <TextBlock Text="For better tracking performance, use a dedicated external Bluetooth adapter." Foreground="#ACBED5" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
       <TextBlock Text="Bluetooth USB BUSID (optional; overrides VID:PID)" /><TextBox x:Name="BluetoothBusIdBox" Text="{Binding BluetoothBusId, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />

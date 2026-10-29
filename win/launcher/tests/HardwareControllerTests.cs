@@ -46,6 +46,14 @@ internal static class HardwareControllerTests
         Check(LauncherSettings.Load(root, state).ControllerMode == "no", "A legacy flag overrode the explicit No mode.");
         File.WriteAllText(env, "XR_CONTROLLER_MODE=gestures\nXR_GEARVR=1\n");
         Check(!LauncherSettings.Load(root, state).GearVr, "A legacy flag overrode the explicit Gestures mode.");
+        settings = LauncherSettings.Load(root, state);
+        settings.ControllerMode = "simple_gestures";
+        settings.SaveControllerSettings(root);
+        Check(LauncherSettings.Load(root, state).ControllerMode == "simple_gestures" &&
+            !LauncherSettings.Load(root, state).GearVr, "Grab/pinch mode failed the controller-only save/reload round trip.");
+        Check(ControllerModeChoice.All.Single(x => x.Id == "gestures").Label == "Gestures (controller emulation)" &&
+            ControllerModeChoice.All.Single(x => x.Id == "simple_gestures").Label == "Gestures (grab / pinch)",
+            "Gesture mode names or persisted identifiers changed.");
         File.WriteAllText(env, "XR_GEARVR=1\nXR_BLUETOOTH=1\n");
         settings = LauncherSettings.Load(root, state);
         Check(settings.GearVr && settings.BluetoothEnabled, "Explicit existing controller/Bluetooth preferences were lost.");

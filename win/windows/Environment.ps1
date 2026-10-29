@@ -49,8 +49,8 @@ function Initialize-XrSettings([string]$Root) {
             throw "$key must be empty, 0 or 1."
         }
     }
-    if ($script:Settings.ContainsKey('XR_CONTROLLER_MODE') -and $script:Settings['XR_CONTROLLER_MODE'] -notin @('','gearvr','gestures','no')) {
-        throw 'XR_CONTROLLER_MODE must be gearvr, gestures or no, or empty for legacy settings.'
+    if ($script:Settings.ContainsKey('XR_CONTROLLER_MODE') -and $script:Settings['XR_CONTROLLER_MODE'] -notin @('','gearvr','gestures','simple_gestures','no')) {
+        throw 'XR_CONTROLLER_MODE must be gearvr, gestures, simple_gestures or no, or empty for legacy settings.'
     }
     $script:SettingOverrides = $overrides
 }

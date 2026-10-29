@@ -4,7 +4,8 @@ public sealed record HeaderArtwork(string? Device, string? Controller)
 {
     public static HeaderArtwork Select(string root, LauncherSettings settings, bool deviceConnected, bool runtimeActive) => new(
         deviceConnected ? LocalImage(root, settings.DeviceImage) : null,
-        runtimeActive && settings.ControllerMode != "no" && settings.ControllerImages.TryGetValue(settings.ControllerMode, out string? image)
+        runtimeActive && settings.ControllerMode != "no" && settings.ControllerImages.TryGetValue(
+            settings.ControllerMode == "simple_gestures" ? "gestures" : settings.ControllerMode, out string? image)
             ? LocalImage(root, image) : null);
 
     public static string? LocalImage(string root, string? relative)

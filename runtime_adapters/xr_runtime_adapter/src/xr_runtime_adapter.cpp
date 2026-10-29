@@ -3032,7 +3032,8 @@ int main(int argc, char** argv) {
   bool runtime_ignore_backend_hand_gestures = false;
   bool runtime_left_hand_gestures_enabled = true;
   bool runtime_right_hand_gestures_enabled = true;
-  bool emulation_controller_enabled = false;
+  bool emulation_controller_enabled = true;
+  bool simple_gestures = false;
   std::string emulation_controller_config_path;
   bool runtime_derive_extra_gesture_buttons = true;
   bool runtime_derive_extra_gesture_buttons_with_controller_input = false;
@@ -3644,9 +3645,12 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-ignore-backend-hand-gestures", runtime_ignore_backend_hand_gestures,
                  "Ignore pinch/grab/button gesture values received from hand_tracking input before applying controller override or runtime-derived gestures");
   app.add_option("--emulation-controller", emulation_controller_enabled,
-                 "Opt-in finger/wrist-tilt controller; replaces legacy hand gestures and combines with physical controller input for enabled sides (default false)");
+                 "Finger/thumb controller emulation, enabled by default; --simple-gestures takes priority");
+  app.add_flag("--simple-gestures", simple_gestures,
+               "Use the original grab/pinch hand gestures instead of controller emulation")
+      ->envname("SIMPLE_GESTURES");
   app.add_option("--emulation-controller-config", emulation_controller_config_path,
-                 "Optional emulation controller JSON profile; enable explicitly with --emulation-controller 1");
+                 "Optional controller emulation JSON profile; ignored with --simple-gestures");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
       app.add_option("--runtime-left-hand-gestures-enabled", runtime_left_hand_gestures_enabled,
                      "Enable visual hand-tracking gestures for the left hand. ControllerInputV3 override buttons are unaffected. Normally set in config controller_override.hand_gestures.left_enabled");
@@ -4061,6 +4065,7 @@ int main(int argc, char** argv) {
   const bool runtime_controller_buttons_only_mode =
       controller_input_config.mode == "controller_buttons_only" ||
       runtime_controller_mode_value == xr_runtime::RuntimeControllerMode::HAND_TRACKING_CONTROLLER_BUTTONS_ONLY;
+  if (simple_gestures) emulation_controller_enabled = false;
   const auto emulation_controller_config = emulation_controller_enabled
       ? xr_runtime_adapter::emulation::load_config(emulation_controller_config_path)
       : xr_runtime_adapter::emulation::Config{};
@@ -4485,6 +4490,8 @@ int main(int argc, char** argv) {
               << override_controller_gesture_block_latch_ms << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons: "
               << (runtime_derive_extra_gesture_buttons ? "true" : "false") << "\n";
+    std::cout << "simple_gestures: " << (simple_gestures ? "true" : "false") << "\n";
+    std::cout << "emulation_controller: " << (emulation_controller_enabled ? "true" : "false") << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons_with_controller_input: "
               << (runtime_derive_extra_gesture_buttons_with_controller_input ? "true" : "false") << "\n";
     std::cout << "runtime_hand_stability_gate: " << (runtime_hand_stability_gate ? "true" : "false") << "\n";

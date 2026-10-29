@@ -24,6 +24,9 @@ public static class ArtworkTests
             "Connected hardware artwork or idle controller visibility is incorrect.");
         artwork = HeaderArtwork.Select(root, settings, true, true);
         Check(artwork.Controller == Path.Combine(root, "images", "hands.png"), "Running gestures did not select the configured hands.");
+        settings.ControllerMode = "simple_gestures";
+        Check(HeaderArtwork.Select(root, settings, true, true).Controller == Path.Combine(root, "images", "hands.png"),
+            "Grab/pinch mode did not use the configured hand artwork.");
         settings.ControllerMode = "gearvr";
         Check(HeaderArtwork.Select(root, settings, true, true).Controller == Path.Combine(root, "images", "remote.png"),
             "Changing controller type did not select its configured image.");

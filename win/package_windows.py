@@ -15,7 +15,9 @@ REQUIRED = ("XR-Gate.exe", "XrGate-Wsl.ps1",
             "windows/Display.ps1", "windows/Driver.ps1", "windows/DriverDevices.ps1", "windows/DriverCleanup.ps1", "windows/DisplayNative.cs", "windows/DeadlineLineReader.cs",
             "windows/Usb.ps1", "windows/NativeCommand.cs", "windows/DeviceStatus.ps1", "windows/RuntimeWindow.ps1", "windows/SetupStatus.ps1", "windows/Delete.ps1", "windows/FirstLogin.ps1", "windows/SteamVr.ps1", "windows/Restart.ps1", "windows/RuntimeSources.ps1",
             "linux/xr_gate_wsl.py", "linux/xr_gate_audio.py", "linux/runtime_progress.py", "linux/wsl_firmware.py", "linux/bluetooth_controllers.py", "linux/select_bluetooth_adapter.py",
-            "docs/README.md", "docs/README.ru.md", "docs/START-HERE.html", "docs/START-HERE.ru.html", "docs/GESTURES.html", "docs/GESTURES.ru.html", "docs/IMAGE-ASSETS.md")
+            "docs/README.md", "docs/README.ru.md", "docs/START-HERE.html", "docs/START-HERE.ru.html", "docs/GESTURES.html", "docs/GESTURES.ru.html", "docs/IMAGE-ASSETS.md",
+            "docs/SUPPORT-VR-CONTROLLERS.html", "docs/SUPPORT-VR-CONTROLLERS.ru.html",
+            "docs/licenses/WebXR-Input-Profiles/LICENSE.txt", "images/gearvr-controller-model.png", "images/gearvr-controller-side.png")
 
 
 def selections(frequencies, modes):
@@ -88,7 +90,7 @@ def copy_installer(source, bundle, launcher, release_tag):
     shutil.copy2(launcher, bundle / "XR-Gate.exe")
     notices = launcher.parent / "licenses"
     if notices.is_dir():
-        shutil.copytree(notices, bundle / "docs" / "licenses")
+        shutil.copytree(notices, bundle / "docs" / "licenses", dirs_exist_ok=True)
     env = (source / ".env.example").read_text(encoding="utf-8")
     env = re.sub(r"(?m)^XR_RELEASE_TAG=.*$", "XR_RELEASE_TAG=" + release_tag, env)
     (bundle / ".env.example").write_text(env, encoding="utf-8", newline="\n")

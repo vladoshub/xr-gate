@@ -8,7 +8,8 @@ param(
   [switch]$WithRuntimeControllerStateUdp,
   [switch]$WithControllerInputTcp,
   [int]$ControllerInputTcpPort = 45672,
-  [bool]$HandOrientationOffsetOnlyRuntime = $true
+  [bool]$HandOrientationOffsetOnlyRuntime = $true,
+  [switch]$SimpleGestures
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +33,9 @@ $args = @(
   "--runtime-pose-udp-port", "45800",
   "--hand-orientation-offset-only-runtime", "$($HandOrientationOffsetOnlyRuntime.ToString().ToLowerInvariant())"
 )
+if ($SimpleGestures -or $env:SIMPLE_GESTURES -eq '1') {
+  $args += @('--simple-gestures', '--emulation-controller', '0')
+}
 if ($WithRuntimeHandUdp) {
   $args += @("--publish-runtime-hand-udp", "--runtime-hand-udp-host", "127.0.0.1", "--runtime-hand-udp-port", "45801")
 }

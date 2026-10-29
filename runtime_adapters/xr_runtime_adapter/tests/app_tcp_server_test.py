@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -145,6 +146,39 @@ def runtime(enabled=True, extra=()):
 
 
 class AppTcpTest(unittest.TestCase):
+    def test_simple_cli_and_environment_override_emulation_and_skip_its_profile(self):
+        cases=[(["--simple-gestures","--emulation-controller","1"],{}),
+               ([],{"SIMPLE_GESTURES":"1"})]
+        import os
+        for options,env in cases:
+            args=[ADAPTER,"--adapter","logging","--input","udp","--udp-bind-host","127.0.0.1",
+                  "--udp-bind-port",str(free_port(socket.SOCK_DGRAM)),"--mode","tick","--duration","0.03",
+                  "--print-every","0","--emulation-controller-config","/not/a/profile.json",*options]
+            result=subprocess.run(args,env=dict(os.environ,SIMPLE_GESTURES="0")|env,
+                                  capture_output=True,text=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn("simple_gestures: true",result.stdout)
+            self.assertIn("emulation_controller: false",result.stdout)
+
+    def test_original_grab_and_pinch_are_selected_instead_of_emulation(self):
+        def backend_side(side,visible):
+            p=[.1*side,1.,-.3,1.,0.,0.,0.]
+            base=HAND_SIDE.pack(side,int(visible),57 if visible else 0,float(visible),
+                *(p*3+[0.]*6+[.9,.8]),1,1,21,0)
+            return base+b''.join(JOINT.pack(i,2,.01*i,.2,-.1,1,0,0,0,.008,float(visible)) for i in range(21))
+        for simple in (False,True):
+            with patch(__name__+'.hand_side',backend_side):
+                with runtime(extra=["--runtime-derive-hand-gestures","0"]+(["--simple-gestures"] if simple else [])) as (_,_,port):
+                    client=Client(port)
+                    try:
+                        frame=client.frame(lambda f:f.get("controllers") and f.get("hands") and f["hands"]["hand_count"]==2)
+                        for name in ("left","right"):
+                            control=frame["controllers"][name]
+                            self.assertEqual(int(control["buttons"])&3,3 if simple else 0)
+                            self.assertAlmostEqual(control["trigger"],.9 if simple else 0,places=4)
+                            self.assertAlmostEqual(control["grip"],.8 if simple else 0,places=4)
+                    finally:client.close()
+
     def test_invalid_server_configuration(self):
         for option, value in (("--app-tcp-port", "0"), ("--app-tcp-port", "65536"),
                               ("--app-tcp-rate", "0"), ("--app-tcp-rate", "nan"),

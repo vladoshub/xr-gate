@@ -237,8 +237,8 @@ class EmulationIntegrationTest(unittest.TestCase):
             finally:
                 client.close()
 
-    def test_default_keeps_backend_gestures(self):
-        with harness.runtime() as (_,_,port):
+    def test_simple_mode_keeps_backend_gestures(self):
+        with harness.runtime(extra=["--simple-gestures"]) as (_,_,port):
             client = harness.Client(port)
             try:
                 f = client.frame(lambda f:f["controllers"] is not None)
