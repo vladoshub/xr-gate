@@ -496,6 +496,13 @@ cd ~/xr-gate-release/xr-gate
 ```
 
 
+Run with only pinch / grab gestures (Only if you don't have controllers)
+```bash
+cd ~/xr-gate-release/xr-gate
+SIMPLE_GESTURES=1 ./run_xr_client.sh --config xreal_ultra
+```
+
+
 ## SteamVR
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
