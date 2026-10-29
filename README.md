@@ -666,7 +666,7 @@ change device permissions.
 
 Build the complete multi-profile package (vendor components included by default) and download hand-tracking models:
 ```bash
-XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_CHECK_BUILD_DEPS=1 XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
 After the first successful local build, repeating the same command automatically
