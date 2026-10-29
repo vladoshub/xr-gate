@@ -135,6 +135,8 @@ Also, consider the limitations of video adapters - my USB-C to HDMI adapter allo
 Aslo example, for Xreal Ultra, you can set the refresh rate to 90Hz (it works in Linux), but for me, this only worked directly via USB-C without adapters. 
 So, if you want to connect your device directly to HDMI/DispayPort, you'll need an adapter, or if you don't have a port with USB-C Alt Mode.
 
+For adding experimental custom refresh rates on Linux X11, see the [SteamVR Linux guide](readme/steamvr-linux.md#custom-refresh-rates-x11).
+
 
 # About input and controllers
 You can use gestures and controllers.

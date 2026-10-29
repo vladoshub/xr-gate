@@ -71,13 +71,55 @@ an `openvr_helper.sh` registration command with the selected output and frequenc
 to align the SteamVR window with its new position. It does not start SteamVR.
 
 The helper also recognizes existing XRandR modes with a suffix, such as
-`3840x1080_70_test`, by resolution and refresh rate. Register custom timings
-separately before running it; creating a mode does not confirm headset support.
+`3840x1080_70_test`, by resolution and refresh rate.
 
 Works with AMD and NVIDIA through X11 RandR; requires `python3` and `xrandr`
 (`x11-xserver-utils` on Ubuntu/Debian). It does not require `xdotool`, root,
 `nvidia-settings`, or a driver rebuild. On Wayland, use the desktop display
 settings instead; XWayland cannot configure physical outputs this way.
+
+### Custom refresh rates (X11)
+
+The experimental `add_openvr_mode.py` creates an XRandR mode from an existing
+progressive timing. Enable the headset's SBS mode first, check its output with
+`xrandr --query`, and replace `DP-6` with that output:
+
+```bash
+python3 ./add_openvr_mode.py DP-6 70 --resolution 3840x1080 && \
+  ./configure_openvr_display.sh 3840x1080 70
+```
+
+Only run the second command if the mode was added successfully. Select the
+reference monitor and headset, then check for `70.00*` on the headset output in
+`xrandr --query`. If needed, run the displayed `openvr_helper.sh` registration
+command while SteamVR is closed. Recreate the custom mode after restarting X11.
+If the mode is already attached to the output, skip the first command.
+Registering a mode or seeing `70.00*` does not guarantee that the headset accepts
+the signal or displays every frame. Restore the existing mode if it is unstable:
+
+```bash
+xrandr --output DP-6 --mode 3840x1080 --rate 60
+```
+
+The helper uses XRandR on X11 and can be tried with AMD and NVIDIA; AMD has not
+been hardware-tested. On NVIDIA, if logs show rejection due to EDID or HorizSync
+validation, the following example can be added once as
+`/etc/X11/xorg.conf.d/90-xr-custom-mode.conf` (replace `DP-6` with the headset's
+NVIDIA output), then reboot. If an NVIDIA `ModeValidation` setting already exists,
+edit that setting instead of creating a competing one:
+
+```text
+Section "OutputClass"
+    Identifier "XR Gate custom mode"
+    MatchDriver "nvidia-drm"
+    Driver "nvidia"
+    Option "ModeValidation" "DP-6: AllowNonEdidModes, NoHorizSyncCheck"
+EndSection
+```
+
+This relaxes those checks for the entire output. It does not apply to AMD, and
+other failures require diagnosis rather than disabling additional checks. If
+the connector name changes, update the NVIDIA setting before using it again.
 
 ### Explicit display and GPU overrides
 

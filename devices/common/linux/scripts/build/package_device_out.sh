@@ -665,6 +665,7 @@ write_app_launchers() {
   write_root_launcher "emulation_tool.sh" "bin/runtime_adapters/xr_runtime_adapter/xr_emulation_tool"
   copy_runtime_file "$XR_ROOT_PROJECT/openvr_helper.sh" "$XR_OUT_ROOT/openvr_helper.sh"
   copy_runtime_file "$XR_ROOT_PROJECT/run_openvr.sh" "$XR_OUT_ROOT/run_openvr.sh"
+  copy_runtime_file "$XR_ROOT_PROJECT/add_openvr_mode.py" "$XR_OUT_ROOT/add_openvr_mode.py"
   copy_runtime_file "$XR_ROOT_PROJECT/configure_openvr_display.sh" "$XR_OUT_ROOT/configure_openvr_display.sh"
   write_root_launcher "move_openvr_window.sh" "bin/scripts/drivers/steam_vr/move_openvr_window.sh"
   write_root_launcher "run_openvr_dgpu_direct.sh" "bin/scripts/drivers/steam_vr/start_openvr_dgpu_direct.sh"
@@ -901,6 +902,18 @@ The reference monitor becomes primary and the headset is placed to its right.
 Use the registration command printed by the script to align the SteamVR window.
 Requires python3 and xrandr; no xdotool. On Wayland use desktop display settings.
 
+To try a custom refresh rate on X11, first enable the headset's existing SBS
+mode, then add and apply the experimental mode (replace DP-6 with your output):
+
+```bash
+python3 ./add_openvr_mode.py DP-6 70 && \
+  ./configure_openvr_display.sh 3840x1080 70
+```
+
+Recreate the mode after restarting X11. Driver and headset acceptance is not
+guaranteed; see the [SteamVR Linux guide](https://github.com/vladoshub/xr-gate/blob/main/readme/steamvr-linux.md#custom-refresh-rates-x11)
+for NVIDIA and AMD notes.
+
 To move a windowed SteamVR display to the headset (X11/XWayland):
 
 ```bash
@@ -1005,6 +1018,7 @@ required=(
   "$XR_OUT_ROOT/run_xr_client.sh"
   "$XR_OUT_ROOT/openvr_helper.sh"
   "$XR_OUT_ROOT/run_openvr.sh"
+  "$XR_OUT_ROOT/add_openvr_mode.py"
   "$XR_OUT_ROOT/configure_openvr_display.sh"
   "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/configure_openvr_display.py"
   "$XR_OUT_BIN_ROOT/scripts/drivers/steam_vr/start_openvr.py"
