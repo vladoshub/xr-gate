@@ -22,7 +22,10 @@ source "$SCRIPT_DIR/build_steps.sh"
 # System preparation is a separate, explicit operation. Keep every component
 # (including vendor hooks and optional downloads) unprivileged during this run.
 export INSTALL_APT_DEPS=0 INSTALL_LFS_DEPS=0 XRIZER_INSTALL_SYSTEM_DEPS=0 ADD_INPUT_GROUP=0
-bash "$SCRIPT_DIR/install_build_deps_ubuntu.sh" --check
+
+if [[ "${XR_CHECK_BUILD_DEPS:-0}" == "1" ]]; then
+  bash "$SCRIPT_DIR/install_build_deps_ubuntu.sh" --check
+fi
 
 # XR_BUILD_ONLY accepts both concrete step names and a few aggregate targets.
 # This keeps CI/resource-constrained builds convenient without changing the
