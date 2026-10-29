@@ -108,7 +108,7 @@
        <StackPanel x:Name="ActionPanel">
         <Button x:Name="DisplayButton" ToolTipService.ShowOnDisabled="True" Content="Select glasses display" Click="Display_Click" ToolTip="Connect the XR device, then select its display if automatic selection fails. Needed only to start VR." />
         <Button x:Name="InstallButton" ToolTipService.ShowOnDisabled="True" Content="Install" Click="Install_Click" ToolTip="Choose a Hardware preset, then install WSL, Ubuntu, XR Gate and a default SBS driver. No display selection required." />
-        <Button x:Name="StartButton" ToolTipService.ShowOnDisabled="True" Content="Start VR" Click="Start_Click" ToolTip="F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
+        <Button x:Name="StartButton" ToolTipService.ShowOnDisabled="True" Content="Start SteamVR" Click="Start_Click" ToolTip="F5: attach USB, start XR Gate tracking and open SteamVR when head tracking is ready." Background="{StaticResource Accent}" Foreground="#082A28" FontWeight="SemiBold" FontSize="17" Padding="18,16" />
         <Button x:Name="RestartButton" ToolTipService.ShowOnDisabled="True" Content="Restart tracking" Click="Restart_Click" ToolTip="F7: restart XR Gate inside Ubuntu without restarting SteamVR or detaching USB." />
         <Button x:Name="RefreshStatusButton" ToolTipService.ShowOnDisabled="True" Content="Refresh status" Click="Refresh_Click" ToolTip="Refresh installation, device and tracking status without starting a session." Background="#18253A" />
        </StackPanel>
@@ -247,7 +247,7 @@
        <StackPanel>
         <TextBlock Text="Hotkeys" FontSize="18" FontWeight="SemiBold" />
         <CheckBox x:Name="GlobalHotkeysBox" Content="Enable global hotkeys" IsChecked="{Binding GlobalHotkeys, UpdateSourceTrigger=PropertyChanged}" Click="GlobalHotkeys_Click" Margin="0,10,0,8" />
-        <TextBlock Text="F5 — Start VR" />
+        <TextBlock Text="F5 — Start SteamVR" />
         <TextBlock Text="F6 — Stop tracking &amp; return USB" Margin="0,4,0,0" />
         <TextBlock Text="F7 — Restart tracking (keep SteamVR running)" Margin="0,4,0,0" />
         <TextBlock x:Name="HotkeysStatus" Text="Work while XR Gate is open, including when minimized. The same startup and cleanup checks apply as for the buttons." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,8,0,0" />
