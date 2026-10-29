@@ -184,6 +184,100 @@ void parse_hand(const nlohmann::json& j, HandConfig& c) {
           "thumb_calibration.disable_clearance");
     out.calibrated = true;
   }
+  if (j.contains("ring_click_pose")) {
+    const auto& r = j.at("ring_click_pose");
+    require(r.is_object() && r.at("feature") == "ring_skeleton_v1", "invalid ring_click_pose feature");
+    auto& out = c.ring_click_pose;
+    out.poses = r.at("poses").get<std::vector<RingPose>>();
+    require(!out.poses.empty() && out.poses.size() <= 16, "ring_click_pose needs 1..16 poses");
+    for (const auto& pose : out.poses)
+      for (double v : pose) require(std::isfinite(v) && std::abs(v) <= 2, "invalid ring_click_pose vector");
+    out.max_distance = r.value("max_distance", out.max_distance);
+    out.release_distance = r.value("release_distance", out.release_distance);
+    range(out.max_distance, .01, 2, "ring_click_pose.max_distance");
+    range(out.release_distance, out.max_distance, 2, "ring_click_pose.release_distance");
+    out.calibrated = r.value("enabled", true);
+  }
+  if (j.contains("thumb_back_pose")) {
+    const auto& b = j.at("thumb_back_pose");
+    require(b.is_object() && b.at("feature") == "thumb_skeleton_v2", "invalid thumb_back_pose feature");
+    auto& out = c.thumb_back_pose;
+    out.poses = b.at("poses").get<std::vector<ThumbPose>>();
+    require(!out.poses.empty() && out.poses.size() <= 16, "thumb_back_pose needs 1..16 poses");
+    for (const auto& pose : out.poses)
+      for (double v : pose) require(std::isfinite(v) && std::abs(v) <= 10, "invalid thumb_back_pose vector");
+    if (b.contains("neutral_poses")) {
+      out.neutral_poses = b.at("neutral_poses").get<std::vector<ThumbPose>>();
+      require(out.neutral_poses.size() <= 8, "thumb_back_pose supports at most 8 neutral poses");
+      for (const auto& pose : out.neutral_poses)
+        for (double v : pose) require(std::isfinite(v) && std::abs(v) <= 10, "invalid thumb neutral pose");
+    }
+    out.neutral_distance = b.value("neutral_distance", out.neutral_distance);
+    range(out.neutral_distance, .01, 1, "thumb_back_pose.neutral_distance");
+    out.max_distance = b.value("max_distance", out.max_distance);
+    out.release_distance = b.value("release_distance", out.release_distance);
+    out.ip_max_degrees = b.value("ip_max_degrees", out.ip_max_degrees);
+    out.ip_release_degrees = b.value("ip_release_degrees", out.ip_release_degrees);
+    out.reference_invert_y = b.value("reference_invert_y", out.reference_invert_y);
+    range(out.max_distance, .01, 2, "thumb_back_pose.max_distance");
+    range(out.release_distance, out.max_distance, 2, "thumb_back_pose.release_distance");
+    range(out.ip_max_degrees, -180, 180, "thumb_back_pose.ip_max_degrees");
+    range(out.ip_release_degrees, out.ip_max_degrees, 180, "thumb_back_pose.ip_release_degrees");
+    for (const auto& positive : out.poses) for (const auto& neutral : out.neutral_poses) {
+      const auto delta = pose_sub(positive, neutral);
+      const double separation = out.release_distance+out.neutral_distance;
+      require(pose_dot(delta,delta) > separation*separation, "thumb back and neutral poses overlap");
+    }
+    out.calibrated = b.value("enabled", true);
+  }
+  if (j.contains("thumb_activity_calibration")) {
+    const auto& g = j.at("thumb_activity_calibration");
+    require(g.at("feature") == "thumb_skeleton_v2", "unsupported thumb activity feature");
+    auto& a = c.thumb_activity;
+    for (const char* name:{"tucked","neutral"}) {
+      require(g.at(name).is_array(), "thumb activity class must be an array");
+      for (const auto& pose:g.at(name))
+        require(pose.is_array() && pose.size()==12, "thumb activity pose needs exactly 12 components");
+    }
+    a.tucked = g.at("tucked").get<std::vector<ThumbPose>>();
+    a.neutral = g.at("neutral").get<std::vector<ThumbPose>>();
+    for (const auto* poses : {&a.tucked, &a.neutral}) {
+      require(!poses->empty() && poses->size() <= 16, "thumb activity needs 1..16 poses per class");
+      for (const auto& pose : *poses) for (double v : pose) range(v, -4, 4, "thumb activity component");
+    }
+    a.max_distance = g.value("max_distance", a.max_distance);
+    a.release_distance = g.value("release_distance", a.release_distance);
+    range(a.max_distance, .01, 1, "thumb activity max_distance");
+    range(a.release_distance, a.max_distance, 1, "thumb activity release_distance");
+    for (const auto& t : a.tucked) for (const auto& n : a.neutral) {
+      const auto delta = pose_sub(t,n);
+      require(pose_dot(delta,delta) > 4*a.release_distance*a.release_distance,
+              "thumb activity classes overlap");
+    }
+    a.calibrated = g.value("enabled", true);
+  }
+  if (j.contains("finger_pair_calibration")) {
+    const auto& g = j.at("finger_pair_calibration");
+    require(g.at("feature") == "finger_angles_v1", "unsupported finger pair feature");
+    const char* names[] = {"open", "index", "middle", "both"};
+    for (size_t i = 0; i < 4; ++i) {
+      auto& poses = c.finger_pair.poses[i];
+      poses = g.at(names[i]).get<std::vector<FingerPairPose>>();
+      require(!poses.empty() && poses.size() <= 64, "finger pair needs 1..64 poses per class");
+      for (const auto& pose : poses)
+        for (double v : pose) range(v, 0, 2, "finger pair angle");
+    }
+    // A contradictory endpoint has no meaningful input polarity.
+    for (size_t i = 0; i < 4; ++i) for (size_t j = i + 1; j < 4; ++j)
+      for (const auto& a : c.finger_pair.poses[i]) for (const auto& b : c.finger_pair.poses[j]) {
+        double error = 0;
+        for (size_t k = 0; k < a.size(); ++k) error += (a[k]-b[k])*(a[k]-b[k]);
+        require(error > 1e-8, "overlapping finger pair classes");
+      }
+    c.finger_pair.max_distance = g.value("max_distance", 1.0);
+    range(c.finger_pair.max_distance, .05, 3, "finger pair max_distance");
+    c.finger_pair.calibrated = g.value("enabled", true);
+  }
   for (size_t i = 0; i < 4; ++i) {
     range(c.open_curl[i], 0, 1, "open_curl");
     range(c.closed_curl[i], 0, 1, "closed_curl");
@@ -222,6 +316,13 @@ Config config_from_json(const nlohmann::json& j) {
   c.forward_range_scale = j.value("forward_range_scale", c.forward_range_scale);
   c.thumb_back_on = j.value("thumb_back_on", c.thumb_back_on);
   c.thumb_back_off = j.value("thumb_back_off", c.thumb_back_off);
+  c.thumb_back_side_ratio = j.value("thumb_back_side_ratio", c.thumb_back_side_ratio);
+  c.grip_release_threshold = j.value("grip_release_threshold", c.grip_release_threshold);
+  c.ring_click_mcp_min_degrees = j.value("ring_click_mcp_min_degrees", c.ring_click_mcp_min_degrees);
+  c.ring_click_mcp_max_degrees = j.value("ring_click_mcp_max_degrees", c.ring_click_mcp_max_degrees);
+  c.ring_click_pip_max_degrees = j.value("ring_click_pip_max_degrees", c.ring_click_pip_max_degrees);
+  c.ring_click_dip_max_degrees = j.value("ring_click_dip_max_degrees", c.ring_click_dip_max_degrees);
+  c.ring_click_hysteresis_degrees = j.value("ring_click_hysteresis_degrees", c.ring_click_hysteresis_degrees);
   c.min_confidence = j.value("min_confidence", c.min_confidence);
   c.max_age_ms = j.value("max_age_ms", c.max_age_ms);
   c.extension_on = j.value("extension_on", c.extension_on);
@@ -233,6 +334,8 @@ Config config_from_json(const nlohmann::json& j) {
   c.button_confirm_ms = j.value("button_confirm_ms", c.button_confirm_ms);
   c.pose_confirm_ms = j.value("pose_confirm_ms", c.pose_confirm_ms);
   c.menu_hold_ms = j.value("menu_hold_ms", c.menu_hold_ms);
+  c.palm_facing_on = j.value("palm_facing_on", c.palm_facing_on);
+  c.palm_facing_off = j.value("palm_facing_off", c.palm_facing_off);
   c.pinch_on_ratio = j.value("pinch_on_ratio", c.pinch_on_ratio);
   c.pinch_off_ratio = j.value("pinch_off_ratio", c.pinch_off_ratio);
   c.thumb_enable_clearance = j.value("thumb_enable_clearance", c.thumb_enable_clearance);
@@ -244,10 +347,13 @@ Config config_from_json(const nlohmann::json& j) {
   require(c.dpad_source == "wrist" || c.dpad_source == "thumb", "invalid dpad_source");
   require(c.button_layout == "legacy" || c.button_layout == "middle_grip", "invalid button_layout");
   require(c.thumbstick_click_gesture == "layout_default" ||
-              c.thumbstick_click_gesture == "three_fingers",
+              c.thumbstick_click_gesture == "three_fingers" ||
+              c.thumbstick_click_gesture == "index_middle_little" ||
+              c.thumbstick_click_gesture == "ring_finger" ||
+              c.thumbstick_click_gesture == "open_palm",
           "invalid thumbstick_click_gesture");
-  require(c.thumbstick_click_gesture != "three_fingers" || c.button_layout == "middle_grip",
-          "three_fingers click requires button_layout=middle_grip");
+  require(c.thumbstick_click_gesture == "layout_default" || c.button_layout == "middle_grip",
+          "separate click requires button_layout=middle_grip");
   require(c.thumb_dpad_mode == "off" || c.thumb_dpad_mode == "four_way" ||
               c.thumb_dpad_mode == "eight_way",
           "invalid thumb_dpad_mode");
@@ -257,6 +363,7 @@ Config config_from_json(const nlohmann::json& j) {
   range(c.forward_range_scale, .25, 2, "forward_range_scale");
   range(c.thumb_back_on, .65, 1.5, "thumb_back_on");
   range(c.thumb_back_off, .45, c.thumb_back_on - .01, "thumb_back_off");
+  range(c.thumb_back_side_ratio, 0, 1, "thumb_back_side_ratio");
   range(c.wrist_filter_degrees, 0, 20, "wrist_filter_degrees");
   range(c.pose_yaw_offset_degrees, -180, 180, "pose_yaw_offset_degrees");
   range(c.min_confidence, 0, 1, "min_confidence");
@@ -267,9 +374,21 @@ Config config_from_json(const nlohmann::json& j) {
   range(c.little_extension_off, .1, c.little_extension_on - .01, "little_extension_off");
   range(c.curl_on, 0.55, 1, "curl_on");
   range(c.curl_off, 0.1, c.curl_on - 0.01, "curl_off");
+  if (c.grip_release_threshold != -1) {
+    const double on = c.grip_on_curl ? c.curl_on
+                      : c.button_layout == "middle_grip" ? c.extension_on : c.little_extension_on;
+    range(c.grip_release_threshold, .1, on-.01, "grip_release_threshold");
+  }
+  range(c.ring_click_mcp_min_degrees, 0, 150, "ring_click_mcp_min_degrees");
+  range(c.ring_click_mcp_max_degrees, c.ring_click_mcp_min_degrees+1, 180, "ring_click_mcp_max_degrees");
+  range(c.ring_click_pip_max_degrees, 0, 150, "ring_click_pip_max_degrees");
+  range(c.ring_click_dip_max_degrees, 0, 150, "ring_click_dip_max_degrees");
+  range(c.ring_click_hysteresis_degrees, 0, 30, "ring_click_hysteresis_degrees");
   range(c.button_confirm_ms, 0, 500, "button_confirm_ms");
   range(c.pose_confirm_ms, 0, 1000, "pose_confirm_ms");
   range(c.menu_hold_ms, 0, 2000, "menu_hold_ms");
+  range(c.palm_facing_on, .5, 1, "palm_facing_on");
+  range(c.palm_facing_off, .1, c.palm_facing_on-.01, "palm_facing_off");
   range(c.pinch_on_ratio, 0.01, 1, "pinch_on_ratio");
   range(c.pinch_off_ratio, c.pinch_on_ratio + 0.01, 2, "pinch_off_ratio");
   range(c.thumb_enable_clearance, 0.01, 3, "thumb_enable_clearance");
@@ -300,6 +419,7 @@ Config load_config(const std::string& path) {
 }
 HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
   HandMeasurement out;
+  std::array<bool, 2> pair_chain_valid{}, pair_knuckle_valid{};
   for (uint32_t f = 0; f < 4; ++f) {
     std::array<Vec3, 4> p{};
     bool valid = true;
@@ -323,6 +443,15 @@ HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
     // A hooked little fingertip is already represented by chord shortening.
     // Counting its DIP angle again loses Grip even with an unfolded MCP/PIP.
     const double dip_weight = f == 3 ? 0 : .35;
+    if (f == 2) {
+      out.ring_angles_degrees[1] = std::acos(std::clamp(dot(bones[0], bones[1]), -1.0, 1.0))*180/pi;
+      out.ring_angles_degrees[2] = std::acos(std::clamp(dot(bones[1], bones[2]), -1.0, 1.0))*180/pi;
+    }
+    if (f < 2) {
+      out.finger_pair_pose[2+f] = std::acos(std::clamp(dot(bones[0], bones[1]), -1.0, 1.0)) / (pi/2);
+      out.finger_pair_pose[4+f] = std::acos(std::clamp(dot(bones[1], bones[2]), -1.0, 1.0)) / (pi/2);
+      pair_chain_valid[f] = true;
+    }
     const double bend = 2 * std::acos(std::clamp(dot(bones[0], bones[1]), -1.0, 1.0)) +
                         dip_weight * std::acos(std::clamp(dot(bones[1], bones[2]), -1.0, 1.0));
     // Tiny, noisy phalanges can produce large joint angles while the whole
@@ -345,6 +474,7 @@ HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
   Vec3 normal = cross(across, forward);
   if (!unit(normal)) return out;
   out.palm_basis = {across, forward, normal};
+  for (size_t k=0;k<3;++k) out.palm_center[k]=(wrist[k]+index[k]+middle[k]+little[k])*.25;
   out.palm_valid = true;
   for (uint32_t f = 0; f < 4; ++f) {
     if (out.curl[f] < 0) continue;
@@ -359,13 +489,31 @@ HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
     // Project into the flexion plane so spreading an open little finger is not
     // mistaken for curling it and does not prevent Grip or the two-hand Menu.
     const double bend = std::atan2(std::abs(dot(proximal, normal)), dot(proximal, metacarpal));
+    if (f < 2) {
+      out.finger_pair_pose[f] = bend / (pi/2);
+      pair_knuckle_valid[f] = true;
+    }
     // Real recordings show straight phalanges with 45-70 degree MCP flexion.
     // Count only a deeply folded knuckle as curl; otherwise index/little
     // extension disappears even though the finger itself is visibly straight.
     const double knuckle_curl = std::clamp((bend * 180 / pi - 65) / 20, 0.0, 1.0);
     if (f == 0) out.index_knuckle_curl = knuckle_curl;
+    if (f == 2) {
+      out.ring_angles_degrees[0] = bend*180/pi; out.ring_angles_valid = true;
+      Vec3 dip{}, tip{};position(h,15,confidence,dip);position(h,16,confidence,tip);
+      const double chain=length(sub(pip,base))+length(sub(dip,pip))+length(sub(tip,dip));
+      const std::array<Vec3,3> endpoints{{pip,dip,tip}};
+      for(size_t k=0;k<3;++k) {
+        const auto relative=mul(sub(endpoints[k],base),1/chain);
+        out.ring_pose[3*k]=dot(relative,across);
+        out.ring_pose[3*k+1]=dot(relative,normal);
+        out.ring_pose[3*k+2]=dot(relative,forward);
+      }
+    }
     out.curl[f] = std::max(out.curl[f], knuckle_curl);
   }
+  out.finger_pair_valid = pair_chain_valid[0] && pair_chain_valid[1] &&
+                          pair_knuckle_valid[0] && pair_knuckle_valid[1];
   if (!position(h, 4, confidence, tip)) return out;
   std::array<Vec3, 3> thumb{};
   for (uint32_t i = 0; i < 3; ++i)
@@ -406,6 +554,35 @@ HandMeasurement measure_hand(const HandSideF32V2& h, double confidence) {
   }
   if (position(h, 8, confidence, index_tip)) out.pinch_ratio = length(sub(tip, index_tip)) / width;
   return out;
+}
+std::array<double, 2> project_finger_pair(const FingerPairCalibration& c,
+                                       const HandMeasurement& hand) {
+  if (!c.calibrated || !hand.finger_pair_valid) return {-1, -1};
+  std::array<double, 4> distance;
+  distance.fill(std::numeric_limits<double>::infinity());
+  for (size_t i = 0; i < 4; ++i) for (const auto& pose : c.poses[i]) {
+    double error = 0;
+    for (size_t k = 0; k < pose.size(); ++k) {
+      const double delta = hand.finger_pair_pose[k] - pose[k];
+      if (!std::isfinite(delta)) return {-1, -1};
+      error += delta * delta;
+    }
+    distance[i] = std::min(distance[i], error);
+  }
+  if (*std::min_element(distance.begin(), distance.end()) > c.max_distance*c.max_distance)
+    return {-1, -1};
+  std::array<double, 2> result{};
+  for (size_t finger = 0; finger < 2; ++finger) {
+    double open = std::numeric_limits<double>::infinity(), closed = open;
+    for (size_t i = 0; i < 4; ++i) {
+      auto& target = (i & (1u << finger)) ? closed : open;
+      target = std::min(target, distance[i]);
+    }
+    // Independent marginals retain the fourth (both curled) class. Do not
+    // suppress Grip whenever Trigger is held, or the other way round.
+    result[finger] = open / std::max(open + closed, 1e-12);
+  }
+  return result;
 }
 Vec3 wrist_feature(const HandMeasurement& h, const Basis& reference) {
   (void)reference;
@@ -535,22 +712,25 @@ void Controller::clear_input(SideState& s) {
   s.grip_channel = {};
   s.click_channel = {};
   s.grip_finger_active = false;
+  s.grip_released = false;
   s.grip_extension = 0;
   s.trigger_finger_active = s.trigger_released = false;
   s.trigger_extension = 0;
   s.click_finger_active = s.click_released = false;
   s.click_extension = 0;
-  s.thumb_back_active = false;
-  s.click_armed = false;
+  s.thumb_back_active = s.thumb_back_pose_active = false;
+  s.palm_click = s.thumb_tucked = s.thumb_neutral = false;
+  s.click_armed = s.ring_click_armed = false;
   s.click_neutral_since_ns = 0;
 }
 bool Controller::is_released_pose(const SideState& s) const {
   if (config_.button_layout == "middle_grip") {
-    const bool grip_released =
-        !s.grip_finger_active && (config_.grip_on_curl ? s.grip_extension > 1 - config_.curl_off
-                                                       : s.grip_extension < config_.extension_off);
-    return s.fingers[2] == Finger::Curled && s.trigger_released && grip_released &&
-           (config_.thumbstick_click_gesture == "three_fingers" || s.click_released);
+    const bool ring_click = config_.thumbstick_click_gesture == "ring_finger";
+    const bool pose_click = config_.thumbstick_click_gesture == "three_fingers" ||
+                            config_.thumbstick_click_gesture == "index_middle_little" ||
+                            config_.thumbstick_click_gesture == "open_palm";
+    return (ring_click || s.fingers[2] == Finger::Curled) && s.trigger_released && s.grip_released &&
+           (pose_click || s.click_released);
   }
   // Grip-only calibration may differ from the finger classification used by
   // A/B/V. A still-actuated calibrated Grip must not rearm after a special pose.
@@ -566,6 +746,44 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
     return std::all_of(s.fingers.begin(), s.fingers.end(),
                        [state](Finger f) { return f == state; });
   };
+  if (config_.thumbstick_click_gesture == "open_palm") {
+    const bool opened = all(Finger::Extended) && h.palm_valid && h.thumb_valid &&
+        h.thumb_clearance >= config_.thumb_enable_clearance &&
+        h.thumb_straightness >= config_.thumb_extension_on;
+    Vec3 toward = sub(viewer_position_, h.palm_center);
+    const double distance = length(toward);
+    const bool facing_valid = viewer_valid_ && distance >= .05 && distance <= 2 && unit(toward);
+    const double facing = facing_valid ? dot(h.palm_basis[2], toward) : 0;
+    const bool clicking = opened && facing_valid && facing >=
+        (s.palm_click ? config_.palm_facing_off : config_.palm_facing_on);
+    const bool menu = opened && facing_valid && -facing >=
+        (s.menu_open ? config_.palm_facing_off : config_.palm_facing_on);
+    s.menu_open = menu;
+    if (opened) {
+      // Reserve the whole open-palm pose, including transitions through the
+      // edge. It must never leak movement or Trigger/Grip into gameplay.
+      const Channel previous = s.palm_click ? s.click_channel : Channel{};
+      clear_input(s);
+      s.palm_click = clicking;
+      s.menu_open = menu;
+      s.wait_for_neutral = true;
+      s.pinch_active = false;
+      s.active = s.candidate = Pose::None;
+      if (clicking) {
+        s.click_channel = previous;
+        if (!s.click_channel.candidate) {
+          s.click_channel.candidate = true;
+          s.click_channel.since_ns = stamp;
+        }
+        if (double(stamp-s.click_channel.since_ns)/1e6 >= config_.button_confirm_ms)
+          s.click_channel.active = true;
+        if (s.click_channel.active) s.buttons = s.touches = CONTROLLER_BUTTON_THUMBSTICK;
+      }
+      return;
+    }
+    if (s.palm_click) s.click_channel = {};
+    s.palm_click = false;
+  }
   const bool neutral = is_released_pose(s);
   const bool was_pinch = s.pinch_active;
   // A fist can have nearly straight index phalanges and nearby thumb/index
@@ -579,25 +797,37 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
                 (config_.button_layout == "legacy" || !s.pinch_active) &&
                 h.thumb_clearance >= config_.thumb_enable_clearance &&
                 h.thumb_straightness >= config_.thumb_extension_on;
+  if (config_.thumbstick_click_gesture == "open_palm") s.menu_open = false;
   Pose pose = Pose::None;
-  const bool separate_click = config_.thumbstick_click_gesture == "three_fingers";
+  const bool independent_click = config_.thumbstick_click_gesture == "ring_finger";
+  const bool separate_click = config_.thumbstick_click_gesture == "three_fingers" ||
+                              config_.thumbstick_click_gesture == "index_middle_little";
+  const bool little_click = config_.thumbstick_click_gesture == "index_middle_little";
+  const size_t click_finger = little_click ? 3 : 2;
+  const bool click_neutral = neutral && (!little_click || s.fingers[3] == Finger::Curled);
   const bool tucked = h.thumb_valid && h.thumb_clearance < config_.thumb_disable_clearance &&
       (config_.dpad_source != "thumb" ||
        (h.thumb_pad_valid && h.thumb_pad_clearance < c.thumb.disable_clearance));
   if (separate_click) {
-    // Folding the thumb can transiently make the tracker straighten the ring
-    // finger. Require a confirmed released pose AFTER the pad has switched off,
-    // followed by extending the ring finger; holding that transient pose must
-    // never turn into a delayed click.
+    // Thumb folding can transiently straighten the selected click finger.
+    // Require a confirmed released pose after the pad switches off, followed
+    // by finger extension. Holding a transient pose must not become a click.
+    const bool pair_still_extended = s.fingers[0] == Finger::Extended &&
+        s.fingers[1] == Finger::Extended &&
+        (!config_.trigger_on_curl || s.trigger_released) &&
+        (!config_.grip_on_curl || s.grip_released);
     if (!tucked) {
       s.click_armed = false;
       s.click_neutral_since_ns = 0;
-    } else if (neutral && !s.pinch_active && h.pinch_ratio > config_.pinch_off_ratio) {
+    } else if (click_neutral && !s.pinch_active && h.pinch_ratio > config_.pinch_off_ratio) {
       if (!s.click_neutral_since_ns) s.click_neutral_since_ns = stamp;
       if (double(stamp-s.click_neutral_since_ns)/1e6 >= config_.pose_confirm_ms)
         s.click_armed = true;
     } else {
       s.click_neutral_since_ns = 0;
+      // Arming belongs to this uninterrupted index/middle pose. A later
+      // return from Trigger/Grip is not an intentional click-finger extension.
+      if (!pair_still_extended) s.click_armed = false;
     }
   }
   // Legacy V remains available only in the legacy layout. In middle_grip
@@ -605,7 +835,8 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
   if (separate_click && s.click_armed && tucked &&
       h.pinch_ratio > config_.pinch_off_ratio &&
       !s.pinch_active && s.fingers[0] == Finger::Extended &&
-      s.fingers[1] == Finger::Extended && s.fingers[2] == Finger::Extended) {
+      s.fingers[1] == Finger::Extended && s.fingers[click_finger] == Finger::Extended &&
+      (!little_click || s.fingers[2] == Finger::Curled)) {
     pose = Pose::PadClick;
   } else if (config_.button_layout == "legacy" && s.fingers[0] == Finger::Extended &&
       s.fingers[1] == Finger::Extended && s.fingers[2] == Finger::Curled &&
@@ -619,6 +850,12 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
     if (std::all_of(s.fingers.begin() + 1, s.fingers.end(),
                     [](Finger f) { return f == Finger::Extended; }))
       pose = config_.button_layout == "middle_grip" ? Pose::A : Pose::B;
+  }
+  // In ring mode, only complete A/B poses own the other input channels. Thumb
+  // proximity or the half-ring click must not suppress simultaneous gameplay.
+  if (independent_click && (s.click_finger_active || pose == Pose::Pinch)) {
+    pose = Pose::None;
+    s.pinch_active = false;
   }
   // Even an unconfirmed three-finger candidate must return through the
   // released operating pose. Do not turn its transition into A/B or gameplay.
@@ -645,6 +882,7 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
     s.trigger_channel = {};
     s.grip_channel = {};
     s.click_channel = {};
+    if (independent_click) s.ring_click_armed = false;
     // Rearming blocks gameplay channels, but must not lock A->B transitions:
     // an intermediate confirmed ring pose may occur while extending the others.
     const bool click_blocked = separate_click &&
@@ -661,8 +899,9 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
   }
   // Legacy uses middle/ring as the operating pose. The new layout requires
   // only the ring finger, leaving all three button fingers independent.
-  const bool operating = s.fingers[2] == Finger::Curled &&
-                         (config_.button_layout == "middle_grip" || s.fingers[1] == Finger::Curled);
+  const bool operating = independent_click ||
+      (s.fingers[2] == Finger::Curled &&
+       (config_.button_layout == "middle_grip" || s.fingers[1] == Finger::Curled));
   const auto channel = [&](Channel& c, bool actuated, double strength, uint64_t bit, float& value) {
     const bool raw = operating && actuated;
     if (!raw) {
@@ -686,7 +925,8 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
   channel(s.grip_channel, s.grip_finger_active,
           config_.grip_on_curl ? 1 - s.grip_extension : s.grip_extension, CONTROLLER_BUTTON_GRIP,
           s.grip);
-  if (config_.button_layout == "middle_grip" && !separate_click) {
+  if (config_.button_layout == "middle_grip" && !separate_click &&
+      config_.thumbstick_click_gesture != "open_palm") {
     float ignored = 0;
     channel(s.click_channel, s.click_finger_active,
             config_.thumbstick_click_on_curl ? 1 - s.click_extension : s.click_extension,
@@ -696,21 +936,68 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
 void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideState& s, double dt,
                             bool blocked) {
   const bool thumb_mode = config_.dpad_source == "thumb";
+  bool recorded_neutral = false;
+  const auto& activity = c.thumb_activity;
+  if (!blocked && h.palm_valid && h.thumb_pad_valid && activity.calibrated) {
+    const auto nearest = [&](const std::vector<ThumbPose>& poses) {
+      double error=std::numeric_limits<double>::infinity();
+      for (const auto& pose:poses) {
+        const auto delta=pose_sub(h.thumb_pose,pose);
+        error=std::min(error,pose_dot(delta,delta));
+      }
+      return error;
+    };
+    const double tucked=nearest(activity.tucked), neutral=nearest(activity.neutral);
+    const double rt=s.thumb_tucked?activity.release_distance:activity.max_distance;
+    const double rn=s.thumb_neutral?activity.release_distance:activity.max_distance;
+    s.thumb_tucked=tucked<=rt*rt && tucked<neutral;
+    s.thumb_neutral=neutral<=rn*rn && neutral<tucked;
+  } else s.thumb_tucked=s.thumb_neutral=false;
+  if (s.thumb_tucked) {
+    // A whole-thumb hidden match overrides back templates and both pad modes.
+    s.thumb_active=s.thumb_back_active=s.thumb_back_pose_active=false;
+    s.x=s.y=0; s.dpad=0;
+    return;
+  }
   if (thumb_mode) {
+    // A strongly curled but visibly active thumb can move its IP inside the
+    // old hidden-thumb radius. Permit only a close match to a recorded whole
+    // thumb pose, with independent IP flexion and release hysteresis.
+    const auto& back = c.thumb_back_pose;
+    double error = std::numeric_limits<double>::infinity();
+    if (!blocked && h.palm_valid && h.thumb_pad_valid && back.calibrated) {
+      for (const auto& pose : back.poses) {
+        const auto delta = pose_sub(h.thumb_pose, pose);
+        error = std::min(error, pose_dot(delta, delta));
+      }
+      for (const auto& pose : back.neutral_poses) {
+        const auto delta = pose_sub(h.thumb_pose, pose);
+        recorded_neutral |= pose_dot(delta,delta) <= back.neutral_distance*back.neutral_distance;
+      }
+      const double radius = s.thumb_back_pose_active ? back.release_distance : back.max_distance;
+      const double flexion = s.thumb_back_pose_active ? back.ip_release_degrees : back.ip_max_degrees;
+      s.thumb_back_pose_active = error <= radius*radius && h.thumb_feature[1]*180/pi <= flexion;
+    } else s.thumb_back_pose_active = false;
     s.thumb_active = !blocked && h.palm_valid && h.thumb_pad_valid && c.thumb.calibrated &&
-                     h.thumb_pad_clearance >=
-                         (s.thumb_active ? c.thumb.disable_clearance : c.thumb.enable_clearance);
+                     (s.thumb_neutral || s.thumb_back_pose_active || h.thumb_pad_clearance >=
+                         (s.thumb_active ? c.thumb.disable_clearance : c.thumb.enable_clearance));
   } else {
-    s.thumb_active = !blocked && h.palm_valid && h.thumb_valid &&
-                     h.thumb_clearance >= (s.thumb_active ? config_.thumb_disable_clearance
+    s.thumb_back_pose_active = false;
+    s.thumb_active = !blocked && h.palm_valid && h.thumb_valid && (s.thumb_neutral ||
+                     (h.thumb_clearance >= (s.thumb_active ? config_.thumb_disable_clearance
                                                           : config_.thumb_enable_clearance) &&
                      h.thumb_straightness >= (s.thumb_active ? config_.thumb_extension_off
-                                                             : config_.thumb_extension_on);
+                                                             : config_.thumb_extension_on)));
   }
   if (!s.thumb_active) {
     s.x = s.y = 0;
     s.dpad = 0;
     s.thumb_back_active = false;
+    return;
+  }
+  if ((recorded_neutral && !s.thumb_back_pose_active) || s.thumb_neutral) {
+    s.x = s.y = 0; s.dpad = 0; s.thumb_back_active = false;
+    s.touches |= CONTROLLER_BUTTON_THUMBSTICK;
     return;
   }
   if (!thumb_mode && !s.anchored) {
@@ -740,8 +1027,12 @@ void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideS
   projection.neutral = s.neutral;
   projection.axis_x = s.axis_x;
   projection.axis_y = s.axis_y;
-  const Vec3 axes = thumb_mode ? project_thumb(c.thumb, h)
-                               : project_wrist(projection, wrist_feature(h, s.reference));
+  Vec3 axes = thumb_mode ? project_thumb(c.thumb, h)
+                        : project_wrist(projection, wrist_feature(h, s.reference));
+  if (thumb_mode && s.thumb_back_pose_active) {
+    const double magnitude = std::max(1.0, config_.thumb_back_on);
+    axes = {0, c.thumb_back_pose.reference_invert_y ? magnitude : -magnitude, 0};
+  }
   double x = axes[0], y = axes[1];
   // Invert before the stricter back gate so it always protects the output
   // direction called "back", including its two diagonals.
@@ -751,7 +1042,8 @@ void Controller::update_pad(const HandMeasurement& h, const HandConfig& c, SideS
     // well as its button, using calibrated raw Y before radial normalization.
     // This also permits a full back diagonal (both components near 1).
     s.thumb_back_active =
-        -y >= (s.thumb_back_active ? config_.thumb_back_off : config_.thumb_back_on);
+        -y >= (s.thumb_back_active ? config_.thumb_back_off : config_.thumb_back_on) &&
+        -y >= std::abs(x)*config_.thumb_back_side_ratio;
     if (y < 0 && !s.thumb_back_active) y = 0;
   }
   const double deadzone = thumb_mode        ? c.thumb.deadzone
@@ -874,6 +1166,9 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
       s.fingers[i] = Finger::Unknown;
   }
   const bool middle_layout = config_.button_layout == "middle_grip";
+  const bool pair_calibrated = middle_layout && c.finger_pair.calibrated;
+  const auto pair_curl = project_finger_pair(c.finger_pair, h);
+  const bool pair_valid = pair_calibrated && pair_curl[0] >= 0 && pair_curl[1] >= 0;
   const size_t grip_finger = middle_layout ? 1 : 3;
   const bool grip_calibrated =
       c.grip_calibrated && c.grip_calibration_finger == (middle_layout ? "middle" : "little");
@@ -888,18 +1183,22 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
                                                  (c.trigger_closed_curl - c.trigger_open_curl),
                                              0.0, 1.0)
                             : s.extension[0];
+  if (pair_calibrated) {
+    s.trigger_extension = pair_valid ? 1-pair_curl[0] : 0;
+    s.grip_extension = pair_valid ? 1-pair_curl[1] : 0;
+  }
   const double trigger_strength =
       config_.trigger_on_curl ? 1 - s.trigger_extension : s.trigger_extension;
   const double trigger_on = config_.trigger_on_curl ? config_.curl_on : config_.extension_on;
   const double trigger_off = config_.trigger_on_curl ? config_.curl_off : config_.extension_off;
   s.trigger_finger_active =
-      c.trigger_calibrated
-          ? h.curl[0] >= 0 &&
+      c.trigger_calibrated || pair_calibrated
+          ? (pair_calibrated ? pair_valid : h.curl[0] >= 0) &&
                 trigger_strength >= (s.trigger_finger_active ? trigger_off : trigger_on)
           : s.fingers[0] == (config_.trigger_on_curl ? Finger::Curled : Finger::Extended);
   s.trigger_released =
-      c.trigger_calibrated
-          ? h.curl[0] >= 0 && !s.trigger_finger_active &&
+      c.trigger_calibrated || pair_calibrated
+          ? (pair_calibrated ? pair_valid : h.curl[0] >= 0) && !s.trigger_finger_active &&
                 (config_.trigger_on_curl ? s.trigger_extension > 1 - config_.curl_off
                                          : s.trigger_extension < config_.extension_off)
           : s.fingers[0] == (config_.trigger_on_curl ? Finger::Extended : Finger::Curled);
@@ -907,12 +1206,39 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
   const double grip_on = config_.grip_on_curl ? config_.curl_on
                          : middle_layout      ? config_.extension_on
                                               : config_.little_extension_on;
-  const double grip_off = config_.grip_on_curl ? config_.curl_off
-                          : middle_layout      ? config_.extension_off
-                                               : config_.little_extension_off;
+  const double grip_off = config_.grip_release_threshold >= 0 ? config_.grip_release_threshold
+                          : config_.grip_on_curl ? config_.curl_off
+                          : middle_layout ? config_.extension_off : config_.little_extension_off;
+  const bool grip_valid = pair_calibrated ? pair_valid : h.curl[grip_finger] >= 0;
   s.grip_finger_active =
-      h.curl[grip_finger] >= 0 && grip_strength >= (s.grip_finger_active ? grip_off : grip_on);
-  if (config_.thumbstick_click_gesture == "three_fingers") {
+      grip_valid &&
+      grip_strength >= (s.grip_finger_active ? grip_off : grip_on);
+  s.grip_released = grip_valid && !s.grip_finger_active && grip_strength < grip_off;
+  if (config_.thumbstick_click_gesture == "ring_finger") {
+    const auto shape = [&](double margin) {
+      return h.ring_angles_valid &&
+          h.ring_angles_degrees[0] >= config_.ring_click_mcp_min_degrees-margin &&
+          h.ring_angles_degrees[0] <= config_.ring_click_mcp_max_degrees+margin &&
+          h.ring_angles_degrees[1] <= config_.ring_click_pip_max_degrees+margin &&
+          h.ring_angles_degrees[2] <= config_.ring_click_dip_max_degrees+margin;
+    };
+    double pose_error=std::numeric_limits<double>::infinity();
+    if(h.ring_angles_valid && c.ring_click_pose.calibrated) for(const auto& pose:c.ring_click_pose.poses) {
+      double e=0;for(size_t k=0;k<pose.size();++k){const double d=h.ring_pose[k]-pose[k];e+=d*d;}
+      pose_error=std::min(pose_error,e);
+    }
+    const auto matches=[&](bool holding) {
+      const double radius=holding ? c.ring_click_pose.release_distance : c.ring_click_pose.max_distance;
+      return !c.ring_click_pose.calibrated || pose_error<=radius*radius;
+    };
+    const bool held = shape(config_.ring_click_hysteresis_degrees) && matches(true);
+    if (!h.ring_angles_valid) s.ring_click_armed = false;
+    else if (!held) s.ring_click_armed = true;
+    s.click_finger_active = s.ring_click_armed &&
+        (s.click_finger_active ? held : shape(0) && matches(false));
+    s.click_extension = s.click_finger_active ? 1 : 0;
+    s.click_released = h.ring_angles_valid && !held;
+  } else if (config_.thumbstick_click_gesture != "layout_default") {
     s.click_extension = 0;
     s.click_finger_active = false;
     s.click_released = true;
@@ -943,7 +1269,7 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
 void Controller::update_menu() {
   const bool both = config_.left.enabled && config_.right.enabled && left_.valid && right_.valid &&
                     left_.menu_open && right_.menu_open &&
-                    (config_.thumbstick_click_gesture != "three_fingers" ||
+                    (config_.thumbstick_click_gesture == "layout_default" ||
                      (!left_.click_neutral_required && !right_.click_neutral_required));
   if (!both || left_.reset_event || right_.reset_event) {
     if (menu_candidate_)
@@ -974,7 +1300,7 @@ void Controller::update_menu() {
   }
 }
 void Controller::publish_side(RuntimeControllerSideStateV1& out, const HandConfig& c,
-                              SideState& s) {
+                              SideState& s, bool left) {
   if (!c.enabled) return;
   // The adapter has already removed legacy gestures from enabled sides. Retain
   // only input explicitly supplied by a fresh physical controller, never the
@@ -991,9 +1317,15 @@ void Controller::publish_side(RuntimeControllerSideStateV1& out, const HandConfi
                     (CONTROLLER_BUTTON_THUMBSTICK | CONTROLLER_BUTTON_DPAD_MASK)));
   // A moving/touched physical pad owns the entire pair of axes and directions,
   // including its centre. Never mix opposite physical and wrist directions.
-  const uint64_t emulated = physical_pad ? s.buttons & ~directions : s.buttons;
+  const auto face_buttons = [left](uint64_t bits) {
+    if (!left) return bits;
+    if (bits & CONTROLLER_BUTTON_A) bits |= CONTROLLER_BUTTON_X;
+    if (bits & CONTROLLER_BUTTON_B) bits |= CONTROLLER_BUTTON_Y;
+    return bits & ~(CONTROLLER_BUTTON_A | CONTROLLER_BUTTON_B);
+  };
+  const uint64_t emulated = face_buttons(physical_pad ? s.buttons & ~directions : s.buttons);
   out.buttons = emulated | (physical ? out.buttons : 0);
-  out.touches = s.touches | (physical ? out.touches : 0);
+  out.touches = face_buttons(s.touches) | (physical ? out.touches : 0);
   out.trigger = std::max(s.trigger, physical ? out.trigger : 0.0f);
   out.grip = std::max(s.grip, physical ? out.grip : 0.0f);
   if (!physical_pad) {
@@ -1041,7 +1373,17 @@ void Controller::publish_side(RuntimeControllerSideStateV1& out, const HandConfi
                 physical ? "emulation_controller+override_controller" : "emulation_controller");
 }
 void Controller::apply(RuntimeControllerStateFrameV1& out, const HandTrackingFrameF32V2* hands,
-                       uint64_t now, uint64_t origin, bool gestures_blocked) {
+                       uint64_t now, uint64_t origin, bool gestures_blocked, const Vec3* viewer) {
+  viewer_valid_=viewer && finite(*viewer);
+  if (viewer_valid_) viewer_position_=*viewer;
+  if (config_.thumbstick_click_gesture=="open_palm" && !viewer_valid_) {
+    for (auto* side:{&left_,&right_}) {
+      if (side->palm_click || side->menu_open) {
+        clear_input(*side); side->wait_for_neutral=true;
+      }
+      side->menu_open=false;
+    }
+  }
   // Use the adapter's existing stream/latch gate. Blocked recognition releases
   // emulated input and confirmation candidates, but physical input still passes
   // through publish_side. Optical controller poses are composed independently.
@@ -1050,8 +1392,8 @@ void Controller::apply(RuntimeControllerStateFrameV1& out, const HandTrackingFra
   update_side(hands && !gestures_blocked ? &hands->right : nullptr, config_.right, right_, hands,
               now, origin);
   update_menu();
-  publish_side(out.left, config_.left, left_);
-  publish_side(out.right, config_.right, right_);
+  publish_side(out.left, config_.left, left_, true);
+  publish_side(out.right, config_.right, right_, false);
   const auto flag = [&](bool enabled, const RuntimeControllerSideStateV1& side, uint32_t side_bit,
                         uint32_t frame_bit) {
     if (enabled) {

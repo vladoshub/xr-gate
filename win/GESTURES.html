@@ -8,11 +8,11 @@ table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;ve
 .hand-map svg{width:100%;max-height:360px}.hand-map dl{margin:0}.hand-map dt{font-weight:700;color:white}.hand-map dd{margin:4px 0 16px;color:#b9c9de}.marker{display:inline-block;width:25px;height:25px;border-radius:50%;text-align:center;color:#0c1320;margin-right:8px}.hand-note{font-size:14px;color:#b9c9de}
 @media(max-width:620px){.hand-map{grid-template-columns:1fr}.hand-map svg{max-height:300px}}
 </style></head><body>
-<!-- Content: runtime_adapters/xr_runtime_adapter/configs/GESTURES.md, main at 4f896399c1fd3c1814e1c6dc5af29da9e5f39bba. -->
+<!-- Content: runtime_adapters/xr_runtime_adapter/configs/GESTURES.md; open-palm click preset. -->
 <nav aria-label="Language and help"><a href="GESTURES.html" lang="en" hreflang="en" aria-current="page">English</a> · <a href="GESTURES.ru.html" lang="ru" hreflang="ru">Русский</a> · <a href="START-HERE.html">Readme</a> · <a href="START-HERE.ru.html">Руководство</a> · <a href="https://github.com/vladoshub/xr-gate/blob/main/runtime_adapters/xr_runtime_adapter/configs/GESTURES.md">GitHub</a></nav>
 <main>
 <h1>Controller Gestures</h1>
-<p>Gestures work the same way on either hand. Menu requires both hands.</p>
+<p>The left hand uses X/Y; the right hand uses A/B. Menu requires both hands.</p>
 <p><strong>Ready pose:</strong> ring finger bent, index and middle fingers straight. Keep your pinky comfortable.</p>
 <h2>Finger Map</h2>
 <p class="hand-note">The open palm below identifies each finger. Use the ready pose above when controlling movement and buttons.</p>
@@ -31,11 +31,11 @@ table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;ve
 <circle cx="258" cy="157" r="17" fill="#c2cddb"/><text x="258" y="163">5</text>
 </g></svg>
 <dl>
-<dt><span class="marker" style="background:#f4c56b">1</span>Thumb → Movement + A/B</dt><dd>Move your thumb to steer. A thumb–index circle selects A or B with the finger shapes shown below.</dd>
+<dt><span class="marker" style="background:#f4c56b">1</span>Thumb → Movement + face buttons</dt><dd>Move your thumb to steer. A thumb–index circle selects X/Y on the left or A/B on the right with the finger shapes shown below.</dd>
 <dt><span class="marker" style="background:#61d8ed">2</span>Index → Trigger</dt><dd>Bend to press; straighten to release.</dd>
 <dt><span class="marker" style="background:#c4a1ff">3</span>Middle → Grip</dt><dd>Bend to press; straighten to release.</dd>
-<dt><span class="marker" style="background:#7ce2b5">4</span>Ring → Part of stick click</dt><dd>From the ready pose, tuck your thumb, pause, then straighten your ring finger. Follow the two steps under Thumbstick Click.</dd>
-<dt><span class="marker" style="background:#c2cddb">5</span>Pinky → No separate button</dt><dd>Ignored for the ready pose and stick click. Follow the finger shapes for A and B.</dd>
+<dt><span class="marker" style="background:#7ce2b5">4</span>Ring → Gameplay pose</dt><dd>Keep it bent for normal movement, Trigger and Grip.</dd>
+<dt><span class="marker" style="background:#c2cddb">5</span>Pinky → Comfortable position</dt><dd>Keep it comfortable while moving the other fingers.</dd>
 </dl></section>
 <h2>Buttons</h2>
 <table>
@@ -43,10 +43,10 @@ table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;ve
 <tbody>
 <tr><td>Trigger</td><td>Bend your index finger. Straighten it to release.</td></tr>
 <tr><td>Grip</td><td>Bend your middle finger. Straighten it to release.</td></tr>
-<tr><td>A</td><td>Make a circle with your thumb and index finger; keep the other three fingers straight.</td></tr>
-<tr><td>B</td><td>Make a circle with your thumb and index finger; bend the other three fingers.</td></tr>
-<tr><td>Thumbstick click / touchpad press</td><td>Three straight fingers with your thumb tucked — follow the steps below.</td></tr>
-<tr><td>Menu</td><td>Briefly hold both hands open with your thumbs away from your palms.</td></tr>
+<tr><td>X (left) / A (right)</td><td>Make a circle with your thumb and index finger; keep the other three fingers straight.</td></tr>
+<tr><td>Y (left) / B (right)</td><td>Make a circle with your thumb and index finger; bend the other three fingers.</td></tr>
+<tr><td>Thumbstick click / touchpad press</td><td>Open one hand toward yourself with all five fingers straight and spread; return to your gameplay pose to release.</td></tr>
+<tr><td>Menu</td><td>Hold both hands open with palms facing away from you, like a stop sign. You should see the backs of your hands.</td></tr>
 </tbody>
 </table>
 <p><strong>For Trigger and Grip, try bending the finger only partway. A full curl may not be necessary.</strong></p>
@@ -62,14 +62,11 @@ table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;ve
 <tr><td>Stop</td><td>Return your thumb to neutral or tuck it against your palm.</td></tr>
 </tbody>
 </table>
-<p>Backward movement requires a more deliberate gesture.</p>
+<p>The newly recorded backward pose produces straight backward movement; other positions and diagonals use your existing calibration.</p>
 <p>In wrist control mode, keep your thumb out and tilt your wrist in the desired direction. Diagonals also work. Tucking your thumb stops movement.</p>
 <h2>Thumbstick Click</h2>
-<ol>
-<li>Keep your index and middle fingers straight and your ring finger bent. Tuck your whole thumb against your palm, keep the thumb and index tips apart, and pause briefly.</li>
-<li>Keep your thumb tucked and straighten your ring finger. The three straight fingers activate the click. Your pinky is ignored.</li>
-</ol>
-<p>Bend your ring finger to release. Tucking your thumb to stop movement does not activate the click by itself.</p>
-<p><strong>Trigger, Grip, and movement can work together.</strong> After A, B, or a thumbstick click, release the gesture and return to the ready pose.</p>
+<p>Open one palm toward yourself, with all five fingers straight and spread. Return to the gameplay pose to release.</p>
+<p><strong>Touchpad press is a separate gesture.</strong> Movement, Trigger and Grip pause while showing it. Menu needs both palms facing away from you.</p>
+<p>After an X/Y or A/B gesture, return to the released pose before using the gameplay buttons again.</p>
 </main>
 </body></html>

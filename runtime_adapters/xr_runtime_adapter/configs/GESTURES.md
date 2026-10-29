@@ -1,43 +1,37 @@
 # Controller Gestures
 
-Gestures work the same way on either hand. Menu requires both hands.
-
-**Ready pose:** ring finger bent, index and middle fingers straight. Keep your pinky comfortable.
-
-## Buttons
+Left hand: X/Y. Right hand: A/B. Menu requires both hands.
 
 | Button | Gesture |
 | --- | --- |
 | Trigger | Bend your index finger. Straighten it to release. |
 | Grip | Bend your middle finger. Straighten it to release. |
-| A | Make a circle with your thumb and index finger; keep the other three fingers straight. |
-| B | Make a circle with your thumb and index finger; bend the other three fingers. |
-| Thumbstick click / touchpad press | Three straight fingers with your thumb tucked — follow the steps below. |
-| Menu | Briefly hold both hands open with your thumbs away from your palms. |
+| X / A | Make a thumb–index circle; keep the other three fingers straight. |
+| Y / B | Make a thumb–index circle; bend the other three fingers. |
+| Thumbstick click / touchpad press | Open one hand toward yourself, with all five fingers straight and spread. Return to your gameplay pose to release. |
+| Menu | Hold both hands open, palms facing away from you, like a stop sign. You should see the backs of your hands. |
 
-**For Trigger and Grip, try bending the finger only partway. A full curl may not be necessary.**
+**Trigger and Grip may work with only a partial bend.**
 
-## Thumb Movement
+Touchpad press is a separate gesture. While showing it, movement, Trigger and
+Grip are paused. Return to your gameplay pose before using those controls.
+Keep both hands visible for Menu. One hand cannot open Menu.
+
+## Movement
 
 Keep your wrist still and your thumb away from your palm.
 
 | Movement | Thumb gesture |
 | --- | --- |
-| Forward | Straighten and slightly arch your thumb backward. |
-| Backward | Bend the tip toward your palm while keeping the base away from it. |
+| Forward | Straighten and slightly arch your thumb away from your palm. |
+| Backward | Curl the tip toward your palm, leaving the base out. |
 | Left / right | Point your thumb in the desired direction. |
-| Diagonal | Combine sideways movement with bending or straightening. |
-| Stop | Return your thumb to neutral or tuck it against your palm. |
+| Diagonal | Combine sideways movement with the calibrated forward/back gesture. |
+| Stop | Return to neutral or tuck your thumb against your palm. |
 
-Backward movement requires a more deliberate gesture.
+The newly recorded backward pose produces straight backward movement. Other
+positions and diagonals use the existing calibration.
 
-In wrist control mode, keep your thumb out and tilt your wrist in the desired direction. Diagonals also work. Tucking your thumb stops movement.
-
-## Thumbstick Click
-
-1. Keep your index and middle fingers straight and your ring finger bent. Tuck your whole thumb against your palm, keep the thumb and index tips apart, and pause briefly.
-2. Keep your thumb tucked and straighten your ring finger. The three straight fingers activate the click. Your pinky is ignored.
-
-Bend your ring finger to release. Tucking your thumb to stop movement does not activate the click by itself.
-
-**Trigger, Grip, and movement can work together.** After A, B, or a thumbstick click, release the gesture and return to the ready pose.
+In wrist mode, keep your thumb out and tilt your wrist in the desired direction.
+Tucking your thumb stops movement. After an X/Y or A/B gesture, return to the
+released pose before using the gameplay buttons again.

@@ -26,6 +26,8 @@ spec=importlib.util.spec_from_file_location('controls_live',ROOT/'tools/xr_gate_
 live=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(live)
 TOOL=None
+def face_bits(bits, hand):
+    return ((bits & ~24) | (2048 if bits & 8 else 0) | (4096 if bits & 16 else 0)) if hand == 'left' else bits
 TARGETS={'thumb_neutral':(0,.25),'thumb_hidden':(0,.25),'thumb_up':(0,1),
          'thumb_down':(0,-.2),'thumb_left':(-.5,.25),'thumb_right':(.5,.25),
          'thumb_up_left':(-.5,1),'thumb_up_right':(.5,1),
@@ -136,7 +138,7 @@ class ControlsCalibrationTest(unittest.TestCase):
                                    ('thumb_up_right',64|512),('thumb_down_left',128|256),('thumb_down_right',128|512)]:
                     for _ in range(30):
                         records.append(optical_frame(side,label,2000000000000+len(records)*50000000))
-                        expected.append((side,bits))
+                        expected.append((side,face_bits(bits,side)))
             source=root/'replay.jsonl'
             source.write_text(''.join(json.dumps(r)+'\n' for r in records))
             target=root/'result.jsonl'
@@ -251,7 +253,7 @@ class ControlsCalibrationTest(unittest.TestCase):
                 for label,bits in cases:
                     for _ in range(30):
                         records.append(optical_frame(side,label,3000000000000+len(records)*50000000,layout='middle_grip'))
-                        expected.append((side,bits))
+                        expected.append((side,face_bits(bits,side)))
             source=root/'middle-replay.jsonl';source.write_text(''.join(json.dumps(r)+'\n' for r in records))
             target=root/'middle-result.jsonl'
             result=subprocess.run([TOOL,'replay',str(source),str(target),'--config',str(output)],capture_output=True,text=True)

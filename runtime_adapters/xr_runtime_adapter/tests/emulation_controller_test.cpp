@@ -16,6 +16,12 @@ using namespace xr_runtime;
 void check(bool value, const char* reason) {
   if (!value) throw std::runtime_error(reason);
 }
+uint64_t face(uint64_t bits, bool left) {
+  if (!left) return bits;
+  if (bits & CONTROLLER_BUTTON_A) bits |= CONTROLLER_BUTTON_X;
+  if (bits & CONTROLLER_BUTTON_B) bits |= CONTROLLER_BUTTON_Y;
+  return bits & ~(CONTROLLER_BUTTON_A | CONTROLLER_BUTTON_B);
+}
 HandSideF32V2 pose(unsigned extended = 0, int thumb = 1, bool left = false) {
   HandSideF32V2 h{};
   h.handedness = left ? 1 : 2;
@@ -681,7 +687,7 @@ void photo_poses_and_rearm() {
                              {3, CONTROLLER_BUTTON_THUMBSTICK}}) {
       sample(pose(0, 0, left));
       auto out = sample(pose(entry.first, entry.first == 3 ? 0 : 2, left));
-      check(out.buttons == entry.second && out.trigger == 0 && out.grip == 0 &&
+      check(out.buttons == face(entry.second,left) && out.trigger == 0 && out.grip == 0 &&
                 out.thumbstick_x == 0 && out.thumbstick_y == 0,
             "A/B/pad click is not exclusive or wrong photo pose");
       ControllerInputMappingConfig mapping;
@@ -1066,11 +1072,11 @@ void middle_grip_three_channels_and_rings() {
         check(side.buttons == (click_curl ? CONTROLLER_BUTTON_THUMBSTICK : 0),
               "former V pose still invokes a special gesture");
         side = sample(pose(14, 2, left));
-        check(side.buttons == CONTROLLER_BUTTON_A && side.trigger == 0 && side.grip == 0 &&
+        check(side.buttons == face(CONTROLLER_BUTTON_A,left) && side.trigger == 0 && side.grip == 0 &&
                   side.thumbstick_x == 0 && side.thumbstick_y == 0,
               "open ring did not exclusively press A");
         side = sample(pose(0, 2, left));
-        check(side.buttons == CONTROLLER_BUTTON_B && side.trigger == 0 && side.grip == 0 &&
+        check(side.buttons == face(CONTROLLER_BUTTON_B,left) && side.trigger == 0 && side.grip == 0 &&
                   side.thumbstick_x == 0 && side.thumbstick_y == 0,
               "closed ring leaked Grip/click or failed B");
         side = sample(pose(0, 0, left));
@@ -1144,7 +1150,8 @@ void middle_grip_three_channels_and_rings() {
   f.left = pose(14, 2, true);
   f.right = pose(14, 2);
   out = apply(open_rings, f);
-  check(out.left.buttons == 8 && out.right.buttons == 8, "two A rings were confused with Menu");
+  check(out.left.buttons == CONTROLLER_BUTTON_X && out.right.buttons == CONTROLLER_BUTTON_A,
+        "two rings were confused with Menu or lost left X");
   em::Controller menu(cfg);
   f = frame();
   f.left = pose(15, 1, true);
@@ -1201,11 +1208,17 @@ void three_finger_click_is_separate() {
         const auto ready = thumb ? thumb_pose(left,0,.25,3,true) : pose(3,0,left);
         sample(ready);
         sample(ready,120);
-        // Start from both ordinary buttons held, then enter a separate click.
+        // Operating either button revokes arming. A return directly from both
+        // held buttons must not become a click even if the ring is mistracked.
         sample(pose(0, 0, left));
         const unsigned click_mask = little_open ? 15 : 7;
         auto click = thumb ? thumb_pose(left, 0, 1, click_mask, true) : pose(click_mask, 0, left);
         if (!thumb) tilt(click, .6, .4);
+        sample(click);
+        check(sample(click,180).buttons==0,
+              "return from both gameplay fingers generated a click");
+        sample(ready);
+        sample(ready,120);
         auto side = sample(click);
         check(side.buttons == 0 && side.trigger == 0 && side.grip == 0 &&
                   side.thumbstick_x == 0 && side.thumbstick_y == 0,
@@ -1232,7 +1245,7 @@ void three_finger_click_is_separate() {
         sample(pose(11, 0, left));
         sample(pose(14, 2, left));
         side = sample(pose(14, 2, left), 120);
-        check(side.buttons == CONTROLLER_BUTTON_A, "A failed after the two-channel neutral");
+        check(side.buttons == face(CONTROLLER_BUTTON_A,left), "A/X failed after the two-channel neutral");
         side = sample(click, 180);
         side = sample(click, 180);
         check(side.buttons == 0, "A-to-three-finger transition bypassed neutral");
@@ -1355,7 +1368,7 @@ void thumb_inversion_and_click_rearming() {
     check(sample(.75).thumbstick_y<0,"inverted back lost hysteresis");
     check(sample(.65).thumbstick_y==0,"inverted back leaked after strict release");
   }
-  for (bool left : {false,true}) for (bool thumb : {false,true}) {
+  for (bool left : {false,true}) for (bool thumb : {false,true}) for(bool paired : {false,true}) {
     auto cfg=thumb ? thumb_config(left,true) : immediate();
     cfg.button_layout="middle_grip";cfg.thumbstick_click_gesture="three_fingers";
     cfg.trigger_on_curl=cfg.grip_on_curl=true;cfg.pose_confirm_ms=120;
@@ -1406,6 +1419,457 @@ void thumb_inversion_and_click_rearming() {
   check(a.right.buttons==b.right.buttons && a.right.thumbstick_y==b.right.thumbstick_y,
         "thumb-only inversion changed wrist steering");
 }
+void finger_pair_channels_and_click_motion_guard() {
+  auto cfg=immediate();
+  cfg.button_layout="middle_grip";cfg.thumbstick_click_gesture="three_fingers";
+  cfg.trigger_on_curl=cfg.grip_on_curl=true;
+  const unsigned masks[]={3,2,1,0};
+  em::FingerPairCalibration calibration;
+  calibration.calibrated=true;
+  for (size_t i=0;i<4;++i) {
+    const auto m=em::measure_hand(pose(masks[i],0),.3);
+    check(m.finger_pair_valid,"pair feature missing for a tracked hand");
+    calibration.poses[i].push_back(m.finger_pair_pose);
+  }
+  nlohmann::json json_cal={{"feature","finger_angles_v1"},
+      {"open",calibration.poses[0]},{"index",calibration.poses[1]},
+      {"middle",calibration.poses[2]},{"both",calibration.poses[3]}};
+  auto parsed=em::config_from_json({{"button_layout","middle_grip"},
+      {"left",{{"finger_pair_calibration",json_cal}}}});
+  check(parsed.left.finger_pair.calibrated && !parsed.right.finger_pair.calibrated,
+        "pair calibration leaked to the other hand");
+  auto disabled=json_cal;disabled["enabled"]=false;
+  check(!em::config_from_json({{"left",{{"finger_pair_calibration",disabled}}}}).left.finger_pair.calibrated,
+        "pair calibration could not be disabled");
+  for (const auto* key : {"open","index","middle","both"}) {
+    auto invalid=json_cal;invalid[key]=nlohmann::json::array();
+    bool rejected=false;
+    try {em::config_from_json({{"left",{{"finger_pair_calibration",invalid}}}});}
+    catch(const std::exception&){rejected=true;}
+    check(rejected,"incomplete pair calibration accepted");
+  }
+  for (unsigned mutation=0;mutation<5;++mutation) {
+    auto bad=json_cal;
+    switch(mutation) {
+      case 0:bad["feature"]="unknown";break;
+      case 1:bad["index"]=bad["open"];break;
+      case 2:bad["open"][0][0]=-1;break;
+      case 3:bad["max_distance"]=0;break;
+      default:bad["open"][0][0]=std::numeric_limits<double>::infinity();break;
+    }
+    bool rejected=false;
+    try {em::config_from_json({{"left",{{"finger_pair_calibration",bad}}}});}
+    catch(const std::exception&){rejected=true;}
+    check(rejected,"invalid pair calibration accepted");
+  }
+  cfg.left.finger_pair=cfg.right.finger_pair=calibration;
+  for (bool left : {false,true}) for (bool on_curl : {false,true}) {
+    auto config=cfg;config.trigger_on_curl=config.grip_on_curl=on_curl;
+    for (size_t i=0;i<4;++i) {
+      auto h=pose(masks[i],1,left);
+      tilt(h,.55,-.45);yaw(h,.8);
+      for(auto&j:h.joints){j.px=j.px*1.2f+.3f;j.py=j.py*1.2f-.2f;j.pz=j.pz*1.2f+.1f;}
+      const auto m=em::measure_hand(h,.3);
+      const auto strength=em::project_finger_pair(calibration,m);
+      check(std::abs(strength[0]-double(i&1))<1e-8 &&
+                std::abs(strength[1]-double((i>>1)&1))<1e-8,
+            "pair feature depends on wrist angle, mirror, size or translation");
+      em::Controller c(config);auto f=frame();(left ? f.left:f.right)=h;
+      auto result=apply(c,f);const auto& side=left ? result.left:result.right;
+      const uint64_t expected=on_curl ? i : (i^3);
+      check((side.buttons&3)==expected,"pair channels lost independence or polarity");
+      (left ? f.left:f.right).joints[7].flags=0;advance(f);
+      result=apply(c,f);
+      check(((left ? result.left:result.right).buttons&3)==0,
+            "invalid pair joints did not release both polarities");
+    }
+    auto strict=calibration;strict.max_distance=.05;
+    auto m=em::measure_hand(pose(3,0,left),.3);m.finger_pair_pose.fill(2);
+    check(em::project_finger_pair(strict,m)[0]<0,"out-of-range pair observation accepted");
+  }
+  // A calibrated channel may see motion that has not crossed the old generic
+  // curl threshold. It must still revoke click arming.
+  for (bool left : {false,true}) for (bool middle : {false,true}) {
+    auto config=cfg;config.pose_confirm_ms=120;
+    em::Controller c(config);auto f=frame();
+    const auto sample=[&](unsigned fingers,uint64_t ms) {
+      (left ? f.left:f.right)=pose(fingers,0,left);advance(f,ms);
+      const auto result=apply(c,f);return left ? result.left:result.right;
+    };
+    sample(3,30);sample(3,120); // Arm, then operate a gameplay finger.
+    sample(middle ? 1:2,30);sample(middle ? 1:2,120);
+    check(!(sample(7,30).buttons&CONTROLLER_BUTTON_THUMBSTICK),
+          "return from finger motion created a click candidate");
+    check(!(sample(7,500).buttons&CONTROLLER_BUTTON_THUMBSTICK),
+          "return from finger motion created a delayed click");
+    sample(3,30);sample(3,120);sample(7,30);
+    check(sample(7,120).buttons==CONTROLLER_BUTTON_THUMBSTICK,
+          "motion guard prevented an intentional click after neutral");
+  }
+}
+void recorded_finger_pair_regressions() {
+  const auto path=std::filesystem::path(__FILE__).parent_path()/"data/emulation_finger_pair_poses.json";
+  std::ifstream in(path);
+  check(bool(in),"recorded finger-pair fixture missing");
+  nlohmann::json data;in>>data;
+  auto cfg=em::config_from_json({{"button_layout","middle_grip"},
+      {"trigger_on_curl",true},{"grip_on_curl",true},
+      {"button_confirm_ms",0},{"dpad_mode","off"},
+      {"left",{{"finger_pair_calibration",data.at("calibration")}}},
+      {"right",{{"finger_pair_calibration",data.at("calibration")}}}});
+  for(bool left:{false,true}) for(const auto& item:data.at("cases")) {
+    auto h=pose(0,1,left);
+    for(size_t i=0;i<21;++i) {
+      auto p=item.at("joints").at(i).get<em::Vec3>();
+      h.joints[i].px=float(left ? -p[0]:p[0]);h.joints[i].py=float(p[1]);h.joints[i].pz=float(p[2]);
+    }
+    for(bool rotate:{false,true}) {
+      if(rotate){tilt(h,.65,-.45);yaw(h,.7);}
+      auto f=frame();(left ? f.left:f.right)=h;em::Controller c(cfg);
+      const auto result=apply(c,f);
+      check(((left ? result.left:result.right).buttons&3)==item.at("expected_buttons").get<uint64_t>(),
+            "recorded index/middle separation or simultaneous curl regressed");
+    }
+  }
+  for(bool left:{false,true}) for(bool open:{false,true}) {
+    auto f=frame();(left ? f.left:f.right)=pose(open ? 14:0,2,left);
+    em::Controller c(cfg);apply(c,f);advance(f,120);const auto result=apply(c,f);
+    check((left ? result.left:result.right).buttons==face(open ? CONTROLLER_BUTTON_A:CONTROLLER_BUTTON_B,left),
+          "pair calibration changed A/B ring priority");
+  }
+}
+void stricter_thumb_back_and_little_click() {
+  for(bool left:{false,true}) {
+    auto cfg=thumb_config(left,true);
+    cfg.thumb_invert_y=true;cfg.thumb_back_on=.98;cfg.thumb_back_off=.90;
+    cfg.thumb_back_side_ratio=.8;
+    const auto neutral=thumb_pose(left,0,.25),right=thumb_pose(left,.5,.25),back=thumb_pose(left,0,1);
+    em::Controller pad(cfg);auto f=frame();
+    const auto steer=[&](double x,double y) {
+      auto h=neutral;
+      for(size_t i=1;i<=4;++i) {
+        h.joints[i].px=neutral.joints[i].px+x*(right.joints[i].px-neutral.joints[i].px)+y*(back.joints[i].px-neutral.joints[i].px);
+        h.joints[i].py=neutral.joints[i].py+x*(right.joints[i].py-neutral.joints[i].py)+y*(back.joints[i].py-neutral.joints[i].py);
+        h.joints[i].pz=neutral.joints[i].pz+x*(right.joints[i].pz-neutral.joints[i].pz)+y*(back.joints[i].pz-neutral.joints[i].pz);
+      }
+      (left ? f.left:f.right)=h;advance(f);const auto result=apply(pad,f);return left ? result.left:result.right;
+    };
+    check(steer(0,.94).thumbstick_y==0,"weak back entered stricter gate");
+    check(steer(0,1).thumbstick_y<-.9,"deliberate back was blocked");
+    check(steer(0,.94).thumbstick_y<0,"strict back lost hold hysteresis");
+    check(steer(0,.88).thumbstick_y==0,"back did not release at the raised threshold");
+    auto side=steer(2,1.05);
+    check(side.thumbstick_x>.9 && side.thumbstick_y==0 && !(side.buttons&CONTROLLER_BUTTON_DPAD_DOWN),
+          "large horizontal movement leaked back into analog/digital output");
+    for(double x:{-1.,1.}) {
+      (left ? f.left:f.right)=thumb_pose(left,x*.5,1);advance(f);
+      const auto diagonal=apply(pad,f);side=left ? diagonal.left:diagonal.right;
+      check(side.thumbstick_y<-.6 && std::abs(side.thumbstick_x)>.6 &&
+            (side.buttons&CONTROLLER_BUTTON_DPAD_DOWN),"strict back removed deliberate diagonals");
+    }
+  }
+  for(bool left:{false,true}) {
+    auto cfg=immediate();cfg.button_layout="middle_grip";
+    cfg.thumbstick_click_gesture="index_middle_little";
+    cfg.trigger_on_curl=cfg.grip_on_curl=true;cfg.pose_confirm_ms=120;
+    cfg.dpad_mode="off";
+    em::Controller c(cfg);auto f=frame();
+    const auto sample=[&](unsigned fingers,int thumb=0,uint64_t ms=30) {
+      (left ? f.left:f.right)=pose(fingers,thumb,left);advance(f,ms);
+      const auto result=apply(c,f);return left ? result.left:result.right;
+    };
+    sample(11);check(sample(11,0,500).buttons==0,"held pinky on startup armed click");
+    sample(3);sample(3,0,120);sample(7);
+    check(sample(7,0,500).buttons==0,"old ring-finger pose activated pinky click");
+    sample(3);sample(3,0,120);sample(11);
+    auto side=sample(11,0,120);
+    check(side.buttons==CONTROLLER_BUTTON_THUMBSTICK && side.press_counters[5]==1,
+          "pinky click did not confirm exactly once");
+    side=sample(11,0,500);check(side.press_counters[5]==1,"held pinky repeated a click");
+    side=sample(3);
+    check(side.buttons==0 && side.release_counters[5]==1,"folded pinky did not release click immediately");
+    sample(3,0,120);sample(2);sample(2,0,120);sample(11);
+    check(sample(11,0,500).buttons==0,"return from Trigger became a pinky click");
+    sample(3);sample(3,0,120);sample(10);
+    check(sample(10,0,120).buttons==CONTROLLER_BUTTON_TRIGGER,
+          "pinky interfered with an independently held Trigger");
+    sample(3);sample(3,0,120);sample(11,1);
+    check(!(sample(11,1,500).buttons&CONTROLLER_BUTTON_THUMBSTICK),
+          "raised thumb did not block pinky click");
+    (left ? f.left:f.right).status=0;advance(f);apply(c,f);
+    check(sample(11,0,500).buttons==0,"pinky reacquisition bypassed neutral");
+    sample(3);sample(3,0,120);sample(11);
+    check(sample(11,0,120).buttons==CONTROLLER_BUTTON_THUMBSTICK,
+          "pinky click did not rearm after a released neutral");
+  }
+}
+void grip_release_and_left_face_counters() {
+  for(bool left:{false,true}) for(bool pair:{false,true}) {
+    auto cfg=immediate();cfg.button_layout="middle_grip";
+    cfg.trigger_on_curl=cfg.grip_on_curl=true;cfg.dpad_mode="off";
+    cfg.button_confirm_ms=45;cfg.grip_release_threshold=.60;
+    auto partial=pose(0,0,left);bend_finger(partial,1,{10,35,60});
+    const auto measurement=em::measure_hand(partial,.3);
+    for(auto* hc:{&cfg.left,&cfg.right}) {
+      if(pair) {
+        hc->finger_pair.calibrated=true;
+        for(size_t i=0;i<4;++i) {
+          const unsigned masks[]={3,2,1,0};
+          hc->finger_pair.poses[i].push_back(em::measure_hand(pose(masks[i],0,left),.3).finger_pair_pose);
+        }
+        // Put the partial pose at an observable half-strength point between
+        // the index-only and both-curled endpoints, exercising the same gate.
+        auto& a=hc->finger_pair.poses[1][0];auto& b=hc->finger_pair.poses[3][0];
+        const auto p=measurement.finger_pair_pose;
+        for(size_t k=0;k<a.size();++k){a[k]=p[k];b[k]=p[k];}
+        a[3]=p[3]-.2;b[3]=p[3]+.2;
+      } else {
+        hc->grip_calibrated=true;hc->grip_calibration_finger="middle";
+        hc->grip_closed_curl=measurement.curl[1]/.55;
+      }
+    }
+    auto old_cfg=cfg;old_cfg.grip_release_threshold=-1;
+    em::Controller faster(cfg),old(old_cfg);auto f=frame();
+    const auto sample=[&](const HandSideF32V2& h,uint64_t ms) {
+      (left ? f.left:f.right)=h;advance(f,ms);auto a=apply(faster,f),b=apply(old,f);
+      return std::pair<RuntimeControllerSideStateV1,RuntimeControllerSideStateV1>{left ? a.left:a.right,left ? b.left:b.right};
+    };
+    auto held=pose(0,0,left);
+    if(pair) { // Ensure the held shape has an exact both-curled endpoint.
+      auto m=em::measure_hand(held,.3);
+      for(auto* hc:{&cfg.left,&cfg.right})hc->finger_pair.poses[3].push_back(m.finger_pair_pose);
+      old_cfg=cfg;old_cfg.grip_release_threshold=-1;faster=em::Controller(cfg);old=em::Controller(old_cfg);
+    }
+    sample(held,30);auto state=sample(held,60);
+    check(state.first.buttons&CONTROLLER_BUTTON_GRIP,"Grip did not engage after normal confirmation");
+    state=sample(partial,1);
+    check(!(state.first.buttons&CONTROLLER_BUTTON_GRIP) && state.first.grip==0 &&
+          state.first.release_counters[1]==1,"new Grip threshold did not release on the first fresh sample");
+    check(state.second.buttons&CONTROLLER_BUTTON_GRIP,"old threshold fixture was not still held");
+  }
+  auto cfg=immediate();cfg.button_layout="middle_grip";cfg.dpad_mode="off";
+  cfg.trigger_on_curl=cfg.grip_on_curl=true;
+  em::Controller c(cfg);auto f=frame();f.left=pose(14,2,true);f.right=pose(14,2);
+  auto out=apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_X && out.left.touches==CONTROLLER_BUTTON_X &&
+        out.left.press_counters[11]==1 && out.left.press_counters[3]==0 &&
+        out.right.buttons==CONTROLLER_BUTTON_A && out.right.press_counters[3]==1,
+        "left X/right A buttons, touches or counters were wrong");
+  ControllerInputMappingConfig mapping;
+  auto input=map_controller_input(&out.left,true,mapping);
+  check(input.x_button && input.x_touch && !input.a && !input.a_touch,"shared driver mapping aliased X to A");
+  f.left=pose(0,2,true);f.right=pose(0,2);advance(f);out=apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_Y && out.left.press_counters[12]==1 &&
+        out.left.release_counters[11]==1 && out.left.press_counters[4]==0 &&
+        out.right.buttons==CONTROLLER_BUTTON_B,"left Y/right B transition or counters were wrong");
+  f.left.status=0;advance(f);out=apply(c,f);
+  check(out.left.buttons==0 && out.left.release_counters[12]==1,"lost left hand did not release Y");
+  em::Controller mixed(cfg);f=frame();f.left=pose(14,2,true);
+  RuntimeControllerStateFrameV1 physical{};
+  physical.left.source_mask=RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
+  physical.left.flags=RUNTIME_CONTROLLER_INPUT_VALID;
+  physical.left.buttons=physical.left.touches=CONTROLLER_BUTTON_A;
+  physical.left.press_counters[3]=1;
+  mixed.apply(physical,&f,f.timestamp_ns);
+  check(physical.left.buttons==(CONTROLLER_BUTTON_A|CONTROLLER_BUTTON_X) &&
+        physical.left.touches==(CONTROLLER_BUTTON_A|CONTROLLER_BUTTON_X) &&
+        physical.left.press_counters[3]==1 && physical.left.press_counters[11]==1,
+        "left gesture mapping renamed or double-counted a physical button");
+}
+void ring_finger_independent_channels() {
+  for (bool left : {false,true}) for (bool thumb : {false,true}) for(bool paired : {false,true}) {
+    auto cfg=thumb ? thumb_config(left,true) : immediate();
+    cfg.button_layout="middle_grip";cfg.thumbstick_click_gesture="ring_finger";
+    cfg.trigger_on_curl=cfg.grip_on_curl=true;
+    cfg.ring_click_mcp_min_degrees=78;cfg.ring_click_mcp_max_degrees=100;
+    cfg.ring_click_pip_max_degrees=30;cfg.ring_click_dip_max_degrees=12;
+    cfg.ring_click_hysteresis_degrees=7;
+    auto marker=pose(3,1,left);bend_finger(marker,2,{85,100,100});
+    for(auto* hc:{&cfg.left,&cfg.right}) {
+      hc->ring_click_pose.calibrated=true;
+      hc->ring_click_pose.poses.push_back(em::measure_hand(marker,.3).ring_pose);
+    }
+    if(paired) for(auto* hc : {&cfg.left,&cfg.right}) {
+      hc->finger_pair.calibrated=true;
+      const unsigned masks[]={3,2,1,0};
+      for(size_t k=0;k<4;++k)hc->finger_pair.poses[k].push_back(em::measure_hand(pose(masks[k],1,left),.3).finger_pair_pose);
+    }
+    for(unsigned buttons=0;buttons<4;++buttons) for(bool tucked:{false,true}) {
+      em::Controller c(cfg);auto f=frame();
+      auto& h=left ? f.left:f.right;
+      h=thumb ? thumb_pose(left,0,.25,3,tucked) : pose(3,tucked?0:1,left);
+      apply(c,f);advance(f);
+      const unsigned mask=(buttons&1 ? 0:1)|(buttons&2 ? 0:2);
+      h=thumb ? thumb_pose(left,0,1,mask,tucked) : pose(mask,tucked?0:1,left);
+      bend_finger(h,2,{85,100,100});
+      if(!thumb)tilt(h,.5,0);
+      auto out=apply(c,f);auto side=left ? out.left:out.right;
+      check((side.buttons&~CONTROLLER_BUTTON_DPAD_MASK)==(buttons|CONTROLLER_BUTTON_THUMBSTICK),
+            "half-ring click did not coexist with independent Trigger/Grip/thumb");
+      if(thumb && !tucked)check(side.buttons&CONTROLLER_BUTTON_DPAD_UP,"ring click blocked thumb D-pad");
+      if(!thumb && !tucked)check(side.buttons&CONTROLLER_BUTTON_DPAD_UP,"ring click blocked wrist D-pad");
+      advance(f,150);out=apply(c,f);side=left ? out.left:out.right;
+      check(side.press_counters[5]==1,"held ring repeated a click");
+      h.joints[14].flags=0;advance(f,1);out=apply(c,f);side=left ? out.left:out.right;
+      check(!(side.buttons&CONTROLLER_BUTTON_THUMBSTICK) && (side.buttons&3)==buttons,
+            "missing ring joints did not release only the ring channel");
+    }
+    // A tip near the index is not a special-pose lock while the ring marker is held.
+    em::Controller c(cfg);auto f=frame();auto& h=left?f.left:f.right;
+    h=pose(3,1,left);apply(c,f);advance(f);bend_finger(h,2,{85,100,100});
+    h.joints[4].px=h.joints[8].px+.006f;h.joints[4].py=h.joints[8].py;h.joints[4].pz=h.joints[8].pz;
+    auto out=apply(c,f);check(((left?out.left:out.right).buttons&~CONTROLLER_BUTTON_DPAD_MASK)==CONTROLLER_BUTTON_THUMBSTICK,
+                            "thumb/index proximity blocked an independent ring click");
+  }
+  auto cfg=em::config_from_json({{"button_layout","middle_grip"},{"thumbstick_click_gesture","ring_finger"},
+    {"trigger_on_curl",true},{"grip_on_curl",true},{"button_confirm_ms",45},{"dpad_mode","off"}});
+  em::Controller c(cfg);auto f=frame();f.right=pose(3,1);bend_finger(f.right,2,{85,100,100});
+  apply(c,f);advance(f,200);check(!(apply(c,f).right.buttons&32),"held startup ring bypassed release");
+  f.right=pose(3,1);advance(f,1);apply(c,f);bend_finger(f.right,2,{85,100,100});advance(f,1);
+  check(!(apply(c,f).right.buttons&32),"ring bypassed normal press confirmation");
+  check(!(apply(c,f,f.timestamp_ns+50000000).right.buttons&32),"duplicate source confirmed ring click");
+  advance(f,45);auto out=apply(c,f);check(out.right.buttons==32 && out.right.press_counters[5]==1,"ring confirmation failed");
+  f.right.status=0;advance(f,1);out=apply(c,f);check(out.right.buttons==0 && out.right.release_counters[5]==1,"lost hand kept click");
+  f.right.status=1;advance(f,100);check(apply(c,f).right.buttons==0,"reacquired held ring bypassed release");
+  f.right=pose(3,1);advance(f);apply(c,f);bend_finger(f.right,2,{85,100,100});advance(f);apply(c,f);advance(f,45);
+  check(apply(c,f).right.buttons==32,"ring did not rearm after release");
+}
+void recorded_palm_and_thumb_activity_regressions() {
+  const auto path=std::filesystem::path(__FILE__).parent_path()/"data/emulation_palm_thumb_poses.json";
+  std::ifstream in(path);check(bool(in),"palm/thumb fixture missing");nlohmann::json data;in>>data;
+  auto cfg=em::config_from_json(data.at("profile"));
+  const auto load=[&](const nlohmann::json& item, bool rotated=false) {
+    auto f=frame();
+    for(bool left:{false,true}) {
+      auto& h=left?f.left:f.right;h=pose(15,1,left);
+      const auto& j=item.at("hands").at(left?"left":"right");
+      h.status=j.at("status");h.flags=j.at("flags");h.confidence=j.at("confidence");
+      for(size_t i=0;i<j.at("joints").size();++i) {
+        auto p=j.at("joints").at(i).get<em::Vec3>();
+        if(rotated)p={p[2]+1,p[1]+2,-p[0]+3};
+        h.joints[i].px=p[0];h.joints[i].py=p[1];h.joints[i].pz=p[2];
+      }
+    }
+    return f;
+  };
+  for(bool rotated:{false,true}) for(const auto& item:data.at("cases")) {
+    auto f=load(item,rotated);em::Controller c(cfg);
+    auto viewer=item.at("viewer").get<em::Vec3>();
+    if(rotated)viewer={viewer[2]+1,viewer[1]+2,-viewer[0]+3};
+    RuntimeControllerStateFrameV1 out{};
+    for(int n=0;n<12;++n){advance(f,50);out={};c.apply(out,&f,f.timestamp_ns,0,false,&viewer);}
+    for(bool left:{false,true}) {
+      const auto& side=left?out.left:out.right;
+      const uint64_t expected=item.at("expected_buttons").at(left?"left":"right");
+      check(side.buttons==expected,"recorded palm click/menu/hidden thumb classification failed");
+      check(std::hypot(side.thumbstick_x,side.thumbstick_y)<.001,"reserved palm or neutral leaked D-pad");
+      if(expected)check(side.press_counters[expected==32?5:2]==1,"held palm repeated press");
+    }
+    if(item.at("id")==1 || item.at("id")==8) {
+      out={};c.apply(out,&f,f.timestamp_ns,0,false,nullptr);
+      check(out.left.buttons==0 && out.right.buttons==0,"lost HMD reference kept palm click/menu on duplicate hands");
+    }
+  }
+  // Same source sample cannot satisfy confirmation; fresh samples can.
+  auto f=load(data.at("cases").at(0));auto viewer=data.at("cases").at(0).at("viewer").get<em::Vec3>();
+  em::Controller c(cfg);RuntimeControllerStateFrameV1 out{};
+  c.apply(out,&f,f.timestamp_ns,0,false,&viewer);out={};
+  c.apply(out,&f,f.timestamp_ns+60000000,0,false,&viewer);
+  check(out.right.buttons==0,"duplicate palm sample advanced confirmation");
+  advance(f,60);out={};c.apply(out,&f,f.timestamp_ns,0,false,&viewer);
+  check(out.right.buttons==32,"fresh palm failed confirmation");
+  out={};c.apply(out,&f,f.timestamp_ns,0,true,&viewer);
+  check(out.right.buttons==0,"blocked gestures kept palm click");
+  // One outward palm and one inward palm must never become Menu.
+  auto mixed=load(data.at("cases").at(7));mixed.right=load(data.at("cases").at(0)).right;
+  viewer=data.at("cases").at(7).at("viewer").get<em::Vec3>();
+  em::Controller mixed_c(cfg);
+  for(int n=0;n<12;++n){advance(mixed,50);out={};mixed_c.apply(out,&mixed,mixed.timestamp_ns,0,false,&viewer);}
+  check(!(out.left.buttons&4) && !(out.right.buttons&4),"mixed-facing hands became Menu");
+  // Hidden thumb veto wins even if a permissive back template also matches.
+  auto hidden=load(data.at("cases").at(1));
+  auto h=em::measure_hand(hidden.right,.3);auto conflict=cfg;
+  conflict.right.thumb_back_pose.calibrated=true;
+  conflict.right.thumb_back_pose.poses={h.thumb_pose};
+  conflict.right.thumb_back_pose.ip_max_degrees=180;
+  conflict.right.thumb_back_pose.ip_release_degrees=180;
+  em::Controller hidden_c(conflict);out={};hidden_c.apply(out,&hidden,hidden.timestamp_ns);
+  check(out.right.thumbstick_y==0 && !(out.right.buttons&CONTROLLER_BUTTON_DPAD_DOWN),"back template overrode tucked thumb");
+  // A/B and ordinary gameplay still use their original rearm rules.
+  auto bad=data.at("profile");bad["palm_facing_off"]=.9;
+  bool rejected=false;try{em::config_from_json(bad);}catch(...){rejected=true;}
+  check(rejected,"inverted palm thresholds accepted");
+  bad=data.at("profile");bad["right"]["thumb_activity_calibration"]["neutral"]=bad["right"]["thumb_activity_calibration"]["tucked"];
+  rejected=false;try{em::config_from_json(bad);}catch(...){rejected=true;}
+  check(rejected,"overlapping hidden and neutral thumb poses accepted");
+  bad=data.at("profile");bad["right"]["thumb_activity_calibration"]["tucked"][0].push_back(0);
+  rejected=false;try{em::config_from_json(bad);}catch(...){rejected=true;}
+  check(rejected,"wrong-sized thumb pose accepted");
+}
+void recorded_touchpad_and_back_regressions() {
+  const auto path=std::filesystem::path(__FILE__).parent_path()/"data/emulation_touchpad_back_poses.json";
+  std::ifstream in(path);check(bool(in),"touchpad/back fixture missing");nlohmann::json data;in>>data;
+  for(bool left:{false,true}) for(bool rotate:{false,true}) {
+    auto cfg=thumb_config(left,true);cfg.button_layout="middle_grip";cfg.thumbstick_click_gesture="ring_finger";
+    cfg.thumb_invert_y=true;
+    auto& bc=(left?cfg.left:cfg.right).thumb_back_pose;
+    const auto& b=data.at("thumb_back_pose");bc.calibrated=true;bc.reference_invert_y=true;
+    bc.poses=b.at("poses").get<std::vector<em::ThumbPose>>();
+    bc.neutral_poses=b.at("neutral_poses").get<std::vector<em::ThumbPose>>();
+    bc.neutral_distance=b.at("neutral_distance").get<double>();
+    auto& rc=(left?cfg.left:cfg.right).ring_click_pose;rc.calibrated=true;
+    rc.poses=data.at("ring_click_pose").at("poses").get<std::vector<em::RingPose>>();
+    if(left)for(auto& p:rc.poses)for(size_t i=0;i<p.size();i+=3)p[i]=-p[i];
+    if(left) for(auto* poses : {&bc.poses,&bc.neutral_poses})
+      for(auto& p:*poses)for(size_t i=0;i<p.size();i+=3)p[i]=-p[i];
+    em::Controller c(cfg);auto f=frame();
+    for(const auto& item:data.at("cases")) {
+      auto h=pose(3,1,left);
+      for(size_t i=0;i<21;++i){auto p=item.at("joints").at(i).get<em::Vec3>();h.joints[i].px=left?-p[0]:p[0];h.joints[i].py=p[1];h.joints[i].pz=p[2];}
+      if(rotate){tilt(h,.55,-.35);yaw(h,.8);}
+      const auto measurement=em::measure_hand(h,.3);
+      if(item.at("click").get<bool>())check(measurement.curl[2]>.9 && measurement.ring_angles_valid,
+          "recorded click must exercise saturated generic curl");
+      (left?f.left:f.right)=h;advance(f);auto out=apply(c,f);const auto side=left?out.left:out.right;
+      check(bool(side.buttons&32)==item.at("click").get<bool>(),"recorded half-ring press/release failed");
+      if(!item.at("back").get<bool>())
+        check(std::hypot(side.thumbstick_x,side.thumbstick_y)<.001,"recorded neutral drifted while clicking or releasing");
+      if(item.at("back").get<bool>()) {
+        check(measurement.thumb_pad_clearance<(left?cfg.left:cfg.right).thumb.disable_clearance,
+              "recorded back must be inside former hidden-thumb cutoff");
+        check(side.thumbstick_y<-.99 && std::abs(side.thumbstick_x)<.001 && (side.buttons&CONTROLLER_BUTTON_DPAD_DOWN),
+              "recorded curled thumb did not produce pure backward motion");
+        auto opposite=cfg;opposite.thumb_invert_y=false;em::Controller other(opposite);auto flipped=apply(other,f);
+        check((left?flipped.left:flipped.right).thumbstick_y>.99,"template ignored global thumb inversion");
+        // A slightly off-template held pose keeps its hysteresis, but cannot
+        // enter from rest. Outside the release radius the low IP cuts it off.
+        const double width=std::hypot(std::hypot(h.joints[5].px-h.joints[17].px,h.joints[5].py-h.joints[17].py),h.joints[5].pz-h.joints[17].pz);
+        auto nearby=h;nearby.joints[1].px+=float(.10*width);(left?f.left:f.right)=nearby;advance(f,1);
+        auto held=apply(c,f);check((left?held.left:held.right).thumbstick_y<-.99,"back template lost hold hysteresis");
+        em::Controller fresh(cfg);auto initial=apply(fresh,f);
+        check((left?initial.left:initial.right).thumbstick_y==0,"back template entered outside press radius");
+        auto far=h;far.joints[1].px+=float(.15*width);(left?f.left:f.right)=far;advance(f,1);
+        auto released=apply(c,f);check((left?released.left:released.right).thumbstick_y==0,"out-of-template back failed release");
+        (left?f.left:f.right)=h;advance(f);apply(c,f);
+        auto blocked=out;c.apply(blocked,&f,f.timestamp_ns,0,true);
+        check((left?blocked.left:blocked.right).buttons==0,"blocked gestures kept template back");
+      }
+    }
+  }
+  for(const auto& bad : {nlohmann::json{{"ring_click_mcp_min_degrees",170}},
+                        nlohmann::json{{"ring_click_pip_max_degrees",-1}},
+                        nlohmann::json{{"button_layout","legacy"},{"thumbstick_click_gesture","ring_finger"}}}) {
+    bool rejected=false;try{em::config_from_json(bad);}catch(const std::exception&){rejected=true;}
+    check(rejected,"invalid ring options accepted");
+  }
+  auto j=nlohmann::json{{"right",{{"thumb_back_pose",data.at("thumb_back_pose")}}}};
+  check(em::config_from_json(j).right.thumb_back_pose.calibrated,"back template not parsed");
+  j["right"]["thumb_back_pose"]["enabled"]=false;
+  check(!em::config_from_json(j).right.thumb_back_pose.calibrated,"back template could not be disabled");
+  j["right"]["thumb_back_pose"]["release_distance"]=.01;
+  bool rejected=false;try{em::config_from_json(j);}catch(const std::exception&){rejected=true;}
+  check(rejected,"invalid template release radius accepted");
+}
 void validation_and_legacy() {
   for (const auto& j :
        {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
@@ -1417,6 +1881,10 @@ void validation_and_legacy() {
         nlohmann::json{{"dpad_source", "both"}}, nlohmann::json{{"dpad_source", "thumb"}},
         nlohmann::json{{"thumb_invert_y", "true"}},
         nlohmann::json{{"thumb_back_on", .2}}, nlohmann::json{{"thumb_back_off", .9}},
+        nlohmann::json{{"thumb_back_side_ratio", 1.1}},
+        nlohmann::json{{"grip_release_threshold", .8}},
+        nlohmann::json{{"grip_release_threshold", -.5}},
+        nlohmann::json{{"thumbstick_click_gesture", "index_middle_little"}},
         nlohmann::json{{"button_layout", "unknown"}},
         nlohmann::json{{"thumbstick_click_gesture", "unknown"}},
         nlohmann::json{{"thumbstick_click_gesture", "three_fingers"}}}) {
@@ -1456,7 +1924,14 @@ int main() {
     trigger_calibration_and_wrist_diagonals();
     middle_grip_three_channels_and_rings();
     three_finger_click_is_separate();
+    ring_finger_independent_channels();
+    recorded_touchpad_and_back_regressions();
+    recorded_palm_and_thumb_activity_regressions();
     thumb_inversion_and_click_rearming();
+    finger_pair_channels_and_click_motion_guard();
+    recorded_finger_pair_regressions();
+    stricter_thumb_back_and_little_click();
+    grip_release_and_left_face_counters();
     grip_with_natural_finger_bends();
     trigger_and_v_across_wrist_orientations();
     calibrated_start_with_held_channels_and_hooked_grip();
