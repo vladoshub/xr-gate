@@ -28,7 +28,8 @@ class BuildDependencyTests(unittest.TestCase):
                      "XR_DEVICE_OUT_ENV", "XR_DEVICE_BUILD_HOOK", "XR_DEVICE_PACKAGE_SCRIPT", "XR_OUT_ROOT",
                      "XR_OUT_BIN_ROOT", "XR_BIN_ROOT", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_LOCAL_BUILD_ID",
                      "XR_BUILD_XRIZER", "XR_DOWNLOAD_HAND_TRACKING_MODELS", "XR_DOWNLOAD_MERCURY_MODELS",
-                     "XR_BUILD_VENDOR_COMPONENTS", "XR_VENDOR_COMPONENTS"):
+                     "XR_BUILD_VENDOR_COMPONENTS", "XR_VENDOR_COMPONENTS", "XR_CHECK_BUILD_DEPS",
+                     "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT"):
             self.env.pop(name, None)
         self.executable(self.bin / "dpkg-query", """#!/usr/bin/env python3
 import os, sys
@@ -166,10 +167,30 @@ PY
 
     def test_missing_dependencies_stop_build_before_any_compilation(self):
         self.stub_build()
-        result = self.run_script(BUILD / "install_xr_gate_out.sh", TEST_MISSING_PACKAGE="libhidapi-dev")
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn('libhidapi-dev', result.stderr)
-        self.assertFalse(self.log.exists())
+        for entrypoint in ("install_xr_gate_out.sh", "update_build_dependencies.sh"):
+            with self.subTest(entrypoint=entrypoint):
+                result = self.run_script(BUILD / entrypoint, XR_CHECK_BUILD_DEPS="1",
+                                         TEST_MISSING_PACKAGE="libhidapi-dev")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('libhidapi-dev', result.stderr)
+                self.assertFalse(self.log.exists())
+
+    def test_dependency_check_is_skipped_by_default_and_when_disabled(self):
+        self.stub_build()
+        # Neither the normal build nor the refresh entrypoint should query the
+        # package database unless checking was explicitly requested.
+        self.executable(self.bin / "dpkg-query", "#!/bin/sh\necho UNEXPECTED_PACKAGE_CHECK >&2\nexit 91\n")
+        for entrypoint in ("install_xr_gate_out.sh", "update_build_dependencies.sh"):
+            for flag in (None, "0"):
+                with self.subTest(entrypoint=entrypoint, flag=flag):
+                    if self.log.exists():
+                        self.log.unlink()
+                    overrides = {} if flag is None else {"XR_CHECK_BUILD_DEPS": flag}
+                    result = self.run_script(BUILD / entrypoint, **overrides)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    commands = [json.loads(line) for line in self.log.read_text().splitlines()]
+                    self.assertEqual(len(commands), 18)
+                    self.assertTrue(all("step" in command for command in commands))
 
     def test_standalone_xreal_helpers_never_install_packages(self):
         self.executable(self.bin / "cmake", """#!/usr/bin/env python3
