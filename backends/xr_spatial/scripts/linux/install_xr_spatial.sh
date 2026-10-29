@@ -26,7 +26,6 @@ INSTALL_BUNDLE_SCRIPTS="${INSTALL_BUNDLE_SCRIPTS:-1}"
 INSTALL_BUNDLE_CALIBRATION="${INSTALL_BUNDLE_CALIBRATION:-1}"
 CHECK_INSTALLED_LDD="${CHECK_INSTALLED_LDD:-1}"
 
-INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 
 ROOT_PROJECT="$(expand_tilde "$ROOT_PROJECT")"
@@ -129,12 +128,6 @@ EOF
   chmod +x "$legacy_dir/scripts/linux/"*.sh "$legacy_dir/xr_spatial_mapper_backend" 2>/dev/null || true
   log "Legacy spatial_mapper compatibility bundle: $legacy_dir"
 }
-
-if [[ "$INSTALL_APT_DEPS" == "1" ]]; then
-  log "Installing build dependencies"
-  sudo apt update
-  sudo apt install -y cmake build-essential pkg-config git rsync libopencv-dev libcli11-dev nlohmann-json3-dev libeigen3-dev
-fi
 
 if [[ ! -f "$BACKEND_DIR/CMakeLists.txt" ]]; then
   echo "[ERROR] CMakeLists.txt not found: $BACKEND_DIR" >&2

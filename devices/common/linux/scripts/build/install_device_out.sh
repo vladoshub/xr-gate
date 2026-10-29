@@ -16,6 +16,14 @@ fi
 
 log() { echo "[install_device_out:${XR_TARGET_DEVICE}] $*" >&2; }
 
+# shellcheck source=build_steps.sh
+source "$SCRIPT_DIR/build_steps.sh"
+
+# System preparation is a separate, explicit operation. Keep every component
+# (including vendor hooks and optional downloads) unprivileged during this run.
+export INSTALL_APT_DEPS=0 INSTALL_LFS_DEPS=0 XRIZER_INSTALL_SYSTEM_DEPS=0 ADD_INPUT_GROUP=0
+bash "$SCRIPT_DIR/install_build_deps_ubuntu.sh" --check
+
 # XR_BUILD_ONLY accepts both concrete step names and a few aggregate targets.
 # This keeps CI/resource-constrained builds convenient without changing the
 # default full-device build. Examples:
@@ -26,47 +34,6 @@ log() { echo "[install_device_out:${XR_TARGET_DEVICE}] $*" >&2; }
 #   XR_BUILD_XRIZER=1 XR_BUILD_ONLY="drivers"  # drivers plus optional xrizer
 #   XR_DOWNLOAD_HAND_TRACKING_MODELS=1    # opt-in model download during a normal build
 #   XR_BUILD_ONLY="capture_service_cpp drivers"
-should_run_step() {
-  local name="$1"
-  local token
-
-  if [[ -z "${XR_BUILD_ONLY:-}" ]]; then
-    return 0
-  fi
-
-  for token in ${XR_BUILD_ONLY}; do
-    case "$token" in
-      all|everything) return 0 ;;
-      "$name") return 0 ;;
-      capture_service|capture_service_native|capture_cpp)
-        [[ "$name" == "capture_service_cpp" ]] && return 0
-        ;;
-      drivers)
-        case "$name" in
-          openvr_driver|monado_driver) return 0 ;;
-          xrizer) [[ "${XR_BUILD_XRIZER:-0}" == "1" ]] && return 0 ;;
-        esac
-        ;;
-      steamvr|steam_vr)
-        [[ "$name" == "openvr_driver" ]] && return 0
-        ;;
-      openxr)
-        [[ "$name" == "monado_driver" ]] && return 0
-        ;;
-      gpl_tools|optional_gpl|drivers_with_xrizer|drivers_gpl)
-        case "$name" in
-          xrizer) return 0 ;;
-          openvr_driver|monado_driver)
-            [[ "$token" == drivers_with_xrizer || "$token" == drivers_gpl ]] && return 0
-            ;;
-        esac
-        ;;
-    esac
-  done
-
-  return 1
-}
-
 run_step() {
   local name="$1"; shift
   if ! should_run_step "$name"; then
@@ -75,42 +42,6 @@ run_step() {
   fi
   log "== $name =="
   "$@"
-}
-
-should_build_xrizer() {
-  local token
-
-  if [[ "${XR_BUILD_XRIZER:-0}" == "1" ]]; then
-    return 0
-  fi
-
-  for token in ${XR_BUILD_ONLY:-}; do
-    case "$token" in
-      xrizer|gpl_tools|optional_gpl|drivers_with_xrizer|drivers_gpl)
-        return 0
-        ;;
-    esac
-  done
-
-  return 1
-}
-
-should_download_hand_tracking_models() {
-  local token
-
-  if [[ "${XR_DOWNLOAD_HAND_TRACKING_MODELS:-0}" == "1" || "${XR_DOWNLOAD_MERCURY_MODELS:-0}" == "1" ]]; then
-    return 0
-  fi
-
-  for token in ${XR_BUILD_ONLY:-}; do
-    case "$token" in
-      hand_tracking_models|mercury_models|hand_models|models)
-        return 0
-        ;;
-    esac
-  done
-
-  return 1
 }
 
 export ROOT_PROJECT="$XR_ROOT_PROJECT"
@@ -155,13 +86,6 @@ else
   log "skip capture_service_python: legacy Python/GStreamer capture_service removed; capture_service_cpp is the default"
 fi
 
-vendor_components_enabled() {
-  case "${XR_BUILD_VENDOR_COMPONENTS:-1}" in
-    1|true|TRUE|yes|YES|on|ON) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 if [[ -n "${XR_DEVICE_BUILD_HOOK:-}" ]]; then
   if vendor_components_enabled; then
     if [[ ! -x "$XR_DEVICE_BUILD_HOOK" ]]; then
@@ -187,7 +111,7 @@ run_step imu_3dof env \
 run_step mercury_hand_tracking env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/backends/mercury_hand_tracking" \
   ORT_ROOT="$XR_OUT_BIN_ROOT/onnxruntime/onnxruntime-linux-x64-1.18.1" \
-  ORT_ARCHIVE="$XR_OUT_BIN_ROOT/onnxruntime/onnxruntime-linux-x64-1.18.1.tgz" \
+  ORT_ARCHIVE="$XR_DEPENDENCY_CACHE_ROOT/downloads/onnxruntime-linux-x64-1.18.1.tgz" \
   MERCURY_MODELS="$XR_OUT_BIN_ROOT/hand-tracking-models/mercury" \
   INSTALL_MERCURY_MODELS=0 \
   bash "$XR_ROOT_PROJECT/backends/mercury_hand_tracking/scripts/linux/install_mercury.sh"

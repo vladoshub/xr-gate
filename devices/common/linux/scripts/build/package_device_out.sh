@@ -511,6 +511,9 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/backends/mercury_hand_tracking/scripts/linux/download_mercury_models.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/mercury_hand_tracking/download_mercury_models.sh"
   copy_runtime_file \
+    "$SCRIPT_DIR/dependency_policy.sh" \
+    "$XR_OUT_BIN_ROOT/scripts/backends/mercury_hand_tracking/dependency_policy.sh"
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/backends/xr_video/scripts/linux/start_xr_video_backend.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/xr_video/start_xr_video_backend.sh"
   copy_runtime_file \

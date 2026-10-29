@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Keep the source checkout separate from per-invocation compiler/build caches.
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/dependency_policy.sh"
 src="${1:?usage: prepare_opencv_source.sh source-dir commit [upstream]}"
 commit="${2:?missing pinned OpenCV commit}"
 upstream="${3:-https://github.com/opencv/opencv.git}"
@@ -15,7 +16,8 @@ fi
 if ! git -C "$src" remote get-url origin >/dev/null 2>&1; then
   git -C "$src" remote add origin "$upstream"
 fi
-if ! git -C "$src" cat-file -e "$commit^{commit}" 2>/dev/null; then
+if [[ "$XR_UPDATE_DEPS" == 1 ]] || ! git -C "$src" cat-file -e "$commit^{commit}" 2>/dev/null; then
+  xr_require_network "OpenCV commit $commit missing or refresh requested: $src"
   git -C "$src" fetch --depth=1 origin "$commit"
 fi
 # Do not force checkout or clean: preserve any developer edits on conflict.

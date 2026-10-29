@@ -254,6 +254,10 @@ jobs:
             devices/common/linux/scripts/build/device_out_env.sh
             devices/common/linux/scripts/build/xr_gate_out_env.sh
             devices/common/linux/scripts/build/install_device_out.sh
+            devices/common/linux/scripts/build/build_steps.sh
+            devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+            devices/common/linux/scripts/build/dependency_policy.sh
+            devices/common/linux/scripts/build/update_build_dependencies.sh
             devices/common/linux/scripts/build/with_build_session.sh
             devices/common/linux/scripts/build/build_opencv.sh
             devices/common/linux/scripts/build/prepare_opencv_source.sh
@@ -289,16 +293,11 @@ jobs:
             bash -n "$script"
           done
 
-      - name: Install base build packages
+      - name: Prepare selected build dependencies
+        env:
+          XR_BUILD_ONLY: ${{ matrix.component.build_only }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            git git-lfs ca-certificates curl wget tar unzip rsync jq file \
-            build-essential cmake ninja-build pkg-config binutils ccache nasm \
-            python3 python3-full python3-venv python3-pip \
-            libopencv-dev libhidapi-dev libcli11-dev nlohmann-json3-dev \
-            libeigen3-dev libboost-all-dev libceres-dev libtbb-dev \
-            libfmt-dev libspdlog-dev
+          bash devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
           git lfs install --local
 
       - name: Test device discovery and driver packaging matrix
@@ -306,7 +305,7 @@ jobs:
 
       - name: Check native build orchestration
         if: ${{ matrix.component.name == 'basalt' }}
-        run: python3 devices/common/linux/scripts/build/tests/test_native_build.py -v
+        run: python3 -m unittest discover -s devices/common/linux/scripts/build/tests -v
 
       - name: Download OpenCV SDK from this run and attempt
         uses: actions/download-artifact@v4
@@ -316,29 +315,6 @@ jobs:
 
       - name: Unpack current-run OpenCV SDK
         run: tar -xzf .build-deps/opencv-sdk.tar.gz -C .build-deps
-
-      - name: Install SteamVR/OpenGL build packages
-        if: ${{ matrix.component.name == 'steamvr' }}
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            mesa-common-dev libopengl-dev libgl-dev libglx-dev libegl-dev \
-            libvulkan-dev libsdl2-dev \
-            libx11-dev libxrandr-dev libxext-dev libxfixes-dev libxi-dev \
-            libxcursor-dev libxinerama-dev libxxf86vm-dev \
-            libxcb1-dev libxcb-randr0-dev libxcb-present-dev \
-            libxcb-dri3-dev libxcb-xfixes0-dev
-
-      - name: Install Monado X11/XCB build packages
-        if: ${{ matrix.component.name == 'monado' }}
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libvulkan-dev vulkan-tools glslang-tools \
-            libx11-dev libx11-xcb-dev libxrandr-dev libxext-dev libxfixes-dev libxxf86vm-dev \
-            libxcb1-dev libxcb-randr0-dev libxcb-present-dev \
-            libxcb-dri3-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
-            libwayland-dev wayland-protocols libxkbcommon-dev \
-            libudev-dev libhidapi-dev libsystemd-dev libdbus-1-dev
 
       - name: Build partial package
         env:
@@ -548,13 +524,11 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
 
-      - name: Install xrizer build packages
+      - name: Prepare xrizer build dependencies
+        env:
+          XR_BUILD_ONLY: xrizer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            git git-lfs ca-certificates curl tar gzip rsync coreutils \
-            build-essential pkg-config clang libclang-dev glslc \
-            python3 python3-full python3-venv
+          bash devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
           git lfs install --local
 
       - name: Download current CPU-profile OpenCV SDK
@@ -636,12 +610,11 @@ jobs:
           submodules: recursive
           lfs: true
 
-      - name: Install download packages
+      - name: Prepare model download dependencies
+        env:
+          XR_BUILD_ONLY: hand_tracking_models
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            git git-lfs ca-certificates curl tar coreutils rsync \
-            python3 python3-venv
+          bash devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
           git lfs install --local
 
       - name: Download Mercury hand-tracking models

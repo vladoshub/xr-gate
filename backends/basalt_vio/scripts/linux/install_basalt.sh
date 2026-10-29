@@ -10,6 +10,8 @@ if [[ "${XR_USE_BUNDLED_OPENCV:-1}" == "1" ]]; then
   source "$BUILD_SUPPORT_DIR/opencv_env.sh"
 fi
 
+source "$BUILD_SUPPORT_DIR/dependency_policy.sh"
+
 expand_tilde() {
   local value="$1"
   case "$value" in
@@ -87,9 +89,8 @@ FINAL_PROFILE_DIR="$(expand_tilde "$FINAL_PROFILE_DIR")"
 BASALT_VIO_CONFIG_OUTPUT="${BASALT_VIO_CONFIG_OUTPUT:-$FINAL_PROFILE_DIR/basalt_vio_config_unified_480_ccw90.json}"
 BASALT_VIO_CONFIG_OUTPUT="$(expand_tilde "$BASALT_VIO_CONFIG_OUTPUT")"
 
-INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
 CLONE_BASALT="${CLONE_BASALT:-1}"
-FETCH_BASALT="${FETCH_BASALT:-1}"
+FETCH_BASALT="${FETCH_BASALT:-$XR_UPDATE_DEPS}"
 UPDATE_SUBMODULES="${UPDATE_SUBMODULES:-1}"
 ALLOW_DIRTY_BASALT="${ALLOW_DIRTY_BASALT:-0}"
 CLEAN_OLD_OVERLAY="${CLEAN_OLD_OVERLAY:-1}"
@@ -148,51 +149,13 @@ fi
 # -----------------------------------------------------------------------------
 # Host dependencies
 # -----------------------------------------------------------------------------
-if [[ "$INSTALL_APT_DEPS" == "1" ]]; then
-  sudo apt update
-  sudo apt install -y \
-    ninja-build \
-    build-essential \
-    pkg-config \
-    git \
-    curl \
-    zip unzip tar \
-    python3 python3-tk \
-    autoconf automake autoconf-archive \
-    libtool \
-    bison flex \
-    nasm \
-    libglu1-mesa-dev \
-    mesa-common-dev \
-    libgl1-mesa-dev
-fi
-
 # -----------------------------------------------------------------------------
 # Basalt source
 # -----------------------------------------------------------------------------
 ensure_basalt_repo() {
-  if [[ -d "$BASALT_DIR/.git" ]]; then
-    echo "[OK] Basalt repo already exists: $BASALT_DIR"
-
-    if [[ "$FETCH_BASALT" == "1" ]]; then
-      echo "[INFO] Fetching Basalt refs/tags"
-      git -C "$BASALT_DIR" fetch --tags origin
-    fi
-
-    local checkout_ref="$BASALT_REF"
-
-    if ! git -C "$BASALT_DIR" rev-parse --verify --quiet "${checkout_ref}^{commit}" >/dev/null; then
-      if git -C "$BASALT_DIR" rev-parse --verify --quiet "origin/${BASALT_REF}^{commit}" >/dev/null; then
-        checkout_ref="origin/${BASALT_REF}"
-      fi
-    fi
-
-    if ! git -C "$BASALT_DIR" rev-parse --verify --quiet "${checkout_ref}^{commit}" >/dev/null; then
-      echo "[ERROR] Basalt ref/commit not found: $BASALT_REF" >&2
-      echo "[ERROR] Repo: $BASALT_DIR" >&2
-      exit 1
-    fi
-
+  local checkout_ref
+  checkout_ref="$(xr_ensure_git_source "$BASALT_DIR" "$BASALT_REPO_URL" "$BASALT_REF" "$CLONE_BASALT" "$FETCH_BASALT")" || exit $?
+  if [[ -e "$BASALT_DIR/.git" ]]; then
     local target_commit
     local current_commit
     target_commit="$(git -C "$BASALT_DIR" rev-parse "${checkout_ref}^{commit}")"
@@ -212,26 +175,11 @@ ensure_basalt_repo() {
     else
       echo "[OK] Basalt already at requested ref: $BASALT_REF"
     fi
-  else
-    if [[ "$CLONE_BASALT" != "1" ]]; then
-      echo "[ERROR] Basalt repo not found: $BASALT_DIR" >&2
-      echo "[ERROR] Clone it first:" >&2
-      echo "  git clone '$BASALT_REPO_URL' '$BASALT_DIR'" >&2
-      echo "  cd '$BASALT_DIR' && git checkout '$BASALT_REF'" >&2
-      echo >&2
-      echo "[ERROR] Or run with CLONE_BASALT=1." >&2
-      exit 1
-    fi
-
-    echo "[INFO] Cloning Basalt into: $BASALT_DIR"
-    mkdir -p "$(dirname "$BASALT_DIR")"
-    git clone "$BASALT_REPO_URL" "$BASALT_DIR"
-    git -C "$BASALT_DIR" checkout "$BASALT_REF"
   fi
 
   if [[ "$UPDATE_SUBMODULES" == "1" ]]; then
     echo "[INFO] Updating Basalt submodules"
-    git -C "$BASALT_DIR" submodule update --init --recursive
+    xr_update_submodules "$BASALT_DIR"
   fi
 }
 
@@ -386,6 +334,7 @@ payload = {
                 "VCPKG_TARGET_TRIPLET": os.environ["VCPKG_TRIPLET"],
                 "VCPKG_HOST_TRIPLET": os.environ["VCPKG_TRIPLET"],
                 "VCPKG_OVERLAY_TRIPLETS": str(Path(root) / "backends/basalt_vio/cmake/triplets"),
+                "VCPKG_INSTALLED_DIR": os.environ["XR_VCPKG_INSTALLED_DIR"],
             },
         }
     ],
@@ -475,12 +424,12 @@ Configuration files under configs/ and XR Gate calibration profiles may be deriv
 EOF_BASALT_SOURCE
 
 while IFS= read -r -d '' copyright_file; do
-  relative="${copyright_file#"$BASALT_BUILD_DIR/vcpkg_installed/"}"
+  relative="${copyright_file#"$XR_VCPKG_INSTALLED_DIR/"}"
   relative="${relative%/copyright}"
   destination="$BASALT_LICENSE_DIR/vcpkg/$relative.txt"
   mkdir -p "$(dirname "$destination")"
   cp "$copyright_file" "$destination"
-done < <(find "$BASALT_BUILD_DIR/vcpkg_installed" -type f -path '*/share/*/copyright' -print0 2>/dev/null)
+done < <(find "$XR_VCPKG_INSTALLED_DIR" -type f -path '*/share/*/copyright' -print0 2>/dev/null)
 
 echo
 echo "[built files]"

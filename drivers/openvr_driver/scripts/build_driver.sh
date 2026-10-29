@@ -19,6 +19,7 @@ fi
 
 DRIVER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${DRIVER_ROOT}/../.." && pwd)"
+source "$PROJECT_ROOT/devices/common/linux/scripts/build/dependency_policy.sh"
 
 THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-$PROJECT_ROOT/third_party}"
 THIRD_PARTY_DIR="$(openvr_expand_tilde "$THIRD_PARTY_DIR")"
@@ -29,7 +30,7 @@ OPENVR_REPO_URL="${OPENVR_REPO_URL:-https://github.com/ValveSoftware/openvr.git}
 OPENVR_DEFAULT_REF="${OPENVR_DEFAULT_REF:-0924064316de3effbcd1acf1e309182a2deb1c05}"
 OPENVR_REF="${OPENVR_REF:-$OPENVR_DEFAULT_REF}"
 CLONE_OPENVR="${CLONE_OPENVR:-0}"
-FETCH_OPENVR="${FETCH_OPENVR:-0}"
+FETCH_OPENVR="${FETCH_OPENVR:-$XR_UPDATE_DEPS}"
 ALLOW_DIRTY_OPENVR="${ALLOW_DIRTY_OPENVR:-0}"
 
 OPENVR_THIRD_PARTY_DIR="${OPENVR_THIRD_PARTY_DIR:-$THIRD_PARTY_DIR/openvr}"
@@ -67,54 +68,6 @@ if [[ "${XR_OPENVR_KEEP_UNSUFFIXED_DRIVER_ROOT:-0}" != "1" && "$(basename "$(dir
   INSTALL_DRIVER_PACKAGE="$(dirname "$(dirname "$INSTALL_DRIVER_PACKAGE")")/$XR_OPENVR_DEVICE/${XR_OPENVR_DRIVER_DIR_NAME}/$(basename "$INSTALL_DRIVER_PACKAGE")"
 fi
 
-is_git_commit_sha() {
-  local ref="$1"
-  [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]
-}
-
-clone_openvr_checkout() {
-  local url="$1"
-  local dest="$2"
-  local ref="$3"
-
-  if [[ -z "$ref" ]]; then
-    git clone --depth 1 "$url" "$dest" >&2
-    return 0
-  fi
-
-  if is_git_commit_sha "$ref"; then
-    mkdir -p "$dest"
-    git -C "$dest" init >&2
-    git -C "$dest" remote add origin "$url" >&2
-
-    # GitHub supports fetching reachable commits by SHA in normal cases. Keep a
-    # full-fetch fallback for older git/server combinations where direct SHA
-    # fetch is disabled.
-    if ! git -C "$dest" fetch --depth 1 origin "$ref" >&2; then
-      echo "[build_driver][WARN] Shallow fetch by OpenVR commit failed; falling back to full fetch." >&2
-      git -C "$dest" fetch --tags origin >&2
-    fi
-
-    git -C "$dest" checkout --quiet --detach "$ref" >&2
-    return 0
-  fi
-
-  git clone --branch "$ref" --depth 1 "$url" "$dest" >&2
-}
-
-fetch_openvr_ref_if_needed() {
-  local repo="$1"
-  local ref="$2"
-
-  git -C "$repo" fetch --tags --prune origin >&2
-
-  if [[ -n "$ref" ]] && is_git_commit_sha "$ref"; then
-    if ! git -C "$repo" rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
-      git -C "$repo" fetch --depth 1 origin "$ref" >&2 || true
-    fi
-  fi
-}
-
 resolve_openvr_sdk_root() {
   local explicit="${XR_OPENVR_SDK_ROOT:-${OPENVR_SDK_ROOT:-}}"
   if [[ -n "$explicit" ]]; then
@@ -128,46 +81,13 @@ resolve_openvr_sdk_root() {
     exit 2
   fi
 
-  if [[ -f "$OPENVR_THIRD_PARTY_DIR/headers/openvr_driver.h" ]]; then
+  if [[ -f "$OPENVR_THIRD_PARTY_DIR/headers/openvr_driver.h" && ! -e "$OPENVR_THIRD_PARTY_DIR/.git" ]]; then
     printf '%s\n' "$OPENVR_THIRD_PARTY_DIR"
     return 0
   fi
 
-  if [[ "$CLONE_OPENVR" == "1" ]]; then
-    mkdir -p "$(dirname "$OPENVR_THIRD_PARTY_DIR")"
-    if [[ -e "$OPENVR_THIRD_PARTY_DIR" && ! -d "$OPENVR_THIRD_PARTY_DIR/.git" ]]; then
-      echo "[ERROR] OPENVR_THIRD_PARTY_DIR exists but is not a git checkout:" >&2
-      echo "  $OPENVR_THIRD_PARTY_DIR" >&2
-      exit 2
-    fi
-
-    if [[ ! -d "$OPENVR_THIRD_PARTY_DIR/.git" ]]; then
-      echo "[build_driver] Cloning OpenVR SDK:" >&2
-      echo "  url:  $OPENVR_REPO_URL" >&2
-      echo "  ref:  ${OPENVR_REF:-<default-branch>}" >&2
-      echo "  dest: $OPENVR_THIRD_PARTY_DIR" >&2
-      clone_openvr_checkout "$OPENVR_REPO_URL" "$OPENVR_THIRD_PARTY_DIR" "$OPENVR_REF"
-    fi
-  fi
-
-  if [[ ! -d "$OPENVR_THIRD_PARTY_DIR/.git" ]]; then
-    echo "[ERROR] OpenVR SDK not found." >&2
-    echo "[ERROR] Expected default third_party checkout:" >&2
-    echo "  $OPENVR_THIRD_PARTY_DIR" >&2
-    echo "" >&2
-    echo "Either set XR_OPENVR_SDK_ROOT/OPENVR_SDK_ROOT, or clone into third_party:" >&2
-    echo "  CLONE_OPENVR=1 $SCRIPT_DIR/build_driver.sh" >&2
-    echo "" >&2
-    echo "Optional variables:" >&2
-    echo "  OPENVR_REPO_URL=$OPENVR_REPO_URL" >&2
-    echo "  OPENVR_REF=<branch-tag-or-commit>  # default: $OPENVR_REF" >&2
-    echo "  OPENVR_THIRD_PARTY_DIR=$OPENVR_THIRD_PARTY_DIR" >&2
-    exit 2
-  fi
-
-  if [[ "$FETCH_OPENVR" == "1" ]]; then
-    fetch_openvr_ref_if_needed "$OPENVR_THIRD_PARTY_DIR" "$OPENVR_REF"
-  fi
+  local resolved_ref
+  resolved_ref="$(xr_ensure_git_source "$OPENVR_THIRD_PARTY_DIR" "$OPENVR_REPO_URL" "$OPENVR_REF" "$CLONE_OPENVR" "$FETCH_OPENVR" 1)" || return $?
 
   if [[ "$ALLOW_DIRTY_OPENVR" != "1" ]]; then
     if ! git -C "$OPENVR_THIRD_PARTY_DIR" diff --quiet || ! git -C "$OPENVR_THIRD_PARTY_DIR" diff --cached --quiet; then
@@ -178,18 +98,7 @@ resolve_openvr_sdk_root() {
     fi
   fi
 
-  if [[ -n "$OPENVR_REF" ]]; then
-    if git -C "$OPENVR_THIRD_PARTY_DIR" rev-parse --verify --quiet "$OPENVR_REF^{commit}" >/dev/null; then
-      git -C "$OPENVR_THIRD_PARTY_DIR" checkout --quiet "$OPENVR_REF" >&2
-    elif git -C "$OPENVR_THIRD_PARTY_DIR" rev-parse --verify --quiet "origin/$OPENVR_REF^{commit}" >/dev/null; then
-      git -C "$OPENVR_THIRD_PARTY_DIR" checkout --quiet "origin/$OPENVR_REF" >&2
-    else
-      echo "[ERROR] OPENVR_REF not found in checkout: $OPENVR_REF" >&2
-      echo "Try FETCH_OPENVR=1 or use an existing branch/tag/commit." >&2
-      echo "Default OpenVR commit: $OPENVR_DEFAULT_REF" >&2
-      exit 2
-    fi
-  fi
+  git -C "$OPENVR_THIRD_PARTY_DIR" checkout --quiet "$resolved_ref" >&2
 
   if [[ ! -f "$OPENVR_THIRD_PARTY_DIR/headers/openvr_driver.h" ]]; then
     echo "[ERROR] OpenVR header not found after resolving SDK:" >&2

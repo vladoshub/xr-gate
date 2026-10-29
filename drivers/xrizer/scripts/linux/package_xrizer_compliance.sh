@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_dependency_support="$(dirname "${BASH_SOURCE[0]}")"
+if [[ -f "$_dependency_support/dependency_policy.sh" ]]; then
+  source "$_dependency_support/dependency_policy.sh"  # Corresponding Source archive
+else
+  source "$_dependency_support/../../../../devices/common/linux/scripts/build/dependency_policy.sh"
+fi
+unset _dependency_support
+
 log() { echo "[package_xrizer_compliance] $*" >&2; }
 fail() { echo "[package_xrizer_compliance][ERROR] $*" >&2; exit 1; }
 
@@ -95,6 +103,8 @@ install -m 0755 \
 install -m 0755 \
   "$ROOT_PROJECT/drivers/xrizer/scripts/linux/package_xrizer_compliance.sh" \
   "$source_root/xr-gate-integration/package_xrizer_compliance.sh"
+install -m 0644 "$ROOT_PROJECT/devices/common/linux/scripts/build/dependency_policy.sh" \
+  "$source_root/xr-gate-integration/dependency_policy.sh"
 if [[ -f "$ROOT_PROJECT/drivers/xrizer/README.md" ]]; then
   install -m 0644 "$ROOT_PROJECT/drivers/xrizer/README.md" "$source_root/xr-gate-integration/README.md"
 fi

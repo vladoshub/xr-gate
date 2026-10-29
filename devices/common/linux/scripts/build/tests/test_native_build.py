@@ -22,21 +22,23 @@ class NativeBuildTests(unittest.TestCase):
         self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU="avx2")
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
                      "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_KEEP_OPENCV_BUILD",
-                     "XR_OPENCV_PREFIX"):
+                     "XR_OPENCV_PREFIX", "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT"):
             self.env.pop(name, None)
 
     def session(self, script, env=None):
         return subprocess.run(["bash", str(BUILD / "with_build_session.sh"), sys.executable,
                                "-c", script], env=env or self.env, capture_output=True, text=True)
 
-    def test_new_session_never_reuses_cache_and_cleans_on_failure(self):
+    def test_new_session_reuses_dependency_cache_and_cleans_build_on_failure(self):
         code = """
 import json, os
 from pathlib import Path
 p=Path(os.environ['CCACHE_DIR'])/'old-result'
-assert not p.exists()
+was_cached = p.exists()
 p.touch()
-print(json.dumps({k:os.environ[k] for k in ['XR_BUILD_SESSION_DIR','VCPKG_BINARY_SOURCES','CCACHE_DIR']}))
+data={k:os.environ[k] for k in ['XR_BUILD_SESSION_DIR','VCPKG_BINARY_SOURCES','CCACHE_DIR','XR_OFFLINE']}
+data['was_cached']=was_cached
+print(json.dumps(data))
 """
         first = self.session(code)
         second = self.session(code)
@@ -44,19 +46,22 @@ print(json.dumps({k:os.environ[k] for k in ['XR_BUILD_SESSION_DIR','VCPKG_BINARY
         self.assertEqual(second.returncode, 0, second.stderr)
         one, two = json.loads(first.stdout), json.loads(second.stdout)
         self.assertNotEqual(one["XR_BUILD_SESSION_DIR"], two["XR_BUILD_SESSION_DIR"])
+        self.assertEqual(one["CCACHE_DIR"], two["CCACHE_DIR"])
+        self.assertFalse(one["was_cached"])
+        self.assertTrue(two["was_cached"])
+        self.assertEqual((one["XR_OFFLINE"], two["XR_OFFLINE"]), ("0", "1"))
         self.assertTrue(one["VCPKG_BINARY_SOURCES"].startswith("clear;files,"))
         self.assertFalse(Path(one["XR_BUILD_SESSION_DIR"]).exists())
         failed = self.session("import os; print(os.environ['XR_BUILD_SESSION_DIR']); raise SystemExit(7)")
         self.assertEqual(failed.returncode, 7)
         self.assertFalse(Path(failed.stdout.strip()).exists())
 
-    def test_opencv_is_kept_by_default_on_success_and_failure_without_reusing_caches(self):
+    def test_opencv_is_kept_by_default_on_success_and_failure_with_fresh_build_trees(self):
         code = """
 import json, os
 from pathlib import Path
 session = Path(os.environ['XR_BUILD_SESSION_DIR'])
 assert not (session/'opencv').exists()
-assert not (Path(os.environ['CCACHE_DIR'])/'old-result').exists()
 for name in ('opencv/build/object.o', 'opencv/install/lib/libopencv_core.a', 'build/other.o'):
     path = session/name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +170,7 @@ raise SystemExit(int(os.environ['TEST_EXIT_STATUS']))
         builder.write_text((BUILD / builder.name).read_text().replace(
             "71d3237a093b60a27601c20e9ee6c3e52154e8b1", commit))
         shutil.copy2(BUILD / "prepare_opencv_source.sh", scripts)
+        shutil.copy2(BUILD / "dependency_policy.sh", scripts)
         cmake = scripts / "cmake"
         cmake.write_text("#!/usr/bin/env python3\n"
                          "import os, sys\nfrom pathlib import Path\n"

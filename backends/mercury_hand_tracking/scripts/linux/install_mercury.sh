@@ -6,6 +6,8 @@ set -euo pipefail
 # Build outputs go under ${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/mercury_hand_tracking.
 # User-facing binaries/libs are copied to $ROOT_PROJECT/bin/backends/mercury_hand_tracking.
 
+source "$(dirname "${BASH_SOURCE[0]}")/../../../../devices/common/linux/scripts/build/dependency_policy.sh"
+
 expand_tilde() {
   local value="$1"
   case "$value" in
@@ -66,18 +68,16 @@ MONADO_REPO_URL="${MONADO_REPO_URL:-https://gitlab.freedesktop.org/monado/monado
 MONADO_COMMIT="${MONADO_COMMIT:-6c9804934324ac5a3e68d64938579dbbeb4d75b3}"
 MONADO_BRANCH="${MONADO_BRANCH:-xr-mercury-base-6c98049}"
 CLONE_MONADO="${CLONE_MONADO:-1}"
-FETCH_MONADO="${FETCH_MONADO:-1}"
+FETCH_MONADO="${FETCH_MONADO:-$XR_UPDATE_DEPS}"
 RESET_MONADO_TREE="${RESET_MONADO_TREE:-1}"
 
 MERCURY_DRIVER_REPO_URL="${MERCURY_DRIVER_REPO_URL:-https://github.com/moshimeow/mercury_steamvr_driver.git}"
 MERCURY_DRIVER_REF="${MERCURY_DRIVER_REF:-e3948ace94a9f2cbd949adf50ffcc082002337cc}"
 CLONE_MERCURY_DRIVER="${CLONE_MERCURY_DRIVER:-1}"
-FETCH_MERCURY_DRIVER="${FETCH_MERCURY_DRIVER:-1}"
+FETCH_MERCURY_DRIVER="${FETCH_MERCURY_DRIVER:-$XR_UPDATE_DEPS}"
 RESET_MERCURY_DRIVER_TREE="${RESET_MERCURY_DRIVER_TREE:-1}"
 
 # Dependencies/build outputs.
-INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
-INSTALL_LFS_DEPS="${INSTALL_LFS_DEPS:-1}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}"
 
 BUILD_ROOT="${BUILD_ROOT:-${XR_BUILD_ROOT:-$ROOT_PROJECT/build}/backends/mercury_hand_tracking}"
@@ -111,39 +111,8 @@ ensure_git_repo() {
   local clone_flag="$5"
   local fetch_flag="$6"
 
-  if [[ -d "$dir/.git" ]]; then
-    log "$name repo already exists: $dir"
-  else
-    if [[ "$clone_flag" != "1" ]]; then
-      fail "$name repo not found: $dir
-Clone it first, for example:
-  git clone '$url' '$dir'
-  cd '$dir' && git checkout '$ref'
-Or run this script with the matching clone flag enabled."
-    fi
+  xr_ensure_git_source "$dir" "$url" "$ref" "$clone_flag" "$fetch_flag"
 
-    log "Cloning $name into: $dir"
-    mkdir -p "$(dirname "$dir")"
-    git clone "$url" "$dir"
-  fi
-
-  if [[ "$fetch_flag" == "1" ]]; then
-    log "Fetching $name refs/tags"
-    git -C "$dir" fetch --tags origin
-  fi
-
-  local checkout_ref="$ref"
-  if ! git -C "$dir" rev-parse --verify --quiet "${checkout_ref}^{commit}" >/dev/null; then
-    if git -C "$dir" rev-parse --verify --quiet "origin/${ref}^{commit}" >/dev/null; then
-      checkout_ref="origin/${ref}"
-    fi
-  fi
-
-  if ! git -C "$dir" rev-parse --verify --quiet "${checkout_ref}^{commit}" >/dev/null; then
-    fail "$name ref/commit not found: $ref in $dir"
-  fi
-
-  echo "$checkout_ref"
 }
 
 log "Project paths"
@@ -166,32 +135,10 @@ require_file "$MONADO_PATCH"
 require_file "$MONADO_DIAGNOSTICS_PATCH"
 require_file "$MONADO_QUALITY_PATCH"
 
-if [[ "$INSTALL_APT_DEPS" == "1" ]]; then
-  log "Installing apt dependencies"
-  sudo apt update
-  sudo apt install -y \
-    git cmake ninja-build build-essential pkg-config \
-    curl tar unzip rsync python3 python3-pip \
-    libopencv-dev libeigen3-dev libceres-dev \
-    libcjson-dev libjson-c-dev \
-    libudev-dev libhidapi-dev libusb-1.0-0-dev \
-    libvulkan-dev glslang-tools \
-    libx11-dev libxrandr-dev libxxf86vm-dev libxcb-randr0-dev libx11-xcb-dev \
-    libwayland-dev libxinerama-dev \
-    libgl1-mesa-dev libegl1-mesa-dev \
-    nlohmann-json3-dev libcli11-dev
-fi
-
-if [[ "$INSTALL_LFS_DEPS" == "1" ]]; then
-  log "Installing git-lfs dependency"
-  sudo apt update
-  sudo apt install -y git-lfs
-fi
-
 log "Installing ONNXRuntime $ORT_VERSION under $ORT_ROOT"
 mkdir -p "$(dirname "$ORT_ARCHIVE")" "$(dirname "$ORT_ROOT")"
-if [[ ! -d "$ORT_ROOT" ]]; then
-  curl -L -o "$ORT_ARCHIVE" "$ORT_URL"
+if [[ ! -d "$ORT_ROOT" || "$XR_UPDATE_DEPS" == 1 ]]; then
+  xr_download "$ORT_URL" "$ORT_ARCHIVE"
   tar -xzf "$ORT_ARCHIVE" -C "$(dirname "$ORT_ROOT")"
 fi
 require_file "$ORT_ROOT/include/onnxruntime_c_api.h"
@@ -217,7 +164,7 @@ else
 fi
 
 git submodule sync --recursive
-git submodule update --init --recursive
+xr_update_submodules "$MONADO_DIR"
 
 echo "Monado commit:"
 git rev-parse HEAD
@@ -364,7 +311,6 @@ if [[ "$INSTALL_MERCURY_MODELS" == "1" ]]; then
     CLONE_MERCURY_DRIVER="$CLONE_MERCURY_DRIVER" \
     FETCH_MERCURY_DRIVER="$FETCH_MERCURY_DRIVER" \
     RESET_MERCURY_DRIVER_TREE="$RESET_MERCURY_DRIVER_TREE" \
-    INSTALL_LFS_DEPS="$INSTALL_LFS_DEPS" \
     MERCURY_MODELS="$MERCURY_MODELS" \
     bash "$BACKEND_DIR/scripts/linux/download_mercury_models.sh"
 else

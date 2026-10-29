@@ -29,7 +29,6 @@ INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/bridges}"
 INSTALL_BIN_DIR="$(expand_tilde "$INSTALL_BIN_DIR")"
 
 VCPKG_TRIPLET="${VCPKG_TRIPLET:-x64-linux}"
-INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 
 find_optional_vcpkg_installed() {
@@ -49,8 +48,8 @@ find_optional_vcpkg_installed() {
 
   local c
   for c in "${candidates[@]}"; do
-    # A clean session may only consume dependencies compiled in this invocation.
-    if [[ -n "${XR_BUILD_SESSION_DIR:-}" && "$c" != "$XR_BUILD_ROOT/"* ]]; then
+    # Accept this profile's managed cache or the current build tree only.
+    if [[ -n "${XR_BUILD_SESSION_DIR:-}" && "$c" != "$XR_BUILD_ROOT/"* && "$c" != "${XR_VCPKG_INSTALLED_DIR:-__none__}/"* ]]; then
       continue
     fi
     if [[ -d "$c" ]] && { [[ -f "$c/share/cli11/CLI11Config.cmake" ]] || [[ -f "$c/share/cli11/cli11-config.cmake" ]] || [[ -f "$c/include/CLI/CLI.hpp" ]]; }; then
@@ -75,11 +74,6 @@ fi
 if [[ ! -d "$ROOT_PROJECT/shared/include" ]]; then
   echo "[ERROR] shared/include not found: $ROOT_PROJECT/shared/include" >&2
   exit 1
-fi
-
-if [[ "$INSTALL_APT_DEPS" == "1" ]]; then
-  sudo apt update
-  sudo apt install -y cmake build-essential pkg-config libcli11-dev nlohmann-json3-dev
 fi
 
 CMAKE_PREFIX_PATH_ENTRIES=()
