@@ -20,9 +20,6 @@ BUILD_JOBS="${BUILD_JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
 cd "$ROOT_PROJECT"
 
-sudo apt update
-sudo apt install -y cmake build-essential pkg-config libhidapi-dev
-
 cmake -S tools/xreal_ultra/xreal_display_helper \
   -B "$BUILD_DIR" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo

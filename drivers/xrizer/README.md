@@ -127,17 +127,16 @@ installation:
 XRIZER_INSTALL_RUSTUP=1 drivers/xrizer/scripts/linux/install_xrizer.sh
 ```
 
-The script also ensures `rust-src`, `cargo-xbuild`, and required Ubuntu
-system build dependencies when possible. The default system package set is:
+Prepare Ubuntu system packages before invoking the builder:
 
-```text
-build-essential pkg-config clang libclang-dev glslc
+```bash
+XR_BUILD_ONLY=xrizer ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
 ```
 
-Disable those automatic helper steps with `XRIZER_INSTALL_RUST_SRC=0`,
-`XRIZER_INSTALL_CARGO_XBUILD=0`, or `XRIZER_INSTALL_SYSTEM_DEPS=0`. Override the
-APT package list with `XRIZER_SYSTEM_PACKAGES=...` if a distro needs different
-package names. The installer also exports `LIBCLANG_PATH` and
+The build checks for required system tools without installing packages or
+invoking sudo. It still ensures user-local `rust-src` and `cargo-xbuild` when
+enabled; disable those steps with `XRIZER_INSTALL_RUST_SRC=0` and
+`XRIZER_INSTALL_CARGO_XBUILD=0`. The installer also exports `LIBCLANG_PATH` and
 `BINDGEN_EXTRA_CLANG_ARGS` when possible so bindgen can find clang resource and
 GCC/system headers such as `stddef.h`.
 

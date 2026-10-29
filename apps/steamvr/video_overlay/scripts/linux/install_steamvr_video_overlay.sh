@@ -28,7 +28,6 @@ INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$ROOT_PROJECT/bin/apps/steamvr/video_overlay
 INSTALL_BIN_DIR="$(expand_tilde "$INSTALL_BIN_DIR")"
 
 CLEAN_BUILD="${CLEAN_BUILD:-0}"
-INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 
 XR_OPENVR_SDK_ROOT="${XR_OPENVR_SDK_ROOT:-${OPENVR_SDK_ROOT:-}}"
@@ -49,12 +48,6 @@ fi
 
 command -v cmake >/dev/null 2>&1 || fatal "cmake not found"
 command -v c++ >/dev/null 2>&1 || fatal "C++ compiler not found"
-
-if [[ "$INSTALL_APT_DEPS" == "1" ]]; then
-  log "Installing basic build dependencies"
-  sudo apt update
-  sudo apt install -y cmake build-essential pkg-config nlohmann-json3-dev
-fi
 
 CMAKE_PREFIX_PATH_EXTRA="${CMAKE_PREFIX_PATH:-}"
 for prefix in \

@@ -652,10 +652,35 @@ git clone https://github.com/vladoshub/xr-gate.git xr_tracking
 cd xr_tracking
 ```
 
+Prepare system build dependencies once before compiling (sudo is requested here):
+
+```bash
+XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+```
+
+Use the same component selection for preparation and compilation. Add
+`XR_BUILD_XRIZER=1` to both commands when including xrizer. Repeat preparation
+after enabling additional components or when the build reports missing packages.
+Compilation itself runs as your normal user and does not install system packages or
+change device permissions.
+
 Build the complete multi-profile package (vendor components included by default) and download hand-tracking models:
 ```bash
-XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_CHECK_BUILD_DEPS=1 XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
+
+After the first successful local build, repeating the same command automatically
+runs offline. Keep `third_party/`, `build/.dependency-cache/`, and any Rust user
+caches. Existing dependencies are refreshed only by an explicit operation:
+
+```bash
+XR_BUILD_CPU=avx2 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 ./devices/common/linux/scripts/build/update_build_dependencies.sh
+```
+
+This refreshes dependencies **and rebuilds** the selected components, keeping
+pinned source versions. `XR_OFFLINE=1` requires offline operation immediately;
+`XR_OFFLINE=0` allows filling missing dependencies without refreshing existing
+ones. See [offline builds and cache settings](docs/ubuntu-builds.md#local-dependency-cache-and-offline-rebuilds).
 
 For x86-64 CPUs without AVX2, build a portable SSE2-baseline package (also works
 when building on a newer CPU):

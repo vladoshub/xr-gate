@@ -73,12 +73,16 @@ cd ~/src/xr-gate
 BIN_DIR="$PWD/out/xr-gate/bin/drivers/monado_driver" \
 XR_BIN_ROOT="$PWD/out/xr-gate/bin" \
 XR_MONADO_DEVICE=xreal_ultra \
-INSTALL_APT_DEPS=0 \
 UPDATE_SUBMODULES=0 \
 drivers/monado_driver/scripts/linux/install.sh
 ```
 
-Если зависимости ещё не установлены, убрать `INSTALL_APT_DEPS=0`.
+Если зависимости ещё не установлены, сначала выполнить:
+
+```bash
+XR_BUILD_ONLY=monado_driver ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+```
+
 Установщик применяет оба upstream-патча и включает поддержку futures.
 Простого копирования `xr_monado_driver.cpp` в старую сборку недостаточно.
 Для нового TCP-вывода геометрии/видео требуется также пересобрать

@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_dependency_support="$(dirname "${BASH_SOURCE[0]}")"
+if [[ -f "$_dependency_support/dependency_policy.sh" ]]; then
+  source "$_dependency_support/dependency_policy.sh"  # Corresponding Source archive
+else
+  source "$_dependency_support/../../../../devices/common/linux/scripts/build/dependency_policy.sh"
+fi
+unset _dependency_support
+
 log() { echo "[install_xrizer] $*" >&2; }
 fail() { echo "[install_xrizer][ERROR] $*" >&2; exit 1; }
 
@@ -41,12 +49,8 @@ CLONE_XRIZER="${CLONE_XRIZER:-1}"
 XRIZER_INSTALL_RUSTUP="${XRIZER_INSTALL_RUSTUP:-0}"
 XRIZER_INSTALL_CARGO_XBUILD="${XRIZER_INSTALL_CARGO_XBUILD:-1}"
 XRIZER_INSTALL_RUST_SRC="${XRIZER_INSTALL_RUST_SRC:-1}"
-XRIZER_INSTALL_SYSTEM_DEPS="${XRIZER_INSTALL_SYSTEM_DEPS:-1}"
-XRIZER_APT_ASSUME_YES="${XRIZER_APT_ASSUME_YES:-1}"
 XRIZER_PACKAGE_COMPLIANCE="${XRIZER_PACKAGE_COMPLIANCE:-1}"
 XRIZER_VENDOR_CARGO_SOURCES="${XRIZER_VENDOR_CARGO_SOURCES:-1}"
-# Packages needed by xrizer build scripts/bindgen on Ubuntu.
-XRIZER_SYSTEM_PACKAGES="${XRIZER_SYSTEM_PACKAGES:-build-essential pkg-config clang libclang-dev glslc}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 
 case "$XRIZER_BUILD_PROFILE" in
@@ -56,26 +60,29 @@ esac
 
 mkdir -p "$THIRD_PARTY_DIR" "$(dirname "$INSTALL_BIN_DIR")"
 
-if [[ ! -d "$XRIZER_DIR/.git" && ! -f "$XRIZER_DIR/.git" ]]; then
-  if [[ "$CLONE_XRIZER" == "1" ]]; then
-    log "cloning xrizer: $XRIZER_REPO -> $XRIZER_DIR"
-    git clone "$XRIZER_REPO" "$XRIZER_DIR"
-  elif [[ -f "$XRIZER_DIR/Cargo.toml" ]]; then
-    log "using xrizer source snapshot without Git metadata: $XRIZER_DIR"
-  else
-    fail "xrizer source missing: $XRIZER_DIR and CLONE_XRIZER=$CLONE_XRIZER"
-  fi
-fi
-
-if [[ -d "$XRIZER_DIR/.git" || -f "$XRIZER_DIR/.git" ]]; then
-  log "checking out xrizer ref: $XRIZER_REF"
-  git -C "$XRIZER_DIR" fetch --tags origin || true
-  git -C "$XRIZER_DIR" checkout "$XRIZER_REF"
-  git -C "$XRIZER_DIR" submodule update --init --recursive
+if [[ ! -e "$XRIZER_DIR/.git" && "$CLONE_XRIZER" == 0 && -f "$XRIZER_DIR/Cargo.toml" ]]; then
+  log "using xrizer source snapshot without Git metadata: $XRIZER_DIR"
 else
-  log "source snapshot mode: checkout and submodule commands are skipped"
+  XRIZER_CHECKOUT_REF="$(xr_ensure_git_source "$XRIZER_DIR" "$XRIZER_REPO" "$XRIZER_REF" "$CLONE_XRIZER")" || exit $?
+  git -C "$XRIZER_DIR" checkout "$XRIZER_CHECKOUT_REF"
+  xr_update_submodules "$XRIZER_DIR"
 fi
+# Toolchain files are relative to the upstream checkout. Checking/installing
+# cargo-xbuild and rust-src from another working directory can select the wrong
+# Rust version, leaving the real build with an unprepared toolchain offline.
+cd "$XRIZER_DIR"
 
+
+find_libclang_dir() {
+  local candidate
+  for candidate in "${LIBCLANG_PATH:-}" /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib; do
+    if [[ -n "$candidate" ]] && compgen -G "$candidate/libclang.so*" >/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 ensure_system_deps() {
   local missing=()
@@ -85,7 +92,8 @@ ensure_system_deps() {
   command -v clang >/dev/null 2>&1 || missing+=(clang)
   command -v glslc >/dev/null 2>&1 || missing+=(glslc)
 
-  if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
+  if ! find_libclang_dir >/dev/null &&
+     ! ldconfig -p 2>/dev/null | grep -E 'libclang(-[0-9]+)?\.so' >/dev/null; then
     missing+=(libclang-dev)
   fi
 
@@ -93,43 +101,13 @@ ensure_system_deps() {
     return 0
   fi
 
-  if [[ "$XRIZER_INSTALL_SYSTEM_DEPS" != "1" ]]; then
-    fail "missing system build dependencies: ${missing[*]}. Install manually or rerun with XRIZER_INSTALL_SYSTEM_DEPS=1."
-  fi
-
-  command -v apt-get >/dev/null 2>&1 || fail "missing system dependencies (${missing[*]}) and apt-get is unavailable. Install them manually."
-
-  local sudo_cmd=()
-  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    command -v sudo >/dev/null 2>&1 || fail "missing system dependencies (${missing[*]}) and sudo is unavailable. Install them manually."
-    sudo_cmd=(sudo)
-  fi
-
-  local apt_flags=()
-  if [[ "$XRIZER_APT_ASSUME_YES" == "1" ]]; then
-    apt_flags=(-y)
-  fi
-
-  log "installing xrizer system build dependencies: $XRIZER_SYSTEM_PACKAGES"
-  "${sudo_cmd[@]}" apt-get update
-  # shellcheck disable=SC2086
-  "${sudo_cmd[@]}" apt-get install "${apt_flags[@]}" $XRIZER_SYSTEM_PACKAGES
-
-  command -v clang >/dev/null 2>&1 || fail "clang still not found after apt install"
-  command -v glslc >/dev/null 2>&1 || fail "glslc still not found after apt install"
+  fail "missing system build dependencies: ${missing[*]}. Run XR_BUILD_ONLY=xrizer ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh before building."
 }
 
 configure_clang_bindgen_env() {
   if [[ -z "${LIBCLANG_PATH:-}" ]]; then
-    local libclang_dir=""
-    local candidate
-    for candidate in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib; do
-      if compgen -G "$candidate/libclang.so*" >/dev/null; then
-        libclang_dir="$candidate"
-        break
-      fi
-    done
-    if [[ -n "$libclang_dir" ]]; then
+    local libclang_dir
+    if libclang_dir="$(find_libclang_dir)"; then
       export LIBCLANG_PATH="$libclang_dir"
       log "using LIBCLANG_PATH=$LIBCLANG_PATH"
     else
@@ -161,6 +139,7 @@ ensure_rust_toolchain() {
     fail "cargo not found. Install Rust toolchain first, or rerun with XRIZER_INSTALL_RUSTUP=1 to install rustup/cargo for this user."
   fi
 
+  xr_require_network "Rust toolchain missing for xrizer"
   command -v curl >/dev/null 2>&1 || fail "curl not found; cannot install rustup. Install curl or install cargo manually."
 
   log "cargo not found; installing rustup/cargo for current user (XRIZER_INSTALL_RUSTUP=1)"
@@ -185,6 +164,7 @@ ensure_cargo_xbuild() {
     fail "cargo-xbuild is not installed. Install it manually or rerun with XRIZER_INSTALL_CARGO_XBUILD=1."
   fi
 
+  xr_require_network "cargo-xbuild missing"
   log "cargo-xbuild not found; installing cargo-xbuild"
   cargo install cargo-xbuild --locked
 
@@ -196,12 +176,15 @@ ensure_rust_src() {
     return 0
   fi
 
-  if command -v rustup >/dev/null 2>&1; then
-    log "ensuring rust-src component is installed"
-    rustup component add rust-src || log "warning: rustup component add rust-src failed; cargo xbuild may fail"
-  else
-    log "warning: rustup not found; cannot ensure rust-src component"
+  local sysroot
+  sysroot="$(rustc --print sysroot)" || fail "Rust toolchain missing for xrizer; prepare it online first"
+  if [[ -f "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" ]]; then
+    return 0
   fi
+  xr_require_network "rust-src missing in $sysroot"
+  command -v rustup >/dev/null 2>&1 || fail "rust-src missing and rustup not installed"
+  rustup component add rust-src
+
 }
 
 ensure_system_deps

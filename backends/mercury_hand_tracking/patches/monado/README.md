@@ -196,7 +196,6 @@ BUILD_MONADO=1 \
 CLONE_MONADO=0 \
 FETCH_MONADO=0 \
 UPDATE_SUBMODULES=0 \
-INSTALL_APT_DEPS=0 \
 drivers/monado_driver/scripts/linux/install.sh
 ```
 

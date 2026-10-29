@@ -7,6 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc 2>/dev/null || echo 2)}"
+source "$SCRIPT_DIR/../../../../devices/common/linux/scripts/build/dependency_policy.sh"
 
 expand_path() {
   local path="$1"
@@ -111,9 +112,8 @@ DEVICE_MONADO_SCRIPT_OUT_DIR="$(expand_path "${DEVICE_MONADO_SCRIPT_OUT_DIR:-$PA
 MONADO_REPO="${MONADO_REPO:-https://gitlab.freedesktop.org/monado/monado.git}"
 MONADO_REF="${MONADO_REF:-7363fee94b66671efdce79655b8b143d7c9eeecd}"
 CLONE_MONADO="${CLONE_MONADO:-1}"
-FETCH_MONADO="${FETCH_MONADO:-0}"
+FETCH_MONADO="${FETCH_MONADO:-$XR_UPDATE_DEPS}"
 UPDATE_SUBMODULES="${UPDATE_SUBMODULES:-1}"
-INSTALL_APT_DEPS="${INSTALL_APT_DEPS:-1}"
 BUILD_MONADO="${BUILD_MONADO:-1}"
 XR_MONADO_ENABLE_X11="${XR_MONADO_ENABLE_X11:-1}"
 MONADO_EXTRA_CMAKE_ARGS="${MONADO_EXTRA_CMAKE_ARGS:-}"
@@ -131,34 +131,6 @@ RESET_MONADO_CHECKOUT="${RESET_MONADO_CHECKOUT:-1}"
 
 PROJECT_COMPILE_PATCH="$PATCH_DIR/project/0028-monado-driver-compile-fixes.patch"
 MONADO_INTEGRATION_PATCH="$PATCH_DIR/monado/0001-add-xr-tracking-runtime-driver.patch"
-
-maybe_install_apt_deps() {
-  if ! is_truthy "$INSTALL_APT_DEPS"; then
-    log "skipping apt dependencies because INSTALL_APT_DEPS=$INSTALL_APT_DEPS"
-    return 0
-  fi
-  if ! command -v apt-get >/dev/null 2>&1; then
-    log "apt-get not found; skipping apt dependencies"
-    return 0
-  fi
-
-  local sudo_cmd=()
-  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    need_cmd sudo
-    sudo_cmd=(sudo)
-  fi
-
-  log "installing baseline build/runtime dependencies via apt"
-  "${sudo_cmd[@]}" apt-get update
-  "${sudo_cmd[@]}" apt-get install -y \
-    git rsync ca-certificates \
-    cmake ninja-build build-essential pkg-config python3 \
-    libvulkan-dev vulkan-tools glslang-tools \
-    libx11-dev libxrandr-dev libxext-dev libxfixes-dev libxxf86vm-dev \
-    libxcb1-dev libxcb-randr0-dev libxcb-present-dev libxcb-dri3-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
-    libudev-dev libhidapi-dev libwayland-dev wayland-protocols libxkbcommon-dev \
-    nlohmann-json3-dev libeigen3-dev libopencv-dev libssl-dev libsystemd-dev libdbus-1-dev
-}
 
 ensure_monado_checkout() {
   need_cmd git
@@ -180,32 +152,13 @@ ensure_monado_checkout() {
       log "will checkout ref after clone: $MONADO_REF"
     fi
 
-    # Do not use 'git clone --branch' here: MONADO_REF may be a raw commit SHA,
-    # while --branch only works reliably for branch/tag names.
-    git clone "$MONADO_REPO" "$MONADO_DIR"
   fi
 
-  if [[ -d "$MONADO_DIR/.git" ]]; then
-    if is_truthy "$FETCH_MONADO"; then
-      log "fetching Monado updates"
-      git -C "$MONADO_DIR" fetch --tags --prune origin
-    fi
-
+  if [[ -e "$MONADO_DIR/.git" || ! -d "$MONADO_DIR/src/xrt" ]]; then
+    local checkout_ref
+    checkout_ref="$(xr_ensure_git_source "$MONADO_DIR" "$MONADO_REPO" "$MONADO_REF" "$CLONE_MONADO" "$FETCH_MONADO")" || exit $?
     if [[ -n "$MONADO_REF" ]]; then
-      log "checking out Monado ref: $MONADO_REF"
-
-      if ! git -C "$MONADO_DIR" rev-parse --verify --quiet "$MONADO_REF^{commit}" >/dev/null; then
-        log "ref is not available locally; fetching origin metadata"
-        git -C "$MONADO_DIR" fetch --tags --prune origin
-      fi
-
-      if git -C "$MONADO_DIR" rev-parse --verify --quiet "$MONADO_REF^{commit}" >/dev/null; then
-        git -C "$MONADO_DIR" checkout --detach "$MONADO_REF"
-      else
-        # Last fallback for branch names, tag names, or servers allowing direct SHA fetches.
-        git -C "$MONADO_DIR" fetch origin "$MONADO_REF"
-        git -C "$MONADO_DIR" checkout --detach FETCH_HEAD
-      fi
+      git -C "$MONADO_DIR" checkout --detach "$checkout_ref"
 
       if is_truthy "$RESET_MONADO_CHECKOUT"; then
         log "resetting Monado checkout before applying project patches"
@@ -217,7 +170,7 @@ ensure_monado_checkout() {
 
     if is_truthy "$UPDATE_SUBMODULES"; then
       log "updating Monado submodules"
-      git -C "$MONADO_DIR" submodule update --init --recursive
+      xr_update_submodules "$MONADO_DIR"
     fi
   fi
 
@@ -818,7 +771,6 @@ main() {
 
   need_cmd cmake
   need_cmd python3
-  maybe_install_apt_deps
   ensure_monado_checkout
   patch_project_driver_sources
   copy_project_driver_to_monado
