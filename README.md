@@ -566,6 +566,9 @@ starting SteamVR to avoid display problems:
 ./configure_openvr_display.sh 3840x1080 90  # optional explicit rate
 ```
 
+**If you have a monitor with the same aspect ratio as your device (e.g. 32:9), it's recommended to change the resolution so that the aspect ratio is different from the device's. Otherwise, the window may render on the monitor.**
+
+
 If some apps in steam desktop mirror covers the stereo window in `extended_sbs`, add
 `-nowindow` to APP → **Properties → Launch Options** in Steam.
 
