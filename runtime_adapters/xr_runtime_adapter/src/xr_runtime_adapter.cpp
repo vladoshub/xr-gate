@@ -42,6 +42,9 @@
 #include <chrono>
 
 #include "gestures.hpp"
+#include "simple_gestures.hpp"
+#include "simple_touchpad.hpp"
+#include "simple_controller_gestures.hpp"
 #include "emulation_controller.hpp"
 #include "emulation_wrist_filter.hpp"
 #include "app_tcp_server.hpp"
@@ -3034,6 +3037,7 @@ int main(int argc, char** argv) {
   bool runtime_right_hand_gestures_enabled = true;
   bool emulation_controller_enabled = true;
   bool simple_gestures = false;
+  bool simple_gestures_touchpad = true;
   std::string emulation_controller_config_path;
   bool runtime_derive_extra_gesture_buttons = true;
   bool runtime_derive_extra_gesture_buttons_with_controller_input = false;
@@ -3647,8 +3651,11 @@ int main(int argc, char** argv) {
   app.add_option("--emulation-controller", emulation_controller_enabled,
                  "Finger/thumb controller emulation, enabled by default; --simple-gestures takes priority");
   app.add_flag("--simple-gestures", simple_gestures,
-               "Use the original grab/pinch hand gestures instead of controller emulation")
+               "Use simple gestures: pinch, palm Grip, fist, V, thumbs-up and two-hand pointing Menu")
       ->envname("SIMPLE_GESTURES");
+  app.add_option("--simple-gestures-touchpad", simple_gestures_touchpad,
+                 "In simple mode, enable head-relative open-palm touchpad with 0.30 m radius (default 1)")
+      ->envname("SIMPLE_GESTURES_TOUCHPAD");
   app.add_option("--emulation-controller-config", emulation_controller_config_path,
                  "Optional controller emulation JSON profile; ignored with --simple-gestures");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
@@ -4491,6 +4498,7 @@ int main(int argc, char** argv) {
     std::cout << "runtime_derive_extra_gesture_buttons: "
               << (runtime_derive_extra_gesture_buttons ? "true" : "false") << "\n";
     std::cout << "simple_gestures: " << (simple_gestures ? "true" : "false") << "\n";
+    std::cout << "simple_gestures_touchpad: " << (simple_gestures_touchpad ? "true" : "false") << "\n";
     std::cout << "emulation_controller: " << (emulation_controller_enabled ? "true" : "false") << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons_with_controller_input: "
               << (runtime_derive_extra_gesture_buttons_with_controller_input ? "true" : "false") << "\n";
@@ -5496,6 +5504,8 @@ int main(int argc, char** argv) {
     uint64_t override_controller_gesture_allow_frames = 0;
     int64_t override_controller_gesture_block_until_ns = 0;
     gestures::RuntimeGestureHysteresisState runtime_gesture_hysteresis;
+    gestures::SimpleControllerGestures simple_controller_gestures;
+    gestures::SimpleTouchpad simple_touchpad(simple_gestures_touchpad);
     gestures::RuntimeHandGestureSnapshot last_fresh_runtime_hand_gestures;
     std::optional<xr_runtime_adapter::emulation::Controller> emulation_controller;
     xr_runtime_adapter::emulation::WristPoseFilter emulation_wrist_filter;
@@ -6427,6 +6437,52 @@ int main(int argc, char** argv) {
           }
         }
 
+        if (simple_gestures) {
+          // Own all simple-mode inputs; the active touchpad reserves its hand.
+          // Use recognition geometry before any presentation-only joint yaw.
+          auto apply_simple = [&](auto& hands) {
+            simple_touchpad.apply(hands,
+                runtime_hmd_position_for_distance ? &frame.hmd : nullptr,
+                static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
+                frame_runtime_left_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
+                frame_runtime_right_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
+                controller_left_connected, controller_right_connected);
+            simple_controller_gestures.apply(hands,
+                runtime_hmd_position_for_distance ? &*runtime_hmd_position_for_distance : nullptr,
+                static_cast<uint64_t>(frame.read_timestamp_ns), origin_state.origin_reset_counter(),
+                frame_runtime_left_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
+                frame_runtime_right_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
+                controller_left_connected, controller_right_connected,
+                simple_touchpad.left_active(),simple_touchpad.right_active());
+          };
+          if (frame.hand_v2.sequence) {
+            apply_simple(frame.hand_v2);
+            if (runtime_visual_hand_tracking_fresh && simple_touchpad.active()) {
+              // Latch only the final, reserved channels; closing a fist on the
+              // panel must not restore a legacy A/B or pinch after tracking loss.
+              gestures::capture_runtime_hand_v2_gesture_snapshot(last_fresh_runtime_hand_gestures,
+                  frame.hand_v2, frame.read_timestamp_ns,
+                  frame_runtime_left_hand_gestures_enabled, frame_runtime_right_hand_gestures_enabled);
+            }
+          } else {
+            auto hands = gestures::runtime_hand_v2_from_runtime_v1(frame.hand);
+            apply_simple(hands);
+            frame.hand.left.grab_strength = hands.left.grab_strength;
+            frame.hand.left.grab_active = hands.left.grab_active;
+            frame.hand.left.pinch_strength = hands.left.pinch_strength;
+            frame.hand.left.pinch_active = hands.left.pinch_active;
+            frame.hand.left.reserved0 = hands.left.reserved0;
+            frame.hand.left.flags = hands.left.flags;
+            frame.hand.right.grab_strength = hands.right.grab_strength;
+            frame.hand.right.grab_active = hands.right.grab_active;
+            frame.hand.right.pinch_strength = hands.right.pinch_strength;
+            frame.hand.right.pinch_active = hands.right.pinch_active;
+            frame.hand.right.reserved0 = hands.right.reserved0;
+            frame.hand.right.flags = hands.right.flags;
+            frame.hand.flags = hands.flags;
+          }
+        }
+
         if (emulation_controller) {
           // Also clear physical input copied into the legacy hand gesture fields.
           // Emulation owns input only in runtime_controller_state, never pinch/grab.
@@ -6551,6 +6607,10 @@ int main(int argc, char** argv) {
                   runtime_controller_imu_control_snapshot.gravity_magnitude),
               &runtime_controller_synthesis_state,
               &controller_imu_history);
+          if (simple_gestures) {
+            simple_controller_gestures.publish(runtime_controller_state);
+            simple_touchpad.publish(runtime_controller_state);
+          }
           if (emulation_controller) {
             const xr_runtime_adapter::emulation::Vec3 gesture_viewer{
                 frame.hmd.px, frame.hmd.py, frame.hmd.pz};

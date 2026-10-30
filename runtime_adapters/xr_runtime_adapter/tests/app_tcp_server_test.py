@@ -49,6 +49,9 @@ class Source:
     def __init__(self, port):
         self.port = port
         self.visible = True
+        self.hmd_position = (.25, 1.5, -.75)
+        self.hmd_quaternion = (1., 0., 0., 0.)
+        self.send_head = True
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run)
         self.thread.start()
@@ -60,8 +63,9 @@ class Source:
                 sequence += 1
                 timestamp = time.monotonic_ns()
                 pose = HMD.pack(1, HMD.size, sequence, timestamp, timestamp, 0,
-                                0.25, 1.5, -0.75, 1.0, 0.0, 0.0, 0.0, *([0.0] * 6), 2, 1, 1.0, 0)
-                sock.sendto(packet(1, sequence * 2, timestamp, pose), ("127.0.0.1", self.port))
+                                *self.hmd_position, *self.hmd_quaternion, *([0.0] * 6), 2, 1, 1.0, 0)
+                if self.send_head:
+                    sock.sendto(packet(1, sequence * 2, timestamp, pose), ("127.0.0.1", self.port))
                 visible = self.visible
                 hands = HAND_HEADER.pack(2, 2200, sequence, timestamp, timestamp, 0,
                                          int(visible), 15 if visible else 0, float(visible), 2 if visible else 0)
@@ -160,7 +164,7 @@ class AppTcpTest(unittest.TestCase):
             self.assertIn("simple_gestures: true",result.stdout)
             self.assertIn("emulation_controller: false",result.stdout)
 
-    def test_original_grab_and_pinch_are_selected_instead_of_emulation(self):
+    def test_simple_invalid_geometry_cannot_bypass_recognizer_with_backend_values(self):
         def backend_side(side,visible):
             p=[.1*side,1.,-.3,1.,0.,0.,0.]
             base=HAND_SIDE.pack(side,int(visible),57 if visible else 0,float(visible),
@@ -174,9 +178,9 @@ class AppTcpTest(unittest.TestCase):
                         frame=client.frame(lambda f:f.get("controllers") and f.get("hands") and f["hands"]["hand_count"]==2)
                         for name in ("left","right"):
                             control=frame["controllers"][name]
-                            self.assertEqual(int(control["buttons"])&3,3 if simple else 0)
-                            self.assertAlmostEqual(control["trigger"],.9 if simple else 0,places=4)
-                            self.assertAlmostEqual(control["grip"],.8 if simple else 0,places=4)
+                            self.assertEqual(int(control["buttons"])&3,0)
+                            self.assertEqual(control["trigger"],0)
+                            self.assertEqual(control["grip"],0)
                     finally:client.close()
 
     def test_invalid_server_configuration(self):

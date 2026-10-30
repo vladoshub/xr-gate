@@ -34,7 +34,8 @@ RUNTIME_APP_TCP_PORT="${RUNTIME_APP_TCP_PORT:-45810}"
 RUNTIME_APP_TCP_RATE="${RUNTIME_APP_TCP_RATE:-60}"
 RUNTIME_APP_TCP_MAX_CLIENTS="${RUNTIME_APP_TCP_MAX_CLIENTS:-8}"
 EMULATION_CONTROLLER="${EMULATION_CONTROLLER:-1}" # controller emulation is the default
-SIMPLE_GESTURES="${SIMPLE_GESTURES:-0}" # 1 selects the original grab/pinch pipeline
+SIMPLE_GESTURES="${SIMPLE_GESTURES:-0}" # 1 selects pinch Trigger and open-palm Grip
+SIMPLE_GESTURES_TOUCHPAD="${SIMPLE_GESTURES_TOUCHPAD:-${XR_SIMPLE_GESTURES_TOUCHPAD:-1}}" # simple mode only
 EMULATION_CONTROLLER_CONFIG="${EMULATION_CONTROLLER_CONFIG:-}" # optional JSON profile
 #ORIGIN_MODE="${ORIGIN_MODE:-start_pose}"
 ORIGIN_MODE="${ORIGIN_MODE:-none}" # runtime origin policy; none keeps upstream origin
@@ -328,6 +329,10 @@ if [[ "$SIMPLE_GESTURES" != "0" && "$SIMPLE_GESTURES" != "1" ]]; then
   echo "SIMPLE_GESTURES must be 0 or 1" >&2
   exit 1
 fi
+if [[ "$SIMPLE_GESTURES_TOUCHPAD" != "0" && "$SIMPLE_GESTURES_TOUCHPAD" != "1" ]]; then
+  echo "SIMPLE_GESTURES_TOUCHPAD must be 0 or 1" >&2
+  exit 1
+fi
 if [[ "$SIMPLE_GESTURES" == "1" ]]; then
   EMULATION_CONTROLLER=0
 fi
@@ -564,6 +569,7 @@ if [[ "$HMD_3DOF_PRIORITY" == "1" ]]; then
   args+=(--hmd-3dof-priority)
 fi
 args+=(--emulation-controller "$EMULATION_CONTROLLER")
+args+=(--simple-gestures-touchpad "$SIMPLE_GESTURES_TOUCHPAD")
 if [[ "$SIMPLE_GESTURES" == "1" ]]; then
   args+=(--simple-gestures)
 elif [[ "$EMULATION_CONTROLLER" == "1" ]]; then
@@ -659,7 +665,8 @@ TRACKING_REGISTRY=$TRACKING_REGISTRY # source tracking SHM registry path
 RUNTIME_TRACKING_REGISTRY=$RUNTIME_TRACKING_REGISTRY # runtime-output tracking SHM registry path
 TRACKING_TRANSFORM_CONFIG=$TRACKING_TRANSFORM_CONFIG # runtime coordinate/hand transform profile
 EMULATION_CONTROLLER=$EMULATION_CONTROLLER # independent emulation input; legacy gestures disabled on selected sides
-SIMPLE_GESTURES=$SIMPLE_GESTURES # original grab/pinch pipeline; takes priority over emulation
+SIMPLE_GESTURES=$SIMPLE_GESTURES # pinch Trigger + open-palm Grip; takes priority over emulation
+SIMPLE_GESTURES_TOUCHPAD=$SIMPLE_GESTURES_TOUCHPAD # head-relative panel; 30 cm radius; simple mode only
 EMULATION_CONTROLLER_CONFIG=$EMULATION_CONTROLLER_CONFIG
 ADAPTER=$ADAPTER # adapter backend mode used by xr_runtime_adapter
 MODE=$MODE # main runtime loop mode

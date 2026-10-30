@@ -27,7 +27,16 @@ Display protection does not change display topology, resolution, refresh rate, f
 
 The Controllers list offers **Gestures (controller emulation)** (default) and
 **Gestures (grab / pinch)**. Existing `XR_CONTROLLER_MODE=gestures` settings keep
-the controller emulation mode; the original gestures use `simple_gestures`.
-The **Gestures** button opens the matching illustrated tab. **Support VR controllers**
+the controller emulation mode; `simple_gestures` uses pinch for Trigger and an
+open palm facing the user for Grip. Outside the touchpad, a fist holds Grip +
+Trigger, V sends left X / right A, thumbs-up sends left Y / right B, and two index
+fingers pointing toward each other send Menu. No calibration is needed.
+The **Gestures** button opens the matching tab in the compact guide with one finger
+map and gesture tables. **Support VR controllers**
 opens the Samsung Gear VR Controller layouts for LEFT and RIGHT and explains IMU-assisted tracking.
 Both guides work offline and ship in the Windows package.
+
+Simple mode's virtual touchpad is enabled by default. Open a palm away to capture
+a head-relative centre, move within a 30 cm radius, then close a fist to click.
+Open toward yourself or leave tracking to exit. Set `XR_SIMPLE_GESTURES_TOUCHPAD=0`
+in `.env` to disable only the panel; restart tracking after changing it.

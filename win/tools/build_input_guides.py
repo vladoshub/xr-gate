@@ -1,101 +1,40 @@
 #!/usr/bin/env python3
-"""Build offline input guides with original SVG hand drawings and a licensed model render.
+"""Build compact offline gesture guides and a licensed controller-model guide.
 
 Only the Python standard library is needed. User reference photographs are
 never read, embedded, copied or distributed by this generator.
 """
 import base64
 import html
+import re
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-SKIN='#edb58f'; EDGE='#995f49'; ACCENT='#64dfce'
+FINGER_MAP_SVG = '''<svg viewBox="0 0 330 440" role="img" aria-labelledby="palm-title palm-desc" xmlns="http://www.w3.org/2000/svg">
+<title id="palm-title">Open palm with five numbered fingers</title>
+<desc id="palm-desc">One: thumb. Two: index. Three: middle. Four: ring. Five: pinky. Their controller actions are listed beside the palm.</desc>
+<defs><linearGradient id="palm-fill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#314c68"/><stop offset="1" stop-color="#20334b"/></linearGradient></defs>
+<path d="M128 413 L116 353 C102 336 91 314 80 291 L31 227 C21 214 24 200 35 196 C46 192 56 199 64 209 L103 252 L95 115 C94 99 103 87 116 87 C130 87 138 98 139 113 L143 226 L143 62 C143 45 152 34 166 34 C181 34 188 46 187 64 L184 225 L193 88 C194 72 204 63 217 65 C231 67 236 78 235 94 L226 232 L240 137 C242 122 252 116 263 119 C276 122 281 133 279 147 L275 279 C275 310 269 334 255 357 L245 413 Z" fill="url(#palm-fill)" stroke="#8ca8c9" stroke-width="3.5" stroke-linejoin="round"/>
+<g fill="none" stroke="#617e9f" stroke-width="2.5" stroke-linecap="round"><path d="M118 283 C147 247 193 254 233 279"/><path d="M113 296 C125 321 144 340 169 352"/><path d="M149 377 C175 383 203 382 227 373"/><path d="M139 228 L145 257 M184 226 L183 254 M226 233 L219 263"/></g>
+<g font-family="system-ui,sans-serif" font-size="17" font-weight="700" text-anchor="middle" fill="#0c1320">
+<circle cx="52" cy="219" r="17" fill="#f4c56b"/><text x="52" y="225">1</text>
+<circle cx="118" cy="121" r="17" fill="#61d8ed"/><text x="118" y="127">2</text>
+<circle cx="165" cy="73" r="17" fill="#c4a1ff"/><text x="165" y="79">3</text>
+<circle cx="213" cy="111" r="17" fill="#7ce2b5"/><text x="213" y="117">4</text>
+<circle cx="258" cy="157" r="17" fill="#c2cddb"/><text x="258" y="163">5</text>
+</g></svg>'''
 
-
-def hand(extended=(0,1), thumb='neutral', active=None, back=False, mirror=False, angle=0):
-    """Original instructional illustration; finger indices: index, middle, ring, little."""
-    wrap=f'<g transform="translate(260 0) scale(-1 1)">' if mirror else '<g>'
-    out=[wrap,f'<g transform="rotate({angle} 130 170)">',
-        f'<path d="M91 231L88 291Q129 301 174 289L177 229Z" fill="{SKIN}" stroke="{EDGE}" stroke-width="2.5"/>',
-        f'<path d="M82 237Q64 218 65 175L76 122Q82 103 100 108L180 113Q203 124 207 156L202 204Q195 235 174 246L104 247Z" fill="{SKIN}" stroke="{EDGE}" stroke-width="2.5"/>']
-    bases=[(94,127),(127,117),(161,124),(190,144)]
-    tips=[(86,35),(127,14),(169,31),(205,69)]
-    for i,((x,y),(tx,ty)) in enumerate(zip(bases,tips)):
-        if i==0 and thumb=='circle':
-            d=f'M{x} {y} C{x-1} {y-38} 71 72 58 94 Q49 107 57 119'; tip=(57,119)
-        elif i in extended:
-            d=f'M{x} {y+9} Q{(x+tx)/2} {(y+ty)/2} {tx} {ty}';tip=(tx,ty)
-        else:
-            d=f'M{x} {y} Q{x-3} {y-22} {x+9} {y-12} C{x+28} {y-1} {x+20} {y+35} {x+3} {y+39}';tip=(x+3,y+39)
-        color=ACCENT if active==i else EDGE
-        out += [f'<path d="{d}" fill="none" stroke="{color}" stroke-width="27" stroke-linecap="round" stroke-linejoin="round"/>',
-                f'<path d="{d}" fill="none" stroke="{SKIN}" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>']
-        if i not in extended and not(i==0 and thumb=='circle'):
-            out.append(f'<ellipse cx="{tip[0]}" cy="{tip[1]-3}" rx="8" ry="10" fill="#f6d0b9" stroke="#bd8b74"/>')
-        elif back:
-            out.append(f'<rect x="{tip[0]-7}" y="{tip[1]-5}" width="14" height="20" rx="6" fill="#f6d0b9" stroke="#bd8b74"/>')
-        elif i in extended:
-            out.append(f'<path d="M{x-7} {y-19}l15 -1 M{x-7} {y-26}l14 -1" stroke="#ba8267" stroke-width="1.5"/>')
-    thumbs={
-        'neutral':'M78 183 Q56 158 53 138 Q48 121 62 114',
-        'out':'M78 183 Q45 157 25 127 L13 103',
-        'forward':'M78 183 Q44 154 18 139 Q6 132 13 117',
-        'back':'M78 183 Q46 154 23 119 L12 81 Q10 68 25 74 L66 104',
-        'left':'M78 183 Q44 164 21 156 L5 150',
-        'right':'M78 183 Q55 152 61 127 L94 104',
-        'tucked':'M78 184 Q99 179 118 162 L143 147',
-        'circle':'M78 183 Q45 160 45 141 Q44 124 57 119',
-        'up':'M78 183 Q56 151 54 124 L50 81'}
-    d=thumbs[thumb]
-    out += [f'<path d="{d}" fill="none" stroke="{ACCENT if active=="thumb" else EDGE}" stroke-width="31" stroke-linecap="round" stroke-linejoin="round"/>',
-            f'<path d="{d}" fill="none" stroke="{SKIN}" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>']
-    if thumb=='back':
-        out.append('<path d="M9 91Q22 85 33 96" fill="none" stroke="#a9765f" stroke-width="2"/><ellipse cx="61" cy="101" rx="10" ry="7" fill="#f7d3bc" stroke="#ba8d75" transform="rotate(35 61 101)"/>')
-    if not back:
-        out.append('<path d="M91 187Q113 164 157 167 M105 207Q139 223 176 202 M88 191Q78 219 112 232" fill="none" stroke="#bf866b" stroke-width="2.2" opacity=".75"/>')
-    out.append('</g></g>')
-    return ''.join(out)
-
-
-def svg(body, width=520, height=330, title='Hand gesture'):
-    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title,quote=True)}" xmlns="http://www.w3.org/2000/svg">{body}</svg>'
-
-
-def one_hand(**kwargs):
-    return svg('<g transform="translate(125 8)">'+hand(**kwargs)+'</g>')
-
-
-def neutral_pair(ru=False):
-    text='РЕАЛЬНЫЕ РУКИ — К ТЕЛУ' if ru else 'REAL HANDS — TURN INWARD'
-    virtual='В VR — ВПЕРЁД' if ru else 'IN VR — POINT FORWARD'
-    body='<g transform="translate(5 15) scale(.75)">'+hand(mirror=True,angle=-35)+'</g>'
-    body+='<g transform="translate(320 15) scale(.75)">'+hand(angle=-35)+'</g>'
-    body+='<path d="M235 117Q260 145 285 117" fill="none" stroke="#64dfce" stroke-width="3"/>'
-    body+='<path d="M237 111l-3 12 12-2 M283 111l3 12-12-2" fill="none" stroke="#64dfce" stroke-width="3"/>'
-    body+=f'<text x="260" y="280" text-anchor="middle" fill="#e9f1fc" font-size="15">{text}</text>'
-    body+=f'<text x="260" y="307" text-anchor="middle" fill="#64dfce" font-size="15">{virtual}</text>'
-    return svg(body)
-
-
-def menu_picture(ru=False):
-    text='ЛАДОНИ ОТ СЕБЯ' if ru else 'PALMS AWAY FROM YOU'
-    return svg('<g transform="translate(15 10) scale(.85)">'+hand((0,1,2,3),'out',back=True,mirror=True)+'</g>'
-        +'<g transform="translate(285 10) scale(.85)">'+hand((0,1,2,3),'out',back=True)+'</g>'
-        +f'<text x="260" y="310" text-anchor="middle" fill="#64dfce" font-size="17">{text}</text>')
-
-
-def thumb_picture(pose,ru=False):
-    # The magnified thumb keeps the palm as a fixed reference.
-    body='<g transform="translate(50 -95) scale(1.45)">'+hand(thumb=pose,active='thumb')+'</g>'
-    arrows={
-      'forward':'M380 180L380 110 M368 123L380 110L392 123',
-      'back':'M380 110L380 180 M368 167L380 180L392 167',
-      'left':'M412 145L347 145 M360 133L347 145L360 157',
-      'right':'M347 145L412 145 M399 133L412 145L399 157'}
-    if pose in arrows:
-        body+=f'<path d="{arrows[pose]}" stroke="#64dfce" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
-    return svg(body,height=250,title='Thumb '+pose)
-
+COMPACT_STYLE = '''
+body{font:16px/1.6 system-ui,sans-serif;max-width:850px;margin:32px auto;padding:0 22px;background:#101b2a;color:#e8eff8}
+*{box-sizing:border-box}a{color:#8acaff}p{line-height:1.65}h1,h2{line-height:1.25}strong{color:white}nav,footer{font-size:14px}nav{display:flex;gap:14px;flex-wrap:wrap}footer{margin:32px 0}
+table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #34455e}th{background:#18283b;color:white}th:first-child,td:first-child{width:30%}
+.hand-map{display:grid;grid-template-columns:minmax(180px,270px) 1fr;gap:30px;align-items:center;padding:22px;background:#18283b;border:1px solid #34455e;border-radius:16px;margin:24px 0 8px}
+.hand-map svg{width:100%;max-height:320px}.hand-map dl{margin:0}.hand-map dt{font-weight:700;color:white;margin:12px 0}.marker{display:inline-block;width:25px;height:25px;border-radius:50%;text-align:center;color:#0c1320;margin-right:8px}.hand-note{font-size:14px;color:#b9c9de}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:24px 0}button[role=tab]{padding:10px 14px;border:1px solid #486079;border-radius:8px;background:#18283b;color:#e8eff8;font:inherit;cursor:pointer}button[aria-selected=true]{background:#68dfca;color:#0c1320;border-color:#68dfca}button:focus-visible,a:focus-visible{outline:3px solid #f4c56b;outline-offset:3px}
+.touchpad-art{max-width:520px;margin:20px auto;background:#18283b;border:1px solid #34455e;border-radius:14px;padding:12px}.touchpad-art svg{width:100%;height:auto}.touchpad-art figcaption{font-size:14px;color:#b9c9de;text-align:center}[hidden]{display:none!important}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#18283b;padding:14px;border-radius:8px}
+@media(max-width:620px){.hand-map{grid-template-columns:1fr;gap:8px}.hand-map svg{max-height:260px}.hand-map dl{display:flex;flex-wrap:wrap;gap:4px 16px}.hand-map dt{margin:0}.tabs button{width:100%;text-align:left}th,td{padding:9px 7px}}
+@media print{body{background:white;color:black}strong{color:black}nav,.tabs{display:none}[role=tabpanel][hidden]{display:block!important}th{color:black;background:#eee}}
+'''
 
 STYLE='''
 :root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#e9f1fc;background:#0b1220}
@@ -116,11 +55,11 @@ addEventListener('hashchange',()=>select(location.hash.slice(1)));select(locatio
 </script>'''
 
 
-def page(title,contents,ru=False,support=False):
+def page(title,contents,ru=False,support=False,style=None):
     suffix='.ru' if ru else ''
     other='' if ru else '.ru'
     filename='SUPPORT-VR-CONTROLLERS' if support else 'GESTURES'
-    return f'''<!doctype html><html lang="{'ru' if ru else 'en'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} — XR Gate</title><style>{STYLE}</style></head><body>
+    return f'''<!doctype html><html lang="{'ru' if ru else 'en'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} — XR Gate</title><style>{style or STYLE}</style></head><body>
 <nav aria-label="{'Справка' if ru else 'Help'}"><a href="START-HERE{suffix}.html">XR Gate</a><a href="GESTURES{suffix}.html">Gestures</a><a href="SUPPORT-VR-CONTROLLERS{suffix}.html">Support VR controllers</a><a href="{filename}{other}.html" lang="{'en' if ru else 'ru'}">{'English' if ru else 'Русский'}</a></nav>
 <main><h1>{title}</h1>{contents}<footer>XR Gate · <a href="https://github.com/vladoshub/xr-gate">GitHub</a></footer></main>{TABS}</body></html>'''
 
@@ -135,68 +74,109 @@ def panel(id,body):
     return f'<section role="tabpanel" id="{id}" aria-labelledby="tab-{id}">{body}</section>'
 
 
-def card(title,description,picture,tag='',wide=False):
-    return f'<article class="card{" wide" if wide else ""}"><div class="art">{picture}</div><div class="copy"><span class="tag">{tag}</span><h3>{title}</h3><p>{description}</p></div></article>'
-
-
 def gestures(ru=False):
     def tr(en,rus):return rus if ru else en
+    def table(headers,rows):
+        return '<table><thead><tr>'+''.join('<th scope="col">'+h+'</th>' for h in headers)+'</tr></thead><tbody>'+''.join(
+            '<tr>'+''.join('<td>'+v+'</td>' for v in row)+'</tr>' for row in rows)+'</tbody></table>'
     entries=[('controller-emulation','Gestures (controller emulation)'),('grab-pinch','Gestures (grab / pinch)')]
-    intro='<p class="intro">'+tr('Choose the same mode in the launcher’s Controllers list. Controller emulation is the default. Keep your hands visible to the glasses’ cameras.',
-        'Выбери такой же режим в списке Controllers лаунчера. По умолчанию используется эмуляция контроллеров. Держи руки в поле зрения камер очков.')+'</p>'
-    em='<div class="grid">'
-    em+=card(tr('Neutral / ready position','Нейтральное положение'),tr(
-        'Keep the index and middle fingers straight, ring finger and pinky bent, and thumb relaxed. Turn your wrists inward toward your body so the cameras see the fingers clearly. The configured yaw offset turns the virtual controllers forward in VR.',
-        'Указательный и средний прямые, безымянный и мизинец согнуты, большой расслаблен. Поверни кисти к телу для лучшего распознавания пальцев. Настроенное смещение yaw доворачивает виртуальные контроллеры вперёд в VR.'),neutral_pair(ru),tr('Start here','Начни с этой позы'),True)
-    em+=card('Trigger',tr('Bend your index finger. Straighten it to release. You can try a partial bend.',
-        'Согни указательный. Выпрями, чтобы отпустить. Можно попробовать сгибать не до конца.'),one_hand(extended=(1,),active=0),tr('Both hands','Обе руки'))
-    em+=card('Grip',tr('Bend your middle finger. Straighten it to release. You can try a partial bend.',
-        'Согни средний. Выпрями, чтобы отпустить. Можно попробовать сгибать не до конца.'),one_hand(extended=(0,),active=1),tr('Both hands','Обе руки'))
-    em+=card('X / A',tr('Touch thumb and index fingertips to make a circle. Keep the other three fingers straight. Left: X. Right: A.',
-        'Соедини большой и указательный в кольцо. Остальные три пальца прямые. Слева — X, справа — A.'),one_hand(extended=(1,2,3),thumb='circle',active=0),tr('Face button','Кнопка'))
-    em+=card('Y / B',tr('Make the same thumb–index circle and bend the other three fingers. Left: Y. Right: B.',
-        'Сделай такое же кольцо, а остальные три пальца согни. Слева — Y, справа — B.'),one_hand(extended=(),thumb='circle',active=0),tr('Face button','Кнопка'))
-    em+=card(tr('Touchpad / thumbstick click','Нажатие тачпада / стика'),tr(
-        'Open one palm toward yourself, with all five fingers straight and spread. You see your palm. Return to the ready position to release. Movement, Trigger and Grip pause while showing this separate gesture.',
-        'Раскрой одну ладонь к себе: все пять пальцев прямые и разведены. Ты видишь свою ладонь. Вернись в нейтральную позу для отпускания. На время этого отдельного жеста движение, Trigger и Grip приостанавливаются.'),one_hand(extended=(0,1,2,3),thumb='out'),tr('Palm toward you','Ладонь к себе'))
-    em+=card('Menu',tr('Hold both hands open, palms facing away from you, like a stop sign. You see the backs of your hands. Hold briefly; both hands must remain visible.',
-        'Раскрой обе ладони от себя, как знак «стоп». Ты видишь тыльную сторону рук. Ненадолго удерживай позу; обе руки должны оставаться видны камерам.'),menu_picture(ru),tr('Both hands together','Две руки одновременно'))
-    em+='</div><h2>'+tr('Movement with your thumb','Движение большим пальцем')+'</h2><p>'+tr(
-        'Keep your wrist still. These drawings show the thumb poses; the other fingers stay in the ready position. Trigger and Grip can work together with movement. Diagonals combine sideways movement with forward or backward.',
-        'Кисть держи неподвижно. На рисунках показаны положения большого; остальные пальцы остаются в нейтральной позе. Trigger и Grip могут работать вместе с движением. Для диагоналей совмещай боковое направление с движением вперёд или назад.')+'</p><div class="grid thumb-grid">'
-    for pose,title,description in [
-        ('neutral',tr('Neutral — no movement','Нейтраль — стоим'),tr('Keep your thumb relaxed and slightly away from your palm.','Большой расслаблен и немного отведён от ладони.')),
-        ('forward',tr('Forward','Вперёд'),tr('Straighten and slightly arch your thumb away from your palm.','Выпрями и слегка выгни большой от ладони.')),
-        ('back',tr('Backward','Назад'),tr('Curl the tip toward your palm while keeping the base away. Make the bend clear.','Согни кончик к ладони, оставляя основание отведённым. Покажи изгиб отчётливо.')),
-        ('left',tr('Left','Влево'),tr('Sweep your thumb to the left without turning your wrist.','Отведи большой влево, не поворачивая кисть.')),
-        ('right',tr('Right','Вправо'),tr('Sweep your thumb to the right without turning your wrist.','Отведи большой вправо, не поворачивая кисть.')),
-        ('tucked',tr('D-pad off','D-pad выключен'),tr('Press your thumb against your palm to stop movement.','Плотно прижми большой к ладони, чтобы выключить движение.'))]:
-        em+=card(title,description,thumb_picture(pose,ru),tr('Thumb D-pad','D-pad большим'))
-    em+='</div><div class="notice">'+tr('If wrist D-pad is selected in your profile, keep your thumb out and tilt your wrist in the direction you want to move. Tuck the thumb to stop. Thumb and wrist modes are alternatives.',
-        'Если в профиле выбран D-pad от кисти, отведи большой и наклоняй кисть в нужную сторону. Прижми большой для остановки. Режимы большого и кисти выбираются по отдельности.')+'</div>'
-    em+='<details><summary>'+tr('Wrist D-pad poses (optional mode)','Положения кисти для D-pad (дополнительный режим)')+'</summary><div class="grid">'
-    for title,angle,path in [(tr('Tilt forward','Наклон вперёд'),-15,'M430 160L430 100 M419 113L430 100L441 113'),
-            (tr('Tilt backward','Наклон назад'),15,'M430 100L430 160 M419 147L430 160L441 147'),
-            (tr('Tilt left','Наклон влево'),-35,'M460 130L400 130 M413 119L400 130L413 141'),
-            (tr('Tilt right','Наклон вправо'),35,'M400 130L460 130 M447 119L460 130L447 141')]:
-        picture=svg('<g transform="translate(110 5)">'+hand(thumb='out',angle=angle)+'</g>'+f'<path d="{path}" stroke="#64dfce" stroke-width="4" fill="none" stroke-linecap="round"/>')
-        em+=card(title,tr('Keep the thumb away from the palm. Tilt the wrist; combine two directions for a diagonal.',
-            'Большой отведён от ладони. Наклоняй кисть; совмести два направления для диагонали.'),picture,tr('Wrist mode only','Только режим кисти'))
-    em+='</div></details>'
-    simple='<p>'+tr('The original hand gestures use the same mapping on either hand: pinch for Trigger and grab for Grip. Open your hand to release. There is no thumb D-pad or open-palm touchpad gesture in this mode.',
-        'Исходные жесты одинаковы на обеих руках: щипок — Trigger, хват — Grip. Раскрой руку для отпускания. D-pad большим и отдельный клик раскрытой ладонью здесь не используются.')+'</p><div class="grid">'
-    simple+=card(tr('Pinch → Trigger','Щипок → Trigger'),tr('Bring your thumb and index fingertips together. Separate them to release.',
-        'Сведи кончики большого и указательного. Разведи их для отпускания.'),one_hand(extended=(1,2,3),thumb='circle'),tr('Both hands','Обе руки'))
-    simple+=card(tr('Grab → Grip','Хват → Grip'),tr('Bend the middle, ring and little fingers to grab. Open them to release.',
-        'Согни средний, безымянный и мизинец для хвата. Разогни их для отпускания.'),one_hand(extended=(),thumb='tucked'),tr('Both hands','Обе руки'))
-    simple+=card(tr('Open hand → release','Раскрытая рука → отпускание'),tr('Relax and open your hand to release the grab and pinch.',
-        'Раскрой руку и разомкни щипок, чтобы отпустить кнопки.'),one_hand(extended=(0,1,2,3),thumb='out'),tr('Released','Отпущено'))
-    simple+='</div><h2>'+tr('Additional legacy bindings','Дополнительные старые жесты')+'</h2><p>'+tr('If enabled in the runtime profile, thumbs-up and pointing provide additional A/B inputs. These shape gestures can overlap with Grip; application bindings determine their action.',
-        'Если они включены в профиле, большой вверх и указательный вперёд дают дополнительные входы A/B. Эти формы руки могут совмещаться с Grip; действие зависит от раскладки приложения.')+'</p><div class="grid">'
-    simple+=card(tr('Thumbs-up → A input','Большой вверх → вход A'),tr('Make a fist and extend your thumb.','Сожми кулак и отогни большой.'),one_hand(extended=(),thumb='up'),tr('Profile-dependent','Зависит от профиля'))
-    simple+=card(tr('Point → B input','Указательный вперёд → вход B'),tr('Straighten only your index finger; bend the other three.','Выпрями указательный, остальные три пальца согни.'),one_hand(extended=(0,),thumb='neutral'),tr('Profile-dependent','Зависит от профиля'))
-    simple+='</div>'
-    return page(tr('Controller gestures','Управление жестами'),intro+tabbar(entries)+panel('controller-emulation',em)+panel('grab-pinch',simple),ru)
+    intro='<p>'+tr('Select the matching mode in the launcher’s Controllers list. Controller emulation is the default.',
+        'Выбери соответствующий режим в списке Controllers лаунчера. По умолчанию используется эмуляция контроллеров.')+'</p>'
+    picture=FINGER_MAP_SVG
+    if ru:
+        picture=picture.replace('Open palm with five numbered fingers','Открытая ладонь с пятью пронумерованными пальцами').replace(
+            'One: thumb. Two: index. Three: middle. Four: ring. Five: pinky. Their controller actions are listed beside the palm.',
+            'Один — большой, два — указательный, три — средний, четыре — безымянный, пять — мизинец. Действия описаны в таблицах ниже.')
+    finger_map='<section class="hand-map" aria-label="'+tr('Finger map','Схема пальцев')+'">'+picture+'<dl>'
+    for number,color,en,rus in [(1,'#f4c56b','Thumb','Большой'),(2,'#61d8ed','Index','Указательный'),
+            (3,'#c4a1ff','Middle','Средний'),(4,'#7ce2b5','Ring','Безымянный'),(5,'#c2cddb','Pinky','Мизинец')]:
+        finger_map+=f'<dt><span class="marker" style="background:{color}">{number}</span>'+tr(en,rus)+'</dt>'
+    finger_map+='</dl></section><p class="hand-note">'+tr(
+        'This drawing identifies the fingers. The ready pose for controller emulation is described below.',
+        'На рисунке обозначены пальцы. Нейтральная поза для эмуляции контроллеров описана ниже.')+'</p>'
+    em='<h2>'+tr('Ready pose','Нейтральное положение')+'</h2><p>'+tr(
+        'Keep your index and middle fingers straight, ring and pinky bent, and thumb relaxed near the palm. Turn your hands inward toward your body so the cameras can see them well. In VR, the hands/controllers are rotated forward by the configured offset.',
+        'Указательный и средний прямые, безымянный и мизинец согнуты, большой расслаблен рядом с ладонью. Поверни кисти внутрь, к телу, для лучшего распознавания камерами. В VR руки и контроллеры довёрнуты вперёд настроенным смещением.')+'</p>'
+    em+='<h2>'+tr('Buttons','Кнопки')+'</h2>'+table([tr('Button','Кнопка'),tr('Gesture','Жест')],[
+        ('Trigger',tr('Bend your index finger; straighten to release.','Согни указательный; выпрями, чтобы отпустить.')),
+        ('Grip',tr('Bend your middle finger; straighten to release.','Согни средний; выпрями, чтобы отпустить.')),
+        ('X (left) / A (right)',tr('Make a thumb–index circle; keep the other three fingers straight.','Соедини большой и указательный в кольцо; остальные три пальца прямые.')),
+        ('Y (left) / B (right)',tr('Make a thumb–index circle; bend the other three fingers.','Соедини большой и указательный в кольцо; остальные три пальца согнуты.')),
+        (tr('Thumbstick click / touchpad press','Нажатие стика / тачпада'),tr('Open one palm toward yourself, with all five fingers straight and spread. Change the pose to release.',
+            'Раскрой одну ладонь к себе: все пять пальцев прямые и разведены. Смени позу, чтобы отпустить.')),
+        ('Menu',tr('Hold both hands open, palms away from you, like a stop sign. You should see the backs of your hands.',
+            'Ненадолго удерживай обе раскрытые ладони от себя, как знак «стоп». Ты видишь тыльную сторону рук.'))])
+    em+='<p><strong>'+tr('For Trigger and Grip, try bending the finger only partway. A full curl may not be necessary.',
+        'Для Trigger и Grip можно попробовать сгибать палец не до конца.')+'</strong></p><p>'+tr(
+        'Left hand: X/Y. Right hand: A/B. Trigger, Grip and D-pad can work together. The open-palm touchpad gesture pauses movement, Trigger and Grip.',
+        'Левая рука — X/Y, правая — A/B. Trigger, Grip и D-pad могут работать вместе. Отдельный жест нажатия тачпада приостанавливает движение, Trigger и Grip.')+'</p>'
+    em+='<h2>'+tr('Thumb movement','Движение большим пальцем')+'</h2><p>'+tr('Keep your wrist still and your thumb away from your palm.',
+        'Держи кисть неподвижно, а большой — отведённым от ладони.')+'</p>'+table([tr('Movement','Движение'),tr('Thumb gesture','Жест большого пальца')],[
+        (tr('Neutral','Нейтраль'),tr('Keep the thumb relaxed and slightly away from the palm; no movement.','Большой расслаблен и немного отведён; движения нет.')),
+        (tr('Forward','Вперёд'),tr('Straighten and slightly arch the thumb away from the palm.','Выпрями и слегка выгни большой от ладони.')),
+        (tr('Backward','Назад'),tr('Clearly curl the tip toward the palm while keeping the base away.','Отчётливо согни кончик к ладони, оставив основание отведённым.')),
+        (tr('Left / right','Влево / вправо'),tr('Move the thumb in the desired direction.','Отведи большой в нужную сторону.')),
+        (tr('Diagonal','Диагональ'),tr('Combine sideways movement with bending or straightening.','Совмести боковое движение со сгибанием или разгибанием.')),
+        (tr('D-pad off','D-pad выключен'),tr('Press the thumb against the palm.','Плотно прижми большой к ладони.'))])
+    em+='<p>'+tr('If wrist D-pad is selected in your profile, keep your thumb out and tilt the wrist in the desired direction. Diagonals work too. Tuck the thumb to stop. Wrist and thumb modes are alternatives.',
+        'Если в профиле выбран D-pad от кисти, отведи большой и наклоняй кисть в нужную сторону. Диагонали тоже работают. Прижми большой для остановки. Режимы кисти и большого пальца выбираются по отдельности.')+'</p>'
+    simple='<h2>'+tr('Simple gestures','Простые жесты')+'</h2><p>'+tr(
+        'No calibration is needed. The gestures below work outside an active touchpad session.',
+        'Калибровка не требуется. Жесты ниже работают вне активной сессии тачпада.')+'</p>'+table([tr('Button','Кнопка'),tr('Gesture','Жест')],[
+        ('Trigger',tr('Pinch your thumb and index fingertips together. Separate them to release.','Соедини кончики большого и указательного в щипок. Разведи, чтобы отпустить.')),
+        ('Grip',tr('Open your palm toward yourself, with all five fingers straight and spread.','Раскрой ладонь к себе: все пять пальцев прямые и разведены.')),
+        ('Grip + Trigger',tr('Close your hand into a fist, with the thumb folded against the fingers. This works outside an active touchpad.',
+            'Сожми кулак, прижав большой к согнутым пальцам. Работает вне активного тачпада.')),
+        ('X (left) / A (right)',tr('Show V: spread your straight index and middle fingers; bend ring and pinky.','Покажи V: прямые указательный и средний разведены, безымянный и мизинец согнуты.')),
+        ('Y (left) / B (right)',tr('Thumbs-up: extend your thumb above the folded fingers; keep the other four bent.','Отогни большой вверх над костяшками, а остальные четыре пальца держи согнутыми.')),
+        ('Menu',tr('Straighten only the index finger on each hand. Point the two index fingers toward each other, with both hands visible.',
+            'Выпрями только указательные на обеих руках. Направь их друг на друга, удерживая обе руки в поле зрения.'))])
+    simple+='<h2>'+tr('Virtual touchpad','Виртуальный тачпад')+'</h2><p>'+tr(
+        'Enabled by default, independently for each hand. Open the palm away from you: you see the back of your hand. Its position relative to your head immediately becomes the centre. Head movement and rotation are accounted for continuously.',
+        'Включён по умолчанию, отдельно для каждой руки. Раскрой ладонь от себя: ты видишь тыльную сторону руки. Её положение относительно головы сразу станет центром. Перемещение и повороты головы учитываются постоянно.')+'</p>'+touchpad_picture(ru)+table([tr('Action','Действие'),tr('Gesture','Жест')],[
+        (tr('Move on the panel','Движение по панели'),tr('Move the hand left/right or up/down relative to your head. Diagonals work. The edge is 30 cm from the centre; movement beyond it stays at the edge.',
+            'Двигай руку влево/вправо и вверх/вниз относительно головы. Диагонали работают. Край находится в 30 см от центра; за ним значение остаётся на краю.')),
+        (tr('Press','Нажать'),tr('Close the hand into a fist after activating the panel. A fist alone cannot activate or click the panel.',
+            'После включения панели сожми кулак. Сам по себе кулак не включает панель и не нажимает её.')),
+        (tr('Release','Отпустить'),tr('Open the palm away again. The centre stays in place.','Снова раскрой ладонь от себя. Центр останется прежним.')),
+        (tr('Exit / set a new centre','Выйти / задать новый центр'),tr('Open the palm toward yourself (Grip) or remove the hand from view. The next activation captures a new centre.',
+            'Раскрой ладонь к себе (Grip) или убери руку из поля зрения. Следующее включение задаст новый центр.'))])
+    simple+='<p>'+tr('While this hand’s panel is active, its Trigger, Grip and A/B gestures are paused. The other hand remains independent. The panel also releases when head or hand tracking is lost.',
+        'Пока панель этой руки активна, её Trigger, Grip и жесты A/B приостановлены. Вторая рука работает независимо. При потере трекинга головы или руки панель тоже отпускается.')+'</p>'
+    simple+='<p>'+tr('To disable only the panel on Linux, add SIMPLE_GESTURES_TOUCHPAD=0 to the launch command. In the Windows launcher’s .env, set XR_SIMPLE_GESTURES_TOUCHPAD=0. Restart tracking after changing it.',
+        'Чтобы отключить только панель в Linux, добавь SIMPLE_GESTURES_TOUCHPAD=0 к команде запуска. В .env Windows-лаунчера укажи XR_SIMPLE_GESTURES_TOUCHPAD=0. После изменения перезапусти трекинг.')+'</p>'
+    simple+='<p>'+tr('On Linux, stop tracking and restart with:','В Linux останови трекинг и запусти:')+'</p><pre><code>SIMPLE_GESTURES=1 ./run_xr_client.sh --config xreal_ultra</code></pre>'
+    return page(tr('Controller gestures','Управление жестами'),intro+tabbar(entries)+
+        panel('controller-emulation',finger_map+em)+panel('grab-pinch',simple),ru,style=COMPACT_STYLE)
+
+
+def touchpad_picture(ru=False):
+    # Reuse the project's original vector outline, without the numbered finger map.
+    hand=re.sub(r'<g font-family=.*?</g>','',FINGER_MAP_SVG,flags=re.S)
+    hand=re.sub(r'<g fill="none" stroke="#617e9f".*?</g>','',hand,flags=re.S)
+    hand=re.sub(r'<svg[^>]*>','<g transform="translate(174 108) scale(.46)">',hand,count=1)
+    hand=hand.replace('</svg>','</g>').replace('palm-fill','touchpad-hand-fill')
+    hand=re.sub(r'<title.*?</title>|<desc.*?</desc>','',hand,flags=re.S)
+    hand=hand.replace('palm-title','touchpad-title').replace('palm-desc','touchpad-desc')
+    nails='<g fill="#7894ad" stroke="#a7bfd4" stroke-width="2"><rect x="106" y="103" width="23" height="31" rx="8"/><rect x="154" y="49" width="24" height="32" rx="8"/><rect x="203" y="80" width="23" height="31" rx="8"/><rect x="247" y="132" width="21" height="27" rx="7"/></g>'
+    hand=hand.rsplit('</g>',1)[0]+nails+'</g>'
+    body='<defs><marker id="touchpad-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64dfce"/></marker></defs>'
+    body+='<circle cx="250" cy="210" r="145" fill="none" stroke="#56758f" stroke-width="2" stroke-dasharray="7 7"/>'+hand
+    for path in ['M250 110L250 65','M250 307L250 355','M172 210L105 210','M326 210L395 210']:
+        body+=f'<path d="{path}" fill="none" stroke="#64dfce" stroke-width="5" marker-end="url(#touchpad-arrow)"/>'
+    for x,y,en,rus in [(250,41,'Up','Вверх'),(250,390,'Down','Вниз'),(58,217,'Left','Влево'),(450,217,'Right','Вправо')]:
+        body+=f'<text x="{x}" y="{y}" text-anchor="middle" fill="#e8eff8" font-size="18">{rus if ru else en}</text>'
+    body+='<text x="364" y="340" text-anchor="middle" fill="#b9c9de" font-size="17">'+('30 см' if ru else '30 cm')+'</text>'
+    caption='Ладонь от себя. Двигай руку относительно головы; кисть не нужно наклонять.' if ru else 'Palm away from you. Move the hand relative to your head; wrist tilt is not required.'
+    return '<figure class="touchpad-art">'+svg(body,520,410,title=caption)+'<figcaption>'+caption+'</figcaption></figure>'
+
+
+def svg(body, width=520, height=330, title='Hand gesture'):
+    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title,quote=True)}" xmlns="http://www.w3.org/2000/svg">{body}</svg>'
+
+
+def card(title,description,picture,tag='',wide=False):
+    return f'<article class="card{" wide" if wide else ""}"><div class="art">{picture}</div><div class="copy"><span class="tag">{tag}</span><h3>{title}</h3><p>{description}</p></div></article>'
 
 
 def controller_picture(side,ru=False):

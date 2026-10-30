@@ -8,6 +8,9 @@
 #include <xr_runtime/input/controller_input_mapping.hpp>
 
 #include "gestures.hpp"
+#include "simple_gestures.hpp"
+#include "simple_controller_gestures.hpp"
+#include "simple_touchpad.hpp"
 #include "override_controller.hpp"
 
 namespace {
@@ -1870,6 +1873,139 @@ void recorded_touchpad_and_back_regressions() {
   bool rejected=false;try{em::config_from_json(j);}catch(const std::exception&){rejected=true;}
   check(rejected,"invalid template release radius accepted");
 }
+void simple_palm_grip_regressions() {
+  const auto path=std::filesystem::path(__FILE__).parent_path()/"data/emulation_palm_thumb_poses.json";
+  std::ifstream in(path);check(bool(in),"palm/thumb fixture missing");nlohmann::json data;in>>data;
+  for(bool rotated:{false,true}) for(const auto& item:data.at("cases")) {
+    auto f=frame();
+    auto viewer=item.at("viewer").get<em::Vec3>();
+    if(rotated)viewer={viewer[2]+1,viewer[1]+2,-viewer[0]+3};
+    for(bool left:{false,true}) {
+      auto& h=left?f.left:f.right;
+      const auto& j=item.at("hands").at(left?"left":"right");
+      h.status=j.at("status");h.flags=j.at("flags");h.confidence=j.at("confidence");
+      for(size_t i=0;i<j.at("joints").size();++i) {
+        auto p=j.at("joints").at(i).get<em::Vec3>();
+        if(rotated)p={p[2]+1,p[1]+2,-p[0]+3};
+        h.joints[i].px=p[0];h.joints[i].py=p[1];h.joints[i].pz=p[2];
+      }
+      h.pinch_strength=.8f;h.pinch_active=1;
+      h.grab_strength=1;h.grab_active=1; // Backend fist must not survive.
+    }
+    xr_runtime_adapter::gestures::SimplePalmGrip detector;
+    detector.apply(f,&viewer,f.timestamp_ns,0,true,true);
+    check(!f.left.grab_active && !f.right.grab_active,"palm confirmation skipped");
+    detector.apply(f,&viewer,f.timestamp_ns+90000000,0,true,true);
+    check(!f.left.grab_active && !f.right.grab_active,"duplicate hands confirmed Grip");
+    advance(f,60);detector.apply(f,&viewer,f.timestamp_ns,0,true,true);
+    for(bool left:{false,true}) {
+      auto& h=left?f.left:f.right;
+      const uint64_t expected=item.at("expected_buttons").at(left?"left":"right");
+      check(h.grab_active==((expected&CONTROLLER_BUTTON_THUMBSTICK)?1u:0u),"simple Grip mismatches recorded open palm");
+      check(h.pinch_active && h.pinch_strength==.8f,"simple Grip modified pinch");
+    }
+    detector.apply(f,nullptr,f.timestamp_ns,0,true,true);
+    check(!f.left.grab_active && !f.right.grab_active,"lost HMD kept simple Grip on duplicate hands");
+    advance(f,20);detector.apply(f,&viewer,f.timestamp_ns,0,true,true);
+    advance(f,60);detector.apply(f,&viewer,f.timestamp_ns,0,true,true);
+    detector.apply(f,&viewer,f.timestamp_ns,1,true,true);
+    check(!f.left.grab_active && !f.right.grab_active,"origin reset kept Grip confirmation");
+    f.right.grab_strength=.7f;f.right.grab_active=1;
+    detector.apply(f,&viewer,f.timestamp_ns,1,false,false,false,true);
+    check(!f.left.grab_active,"blocked side kept simple Grip");
+    check(f.right.grab_active && f.right.grab_strength==.7f,"simple Grip overwrote physical grip");
+    advance(f,60);detector.apply(f,&viewer,f.timestamp_ns,1,true,true);
+    advance(f,60);detector.apply(f,&viewer,f.timestamp_ns,1,true,true);
+    detector.apply(f,&viewer,f.timestamp_ns+200000000,1,true,true);
+    check(!f.left.grab_active && !f.right.grab_active,"stale hands kept simple Grip");
+  }
+}
+
+HandSideF32V2 simple_pose(int kind,bool left) {
+  auto h=pose(kind==0?3:kind==4?1:0,kind==3?2:0,left);
+  if(kind==0)for(size_t f=0;f<2;++f)for(size_t k=1;k<4;++k)
+    h.joints[5+4*f+k].px+=float(double(k)*(left?-1.:1.)*(f==0?1.:-1.)*.012);
+  if(kind==1) {
+    const auto m=em::measure_hand(h,.3);const auto base=h.joints[5];
+    for(size_t i=0;i<4;++i) {
+      auto& j=h.joints[1+i];const double d=-.035+double(i)*(.11/3);
+      j.px=base.px+.025*m.palm_basis[0][0]+d*m.palm_basis[1][0];
+      j.py=base.py+.025*m.palm_basis[0][1]+d*m.palm_basis[1][1];
+      j.pz=base.pz+.025*m.palm_basis[0][2]+d*m.palm_basis[1][2];
+    }
+  }
+  return h;
+}
+HandSideF32V2 menu_point(bool left,bool inward=true) {
+  auto h=simple_pose(4,left);const auto m=em::measure_hand(h,.3);
+  const double sign=left||!inward?1:-1;
+  for(auto& j:h.joints) {
+    const em::Vec3 p{j.px,j.py,j.pz};em::Vec3 local{};
+    for(size_t k=0;k<3;++k)for(size_t axis=0;axis<3;++axis)local[k]+=p[axis]*m.palm_basis[k][axis];
+    j.px=float(sign*local[1]+(left?-.2:.2));j.py=float(local[2]+1);j.pz=float(sign*local[0]-.4);
+  }
+  return h;
+}
+RuntimeControllerStateFrameV1 simple_apply(xr_runtime_adapter::gestures::SimpleControllerGestures& c,
+    HandTrackingFrameF32V2& f,bool left_pad=false,bool right_pad=false) {
+  c.apply(f,nullptr,f.timestamp_ns,0,true,true,false,false,left_pad,right_pad);
+  RuntimeControllerStateFrameV1 out{};
+  for(bool left:{false,true}) {
+    const auto& h=left?f.left:f.right;auto& s=left?out.left:out.right;
+    s.buttons=h.reserved0|(h.pinch_active?CONTROLLER_BUTTON_TRIGGER:0)|(h.grab_active?CONTROLLER_BUTTON_GRIP:0);
+    s.trigger=h.pinch_strength;s.grip=h.grab_strength;
+  }
+  c.publish(out);return out;
+}
+void simple_new_layout_and_conflicts() {
+  using xr_runtime_adapter::gestures::SimpleControllerGestures;
+  const uint64_t expected[]={CONTROLLER_BUTTON_A,CONTROLLER_BUTTON_B,
+      CONTROLLER_BUTTON_TRIGGER|CONTROLLER_BUTTON_GRIP,CONTROLLER_BUTTON_TRIGGER};
+  for(bool left:{false,true})for(int kind=0;kind<4;++kind)for(double angle:{0.,1.2,-1.0})for(double scale:{.8,1.2}) {
+    SimpleControllerGestures c;auto f=frame();f.left.status=f.right.status=0;
+    auto& h=left?f.left:f.right;h=simple_pose(kind,left);yaw(h,angle);
+    for(auto& j:h.joints){j.px*=scale;j.py*=scale;j.pz*=scale;}
+    h.pinch_strength=h.grab_strength=1;h.pinch_active=h.grab_active=1;h.reserved0=0xffff;
+    auto out=simple_apply(c,f);check((left?out.left:out.right).buttons==0,"simple pose skipped confirmation");
+    advance(f,44);out=simple_apply(c,f);check((left?out.left:out.right).buttons==0,"simple pose confirmed too soon");
+    advance(f,1);out=simple_apply(c,f);auto s=left?out.left:out.right;
+    if(s.buttons!=face(expected[kind],left)) {
+      const auto m=em::measure_hand(h,.3);
+      throw std::runtime_error("simple kind="+std::to_string(kind)+" left="+std::to_string(left)+
+          " angle="+std::to_string(angle)+" actual="+std::to_string(s.buttons)+" curl="+
+          std::to_string(m.curl[0])+","+std::to_string(m.curl[1])+","+std::to_string(m.curl[2])+","+std::to_string(m.curl[3]));
+    }
+    if(kind==2)check(s.trigger==1 && s.grip==1,"simple fist did not hold both axes");
+    if(kind==3)check(s.trigger>0 && s.grip==0,"pinch mistaken for fist");
+    const auto counters=s.press_counters[0]+s.press_counters[1]+s.press_counters[left?11:3]+s.press_counters[left?12:4];
+    advance(f,60);out=simple_apply(c,f);s=left?out.left:out.right;
+    check(counters==s.press_counters[0]+s.press_counters[1]+s.press_counters[left?11:3]+s.press_counters[left?12:4],"held simple gesture repeated presses");
+    h.status=2;advance(f);out=simple_apply(c,f);check((left?out.left:out.right).buttons==0,"lost simple hand kept buttons");
+  }
+  SimpleControllerGestures c;auto f=frame();f.left=menu_point(true);f.right=menu_point(false);
+  simple_apply(c,f);advance(f,45);auto out=simple_apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_MENU && out.right.buttons==0,"inward pointing did not make one Menu");
+  for(auto* h:{&f.left,&f.right}){yaw(*h,.9);for(auto& j:h->joints){j.px+=.3f;j.py+=.2f;}}
+  advance(f);out=simple_apply(c,f);check(out.left.buttons==CONTROLLER_BUTTON_MENU,"Menu depends on world orientation");
+  f.left=menu_point(true);
+  f.right=menu_point(false,false);advance(f);out=simple_apply(c,f);
+  check(!(out.left.buttons&CONTROLLER_BUTTON_MENU),"parallel pointing kept Menu");
+  f.right=menu_point(false);advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f,true,false);
+  check(!(out.left.buttons&CONTROLLER_BUTTON_MENU),"touchpad hand joined Menu");
+  f.left=simple_pose(2,true);f.left.pinch_active=f.left.grab_active=0;f.left.pinch_strength=f.left.grab_strength=0;
+  f.left.reserved0=CONTROLLER_BUTTON_THUMBSTICK;advance(f,60);out=simple_apply(c,f,true,false);
+  check(out.left.buttons==CONTROLLER_BUTTON_THUMBSTICK && out.left.trigger==0 && out.left.grip==0,"touchpad fist leaked gameplay channels");
+  SimpleControllerGestures pinch;f=frame();f.left.status=0;f.right=simple_pose(3,false);
+  simple_apply(pinch,f);
+  pinch.apply(f,nullptr,f.timestamp_ns+90000000,0,true,true,false,false,false,false);
+  check(!f.right.pinch_active,"duplicate sample confirmed simple pinch");
+  advance(f,45);out=simple_apply(pinch,f);check(out.right.buttons==1,"pinch was not confirmed");
+  f.right.joints[4].px=f.right.joints[8].px+.04f;
+  advance(f);out=simple_apply(pinch,f);check(out.right.buttons==1,"pinch hysteresis released too soon");
+  f.right.joints[4].px=f.right.joints[8].px+.06f;
+  advance(f);out=simple_apply(pinch,f);check(out.right.buttons==0,"released pinch became thumbs-up/fist");
+}
+
 void validation_and_legacy() {
   for (const auto& j :
        {nlohmann::json{{"version", 1}}, nlohmann::json{{"finger_mode", "count"}},
@@ -1944,6 +2080,8 @@ int main() {
     physical_controller_merge();
     physical_short_taps_and_counter_reset();
     gesture_block_gate_keeps_physical_input();
+    simple_palm_grip_regressions();
+    simple_new_layout_and_conflicts();
     validation_and_legacy();
     std::cout << "Wrist tilt, extension channels, photo poses and two-hand Menu passed\n";
   } catch (const std::exception& e) {

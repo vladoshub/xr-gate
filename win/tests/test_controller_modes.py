@@ -26,7 +26,7 @@ class ControllerModesTest(unittest.TestCase):
                 self.assertNotIn("override_controller",names)
                 self.assertNotIn("override_controller_service",names)
                 env=next(s for s in data["post_gate_services"] if s["name"]=="xr_runtime_adapter")["env"]
-                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","KEEP":"yes"})
+                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"1","KEEP":"yes"})
                 self.assertEqual(source.read_bytes(),before)
                 runtime.settings["XR_TCP_PORT"]="45810"; captured={}
                 runtime.run_managed=lambda args,env,handle:captured.update(env)
@@ -34,7 +34,19 @@ class ControllerModesTest(unittest.TestCase):
                     runtime._start_locked(handle)
                 self.assertEqual(captured["SIMPLE_GESTURES"],"1")
                 self.assertEqual(captured["EMULATION_CONTROLLER"],"0")
+                self.assertEqual(captured["SIMPLE_GESTURES_TOUCHPAD"],"1")
                 self.assertEqual(captured["RUN_OVERRIDE_CONTROLLER"],"0")
+
+    def test_simple_touchpad_setting_reaches_generated_profile_and_validates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime,_=self.fixture(Path(folder),"simple_gestures",False)
+            runtime.settings["XR_SIMPLE_GESTURES_TOUCHPAD"]="0"
+            data=json.loads(runtime.generate_profile().read_text())
+            env=next(s for s in data["post_gate_services"] if s["name"]=="xr_runtime_adapter")["env"]
+            self.assertEqual(env["SIMPLE_GESTURES_TOUCHPAD"],"0")
+            runtime.settings["XR_SIMPLE_GESTURES_TOUCHPAD"]="bad"
+            with self.assertRaisesRegex(ValueError,"XR_SIMPLE_GESTURES_TOUCHPAD"):
+                runtime.generate_profile()
 
     def test_real_start_script_simple_flag_wins_and_no_mode_disables_both(self):
         script=Path(__file__).resolve().parents[2]/"runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh"
@@ -42,6 +54,7 @@ class ControllerModesTest(unittest.TestCase):
             probe=Path(folder)/"adapter.py"
             probe.write_text('#!/usr/bin/env python3\nimport json,sys\nprint("OPTIONS="+json.dumps(sys.argv[1:]))\n');probe.chmod(0o755)
             cases=[({},"1",False),({"SIMPLE_GESTURES":"1","EMULATION_CONTROLLER":"1"},"0",True),
+                   ({"SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"0"},"0",True),
                    ({"XR_CONTROLLER_MODE":"simple_gestures"},"0",True),
                    ({"XR_CONTROLLER_MODE":"no","SIMPLE_GESTURES":"1"},"0",False)]
             for extra,emulation,simple in cases:
@@ -54,6 +67,7 @@ class ControllerModesTest(unittest.TestCase):
                 self.assertEqual(args.count("--emulation-controller"),1)
                 self.assertEqual(args[args.index("--emulation-controller")+1],emulation)
                 self.assertEqual("--simple-gestures" in args,simple)
+                self.assertEqual(args[args.index("--simple-gestures-touchpad")+1],extra.get("SIMPLE_GESTURES_TOUCHPAD","1"))
                 if emulation=="0":self.assertNotIn("--emulation-controller-config",args)
 
     def fixture(self, root, mode, custom=False):

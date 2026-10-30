@@ -146,6 +146,17 @@ Gestures try to emulate the controller as much as possible - dpad, trigger, grip
 
 See [GESTURES](runtime_adapters/xr_runtime_adapter/configs/GESTURES.md)
 
+With `SIMPLE_GESTURES=1`, pinch presses Trigger and an open palm facing you presses
+Grip. Spread all five fingers; turn the palm away or bend them to release.
+Outside an active touchpad, a fist holds Grip + Trigger, V sends X/A (left/right),
+and thumbs-up sends Y/B. Point both index fingers toward each other for Menu.
+No calibration is needed. See the launcher's **Gestures (grab / pinch)** tab.
+
+The simple mode also has a virtual touchpad enabled by default: open a palm away
+from you to set its centre, move the hand within a 30 cm radius relative to your
+head, and close a fist to click. Open toward yourself or leave tracking to exit.
+Use `SIMPLE_GESTURES_TOUCHPAD=0` to disable only this panel.
+
 ## Bluetooth controlles
 Currently, two types of Bluetooth controllers are supported: those with and without an IMU.
 The difference is that controllers with an IMU allow you to track hand orientation from the IMU, which greatly improves sensitivity and accuracy. 
@@ -496,7 +507,7 @@ cd ~/xr-gate-release/xr-gate
 ```
 
 
-Run with only pinch / grab gestures (Only if you don't have controllers)
+Run with simple gestures: pinch for Trigger, open palm facing you for Grip
 ```bash
 cd ~/xr-gate-release/xr-gate
 SIMPLE_GESTURES=1 ./run_xr_client.sh --config xreal_ultra
