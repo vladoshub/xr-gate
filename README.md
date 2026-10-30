@@ -534,7 +534,7 @@ cd ~/xr-gate-release/xr-gate
 **For Xreal Ultra you should enable high refresh rate**
 
 ```bash
-XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_ultra ./openvr_helper.sh --steamvr
+XR_OPENVR_DISPLAY_MODE=direct XR_DISPLAY_FREQUENCY_HZ=90 XR_OPENVR_DEVICE=xreal_ultra ./openvr_helper.sh
 ```
 
 Then just run Steam
