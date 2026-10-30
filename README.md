@@ -567,6 +567,9 @@ If some apps in steam desktop mirror covers the stereo window in `extended_sbs`,
 
 Then just run Steam
 
+Click **Dismiss** if you see a notification recommending switching to **Direct Display Mode**.
+
+
 [SteamVR Linux: universal windowed SBS launcher and Wayland notes](readme/steamvr-linux.md)
 
 
