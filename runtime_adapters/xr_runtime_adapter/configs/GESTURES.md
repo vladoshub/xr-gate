@@ -42,7 +42,7 @@ released pose before using the gameplay buttons again.
 
 ## Simple gestures
 
-Select **Gestures (grab / pinch)** in the launcher, or restart tracking with
+Select **Gestures** in the launcher, or restart tracking with
 `SIMPLE_GESTURES=1` on Linux.
 
 | Button | Gesture |

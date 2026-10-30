@@ -79,7 +79,7 @@ def gestures(ru=False):
     def table(headers,rows):
         return '<table><thead><tr>'+''.join('<th scope="col">'+h+'</th>' for h in headers)+'</tr></thead><tbody>'+''.join(
             '<tr>'+''.join('<td>'+v+'</td>' for v in row)+'</tr>' for row in rows)+'</tbody></table>'
-    entries=[('grab-pinch','Gestures (grab / pinch)'),('controller-emulation','Gestures (controller emulation)')]
+    entries=[('grab-pinch','Gestures'),('controller-emulation','Gestures (controller emulation)')]
     intro='<p>'+tr('Select the matching mode in the launcher’s Controllers list. Simple gestures are the default.',
         'Выбери соответствующий режим в списке Controllers лаунчера. По умолчанию используются простые жесты.')+'</p>'
     picture=FINGER_MAP_SVG
@@ -149,7 +149,7 @@ def gestures(ru=False):
         'Радиус по умолчанию: 10 см. Простой режим добавляет 30° наружу виртуальным рукам и контроллерам. Настройки скрипта: SIMPLE_GESTURES_TOUCHPAD_RADIUS_M и SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES (0 отключает доворот). В .env Windows добавь к именам префикс XR_. Доворот пропускается, пока сторона использует ориентацию IMU контроллера, и возвращается с оптическими руками.')+'</p>'
     simple+='<p>'+tr('On Linux, stop tracking and restart with:','В Linux останови трекинг и запусти:')+'</p><pre><code>SIMPLE_GESTURES=1 ./run_xr_client.sh --config xreal_ultra</code></pre>'
     return page(tr('Controller gestures','Управление жестами'),intro+tabbar(entries)+
-        panel('controller-emulation',finger_map+em)+panel('grab-pinch',simple),ru,style=COMPACT_STYLE)
+        panel('grab-pinch',simple)+panel('controller-emulation',finger_map+em),ru,style=COMPACT_STYLE)
 
 
 def touchpad_picture(ru=False):
@@ -168,7 +168,7 @@ def touchpad_picture(ru=False):
         body+=f'<path d="{path}" fill="none" stroke="#64dfce" stroke-width="5" marker-end="url(#touchpad-arrow)"/>'
     for x,y,en,rus in [(250,41,'Up','Вверх'),(250,390,'Down','Вниз'),(58,217,'Left','Влево'),(450,217,'Right','Вправо')]:
         body+=f'<text x="{x}" y="{y}" text-anchor="middle" fill="#e8eff8" font-size="18">{rus if ru else en}</text>'
-    body+='<text x="364" y="340" text-anchor="middle" fill="#b9c9de" font-size="17">'+('10 см' if ru else '10 cm')+'</text>'
+    body+='<text x="364" y="340" text-anchor="middle" fill="#b9c9de" font-size="17">'+('Радиус: 10 см' if ru else 'Radius: 10 cm')+'</text>'
     caption='Ладонь от себя. Двигай руку относительно головы; кисть не нужно наклонять.' if ru else 'Palm away from you. Move the hand relative to your head; wrist tilt is not required.'
     return '<figure class="touchpad-art">'+svg(body,520,410,title=caption)+'<figcaption>'+caption+'</figcaption></figure>'
 
@@ -204,7 +204,9 @@ def controller_picture(side,ru=False):
 
 def support(ru=False):
     def tr(en,rus):return rus if ru else en
-    intro='<p>'+tr('Default XR Gate → SteamVR mapping. The same Samsung Gear VR Controller works on either side; assign one to LEFT and the other to RIGHT in the launcher.',
+    intro='<p class="notice">'+tr('Bluetooth is required to connect Samsung Gear VR controllers. For a stable, reliable connection, use a dedicated external USB Bluetooth adapter.',
+        'Для подключения Samsung Gear VR требуется Bluetooth. Для качественной и стабильной связи с контроллерами рекомендуется отдельный внешний USB Bluetooth-адаптер.')+'</p>'
+    intro+='<p>'+tr('Default XR Gate → SteamVR mapping. The same Samsung Gear VR Controller works on either side; assign one to LEFT and the other to RIGHT in the launcher.',
         'Стандартная раскладка XR Gate → SteamVR. Одинаковые Samsung Gear VR Controller используются с обеих сторон: назначь один LEFT, другой RIGHT в лаунчере.')+'</p>'
     content=intro+'<div class="grid mapping">'+card('LEFT',tr('Volume + is X; volume − is Y.','Громкость + — X, громкость − — Y.'),controller_picture('LEFT',ru))
     content+=card('RIGHT',tr('Volume + is A; volume − is B.','Громкость + — A, громкость − — B.'),controller_picture('RIGHT',ru))+'</div>'

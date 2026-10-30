@@ -467,7 +467,7 @@ JSON эмуляции в этом режиме не загружается. `--e
 SIMPLE_GESTURES=1 ./run_xr_client.sh --config xreal_ultra
 ```
 
-В Windows Launcher выбери `Gestures (grab / pinch)`. Прежний пункт
+В Windows Launcher выбери `Gestures`. Прежний пункт
 `Gestures` называется `Gestures (controller emulation)`; его сохранённое
 значение `XR_CONTROLLER_MODE=gestures` и калибровки не меняются.
 Вариант `No` отключает обе схемы, сохраняя трекинг головы.

@@ -52,7 +52,8 @@ internal static class HardwareControllerTests
         Check(LauncherSettings.Load(root, state).ControllerMode == "simple_gestures" &&
             !LauncherSettings.Load(root, state).GearVr, "Grab/pinch mode failed the controller-only save/reload round trip.");
         Check(ControllerModeChoice.All.Single(x => x.Id == "gestures").Label == "Gestures (controller emulation)" &&
-            ControllerModeChoice.All.Single(x => x.Id == "simple_gestures").Label == "Gestures (grab / pinch)",
+            ControllerModeChoice.All.Single(x => x.Id == "simple_gestures").Label == "Gestures" &&
+            ControllerModeChoice.All[0].Id == "simple_gestures",
             "Gesture mode names or persisted identifiers changed.");
         File.WriteAllText(env, "XR_GEARVR=1\nXR_BLUETOOTH=1\n");
         settings = LauncherSettings.Load(root, state);

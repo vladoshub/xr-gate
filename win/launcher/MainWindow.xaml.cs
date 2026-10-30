@@ -621,7 +621,7 @@ public partial class MainWindow : Window
         try
         {
             string language = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru" ? "GESTURES.ru.html" : "GESTURES.html";
-            OpenDocumentation(language, settings.ControllerMode == "simple_gestures" ? "grab-pinch" : "controller-emulation");
+            OpenDocumentation(language, "grab-pinch");
         }
         catch (Exception exception) { StatusDetail.Text = exception.Message; }
     }

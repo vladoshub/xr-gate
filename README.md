@@ -150,7 +150,7 @@ With `SIMPLE_GESTURES=1`, pinch presses Trigger and an open palm facing you pres
 Grip. Spread all five fingers; turn the palm away or bend them to release.
 Outside an active touchpad, a fist holds Grip + Trigger, V sends X/A (left/right),
 and thumbs-up sends Y/B. Point both index fingers toward each other for Menu.
-No calibration is needed. See the launcher's **Gestures (grab / pinch)** tab.
+No calibration is needed. See the launcher's **Gestures** tab.
 
 The simple mode also has a virtual touchpad enabled by default: fully straighten
 all five fingers, separate thumb and index, and point the palm directly away
