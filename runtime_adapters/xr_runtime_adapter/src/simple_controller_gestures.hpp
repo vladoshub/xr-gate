@@ -85,6 +85,7 @@ class SimpleControllerGestures {
       confirm(s.channel,pad?Pose::None:Pose::ThumbUp,stamp);
       if(s.channel.active==Pose::ThumbUp)
         h.reserved0=left?xr_runtime::CONTROLLER_BUTTON_Y:xr_runtime::CONTROLLER_BUTTON_B;
+      h.reserved0 |= pad_click;
       return;  // Thumb owns the pose, including V/open-palm/menu overlap.
     }
     const auto m=emulation::measure_hand(h,config_.min_confidence);
@@ -105,8 +106,8 @@ class SimpleControllerGestures {
     // Reuse emulation's scale-normalized tip distance and folded-index guard.
     // The former simple path had an ~3 mm release band after two response curves.
     s.pinch=simple_pinch(m,s.pinch);
-    // In a panel, V belongs only to click, thumbs-up to exit, and fist is idle.
-    // Consume V before pinch so a nearby thumb cannot add Trigger to its click.
+    // In a panel, V belongs only to exit, thumbs-up to click, and fist is idle.
+    // Consume V before pinch so a nearby thumb cannot fire during exit.
     const Pose pose=vee_shape?(pad||!s.vee?Pose::None:Pose::V):s.pinch?Pose::Pinch:
         !pad&&closed&&closed_index&&tucked?Pose::Fist:Pose::None;
     confirm(s.channel,pose,stamp);

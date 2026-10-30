@@ -16,10 +16,10 @@ class SimpleTouchpad {
   bool active() const { return left_.active || right_.active; }
   bool left_active() const { return left_.active; }
   bool right_active() const { return right_.active; }
-  bool left_reserved() const { return left_.active || left_.exit_thumb; }
-  bool right_reserved() const { return right_.active || right_.exit_thumb; }
-  bool left_exit_held() const { return left_.exit_thumb; }
-  bool right_exit_held() const { return right_.exit_thumb; }
+  bool left_reserved() const { return left_.active || left_.exit_vee; }
+  bool right_reserved() const { return right_.active || right_.exit_vee; }
+  bool left_exit_held() const { return left_.exit_vee; }
+  bool right_exit_held() const { return right_.exit_vee; }
 
   void apply(xr_runtime::HandTrackingFrameF32V2& hands, const xr_runtime::HmdPoseF64V1* head,
              uint64_t now, uint64_t origin, bool left_enabled, bool right_enabled,
@@ -52,9 +52,9 @@ class SimpleTouchpad {
 
  private:
   struct Side {
-    bool active = false, away = false, click = false, vee = false;
+    bool active = false, away = false, click = false, vee = false, thumb_up = false;
     bool candidate = false, owned = false, previous_click = false, arming = false;
-    bool exit_thumb = false, exit_candidate = false;
+    bool exit_vee = false, exit_candidate = false;
     uint32_t presses = 0, releases = 0;
     uint64_t sample = 0, since = 0, arm_since = 0;
     uint64_t exit_since = 0;
@@ -64,9 +64,9 @@ class SimpleTouchpad {
   };
 
   static void cancel(Side& s) {
-    s.active = s.away = s.click = s.vee = s.candidate = s.arming = false;
+    s.active = s.away = s.click = s.vee = s.thumb_up = s.candidate = s.arming = false;
     s.sample = s.since = s.arm_since = 0;
-    s.exit_thumb = s.exit_candidate = false; s.exit_since = 0;
+    s.exit_vee = s.exit_candidate = false; s.exit_since = 0;
     s.extended = {}; s.curled = {};
     s.x = s.y = 0;
     // Keep published click counters across releases, loss and recentering.
@@ -154,28 +154,11 @@ class SimpleTouchpad {
       cancel(s); return;
     }
     if (stamp < s.sample) cancel(s);
-    const bool thumb_up=simple_thumb_up(hand,head,config_.min_confidence,s.exit_thumb || s.exit_candidate);
-    if (s.exit_thumb) {
-      // The exit gesture is consumed until released; it must not also send B/Y.
-      if (thumb_up) { reserve(hand); s.sample=stamp; return; }
-      s.exit_thumb=false;
-    }
-    if (s.active && thumb_up) {
-      if (stamp!=s.sample) {
-        if (!s.exit_candidate || double(stamp-s.sample)/1e6>config_.max_age_ms) s.exit_since=stamp;
-        s.exit_candidate=true;
-        if (double(stamp-s.exit_since)/1e6>=config_.button_confirm_ms) {
-          cancel(s); s.exit_thumb=true; reserve(hand); s.sample=stamp; return;
-        }
-      }
-    } else { s.exit_candidate=false; s.exit_since=0; }
+    const bool thumb_up=simple_thumb_up(hand,head,config_.min_confidence,s.thumb_up);
     const auto h = emulation::measure_hand(hand, config_.min_confidence);
     if (!h.palm_valid || std::any_of(h.curl.begin(),h.curl.end(),
         [](double v) { return !std::isfinite(v) || v < 0; })) {
-      const bool consume_exit=s.active || s.exit_candidate;
       cancel(s);
-      // Do not turn an exit thumb into a fresh B/Y if other fingers disappear.
-      if(thumb_up && consume_exit){s.exit_thumb=true;reserve(hand);s.sample=stamp;}
       return;
     }
     for (size_t i=0;i<4;++i) {
@@ -184,6 +167,23 @@ class SimpleTouchpad {
       s.extended[i] = 1-h.curl[i] >= (s.extended[i] ? off : on);
       s.curled[i] = h.curl[i] >= (s.curled[i] ? config_.curl_off : config_.curl_on);
     }
+    s.thumb_up=thumb_up;
+    s.vee=!thumb_up && simple_v(hand,s.extended,s.curled,s.vee || s.exit_vee) &&
+        simple_v_facing(h,head,s.vee || s.exit_vee);
+    if (s.exit_vee) {
+      // Consume the exit pose until released; it must not also send X/A.
+      if (s.vee) { reserve(hand); s.sample=stamp; return; }
+      s.exit_vee=false;
+    }
+    if (s.active && s.vee) {
+      if (stamp!=s.sample) {
+        if (!s.exit_candidate || double(stamp-s.sample)/1e6>config_.max_age_ms) s.exit_since=stamp;
+        s.exit_candidate=true;
+        if (double(stamp-s.exit_since)/1e6>=config_.button_confirm_ms) {
+          cancel(s); s.exit_vee=true; reserve(hand); s.sample=stamp; return;
+        }
+      }
+    } else { s.exit_candidate=false; s.exit_since=0; }
     const bool extended=std::all_of(s.extended.begin(),s.extended.end(),[](bool v){return v;});
     const auto palm=emulation::measure_open_palm_pose(h,extended,config_,&viewer,false,s.away);
     // Palm orientation only controls entry; an active panel permits wrist rotation.
@@ -208,16 +208,13 @@ class SimpleTouchpad {
       double x=(point[0]-s.centre[0])/radius_m_, y=(point[1]-s.centre[1])/radius_m_;
       const double scale=std::max(1.0,std::hypot(x,y));
       s.x=static_cast<float>(x/scale); s.y=static_cast<float>(y/scale);
-      const bool vee=!thumb_up && simple_v(hand,s.extended,s.curled,s.vee) &&
-          simple_v_facing(h,head,s.vee);
-      if (!vee) { s.vee=s.click=s.candidate=false; s.since=0; }
+      if (!thumb_up) { s.click=s.candidate=false; s.since=0; }
       else if (stamp!=s.sample) {
-        s.vee=true;
         if (!s.candidate) { s.candidate=true; s.since=stamp; }
         s.click=double(stamp-s.since)/1e6 >= config_.button_confirm_ms;
       }
       // Clear backend input before the simple recognizer adds the allowed
-      // pinch and palm Grip channels alongside the authoritative V click.
+      // pinch and palm Grip channels alongside the authoritative thumb click.
       reserve(hand,s.click);
     }
     s.sample=stamp;

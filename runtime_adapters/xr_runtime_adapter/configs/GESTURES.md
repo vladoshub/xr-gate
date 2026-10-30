@@ -55,7 +55,8 @@ Select **Gestures (grab / pinch)** in the launcher, or restart tracking with
 | Menu | Straighten only the index on each hand and point the two index fingers toward each other. Keep both hands visible. |
 
 No calibration is needed. Pinch and palm Grip also work during an active
-touchpad session. In that session, V clicks the panel instead of X/A; a fist does not click.
+touchpad session. In that session, a fist with the thumb lifted straight up clicks the panel
+instead of B/Y, and V exits instead of X/A.
 
 ### Virtual touchpad (enabled by default)
 
@@ -65,20 +66,21 @@ Keep this pose briefly to activate the panel. Its position relative to your head
 then becomes the centre. Move the hand left/right and up/down; diagonals
 work. The edge is 10 cm from the centre. Movement beyond it stays at the edge.
 
-Show V to press: spread the straight index and middle fingers, with ring and
-pinky bent. Keep the fingers pointing up and the palm facing away from you.
-An angled wrist releases the click, while the panel stays active. Release V to release the click. The centre stays fixed, and moving
-a held V still changes direction. V only clicks after activation and sends no
-X/A during the session; no replacement gesture is assigned to X/A. A fist does
-not click. Pinch sends Trigger and an open palm toward yourself sends Grip,
-while the axes keep working. The other hand stays independent.
-
 Make a fist with the other four fingers, lift the thumb away from the palm
-and point it straight up to exit without pressing B/Y. The thumb tip may be
-straight or bent. An open hand, V or tucked thumb does not exit. Release
-the pose before using thumbs-up as a normal button.
+and point it straight up to press. The thumb tip may be straight or bent.
+Release the pose to release the click. The centre stays fixed, and moving
+the held pose still changes direction. It sends no B/Y during the session.
+A fist with a tucked thumb does not click. Pinch sends Trigger and an open
+palm toward yourself sends Grip, while the axes keep working.
+The other hand stays independent.
+
+Show V to exit: spread the straight index and middle fingers; bend ring and
+pinky. Point the fingers up and the palm away from you. An angled V does not
+exit. This exits without pressing X/A; release V before using it as a normal
+button. No replacement gesture is assigned to X/A or B/Y inside the panel.
 Wrist rotation does not exit the panel, including turning the open palm toward
-yourself. The 35-degree orientation limit is checked only when activating.
+yourself. The open-palm 35-degree orientation limit gates activation. V has its own
+orientation check.
 Loss of hand or head tracking also exits.
 The next activation captures a new centre.
 

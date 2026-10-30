@@ -210,7 +210,7 @@ class EmulationIntegrationTest(unittest.TestCase):
             self.assertNotEqual(snapshots[0]["hands"][name]["joints"][8]["position"],
                                 snapshots[1]["hands"][name]["joints"][8]["position"])
 
-    def test_simple_panel_pinch_palm_grip_and_v_keep_live_axes(self):
+    def test_simple_panel_pinch_palm_grip_and_thumb_keep_live_axes(self):
         away=-math.pi/4
         def pose(name,options,dx):
             left=name=="left"
@@ -231,8 +231,8 @@ class EmulationIntegrationTest(unittest.TestCase):
                     (dict(extended=0,thumb="pinch",tilt_x=away),1,1,1,0),
                     (dict(extended=0,thumb="vertical_pinch",tilt_x=away),1,1,1,0),
                     (dict(extended=15,tilt_x=away+math.pi),2,2,0,1),
-                    (dict(extended=3,v_spread=True,tilt_x=away),32,32,0,0),
-                    (dict(extended=3,v_spread=True,thumb="down",tilt_x=away),32,32,0,0)]:
+                    (dict(extended=0,thumb="thumb_straight",tilt_x=away),32,32,0,0),
+                    (dict(extended=0,thumb="thumbs_up",tilt_x=away),32,32,0,0)]:
                     frames=[]
                     for dx in (.025,.05):
                         STATE.update({n:pose(n,options,dx) for n in ("left","right")})
@@ -258,7 +258,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                     self.assertEqual(f["controllers"][n]["grip"],0)
             finally:client.close()
 
-    def test_thumb_up_exits_panel_without_sending_face_buttons(self):
+    def test_v_exits_panel_without_sending_face_buttons(self):
         away=1.2+math.pi
         STATE.update(left=dict(extended=15,tilt_x=away),right=dict(extended=15,tilt_x=away))
         with harness.runtime(default_mode=True) as (_,_,port):
@@ -268,8 +268,8 @@ class EmulationIntegrationTest(unittest.TestCase):
                     return client.frame(lambda f:f.get("controllers") and all(
                         predicate(f["controllers"][n]) for n in ("left","right")))
                 both(lambda c:int(c["touches"])==32)
-                STATE.update(left=simple_upright(extended=0,thumb="thumbs_up"),
-                             right=simple_upright(extended=0,thumb="thumbs_up"))
+                STATE.update(left=simple_upright(extended=3,v_spread=True),
+                             right=simple_upright(extended=3,v_spread=True))
                 both(lambda c:int(c["touches"])==0 and int(c["buttons"])==0 and c["thumbstick"]==[0,0])
                 until=time.monotonic()+.15
                 while time.monotonic()<until:
@@ -277,7 +277,9 @@ class EmulationIntegrationTest(unittest.TestCase):
                     for name in ("left","right"):
                         self.assertEqual(int(f["controllers"][name]["buttons"]),0)
                         self.assertEqual(int(f["controllers"][name]["touches"]),0)
-                # Release the exit pose, then the normal thumbs-up still sends Y/B.
+                # Release the exit V, then both original face-button mappings still work.
+                STATE.update(left=simple_upright(extended=0,thumb="down"),right=simple_upright(extended=0,thumb="down"))
+                both(lambda c:int(c["buttons"])==3)
                 STATE.update(left=simple_upright(extended=3,v_spread=True),right=simple_upright(extended=3,v_spread=True))
                 client.frame(lambda f:f.get("controllers") and int(f["controllers"]["left"]["buttons"])==2048
                              and int(f["controllers"]["right"]["buttons"])==8)
@@ -304,13 +306,13 @@ class EmulationIntegrationTest(unittest.TestCase):
                     int(f["controllers"][n]["touches"])==32 for n in ("left","right")))
                 STATE.update({n:simple_upright(extended=0,thumb="thumbs_up_short") for n in ("left","right")})
                 f=client.frame(lambda f:f.get("controllers") and all(
-                    int(f["controllers"][n]["touches"])==0 and int(f["controllers"][n]["buttons"])==0
+                    int(f["controllers"][n]["touches"])==32 and int(f["controllers"][n]["buttons"])==32
                     for n in ("left","right")))
-                for _ in range(8):pair(0,0)
+                for _ in range(8):pair(32,32)
                 STATE.update({n:simple_upright(extended=0,thumb="pinch") for n in ("left","right")})
                 pair(1,1)
                 STATE.update({n:simple_upright(extended=0,thumb="down") for n in ("left","right")})
-                pair(3,3)
+                pair(0,0)
             finally:client.close()
 
     def test_thumb_up_requires_fist_for_all_finger_combinations(self):
@@ -348,7 +350,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 pair(lambda c,n:int(c["buttons"])==(4096 if n=="left" else 16))
             finally:client.close()
 
-    def test_thumb_direction_rejection_and_fist_only_panel_exit(self):
+    def test_thumb_direction_rejection_and_panel_click_requires_fist(self):
         STATE.update({n:simple_upright(extended=0,thumb="down") for n in ("left","right")})
         with harness.runtime(default_mode=True) as (_,_,port):
             client=harness.Client(port)
@@ -366,16 +368,17 @@ class EmulationIntegrationTest(unittest.TestCase):
                         while time.monotonic()<until:
                             f=pair(lambda c:int(c["touches"])==(32 if panel else 0))
                             for n in ("left","right"):
-                                self.assertEqual(int(f["controllers"][n]["buttons"])&(4096|16),0)
+                                self.assertEqual(int(f["controllers"][n]["buttons"])&(4096|16|(32 if panel else 0)),0)
                 for mask in (1,3,7,15,0):
                     STATE.update({n:simple_upright(extended=15) for n in ("left","right")})
                     pair(lambda c:int(c["touches"])==32)
                     STATE.update({n:simple_upright(extended=mask,thumb="thumb_straight",v_spread=mask==3)
                                   for n in ("left","right")})
-                    expected=0 if mask==0 else 32
-                    pair(lambda c:int(c["touches"])==expected and not int(c["buttons"])&(4096|16))
+                    expected=0 if mask==3 else 32
+                    buttons=32 if mask==0 else 0
+                    pair(lambda c:int(c["touches"])==expected and int(c["buttons"])==buttons)
                     for _ in range(8):
-                        pair(lambda c:int(c["touches"])==expected and not int(c["buttons"])&(4096|16))
+                        pair(lambda c:int(c["touches"])==expected and int(c["buttons"])==buttons)
             finally:client.close()
 
     def test_thumb_tip_bend_is_optional_but_clearance_and_up_angle_remain(self):
@@ -393,8 +396,8 @@ class EmulationIntegrationTest(unittest.TestCase):
                             STATE.update({n:simple_upright(extended=15) for n in ("left","right")})
                             pair(lambda c,n:int(c["touches"])==32)
                         STATE.update({n:simple_upright(extended=0,thumb=thumb) for n in ("left","right")})
-                        pair(lambda c,n:int(c["buttons"])==(0 if panel else 4096 if n=="left" else 16)
-                             and int(c["touches"])==0)
+                        pair(lambda c,n:int(c["buttons"])==(32 if panel else 4096 if n=="left" else 16)
+                             and int(c["touches"])==(32 if panel else 0))
                         STATE.update({n:simple_upright(extended=0,thumb="down") for n in ("left","right")})
                         pair(lambda c,n:not int(c["buttons"])&(4096|16))
                     for thumb in ("thumb_arch_tilt","thumb_tucked_up"):
@@ -424,15 +427,21 @@ class EmulationIntegrationTest(unittest.TestCase):
                     if panel:
                         client.frame(lambda f:f.get("controllers") and all(
                             int(f["controllers"][n]["touches"])==32 for n in ("left","right")))
-                    expected=(32,32) if panel else (2048,8)
+                    expected=(0,0) if panel else (2048,8)
                     for angle in (dict(tilt_x=-math.pi/4+math.pi/3),dict(tilt_y=math.pi/3),
                                   dict(tilt_x=-math.pi/4+math.pi)):
-                        STATE.update({n:simple_upright(extended=3,v_spread=True) for n in ("left","right")})
-                        pair(*expected)
                         STATE.update({n:simple_upright(extended=3,v_spread=True,**angle) for n in ("left","right")})
                         f=pair(0,0)
                         for n in ("left","right"):
                             self.assertEqual(int(f["controllers"][n]["touches"])&32,32 if panel else 0)
+                        STATE.update({n:simple_upright(extended=3,v_spread=True) for n in ("left","right")})
+                        client.frame(lambda f:f.get("controllers") and all(
+                            int(f["controllers"][n]["buttons"])==bit and int(f["controllers"][n]["touches"])==0
+                            for n,bit in zip(("left","right"),expected)))
+                        if panel:
+                            STATE.update({n:simple_upright(extended=15) for n in ("left","right")})
+                            client.frame(lambda f:f.get("controllers") and all(
+                                int(f["controllers"][n]["touches"])==32 for n in ("left","right")))
                     # Rotate the head and hands together 60 degrees about the head:
                     # an upright V in the camera frame must remain accepted.
                     theta=math.pi/3
@@ -445,7 +454,9 @@ class EmulationIntegrationTest(unittest.TestCase):
                                  offset=tuple(head[k]+rotated[k] for k in range(3)))
                     source.hmd_quaternion=(math.cos(theta/2),-math.sin(theta/2),0,0)
                     STATE.update(left=dict(aligned),right=dict(aligned))
-                    pair(*expected)
+                    client.frame(lambda f:f.get("controllers") and all(
+                        int(f["controllers"][n]["buttons"])==bit and int(f["controllers"][n]["touches"])==0
+                        for n,bit in zip(("left","right"),expected)))
                 finally:client.close()
 
     def test_simple_free_wrist_rotation_and_right_axes_without_left_tracking(self):
@@ -457,11 +468,10 @@ class EmulationIntegrationTest(unittest.TestCase):
                 def right(predicate):
                     return client.frame(lambda f:f.get("controllers") and predicate(f["controllers"]["right"]))
                 right(lambda c:int(c["touches"])==32)
-                STATE["right"]=simple_upright(extended=3,v_spread=True,tilt_x=away,offset=(.05,0,0))
+                STATE["right"]=simple_upright(extended=0,thumb="thumbs_up",tilt_x=away,offset=(.05,0,0))
                 right(lambda c:int(c["buttons"])==32 and abs(c["thumbstick"][0]-.5)<.001)
-                # Closing the fingers does not change the palm normal; turn the
-                # whole V pose out of the entry cone without releasing the panel.
-                STATE["right"]["tilt_x"]=away+math.pi/2
+                # An angled V releases the thumb click, but cannot exit the panel.
+                STATE["right"]=simple_upright(extended=3,v_spread=True,tilt_x=away+math.pi/2,offset=(.05,0,0))
                 f=right(lambda c:int(c["touches"])==32 and int(c["buttons"])==0)
                 self.assertEqual(f["controllers"]["right"]["release_counters"][5],1)
                 STATE["right"]["visible"]=False
@@ -505,8 +515,8 @@ class EmulationIntegrationTest(unittest.TestCase):
                 STATE.update(left=simple_upright(extended=15,tilt_x=-math.pi/4),
                              right=simple_upright(extended=15,tilt_x=-math.pi/4))
                 pair(lambda c:int(c["touches"])==32 and c["thumbstick"]==[0,0])
-                STATE.update(left=simple_upright(extended=3,v_spread=True,tilt_x=-math.pi/4,offset=(.15,.15,0)),
-                             right=simple_upright(extended=3,v_spread=True,tilt_x=-math.pi/4,offset=(.15,.15,0)))
+                STATE.update(left=simple_upright(extended=0,thumb="thumbs_up",tilt_x=-math.pi/4,offset=(.15,.15,0)),
+                             right=simple_upright(extended=0,thumb="thumbs_up",tilt_x=-math.pi/4,offset=(.15,.15,0)))
                 pair(lambda c:int(c["buttons"])==32 and c["trigger"]==0 and c["grip"]==0
                      and all(abs(v-.5)<.001 for v in c["thumbstick"]))
             finally:client.close()
@@ -529,7 +539,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 STATE["right"]["offset"]=(.85,2.05,-.30)
                 diagonal=right(lambda c:c["thumbstick"][0]>.7 and c["thumbstick"][1]>.7)
                 self.assertAlmostEqual(math.hypot(*diagonal["thumbstick"]),1,places=4)
-                STATE["right"]=simple_upright(extended=3,v_spread=True,tilt_x=-math.pi/4,offset=(.15,0,0))
+                STATE["right"]=simple_upright(extended=0,thumb="thumbs_up",tilt_x=-math.pi/4,offset=(.15,0,0))
                 click=right(lambda c:int(c["buttons"])==32)
                 self.assertEqual(click["press_counters"][5],1)
                 self.assertAlmostEqual(click["thumbstick"][0],.5,places=4)
@@ -557,7 +567,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 right(lambda c:abs(c["thumbstick"][0]-.5)<.001)
                 source.hmd_position=(.4,1.5,-.75)
                 right(lambda c:int(c["touches"])&32 and abs(c["thumbstick"][0])<.001)
-                STATE["right"].update(extended=3,v_spread=True)
+                STATE["right"].update(extended=0,thumb="thumbs_up")
                 right(lambda c:int(c["buttons"])==32)
                 source.send_head=False
                 lost=right(lambda c:int(c["touches"])==0 and not int(c["buttons"])&32)
@@ -567,7 +577,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 while time.monotonic()<until:
                     c=right(lambda c:True)
                     self.assertEqual(int(c["buttons"])&32,0);self.assertEqual(int(c["touches"])&32,0)
-                STATE["right"]["extended"]=15
+                STATE["right"].update(extended=15,thumb="up")
                 right(lambda c:int(c["touches"])&32 and c["thumbstick"]==[0,0])
             finally:client.close()
 

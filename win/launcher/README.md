@@ -39,19 +39,20 @@ Both guides work offline and ship in the Windows package.
 Simple mode's virtual touchpad is enabled by default. Fully straighten all five
 fingers, separate thumb and index, and point the palm directly away from your
 head briefly to capture a head-relative centre. Move within a 10 cm radius,
-then show V to click; moving the V pose still changes the panel direction.
-Wrist rotation does not exit the panel; the 35-degree limit is for activation only. Loss of hand/head tracking exits. Thumbs-up also exits without pressing B/Y. Release the exit pose before
+then make a fist with the thumb lifted straight up to click. Moving the held
+pose still changes the panel direction.
+Wrist rotation does not exit the panel; the open-palm 35-degree limit gates activation. Loss of hand/head tracking exits. V also exits without pressing X/A. Release the exit pose before
 using it as a normal button. Set `XR_SIMPLE_GESTURES_TOUCHPAD=0`
 in `.env` to disable only the panel; restart tracking after changing it.
 
 During a simple-mode touchpad session, pinch sends Trigger, an open palm toward
-yourself sends Grip, and V clicks the panel while the axes keep working.
-V sends no A/X in this mode, a fist does not click, and thumbs-up exits without pressing B/Y.
-For V, point the fingers up and the palm away from you. An angled wrist
-releases the V button while keeping the panel active. For the thumb gesture, curl index, middle, ring and pinky into a fist. Keep
-the thumb away from the palm and point its main phalanx straight up. The tip
-may be straight or bent; a backward arch is not required. The upward angle
-limit stays at 15 degrees (20 while holding).
+yourself sends Grip, and a fist with the thumb lifted straight up clicks the panel
+while the axes keep working. It sends no B/Y. A fist with a tucked thumb does not
+click. V exits without pressing X/A; release V before using it as a normal button.
+For V, point the fingers up and the palm away from you; an angled V does not exit.
+For the click, curl index, middle, ring and pinky into a fist. Keep the thumb away
+from the palm and point its main phalanx straight up. The tip may be straight or
+bent; a backward arch is not required. The existing angle limits are unchanged.
 
 
 Simple gestures are the default for new sessions/settings. To explicitly select

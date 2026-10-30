@@ -75,6 +75,21 @@ void vee(HandSideF32V2& h) {
     }
   }
 }
+void thumb_up(HandSideF32V2& hand) {
+  fist(hand);
+  const auto m=em::measure_hand(hand,.3);const auto base=hand.joints[5];
+  for(size_t i=0;i<4;++i) {
+    auto& j=hand.joints[1+i];const double d=-.035+double(i)*(.11/3);
+    j.px=base.px+.025*m.palm_basis[0][0];
+    j.py=base.py+.025*m.palm_basis[0][1]+d;
+    j.pz=base.pz+.025*m.palm_basis[0][2];
+  }
+  // Strong IP extension away from the palm, with the main phalanx still up.
+  const auto ip=hand.joints[3];
+  hand.joints[4].px=ip.px-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][0];
+  hand.joints[4].py=ip.py+.035*.5-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][1];
+  hand.joints[4].pz=ip.pz-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][2];
+}
 RuntimeControllerStateFrameV1 step(SimpleTouchpad& pad,Pose& p,bool left=true,bool right=true,
                                   const HmdPoseF64V1* head=nullptr,uint64_t origin=0) {
   pad.apply(p.hands,head?head:&p.head,p.hands.timestamp_ns,origin,left,right);
@@ -156,12 +171,12 @@ void activation_guards() {
     advance(p,44);step(pad,p,left,!left);check(!pad.active(),"activation confirmed before 45 ms");
     advance(p,1);auto out=step(pad,p,left,!left);
     check((left?out.left:out.right).touches==CONTROLLER_BUTTON_THUMBSTICK,"deliberate open palm failed to activate");
-    // Shape restrictions govern entry only. A held V keeps live axes inside
-    // the orientation cone, without requiring the fingers to stay open.
-    advance(p);vee(hand);step(pad,p,left,!left);advance(p,60);move(hand,.15,.15,0);
+    // Shape restrictions govern entry only. A fist keeps live axes without
+    // requiring the fingers to stay open.
+    advance(p);fist(hand);step(pad,p,left,!left);advance(p,60);move(hand,.15,.15,0);
     face_away(hand,p.head,20);
     out=step(pad,p,left,!left);const auto& side=left?out.left:out.right;
-    check(side.buttons==CONTROLLER_BUTTON_THUMBSTICK,"guard cancelled active V click");
+    check(side.buttons==0 && side.touches==CONTROLLER_BUTTON_THUMBSTICK,"guard cancelled active fist movement");
     near(side.thumbstick_x,.5,"held V lost X motion");near(side.thumbstick_y,.5,"held V lost Y motion");
   }
   // An isolated open frame, pinch, loss or discontinuous source cannot arm.
@@ -183,7 +198,8 @@ void wrist_rotation_keeps_panel_active() {
   for(bool left:{false,true}) {
     auto p=recorded();SimpleTouchpad pad;activate(pad,p);
     auto& hand=left?p.hands.left:p.hands.right;const auto open=hand;
-    advance(p);vee(hand);step(pad,p);advance(p,45);step(pad,p);
+    advance(p);thumb_up(hand);step(pad,p);advance(p,45);step(pad,p);
+    hand=open;vee(hand);
     for(double angle:{90.,160.}) {
       advance(p);face_away(hand,p.head,angle);move(hand,.01,0,0);
       auto out=step(pad,p);const auto side=left?out.left:out.right;
@@ -204,43 +220,31 @@ void wrist_rotation_keeps_panel_active() {
   }
 }
 
-void thumb_exit_is_confirmed_and_consumed() {
+void vee_exit_is_confirmed_and_consumed() {
   for(bool left:{false,true}) {
     auto p=recorded();SimpleTouchpad pad;activate(pad,p);
     auto& hand=left?p.hands.left:p.hands.right;const auto open=hand;
-    advance(p);vee(hand);face_away(hand,p.head,20);step(pad,p);
+    advance(p);thumb_up(hand);step(pad,p);
     advance(p,45);auto out=step(pad,p);
     check((left?out.left:out.right).buttons==CONTROLLER_BUTTON_THUMBSTICK,"test click was not held");
-    fist(hand);
-    const auto m=em::measure_hand(hand,.3);const auto base=hand.joints[5];
-    for(size_t i=0;i<4;++i) {
-      auto& j=hand.joints[1+i];const double d=-.035+double(i)*(.11/3);
-      j.px=base.px+.025*m.palm_basis[0][0];
-      j.py=base.py+.025*m.palm_basis[0][1]+d;
-      j.pz=base.pz+.025*m.palm_basis[0][2];
-    }
-    // Strong IP extension away from the palm, with the main phalanx still up.
-    const auto ip=hand.joints[3];
-    hand.joints[4].px=ip.px-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][0];
-    hand.joints[4].py=ip.py+.035*.5-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][1];
-    hand.joints[4].pz=ip.pz-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][2];
+    hand=open;vee(hand);face_away(hand,p.head,20);
     advance(p);out=step(pad,p);
-    check(left?pad.left_active():pad.right_active(),"thumb exit skipped confirmation");
-    check((left?out.left:out.right).buttons==0,"thumb exit pose pressed the panel");
+    check(left?pad.left_active():pad.right_active(),"V exit skipped confirmation");
+    check((left?out.left:out.right).buttons==0,"V exit pose pressed the panel");
     pad.apply(p.hands,&p.head,p.hands.timestamp_ns+60000000,0,true,true);
-    check(left?pad.left_active():pad.right_active(),"duplicate source confirmed thumb exit");
-    advance(p,44);step(pad,p);check(left?pad.left_active():pad.right_active(),"thumb exited before 45 ms");
+    check(left?pad.left_active():pad.right_active(),"duplicate source confirmed V exit");
+    advance(p,44);step(pad,p);check(left?pad.left_active():pad.right_active(),"V exited before 45 ms");
     advance(p,1);out=step(pad,p);
-    check(!(left?pad.left_active():pad.right_active()),"thumb up did not exit panel");
-    check(left?pad.left_reserved():pad.right_reserved(),"exit thumb did not reserve ordinary button input");
+    check(!(left?pad.left_active():pad.right_active()),"V did not exit panel");
+    check(left?pad.left_reserved():pad.right_reserved(),"exit V did not reserve ordinary button input");
     const auto side=left?out.left:out.right;
-    check(side.buttons==0 && side.touches==0 && side.release_counters[5]==1,"thumb exit left click/touch held");
-    near(side.thumbstick_x,0,"thumb exit left axes held");
-    check((left?out.right:out.left).touches==CONTROLLER_BUTTON_THUMBSTICK,"thumb exit cancelled other hand");
-    for(int i=0;i<6;++i){advance(p);step(pad,p);check(left?pad.left_reserved():pad.right_reserved(),"held exit thumb escaped suppression");}
+    check(side.buttons==0 && side.touches==0 && side.release_counters[5]==1,"V exit left click/touch held");
+    near(side.thumbstick_x,0,"V exit left axes held");
+    check((left?out.right:out.left).touches==CONTROLLER_BUTTON_THUMBSTICK,"V exit cancelled other hand");
+    for(int i=0;i<6;++i){advance(p);step(pad,p);check(left?pad.left_reserved():pad.right_reserved(),"held exit V escaped suppression");}
     hand=open;move(hand,.025,0,0);face_away(hand,p.head,20);advance(p);out=activate(pad,p);
     check((left?out.left:out.right).touches==CONTROLLER_BUTTON_THUMBSTICK,"release/reopen did not rearm");
-    near((left?out.left:out.right).thumbstick_x,0,"thumb exit failed to recapture centre");
+    near((left?out.left:out.right).thumbstick_x,0,"V exit failed to recapture centre");
   }
 }
 
@@ -317,8 +321,7 @@ void click_arming_reservation_and_release() {
   out=step(cold,p);advance(p,100);out=step(cold,p);
   check(!cold.active() && out.left.buttons==0 && out.right.buttons==0,"cold V armed/clicked touchpad");
   p=recorded();SimpleTouchpad pad(true,.30);activate(pad,p);
-  advance(p);move(p.hands.right,.15,0,0);vee(p.hands.right);
-  face_away(p.hands.right,p.head,20);
+  advance(p);move(p.hands.right,.15,0,0);thumb_up(p.hands.right);
   p.hands.right.pinch_strength=p.hands.right.grab_strength=1;p.hands.right.pinch_active=p.hands.right.grab_active=1;
   p.hands.right.reserved0=CONTROLLER_BUTTON_A|CONTROLLER_BUTTON_TRIGGER;
   out=step(pad,p);
@@ -326,11 +329,11 @@ void click_arming_reservation_and_release() {
   pad.apply(p.hands,&p.head,p.hands.timestamp_ns+60000000,0,true,true);out={};pad.publish(out);
   check(out.right.buttons==0,"duplicate hand sample confirmed click");
   advance(p,60);out=step(pad,p);
-  check(out.right.buttons==CONTROLLER_BUTTON_THUMBSTICK && out.right.press_counters[5]==1,"armed V did not click once");
-  near(out.right.thumbstick_x,.5,"V shifted captured centre");
-  for(int n=0;n<4;++n){advance(p);out=step(pad,p);check(out.right.press_counters[5]==1,"held V repeated click");}
-  advance(p);fist(p.hands.right);out=step(pad,p);
-  check(out.right.buttons==0 && out.right.release_counters[5]==1,"fist did not release V click");
+  check(out.right.buttons==CONTROLLER_BUTTON_THUMBSTICK && out.right.press_counters[5]==1,"armed thumb did not click once");
+  near(out.right.thumbstick_x,.5,"thumb shifted captured centre");
+  for(int n=0;n<4;++n){advance(p);out=step(pad,p);check(out.right.press_counters[5]==1,"held thumb repeated click");}
+  advance(p);p.hands.right=open.hands.right;move(p.hands.right,.15,0,0);fist(p.hands.right);out=step(pad,p);
+  check(out.right.buttons==0 && out.right.release_counters[5]==1,"fist did not release thumb click");
   advance(p,60);out=step(pad,p);check(out.right.buttons==0,"held fist clicked panel");
   advance(p);p.hands.right=open.hands.right;move(p.hands.right,.15,0,0);
   face_away(p.hands.right,p.head,20);out=step(pad,p);
@@ -344,8 +347,8 @@ void click_arming_reservation_and_release() {
 }
 void resets_loss_disabled_and_physical() {
   for(int reason=0;reason<11;++reason) {
-    auto p=recorded();SimpleTouchpad pad(true,.30);activate(pad,p);advance(p);vee(p.hands.right);step(pad,p);advance(p,60);
-    auto out=step(pad,p);check(out.right.buttons==CONTROLLER_BUTTON_THUMBSTICK,"test V was not held");
+    auto p=recorded();SimpleTouchpad pad(true,.30);activate(pad,p);advance(p);thumb_up(p.hands.right);step(pad,p);advance(p,60);
+    auto out=step(pad,p);check(out.right.buttons==CONTROLLER_BUTTON_THUMBSTICK,"test thumb was not held");
     if(reason==0)pad.apply(p.hands,nullptr,p.hands.timestamp_ns,0,true,true);
     if(reason==1)pad.apply(p.hands,&p.head,p.hands.timestamp_ns+200000000,0,true,true);
     if(reason==2)pad.apply(p.hands,&p.head,p.hands.timestamp_ns,1,true,true);
@@ -374,7 +377,7 @@ int main() {
       near(out.right.thumbstick_x,.05/radius,"configured radius ignored");
     }
     check(SimpleTouchpad::default_radius_m==.10,"default radius must be 10 cm");
-    activation_guards();wrist_rotation_keeps_panel_active();thumb_exit_is_confirmed_and_consumed();centre_axes_and_radius();head_coordinates_and_two_centres();click_arming_reservation_and_release();resets_loss_disabled_and_physical();
-    std::cout<<"Simple touchpad: configurable radius, head axes, free wrist rotation, thumb exit, independent hands, click release and recenter passed\n";
+    activation_guards();wrist_rotation_keeps_panel_active();vee_exit_is_confirmed_and_consumed();centre_axes_and_radius();head_coordinates_and_two_centres();click_arming_reservation_and_release();resets_loss_disabled_and_physical();
+    std::cout<<"Simple touchpad: configurable radius, head axes, free wrist rotation, V exit, independent hands, click release and recenter passed\n";
   } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }
