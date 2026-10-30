@@ -98,10 +98,11 @@ Simple-mode settings in `start_xr_runtime_adapter_shm.sh` (or launch environment
 ```bash
 SIMPLE_GESTURES=1
 SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10
-SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=30
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=0
 ```
 
-The radius is in metres (0.01–1.0). Positive yaw turns both output hands outward,
+The radius is in metres (0.01–1.0). You can change the extra yaw angle.
+Positive yaw turns both output hands outward,
 over all existing offsets; set it to 0 to disable. The correction affects the
 whole skeleton and virtual controller after recognition, so gesture directions
 and touchpad axes remain head-relative. As in controller emulation, it is skipped

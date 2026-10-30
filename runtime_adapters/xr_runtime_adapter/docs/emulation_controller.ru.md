@@ -563,7 +563,7 @@ V внутри панели выполняет только выход, без X
 
 Теперь простой режим выбран по умолчанию. В start_xr_runtime_adapter_shm.sh:
 SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10 задаёт радиус в метрах (0.01–1.0),
-SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=30 — дополнительный доворот наружу
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES — настраиваемый дополнительный доворот наружу
 поверх остальных смещений. Ноль отключает доворот. Настройки доступны также
 через одноимённые переменные окружения и CLI --simple-gestures-touchpad-radius-m,
 --simple-gestures-pose-yaw-offset-degrees. В Windows .env имена с префиксом XR_.
