@@ -1,6 +1,6 @@
 # Controller Gestures
 
-Controller emulation is the default. Keep index and middle straight, ring and
+Simple gestures are the default. For controller emulation, keep index and middle straight, ring and
 pinky bent, and the thumb relaxed. Turn the hands inward toward your body for
 better recognition; the configured offset turns the virtual hands forward.
 
@@ -54,23 +54,53 @@ Select **Gestures (grab / pinch)** in the launcher, or restart tracking with
 | Y (left) / B (right) | Thumbs-up: extend the thumb above the folded knuckles; bend the other four fingers. |
 | Menu | Straighten only the index on each hand and point the two index fingers toward each other. Keep both hands visible. |
 
-No calibration is needed. These gestures work outside an active touchpad session.
-While the touchpad is active, a fist clicks only that panel, without Grip or Trigger.
+No calibration is needed. Pinch and palm Grip also work during an active
+touchpad session. In that session, V clicks the panel instead of X/A; a fist does not click.
 
 ### Virtual touchpad (enabled by default)
 
-Open your palm away from you to activate the panel. Its current position relative
-to your head becomes the centre. Move the hand left/right and up/down; diagonals
-work. The edge is 30 cm from the centre. Movement beyond it stays at the edge.
+Fully straighten all five fingers and separate thumb and index. Point the open
+palm away from your head, like a stop sign, with fingers unfolded at the knuckles.
+Keep this pose briefly to activate the panel. Its position relative to your head
+then becomes the centre. Move the hand left/right and up/down; diagonals
+work. The edge is 10 cm from the centre. Movement beyond it stays at the edge.
 
-Close a fist to press, then reopen away from you to release. The centre stays
-fixed. A fist can only click after activation. While the panel is active, this
-hand's Trigger, Grip and A/B gestures pause; the other hand stays independent.
+Show V to press: spread the straight index and middle fingers, with ring and
+pinky bent. Release V to release the click. The centre stays fixed, and moving
+a held V still changes direction. V only clicks after activation and sends no
+X/A during the session; no replacement gesture is assigned to X/A. A fist does
+not click. Pinch sends Trigger and an open palm toward yourself sends Grip,
+while the axes keep working. The other hand stays independent.
 
-Open the palm toward yourself (Grip) or remove the hand from view to exit.
-The next activation captures a new centre. Loss of head or hand tracking also
-releases the panel.
+Show thumbs-up (other four fingers bent) to exit without pressing B/Y. Release
+the pose before using thumbs-up as a normal button.
+Wrist rotation does not exit the panel, including turning the open palm toward
+yourself. The 35-degree orientation limit is checked only when activating.
+Loss of hand or head tracking also exits.
+The next activation captures a new centre.
 
 To disable only the panel, add `SIMPLE_GESTURES_TOUCHPAD=0` to the Linux launch
 command. In the Windows launcher's `.env`, use `XR_SIMPLE_GESTURES_TOUCHPAD=0`.
 Restart tracking after changing it.
+
+
+Simple gestures are the default for new sessions/settings. To explicitly select
+controller emulation on Linux, use `SIMPLE_GESTURES=0 EMULATION_CONTROLLER=1`.
+Existing saved launcher selections are preserved.
+
+Simple-mode settings in `start_xr_runtime_adapter_shm.sh` (or launch environment):
+
+```bash
+SIMPLE_GESTURES=1
+SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=30
+```
+
+The radius is in metres (0.01–1.0). Positive yaw turns both output hands outward,
+over all existing offsets; set it to 0 to disable. The correction affects the
+whole skeleton and virtual controller after recognition, so gesture directions
+and touchpad axes remain head-relative. As in controller emulation, it is skipped
+on a side using controller IMU orientation and returns when that side switches
+back to optical hand orientation. It does not accumulate on reconnect.
+In the Windows `.env`, use the same radius/yaw names prefixed with `XR_`.
+Restart tracking after changing them.

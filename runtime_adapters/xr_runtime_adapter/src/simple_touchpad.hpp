@@ -10,11 +10,16 @@ namespace xr_runtime_adapter::gestures {
 // coordinates (+X right, +Y up), never the hand/controller presentation frame.
 class SimpleTouchpad {
  public:
-  static constexpr double radius_m = .30;
-  explicit SimpleTouchpad(bool enabled = true) : enabled_(enabled) {}
+  static constexpr double default_radius_m = .10;
+  explicit SimpleTouchpad(bool enabled = true, double radius_m = default_radius_m)
+      : enabled_(enabled), radius_m_(radius_m) {}
   bool active() const { return left_.active || right_.active; }
   bool left_active() const { return left_.active; }
   bool right_active() const { return right_.active; }
+  bool left_reserved() const { return left_.active || left_.exit_thumb; }
+  bool right_reserved() const { return right_.active || right_.exit_thumb; }
+  bool left_exit_held() const { return left_.exit_thumb; }
+  bool right_exit_held() const { return right_.exit_thumb; }
 
   void apply(xr_runtime::HandTrackingFrameF32V2& hands, const xr_runtime::HmdPoseF64V1* head,
              uint64_t now, uint64_t origin, bool left_enabled, bool right_enabled,
@@ -47,19 +52,22 @@ class SimpleTouchpad {
 
  private:
   struct Side {
-    bool active = false, away = false, click = false, fist = false;
-    bool candidate = false, owned = false, previous_click = false;
+    bool active = false, away = false, click = false, vee = false;
+    bool candidate = false, owned = false, previous_click = false, arming = false;
+    bool exit_thumb = false, exit_candidate = false;
     uint32_t presses = 0, releases = 0;
-    uint64_t sample = 0, since = 0;
-    std::array<bool, 4> extended{};
+    uint64_t sample = 0, since = 0, arm_since = 0;
+    uint64_t exit_since = 0;
+    std::array<bool, 4> extended{}, curled{};
     emulation::Vec3 centre{};
     float x = 0, y = 0;
   };
 
   static void cancel(Side& s) {
-    s.active = s.away = s.click = s.fist = s.candidate = false;
-    s.sample = s.since = 0;
-    s.extended = {};
+    s.active = s.away = s.click = s.vee = s.candidate = s.arming = false;
+    s.sample = s.since = s.arm_since = 0;
+    s.exit_thumb = s.exit_candidate = false; s.exit_since = 0;
+    s.extended = {}; s.curled = {};
     s.x = s.y = 0;
     // Keep published click counters across releases, loss and recentering.
   }
@@ -90,6 +98,49 @@ class SimpleTouchpad {
             2*(x*z+w*y)*px + 2*(y*z-w*x)*py + (1-2*(x*x+y*y))*pz};
   }
 
+  static double dot(const emulation::Vec3& a, const emulation::Vec3& b) {
+    return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  }
+
+  static bool facing_away(const emulation::HandMeasurement& h,
+                          const emulation::Vec3& viewer) {
+    emulation::Vec3 toward{};
+    for (size_t i=0;i<3;++i) toward[i]=viewer[i]-h.palm_center[i];
+    const double distance=std::sqrt(dot(toward,toward));
+    // The 35-degree cone gates entry only. Use the
+    // palm bones, independent of finger curl, thumb pose and presentation yaw.
+    return std::isfinite(distance) && distance >= .05 && distance <= 2 &&
+        -dot(h.palm_basis[2],toward)/distance >= .8191520442889918;
+  }
+
+  // Entry is deliberately stricter than gameplay finger extension. Its relaxed
+  // MCP threshold accepts forward-pointing fingers with folded knuckles, which
+  // must never seize an entire touchpad session while making/releasing a pinch.
+  static bool activation_pose(const xr_runtime::HandSideF32V2& hand,
+                              const emulation::HandMeasurement& h,
+                              const emulation::Vec3& viewer) {
+    if (!h.thumb_valid || h.thumb_clearance < .85 || h.thumb_straightness < .85 ||
+        !std::isfinite(h.pinch_ratio) || h.pinch_ratio < .85 ||
+        std::any_of(h.curl.begin(),h.curl.end(),[](double v){return v > .20;})) return false;
+    if (!facing_away(h,viewer)) return false;
+    const auto& wrist=hand.joints[0];
+    for (size_t f=0;f<4;++f) {
+      const auto& base=hand.joints[5+4*f];
+      const auto& pip=hand.joints[6+4*f];
+      emulation::Vec3 meta{base.px-wrist.px,base.py-wrist.py,base.pz-wrist.pz};
+      const emulation::Vec3 proximal{pip.px-base.px,pip.py-base.py,pip.pz-base.pz};
+      const double normal=dot(meta,h.palm_basis[2]);
+      for (size_t i=0;i<3;++i) meta[i]-=normal*h.palm_basis[2][i];
+      const double length=std::sqrt(dot(meta,meta));
+      if (!std::isfinite(length) || length < 1e-5) return false;
+      // Flexion plane only: sideways finger spread is welcome. At most 45
+      // degrees at every knuckle; a claw can have straight phalanges/curl=0.
+      const double forward=dot(proximal,meta)/length;
+      if (forward <= 0 || std::abs(dot(proximal,h.palm_basis[2])) > forward) return false;
+    }
+    return true;
+  }
+
   void update(xr_runtime::HandSideF32V2& hand, Side& s,
               const emulation::Vec3& viewer, uint64_t stamp, bool enabled) {
     const bool valid = enabled && hand.status == 1 &&
@@ -105,36 +156,63 @@ class SimpleTouchpad {
     const auto h = emulation::measure_hand(hand, config_.min_confidence);
     if (!h.palm_valid || std::any_of(h.curl.begin(),h.curl.end(),
         [](double v) { return !std::isfinite(v) || v < 0; })) { cancel(s); return; }
+    const double closed_threshold=(s.exit_thumb || s.exit_candidate)?config_.curl_off:config_.curl_on;
+    const bool closed=std::all_of(h.curl.begin(),h.curl.end(),
+        [closed_threshold](double v){return v>=closed_threshold;});
+    const bool thumb_up=simple_thumb_up(h,closed,s.exit_thumb || s.exit_candidate);
+    if (s.exit_thumb) {
+      // The exit gesture is consumed until released; it must not also send B/Y.
+      if (thumb_up) { reserve(hand); s.sample=stamp; return; }
+      s.exit_thumb=false;
+    }
+    if (s.active && thumb_up) {
+      if (stamp!=s.sample) {
+        if (!s.exit_candidate || double(stamp-s.sample)/1e6>config_.max_age_ms) s.exit_since=stamp;
+        s.exit_candidate=true;
+        if (double(stamp-s.exit_since)/1e6>=config_.button_confirm_ms) {
+          cancel(s); s.exit_thumb=true; reserve(hand); s.sample=stamp; return;
+        }
+      }
+    } else { s.exit_candidate=false; s.exit_since=0; }
     for (size_t i=0;i<4;++i) {
       const double on=i==3 ? config_.little_extension_on : config_.extension_on;
       const double off=i==3 ? config_.little_extension_off : config_.extension_off;
       s.extended[i] = 1-h.curl[i] >= (s.extended[i] ? off : on);
+      s.curled[i] = h.curl[i] >= (s.curled[i] ? config_.curl_off : config_.curl_on);
     }
     const bool extended=std::all_of(s.extended.begin(),s.extended.end(),[](bool v){return v;});
     const auto palm=emulation::measure_open_palm_pose(h,extended,config_,&viewer,false,s.away);
-    // The established palm-to-self Grip remains the explicit exit gesture.
-    if (palm.toward_viewer) { cancel(s); return; }
+    // Palm orientation only controls entry; an active panel permits wrist rotation.
     const auto point=head_local(h.palm_center,viewer);
     s.away=palm.away_from_viewer;
-    if (!s.active && s.away) {
-      s.active = s.owned = true;
-      s.centre = point;  // Capture once; reopening after a click does not recenter.
+    if (!s.active) {
+      if (!s.away || !activation_pose(hand,h,viewer)) {
+        s.arming=false; s.arm_since=0;
+      } else if (stamp!=s.sample) {
+        if (!s.arming || double(stamp-s.sample)/1e6 > config_.max_age_ms) s.arm_since=stamp;
+        s.arming=true;
+        // A single noisy open sample cannot interrupt a pinch. Source time,
+        // not repeated adapter ticks, confirms entry in the usual 45 ms.
+        if (double(stamp-s.arm_since)/1e6 >= config_.button_confirm_ms) {
+          s.active = s.owned = true;
+          s.centre = point;  // Capture on recognition, never on later reopening.
+          s.arming=false; s.arm_since=0;
+        }
+      }
     }
     if (s.active) {
-      double x=(point[0]-s.centre[0])/radius_m, y=(point[1]-s.centre[1])/radius_m;
+      double x=(point[0]-s.centre[0])/radius_m_, y=(point[1]-s.centre[1])/radius_m_;
       const double scale=std::max(1.0,std::hypot(x,y));
       s.x=static_cast<float>(x/scale); s.y=static_cast<float>(y/scale);
-      const double threshold=s.fist ? config_.curl_off : config_.curl_on;
-      const bool fist=std::all_of(h.curl.begin(),h.curl.end(),
-          [threshold](double v){return v>=threshold;});
-      if (!fist) { s.fist=s.click=s.candidate=false; s.since=0; }
+      const bool vee=!thumb_up && simple_v(hand,s.extended,s.curled,s.vee);
+      if (!vee) { s.vee=s.click=s.candidate=false; s.since=0; }
       else if (stamp!=s.sample) {
-        s.fist=true;
+        s.vee=true;
         if (!s.candidate) { s.candidate=true; s.since=stamp; }
         s.click=double(stamp-s.since)/1e6 >= config_.button_confirm_ms;
       }
-      // Reserve this hand's legacy channels, including backend A/B, for the
-      // whole session and the intermediate shapes while closing/opening a fist.
+      // Clear backend input before the simple recognizer adds the allowed
+      // pinch and palm Grip channels alongside the authoritative V click.
       reserve(hand,s.click);
     }
     s.sample=stamp;
@@ -149,9 +227,9 @@ class SimpleTouchpad {
       return;
     }
     if (s.active) {
-      out.buttons=s.click ? bit : 0;
-      out.touches=bit;
-      out.trigger=out.grip=0;
+      constexpr uint64_t allowed=CONTROLLER_BUTTON_TRIGGER|CONTROLLER_BUTTON_GRIP;
+      out.buttons=(out.buttons & allowed) | (s.click ? bit : 0);
+      out.touches=(out.touches & allowed) | bit;
       out.thumbstick_x=s.x; out.thumbstick_y=s.y;
       out.flags |= RUNTIME_CONTROLLER_CONNECTED | RUNTIME_CONTROLLER_INPUT_VALID;
       out.source_mask |= RUNTIME_CONTROLLER_SOURCE_HAND_GESTURES;
@@ -171,6 +249,7 @@ class SimpleTouchpad {
   }
 
   bool enabled_;
+  double radius_m_;
   emulation::Config config_=simple_palm_config();
   std::array<double,4> q_{{1,0,0,0}};
   Side left_,right_;

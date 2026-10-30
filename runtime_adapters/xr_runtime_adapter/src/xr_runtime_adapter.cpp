@@ -3036,7 +3036,9 @@ int main(int argc, char** argv) {
   bool runtime_left_hand_gestures_enabled = true;
   bool runtime_right_hand_gestures_enabled = true;
   bool emulation_controller_enabled = true;
-  bool simple_gestures = false;
+  bool simple_gestures = true;
+  double simple_gestures_touchpad_radius_m = .10;
+  double simple_gestures_pose_yaw_offset_degrees = 30;
   bool simple_gestures_touchpad = true;
   std::string emulation_controller_config_path;
   bool runtime_derive_extra_gesture_buttons = true;
@@ -3648,14 +3650,20 @@ int main(int argc, char** argv) {
                  "How long to keep the last fresh derived visual pinch/grab in ms after hand tracking stops being fresh; 0 clears immediately");
   app.add_option("--runtime-ignore-backend-hand-gestures", runtime_ignore_backend_hand_gestures,
                  "Ignore pinch/grab/button gesture values received from hand_tracking input before applying controller override or runtime-derived gestures");
-  app.add_option("--emulation-controller", emulation_controller_enabled,
-                 "Finger/thumb controller emulation, enabled by default; --simple-gestures takes priority");
-  app.add_flag("--simple-gestures", simple_gestures,
+  auto* emulation_mode_option = app.add_option("--emulation-controller", emulation_controller_enabled,
+                 "Finger/thumb controller emulation; explicit selection overrides the default simple mode");
+  auto* simple_mode_option = app.add_flag("--simple-gestures", simple_gestures,
                "Use simple gestures: pinch, palm Grip, fist, V, thumbs-up and two-hand pointing Menu")
       ->envname("SIMPLE_GESTURES");
   app.add_option("--simple-gestures-touchpad", simple_gestures_touchpad,
-                 "In simple mode, enable head-relative open-palm touchpad with 0.30 m radius (default 1)")
+                 "In simple mode, enable head-relative open-palm touchpad with configurable radius (default 1)")
       ->envname("SIMPLE_GESTURES_TOUCHPAD");
+  app.add_option("--simple-gestures-touchpad-radius-m", simple_gestures_touchpad_radius_m,
+                 "Simple touchpad radius in metres (default 0.10)")
+      ->envname("SIMPLE_GESTURES_TOUCHPAD_RADIUS_M")->check(CLI::Range(.01, 1.0));
+  app.add_option("--simple-gestures-pose-yaw-offset-degrees", simple_gestures_pose_yaw_offset_degrees,
+                 "Extra outward yaw for simple-mode hands and controllers (default 30)")
+      ->envname("SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES")->check(CLI::Range(-180.0, 180.0));
   app.add_option("--emulation-controller-config", emulation_controller_config_path,
                  "Optional controller emulation JSON profile; ignored with --simple-gestures");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
@@ -4072,10 +4080,14 @@ int main(int argc, char** argv) {
   const bool runtime_controller_buttons_only_mode =
       controller_input_config.mode == "controller_buttons_only" ||
       runtime_controller_mode_value == xr_runtime::RuntimeControllerMode::HAND_TRACKING_CONTROLLER_BUTTONS_ONLY;
+  if (emulation_mode_option->count() && !simple_mode_option->count()) simple_gestures = false;
   if (simple_gestures) emulation_controller_enabled = false;
   const auto emulation_controller_config = emulation_controller_enabled
       ? xr_runtime_adapter::emulation::load_config(emulation_controller_config_path)
       : xr_runtime_adapter::emulation::Config{};
+  auto simple_pose_config = xr_runtime_adapter::emulation::Config{};
+  simple_pose_config.pose_yaw_offset_degrees = simple_gestures_pose_yaw_offset_degrees;
+  const auto& presentation_yaw_config = simple_gestures ? simple_pose_config : emulation_controller_config;
   const bool emulation_left_enabled = emulation_controller_enabled && emulation_controller_config.left.enabled;
   const bool emulation_right_enabled = emulation_controller_enabled && emulation_controller_config.right.enabled;
   const bool effective_runtime_left_hand_gestures_enabled =
@@ -4498,6 +4510,8 @@ int main(int argc, char** argv) {
     std::cout << "runtime_derive_extra_gesture_buttons: "
               << (runtime_derive_extra_gesture_buttons ? "true" : "false") << "\n";
     std::cout << "simple_gestures: " << (simple_gestures ? "true" : "false") << "\n";
+    std::cout << "simple_gestures_touchpad_radius_m: " << simple_gestures_touchpad_radius_m << "\n";
+    std::cout << "simple_gestures_pose_yaw_offset_degrees: " << simple_gestures_pose_yaw_offset_degrees << "\n";
     std::cout << "simple_gestures_touchpad: " << (simple_gestures_touchpad ? "true" : "false") << "\n";
     std::cout << "emulation_controller: " << (emulation_controller_enabled ? "true" : "false") << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons_with_controller_input: "
@@ -5505,7 +5519,7 @@ int main(int argc, char** argv) {
     int64_t override_controller_gesture_block_until_ns = 0;
     gestures::RuntimeGestureHysteresisState runtime_gesture_hysteresis;
     gestures::SimpleControllerGestures simple_controller_gestures;
-    gestures::SimpleTouchpad simple_touchpad(simple_gestures_touchpad);
+    gestures::SimpleTouchpad simple_touchpad(simple_gestures_touchpad, simple_gestures_touchpad_radius_m);
     gestures::RuntimeHandGestureSnapshot last_fresh_runtime_hand_gestures;
     std::optional<xr_runtime_adapter::emulation::Controller> emulation_controller;
     xr_runtime_adapter::emulation::WristPoseFilter emulation_wrist_filter;
@@ -6280,10 +6294,10 @@ int main(int argc, char** argv) {
             apply_hand_frame_transform(
                 frame.hand_v2, hand_transform, hmd_position_ptr, hmd_orientation_ptr,
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_left_connected, emulation_left_enabled,
+                    hand_transform, controller_left_connected, emulation_left_enabled || simple_gestures,
                     left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_transform, controller_right_connected, emulation_right_enabled,
+                    hand_transform, controller_right_connected, emulation_right_enabled || simple_gestures,
                     right_uses_imu_profile),
                 frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
@@ -6293,10 +6307,10 @@ int main(int argc, char** argv) {
             apply_hand_frame_transform(
                 frame.hand, hand_v1_transform, hmd_position_ptr, hmd_orientation_ptr,
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_left_connected, emulation_left_enabled,
+                    hand_v1_transform, controller_left_connected, emulation_left_enabled || simple_gestures,
                     left_uses_imu_profile),
                 should_apply_hand_orientation_offset(
-                    hand_v1_transform, controller_right_connected, emulation_right_enabled,
+                    hand_v1_transform, controller_right_connected, emulation_right_enabled || simple_gestures,
                     right_uses_imu_profile),
                 frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
@@ -6453,7 +6467,8 @@ int main(int argc, char** argv) {
                 frame_runtime_left_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
                 frame_runtime_right_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
                 controller_left_connected, controller_right_connected,
-                simple_touchpad.left_active(),simple_touchpad.right_active());
+                simple_touchpad.left_active(),simple_touchpad.right_active(),
+                simple_touchpad.left_exit_held(),simple_touchpad.right_exit_held());
           };
           if (frame.hand_v2.sequence) {
             apply_simple(frame.hand_v2);
@@ -6502,8 +6517,8 @@ int main(int argc, char** argv) {
               hand_transform.hand_orientation_offset.apply_to_joints) ||
              (frame.hand.sequence && legacy_hand_transform.hand_orientation_offset.enabled &&
               legacy_hand_transform.hand_orientation_offset.apply_to_joints));
-        const bool emulation_yaw = emulation_controller &&
-            emulation_controller_config.pose_yaw_offset_degrees != 0;
+        const bool emulation_yaw = (emulation_controller || simple_gestures) &&
+            presentation_yaw_config.pose_yaw_offset_degrees != 0;
         std::optional<xr_runtime::RuntimeFrame> presentation_frame;
         if (skeleton_offset || emulation_yaw) {
           presentation_frame = frame;
@@ -6511,22 +6526,22 @@ int main(int argc, char** argv) {
             xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
                 presentation_frame->hand_v2, hand_transform,
                 should_apply_hand_orientation_offset(hand_transform, controller_left_connected,
-                    emulation_left_enabled, left_uses_imu_profile),
+                    emulation_left_enabled || simple_gestures, left_uses_imu_profile),
                 should_apply_hand_orientation_offset(hand_transform, controller_right_connected,
-                    emulation_right_enabled, right_uses_imu_profile), &skeleton_aligned_reference);
+                    emulation_right_enabled || simple_gestures, right_uses_imu_profile), &skeleton_aligned_reference);
             xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
                 presentation_frame->hand, legacy_hand_transform,
                 should_apply_hand_orientation_offset(legacy_hand_transform, controller_left_connected,
-                    emulation_left_enabled, left_uses_imu_profile),
+                    emulation_left_enabled || simple_gestures, left_uses_imu_profile),
                 should_apply_hand_orientation_offset(legacy_hand_transform, controller_right_connected,
-                    emulation_right_enabled, right_uses_imu_profile), &legacy_skeleton_aligned_reference);
+                    emulation_right_enabled || simple_gestures, right_uses_imu_profile), &legacy_skeleton_aligned_reference);
           }
           if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                presentation_frame->hand_v2, emulation_controller_config,
+                presentation_frame->hand_v2, presentation_yaw_config,
                 !left_uses_imu_profile, !right_uses_imu_profile);
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                presentation_frame->hand, emulation_controller_config,
+                presentation_frame->hand, presentation_yaw_config,
                 !left_uses_imu_profile, !right_uses_imu_profile);
           }
         }
@@ -6638,9 +6653,9 @@ int main(int argc, char** argv) {
                 left_imu_orientation_used,
                 right_imu_orientation_used);
           }
-          if (emulation_controller) {
+          if (emulation_controller || simple_gestures) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                runtime_controller_state, emulation_controller_config);
+                runtime_controller_state, presentation_yaw_config);
           }
           controller_state_for_log = runtime_controller_state;
           controller_state_for_log_available = true;

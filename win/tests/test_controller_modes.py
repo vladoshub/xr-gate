@@ -26,7 +26,7 @@ class ControllerModesTest(unittest.TestCase):
                 self.assertNotIn("override_controller",names)
                 self.assertNotIn("override_controller_service",names)
                 env=next(s for s in data["post_gate_services"] if s["name"]=="xr_runtime_adapter")["env"]
-                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"1","KEEP":"yes"})
+                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"1","SIMPLE_GESTURES_TOUCHPAD_RADIUS_M":"0.10","SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES":"30","KEEP":"yes"})
                 self.assertEqual(source.read_bytes(),before)
                 runtime.settings["XR_TCP_PORT"]="45810"; captured={}
                 runtime.run_managed=lambda args,env,handle:captured.update(env)
@@ -53,7 +53,7 @@ class ControllerModesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             probe=Path(folder)/"adapter.py"
             probe.write_text('#!/usr/bin/env python3\nimport json,sys\nprint("OPTIONS="+json.dumps(sys.argv[1:]))\n');probe.chmod(0o755)
-            cases=[({},"1",False),({"SIMPLE_GESTURES":"1","EMULATION_CONTROLLER":"1"},"0",True),
+            cases=[({"SIMPLE_GESTURES":None,"EMULATION_CONTROLLER":None},"0",True),({},"1",False),({"SIMPLE_GESTURES":"1","EMULATION_CONTROLLER":"1"},"0",True),
                    ({"SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"0"},"0",True),
                    ({"XR_CONTROLLER_MODE":"simple_gestures"},"0",True),
                    ({"XR_CONTROLLER_MODE":"no","SIMPLE_GESTURES":"1"},"0",False)]
@@ -61,9 +61,12 @@ class ControllerModesTest(unittest.TestCase):
                 env=dict(os.environ,ROOT_PROJECT=folder,XR_RUNTIME_ADAPTER_BIN=str(probe),AUTO_BUILD="0",
                          SIMPLE_GESTURES="0",EMULATION_CONTROLLER="1",EMULATION_CONTROLLER_CONFIG="/not/a/profile.json",XR_CONTROLLER_MODE="")
                 env.update(extra)
+                env={k:v for k,v in env.items() if v is not None}
                 result=subprocess.run(["bash",str(script)],env=env,text=True,capture_output=True,timeout=5)
                 self.assertEqual(result.returncode,0,result.stderr)
                 args=json.loads(next(x.removeprefix("OPTIONS=") for x in result.stdout.splitlines() if x.startswith("OPTIONS=")))
+                self.assertEqual(args[args.index("--simple-gestures-touchpad-radius-m")+1],"0.10")
+                self.assertEqual(args[args.index("--simple-gestures-pose-yaw-offset-degrees")+1],"30")
                 self.assertEqual(args.count("--emulation-controller"),1)
                 self.assertEqual(args[args.index("--emulation-controller")+1],emulation)
                 self.assertEqual("--simple-gestures" in args,simple)

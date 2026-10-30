@@ -10,17 +10,18 @@ class SimpleControllerGestures {
  public:
   void apply(xr_runtime::HandTrackingFrameF32V2& hands, const emulation::Vec3* viewer,
              uint64_t now, uint64_t origin, bool left_enabled, bool right_enabled,
-             bool left_physical, bool right_physical, bool left_pad, bool right_pad) {
+             bool left_physical, bool right_physical, bool left_pad, bool right_pad,
+             bool left_pad_exit = false, bool right_pad_exit = false) {
     if (origin!=origin_ || hands.reset_counter!=reset_) {
       left_=right_={};menu_={};origin_=origin;reset_=hands.reset_counter;
     }
     const uint64_t stamp=hands.source_timestamp_ns?hands.source_timestamp_ns:hands.timestamp_ns;
     const bool fresh=hands.sequence && stamp &&
         (stamp<=now ? double(now-stamp)/1e6<=config_.max_age_ms : stamp-now<=2000000);
-    palm_grip_.apply(hands,viewer,now,origin,left_enabled&&!left_pad,right_enabled&&!right_pad,
+    palm_grip_.apply(hands,viewer,now,origin,left_enabled&&!left_pad_exit,right_enabled&&!right_pad_exit,
                      left_physical,right_physical);
-    update(hands.left,left_,stamp,fresh&&left_enabled,left_physical,left_pad,true);
-    update(hands.right,right_,stamp,fresh&&right_enabled,right_physical,right_pad,false);
+    update(hands.left,left_,stamp,fresh&&left_enabled,left_physical,left_pad,left_pad_exit,true);
+    update(hands.right,right_,stamp,fresh&&right_enabled,right_physical,right_pad,right_pad_exit,false);
     const bool inward=pointing_together(hands.left,hands.right);
     if (!inward) menu_={};
     else {
@@ -40,7 +41,7 @@ class SimpleControllerGestures {
   struct Channel {Pose candidate=Pose::None,active=Pose::None;uint64_t since=0,sample=0;};
   struct Side {
     std::array<bool,4> extended{},curled{};
-    bool valid=false,point=false,pinch=false,thumb_up=false;
+    bool valid=false,point=false,pinch=false,thumb_up=false,vee=false;
     Channel channel;
   };
   struct Counters {uint64_t previous=0;std::array<uint32_t,32> press{},release{};};
@@ -64,9 +65,11 @@ class SimpleControllerGestures {
     c.sample=stamp;
   }
 
-  void update(xr_runtime::HandSideF32V2& h,Side& s,uint64_t stamp,bool enabled,bool physical,bool pad,bool left) {
+  void update(xr_runtime::HandSideF32V2& h,Side& s,uint64_t stamp,bool enabled,bool physical,
+              bool pad,bool pad_exit,bool left) {
     if(physical){s={};return;}
-    if(pad){s={};return;} // Touchpad already reserved and wrote its click.
+    if(pad_exit){s={};clear(h);return;}
+    const uint32_t pad_click=pad?(h.reserved0 & xr_runtime::CONTROLLER_BUTTON_THUMBSTICK):0;
     const float palm_grip=h.grab_strength;
     clear(h);
     const bool valid=enabled && h.status==1 &&
@@ -84,26 +87,22 @@ class SimpleControllerGestures {
       s.extended[i]=1-m.curl[i]>=(s.extended[i]?off:on);
       s.curled[i]=m.curl[i]>=(s.curled[i]?config_.curl_off:config_.curl_on);
     }
-    s.point=s.extended[0] && s.curled[1] && s.curled[2] && s.curled[3];
-    auto index=sub(joint(h,8),joint(h,5)),middle=sub(joint(h,12),joint(h,9));
-    const bool directions=unit(index)&&unit(middle);
-    const bool was_v=s.channel.candidate==Pose::V;
-    const bool vee=s.extended[0] && s.extended[1] && s.curled[2] && s.curled[3] && directions &&
-        dot(index,middle)<=std::cos((was_v?8.:12.)*3.141592653589793/180.);
+    s.point=!pad && s.extended[0] && s.curled[1] && s.curled[2] && s.curled[3];
+    s.vee=simple_v(h,s.extended,s.curled,s.vee);
+    const bool vee=s.vee;
     const bool closed=std::all_of(s.curled.begin(),s.curled.end(),[](bool v){return v;});
     const bool closed_index=m.index_chain_curl>=.80 || m.index_knuckle_curl>=.95;
     // A thumb held above the folded knuckles is distinct from the thumb lying
     // across a fist. Palm-local distances work at arbitrary wrist orientations.
-    s.thumb_up=closed && closed_index && m.thumb_valid &&
-        m.thumb_clearance>=(s.thumb_up?.70:.78) && m.thumb_straightness>=(s.thumb_up?.70:.76) &&
-        m.thumb_pose[11]>=(s.thumb_up?.15:.25);
+    s.thumb_up=simple_thumb_up(m,closed,s.thumb_up);
     const bool tucked=m.thumb_valid && (m.thumb_clearance<.73 || m.thumb_straightness<.72 || m.thumb_pose[11]<.15);
     // Reuse emulation's scale-normalized tip distance and folded-index guard.
     // The former simple path had an ~3 mm release band after two response curves.
-    s.pinch=m.thumb_valid && m.thumb_clearance>=.60 && m.index_chain_curl<.80 &&
-        m.index_knuckle_curl<.95 && m.pinch_ratio>=0 && m.pinch_ratio<=(s.pinch?.60:.40);
-    const Pose pose=vee?Pose::V:s.pinch?Pose::Pinch:s.thumb_up?Pose::ThumbUp:
-        closed&&closed_index&&tucked?Pose::Fist:Pose::None;
+    s.pinch=simple_pinch(m,s.pinch);
+    // In a panel, V belongs only to click, thumbs-up to exit, and fist is idle.
+    // Consume V before pinch so a nearby thumb cannot add Trigger to its click.
+    const Pose pose=vee?(pad?Pose::None:Pose::V):s.pinch?Pose::Pinch:!pad&&s.thumb_up?Pose::ThumbUp:
+        !pad&&closed&&closed_index&&tucked?Pose::Fist:Pose::None;
     confirm(s.channel,pose,stamp);
     if(s.channel.active==Pose::V)h.reserved0=left?xr_runtime::CONTROLLER_BUTTON_X:xr_runtime::CONTROLLER_BUTTON_A;
     else if(s.channel.active==Pose::ThumbUp)h.reserved0=left?xr_runtime::CONTROLLER_BUTTON_Y:xr_runtime::CONTROLLER_BUTTON_B;
@@ -111,6 +110,7 @@ class SimpleControllerGestures {
       h.pinch_strength=static_cast<float>(std::clamp((.60-m.pinch_ratio)/.20,0.,1.));h.pinch_active=1;
     } else if(s.channel.active==Pose::Fist){h.pinch_strength=h.grab_strength=1;h.pinch_active=h.grab_active=1;}
     else if(pose==Pose::None && palm_grip>0){h.grab_strength=palm_grip;h.grab_active=1;}
+    h.reserved0 |= pad_click;
   }
 
   bool pointing_together(const xr_runtime::HandSideF32V2& l,const xr_runtime::HandSideF32V2& r) const {

@@ -152,10 +152,16 @@ Outside an active touchpad, a fist holds Grip + Trigger, V sends X/A (left/right
 and thumbs-up sends Y/B. Point both index fingers toward each other for Menu.
 No calibration is needed. See the launcher's **Gestures (grab / pinch)** tab.
 
-The simple mode also has a virtual touchpad enabled by default: open a palm away
-from you to set its centre, move the hand within a 30 cm radius relative to your
-head, and close a fist to click. Open toward yourself or leave tracking to exit.
+The simple mode also has a virtual touchpad enabled by default: fully straighten
+all five fingers, separate thumb and index, and point the palm directly away
+from your head briefly to set its centre. Move the hand within a 10 cm radius
+relative to your head and show V to click. Moving a held V still changes
+the panel direction. Wrist rotation does not exit the panel; the 35-degree limit is for activation only. Loss of hand/head tracking exits. Thumbs-up also exits the panel without pressing B/Y.
 Use `SIMPLE_GESTURES_TOUCHPAD=0` to disable only this panel.
+
+During a simple-mode touchpad session, pinch sends Trigger, an open palm toward
+yourself sends Grip, and V clicks the panel while the axes keep working.
+V sends no A/X in this mode, a fist does not click, and thumbs-up exits without pressing B/Y.
 
 ## Bluetooth controlles
 Currently, two types of Bluetooth controllers are supported: those with and without an IMU.

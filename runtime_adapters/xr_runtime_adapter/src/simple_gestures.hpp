@@ -17,6 +17,32 @@ inline emulation::Config simple_palm_config() {
   return c;
 }
 
+inline bool simple_thumb_up(const emulation::HandMeasurement& h, bool fingers_closed, bool holding) {
+  return fingers_closed && (h.index_chain_curl>=.80 || h.index_knuckle_curl>=.95) &&
+      h.thumb_valid && h.thumb_clearance>=(holding?.70:.78) &&
+      h.thumb_straightness>=(holding?.70:.76) && h.thumb_pose[11]>=(holding?.15:.25);
+}
+
+inline bool simple_pinch(const emulation::HandMeasurement& h, bool holding) {
+  return h.thumb_valid && h.thumb_clearance>=.60 && h.index_chain_curl<.80 &&
+      h.index_knuckle_curl<.95 && h.pinch_ratio>=0 && h.pinch_ratio<=(holding?.60:.40);
+}
+
+inline bool simple_v(const xr_runtime::HandSideF32V2& hand,
+                     const std::array<bool,4>& extended,
+                     const std::array<bool,4>& curled, bool holding) {
+  if (!extended[0] || !extended[1] || !curled[2] || !curled[3]) return false;
+  const auto direction=[&hand](size_t base) {
+    const auto& a=hand.joints[base];const auto& b=hand.joints[base+3];
+    return emulation::Vec3{b.px-a.px,b.py-a.py,b.pz-a.pz};
+  };
+  const auto a=direction(5),b=direction(9);
+  double aa=0,bb=0,ab=0;
+  for(size_t i=0;i<3;++i){aa+=a[i]*a[i];bb+=b[i]*b[i];ab+=a[i]*b[i];}
+  return std::isfinite(aa) && std::isfinite(bb) && aa>=1e-10 && bb>=1e-10 &&
+      ab/std::sqrt(aa*bb)<=std::cos((holding?8.:12.)*3.141592653589793/180.);
+}
+
 // SIMPLE_GESTURES alone replaces visual grab/fist with an open palm facing the
 // HMD. Pinch, extra bindings and physical-controller input keep their old path.
 class SimplePalmGrip {

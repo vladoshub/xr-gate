@@ -46,6 +46,9 @@ def coordinates(extended=0, thumb="up", tilt_x=0.0, tilt_y=0.0, left=False, fing
     if thumb == "pinch":
         joints[6:9] = [[.04,.10,0],[.04,.115,-.02598],[.04,.109795,-.05553]]
         joints[4] = [joints[8][0]+.006,joints[8][1],joints[8][2]]
+    if thumb == "open_pinch":
+        base=list(joints[1]);tip=[joints[8][0]+.006,joints[8][1],joints[8][2]]
+        for k in range(1,4):joints[1+k]=[a+(b-a)*k/3 for a,b in zip(base,tip)]
     if thumb == "thumbs_up":
         joints[1:5]=[[.05,y,0] for y in (.015,.055,.10,.145)]
     if v_spread:
@@ -152,6 +155,172 @@ class EmulationIntegrationTest(unittest.TestCase):
         STATE.clear()
         STATE.update(left={},right={})
 
+    def test_default_simple_radius_and_outward_yaw(self):
+        snapshots=[]
+        for extra in ([],["--simple-gestures-pose-yaw-offset-degrees","0"]):
+            STATE.update(left=dict(extended=15,tilt_x=1.2+math.pi),
+                         right=dict(extended=15,tilt_x=1.2+math.pi))
+            with harness.runtime(extra=extra,default_mode=True) as (_,_,port):
+                client=harness.Client(port)
+                try:
+                    f=client.frame(lambda f:f.get("controllers") and all(
+                        int(f["controllers"][n]["touches"])==32 for n in ("left","right")))
+                    snapshots.append(f)
+                    STATE["right"]["offset"]=(.05,0,0)
+                    client.frame(lambda f:f.get("controllers") and
+                        abs(f["controllers"]["right"]["thumbstick"][0]-.5)<.001)
+                finally:client.close()
+        for name,sign in (("left",1),("right",-1)):
+            base=snapshots[1]["controllers"][name]["orientation_xyzw"]
+            actual=snapshots[0]["controllers"][name]["orientation_xyzw"]
+            x,y,z,w=base;c=math.cos(math.pi/12);s=sign*math.sin(math.pi/12)
+            expected=[c*x+s*z,c*y+s*w,c*z-s*x,c*w-s*y]
+            self.assertAlmostEqual(abs(sum(a*b for a,b in zip(actual,expected))),1,places=5)
+            # The published skeleton and controller use the same correction.
+            self.assertNotEqual(snapshots[0]["hands"][name]["joints"][8]["position"],
+                                snapshots[1]["hands"][name]["joints"][8]["position"])
+
+    def test_simple_panel_pinch_palm_grip_and_v_keep_live_axes(self):
+        away=1.2+math.pi
+        def pose(name,options,dx):
+            left=name=="left"
+            initial=coordinates(extended=15,tilt_x=away,left=left)
+            current=coordinates(**options,left=left)
+            # Keep the same palm centre while rotating the synthetic hand, then
+            # move 2.5/5 cm to verify axes alongside each recognized button.
+            offset=tuple(sum(initial[j][k]-current[j][k] for j in (0,5,9,17))/4
+                         +(dx if k==0 else 0) for k in range(3))
+            return dict(options,offset=offset)
+        STATE.update(left=dict(extended=15,tilt_x=away),right=dict(extended=15,tilt_x=away))
+        with harness.runtime(default_mode=True) as (_,_,port):
+            client=harness.Client(port)
+            try:
+                client.frame(lambda f:f.get("controllers") and all(
+                    int(f["controllers"][n]["touches"])&32 for n in ("left","right")))
+                for options,lbit,rbit,trigger,grip in [
+                    (dict(extended=0,thumb="pinch",tilt_x=away),1,1,1,0),
+                    (dict(extended=15,tilt_x=1.2),2,2,0,1),
+                    (dict(extended=3,v_spread=True,tilt_x=away),32,32,0,0),
+                    (dict(extended=3,v_spread=True,thumb="open_pinch",tilt_x=away),32,32,0,0)]:
+                    frames=[]
+                    for dx in (.025,.05):
+                        STATE.update({n:pose(n,options,dx) for n in ("left","right")})
+                        f=client.frame(lambda f:f.get("controllers") and all(
+                            int(f["controllers"][n]["buttons"])==bit and
+                            abs(f["controllers"][n]["thumbstick"][0]-dx/.10)<.001
+                            for n,bit in (("left",lbit),("right",rbit))))
+                        frames.append(f)
+                        for n in ("left","right"):
+                            c=f["controllers"][n]
+                            self.assertTrue(int(c["touches"])&32)
+                            self.assertEqual(c["trigger"],trigger);self.assertEqual(c["grip"],grip)
+                    for n in ("left","right"):
+                        self.assertEqual(frames[0]["controllers"][n]["press_counters"],
+                                         frames[1]["controllers"][n]["press_counters"])
+                STATE.update(left=dict(extended=0,thumb="down",tilt_x=away),
+                             right=dict(extended=0,thumb="down",tilt_x=away))
+                f=client.frame(lambda f:f.get("controllers") and all(
+                    int(f["controllers"][n]["buttons"])==0 and
+                    int(f["controllers"][n]["touches"])==32 for n in ("left","right")))
+                for n in ("left","right"):
+                    self.assertEqual(f["controllers"][n]["trigger"],0)
+                    self.assertEqual(f["controllers"][n]["grip"],0)
+            finally:client.close()
+
+    def test_thumb_up_exits_panel_without_sending_face_buttons(self):
+        away=1.2+math.pi
+        STATE.update(left=dict(extended=15,tilt_x=away),right=dict(extended=15,tilt_x=away))
+        with harness.runtime(default_mode=True) as (_,_,port):
+            client=harness.Client(port)
+            try:
+                def both(predicate):
+                    return client.frame(lambda f:f.get("controllers") and all(
+                        predicate(f["controllers"][n]) for n in ("left","right")))
+                both(lambda c:int(c["touches"])==32)
+                STATE.update(left=dict(extended=0,thumb="thumbs_up",tilt_x=away),
+                             right=dict(extended=0,thumb="thumbs_up",tilt_x=away))
+                both(lambda c:int(c["touches"])==0 and int(c["buttons"])==0 and c["thumbstick"]==[0,0])
+                until=time.monotonic()+.15
+                while time.monotonic()<until:
+                    f=client.frame(lambda f:f.get("controllers"))
+                    for name in ("left","right"):
+                        self.assertEqual(int(f["controllers"][name]["buttons"]),0)
+                        self.assertEqual(int(f["controllers"][name]["touches"]),0)
+                # Release the exit pose, then the normal thumbs-up still sends Y/B.
+                STATE.update(left=dict(extended=3,v_spread=True),right=dict(extended=3,v_spread=True))
+                client.frame(lambda f:f.get("controllers") and int(f["controllers"]["left"]["buttons"])==2048
+                             and int(f["controllers"]["right"]["buttons"])==8)
+                STATE.update(left=dict(extended=0,thumb="thumbs_up"),right=dict(extended=0,thumb="thumbs_up"))
+                client.frame(lambda f:f.get("controllers") and int(f["controllers"]["left"]["buttons"])==4096
+                             and int(f["controllers"]["right"]["buttons"])==16)
+                STATE.update(left=dict(extended=15,tilt_x=away,offset=(.02,0,0)),
+                             right=dict(extended=15,tilt_x=away,offset=(.02,0,0)))
+                both(lambda c:int(c["touches"])==32 and c["thumbstick"]==[0,0])
+            finally:client.close()
+
+    def test_simple_free_wrist_rotation_and_right_axes_without_left_tracking(self):
+        away=1.2+math.pi
+        STATE.update(left=dict(extended=15,tilt_x=away),right=dict(extended=15,tilt_x=away))
+        with harness.runtime(default_mode=True) as (_,source,port):
+            client=harness.Client(port)
+            try:
+                def right(predicate):
+                    return client.frame(lambda f:f.get("controllers") and predicate(f["controllers"]["right"]))
+                right(lambda c:int(c["touches"])==32)
+                STATE["right"]=dict(extended=3,v_spread=True,tilt_x=away,offset=(.05,0,0))
+                right(lambda c:int(c["buttons"])==32 and abs(c["thumbstick"][0]-.5)<.001)
+                # Closing the fingers does not change the palm normal; turn the
+                # whole V pose out of the entry cone without releasing the panel.
+                STATE["right"]["tilt_x"]=away+math.pi/2
+                f=right(lambda c:int(c["touches"])==32 and int(c["buttons"])==32)
+                self.assertEqual(f["controllers"]["right"]["release_counters"][5],0)
+                STATE["right"]["visible"]=False
+                f=right(lambda c:int(c["touches"])==0 and c["thumbstick"]==[0,0])
+                self.assertEqual(f["controllers"]["right"]["release_counters"][5],1)
+                self.assertEqual(int(f["controllers"]["left"]["touches"]),32)
+                STATE["right"]=dict(extended=15,tilt_x=away,offset=(.02,0,0))
+                right(lambda c:int(c["touches"])==32 and c["thumbstick"]==[0,0])
+                STATE["left"]["visible"]=False;source.hand_count=1
+                for x in (.07,-.03,.07):
+                    STATE["right"]["offset"]=(x,0,0)
+                    expected=(x-.02)/.10
+                    f=client.frame(lambda f:f.get("controllers") and f.get("hands") and
+                        f["hands"]["left"]["status"]!=1 and
+                        abs(f["controllers"]["right"]["thumbstick"][0]-expected)<.001)
+                    self.assertTrue(f["controllers"]["right"]["input_valid"])
+                    self.assertTrue(f["controllers"]["right"]["pose_valid"])
+                    self.assertEqual(int(f["controllers"]["right"]["touches"]),32)
+            finally:client.close()
+
+    def test_simple_touchpad_does_not_steal_open_pinch_or_claw(self):
+        pose=dict(extended=15,thumb="open_pinch",tilt_x=1.2+math.pi)
+        STATE.update(left=dict(pose),right=dict(pose))
+        with harness.runtime(extra=["--simple-gestures"]) as (_,_,port):
+            client=harness.Client(port)
+            try:
+                def pair(predicate):
+                    return client.frame(lambda f:f.get("controllers") and all(
+                        predicate(f["controllers"][name]) for name in ("left","right")))
+                pair(lambda c:c["trigger"]==1 and int(c["touches"])==0)
+                # The loose gameplay extension threshold sees these straight
+                # phalanges as open; all MCP joints are actually bent 60 deg.
+                pose=dict(extended=15,tilt_x=1.2+math.pi,
+                          finger_bends={f:[60,60,60] for f in range(4)})
+                STATE.update(left=dict(pose),right=dict(pose))
+                pair(lambda c:c["trigger"]==0 and int(c["touches"])==0)
+                for _ in range(8):
+                    f=client.frame(lambda f:f.get("controllers"))
+                    for name in ("left","right"):
+                        self.assertEqual(int(f["controllers"][name]["touches"]),0)
+                STATE.update(left=dict(extended=15,tilt_x=1.2+math.pi),
+                             right=dict(extended=15,tilt_x=1.2+math.pi))
+                pair(lambda c:int(c["touches"])==32 and c["thumbstick"]==[0,0])
+                STATE.update(left=dict(extended=3,v_spread=True,tilt_x=1.2+math.pi,offset=(.15,.15,0)),
+                             right=dict(extended=3,v_spread=True,tilt_x=1.2+math.pi,offset=(.15,.15,0)))
+                pair(lambda c:int(c["buttons"])==32 and c["trigger"]==0 and c["grip"]==0
+                     and all(abs(v-.5)<.001 for v in c["thumbstick"]))
+            finally:client.close()
+
     def test_simple_touchpad_axes_click_and_frozen_centre(self):
         STATE.update(left=dict(extended=15,tilt_x=1.2+math.pi),right={})
         with harness.runtime(extra=["--simple-gestures"]) as (_,_,port):
@@ -170,7 +339,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 STATE["right"]["offset"]=(.6,.6,0)
                 diagonal=right(lambda c:c["thumbstick"][0]>.7 and c["thumbstick"][1]>.7)
                 self.assertAlmostEqual(math.hypot(*diagonal["thumbstick"]),1,places=4)
-                STATE["right"]=dict(extended=0,tilt_x=1.2+math.pi,offset=(.15,0,0))
+                STATE["right"]=dict(extended=3,v_spread=True,tilt_x=1.2+math.pi,offset=(.15,0,0))
                 click=right(lambda c:int(c["buttons"])==32)
                 self.assertEqual(click["press_counters"][5],1)
                 self.assertAlmostEqual(click["thumbstick"][0],.5,places=4)
@@ -179,7 +348,9 @@ class EmulationIntegrationTest(unittest.TestCase):
                 self.assertTrue(int(released["touches"])&32)
                 self.assertAlmostEqual(released["thumbstick"][0],.5,places=4)
                 STATE["right"]=dict(extended=15,tilt_x=1.2)
-                right(lambda c:int(c["touches"])==0 and c["grip"]==1)
+                right(lambda c:int(c["touches"])&32 and c["grip"]==1)
+                STATE["right"]["visible"]=False
+                right(lambda c:int(c["touches"])==0)
                 STATE["right"]=dict(extended=15,tilt_x=1.2+math.pi,offset=(.15,0,0))
                 right(lambda c:int(c["touches"])&32 and c["thumbstick"]==[0,0])
             finally:client.close()
@@ -196,7 +367,7 @@ class EmulationIntegrationTest(unittest.TestCase):
                 right(lambda c:abs(c["thumbstick"][0]-.5)<.001)
                 source.hmd_position=(.4,1.5,-.75)
                 right(lambda c:int(c["touches"])&32 and abs(c["thumbstick"][0])<.001)
-                STATE["right"]["extended"]=0
+                STATE["right"].update(extended=3,v_spread=True)
                 right(lambda c:int(c["buttons"])==32)
                 source.send_head=False
                 lost=right(lambda c:int(c["touches"])==0 and not int(c["buttons"])&32)

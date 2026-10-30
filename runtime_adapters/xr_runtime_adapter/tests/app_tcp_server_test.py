@@ -52,6 +52,7 @@ class Source:
         self.hmd_position = (.25, 1.5, -.75)
         self.hmd_quaternion = (1., 0., 0., 0.)
         self.send_head = True
+        self.hand_count = 2
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run)
         self.thread.start()
@@ -68,7 +69,7 @@ class Source:
                     sock.sendto(packet(1, sequence * 2, timestamp, pose), ("127.0.0.1", self.port))
                 visible = self.visible
                 hands = HAND_HEADER.pack(2, 2200, sequence, timestamp, timestamp, 0,
-                                         int(visible), 15 if visible else 0, float(visible), 2 if visible else 0)
+                                         int(visible), 15 if visible else 0, float(visible), self.hand_count if visible else 0)
                 hands += hand_side(1, visible) + hand_side(2, visible)
                 sock.sendto(packet(5, sequence * 2 + 1, timestamp, hands), ("127.0.0.1", self.port))
                 self.stop.wait(1 / 240)
@@ -109,11 +110,17 @@ class Client:
 
 
 @contextlib.contextmanager
-def runtime(enabled=True, extra=()):
+def runtime(enabled=True, extra=(), default_mode=False):
     tcp_port, udp_port = free_port(), free_port(socket.SOCK_DGRAM)
     args = [ADAPTER, "--input", "udp", "--udp-bind-host", "127.0.0.1", "--udp-bind-port", str(udp_port),
             "--mode", "tick", "--tick-rate", "240", "--no-prediction", "--consume-stale-as-lost",
-            "--app-tcp-port", str(tcp_port), "--print-every", "0", *extra]
+            "--app-tcp-port", str(tcp_port), "--print-every", "0"]
+    if not default_mode and "--emulation-controller" not in extra:
+        args += ["--emulation-controller", "1"]
+    if not default_mode:
+        for key,value in (("--simple-gestures-touchpad-radius-m","0.30"),("--simple-gestures-pose-yaw-offset-degrees","0")):
+            if key not in extra: args += [key,value]
+    args += list(extra)
     if enabled:
         args += ["--app-tcp", "--app-tcp-max-clients", "2", "--app-tcp-rate", "240"]
     with tempfile.TemporaryFile(mode="w+") as log:

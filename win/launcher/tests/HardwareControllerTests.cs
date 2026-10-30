@@ -17,7 +17,7 @@ internal static class HardwareControllerTests
             "A fresh installation selected a device before detection/manual selection.");
         settings.HardwareEnv = "hardware/xreal_ultra.env";
         settings.SaveHardwareSelection(root);
-        Check(settings.ControllerMode == "gestures" && !settings.BluetoothEnabled && !settings.ShowCommandPrompt && settings.GlobalHotkeys, "Gestures, Bluetooth-off, hidden-console or enabled hotkey defaults were lost.");
+        Check(settings.ControllerMode == "simple_gestures" && !settings.BluetoothEnabled && !settings.ShowCommandPrompt && settings.GlobalHotkeys, "Gestures, Bluetooth-off, hidden-console or enabled hotkey defaults were lost.");
         settings.ControllerMode = "gestures";
         settings.ShowCommandPrompt = true;
         settings.Save(root);

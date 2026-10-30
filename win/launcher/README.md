@@ -36,7 +36,36 @@ map and gesture tables. **Support VR controllers**
 opens the Samsung Gear VR Controller layouts for LEFT and RIGHT and explains IMU-assisted tracking.
 Both guides work offline and ship in the Windows package.
 
-Simple mode's virtual touchpad is enabled by default. Open a palm away to capture
-a head-relative centre, move within a 30 cm radius, then close a fist to click.
-Open toward yourself or leave tracking to exit. Set `XR_SIMPLE_GESTURES_TOUCHPAD=0`
+Simple mode's virtual touchpad is enabled by default. Fully straighten all five
+fingers, separate thumb and index, and point the palm directly away from your
+head briefly to capture a head-relative centre. Move within a 10 cm radius,
+then show V to click; moving the V pose still changes the panel direction.
+Wrist rotation does not exit the panel; the 35-degree limit is for activation only. Loss of hand/head tracking exits. Thumbs-up also exits without pressing B/Y. Release the exit pose before
+using it as a normal button. Set `XR_SIMPLE_GESTURES_TOUCHPAD=0`
 in `.env` to disable only the panel; restart tracking after changing it.
+
+During a simple-mode touchpad session, pinch sends Trigger, an open palm toward
+yourself sends Grip, and V clicks the panel while the axes keep working.
+V sends no A/X in this mode, a fist does not click, and thumbs-up exits without pressing B/Y.
+
+
+Simple gestures are the default for new sessions/settings. To explicitly select
+controller emulation on Linux, use `SIMPLE_GESTURES=0 EMULATION_CONTROLLER=1`.
+Existing saved launcher selections are preserved.
+
+Simple-mode settings in `start_xr_runtime_adapter_shm.sh` (or launch environment):
+
+```bash
+SIMPLE_GESTURES=1
+SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=30
+```
+
+The radius is in metres (0.01–1.0). Positive yaw turns both output hands outward,
+over all existing offsets; set it to 0 to disable. The correction affects the
+whole skeleton and virtual controller after recognition, so gesture directions
+and touchpad axes remain head-relative. As in controller emulation, it is skipped
+on a side using controller IMU orientation and returns when that side switches
+back to optical hand orientation. It does not accumulate on reconnect.
+In the Windows `.env`, use the same radius/yaw names prefixed with `XR_`.
+Restart tracking after changing them.
