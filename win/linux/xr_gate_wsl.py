@@ -8,6 +8,7 @@ import ctypes
 import fcntl
 import hashlib
 import json
+import math
 import os
 import platform
 import pwd
@@ -37,6 +38,26 @@ def integer_setting(settings, key, minimum=1, maximum=65535):
     if not minimum <= value <= maximum:
         raise ValueError(f"{key} must be from {minimum} to {maximum}.")
     return value
+
+
+def simple_touchpad_setting(settings):
+    value = settings.get("XR_SIMPLE_GESTURES_TOUCHPAD", "1")
+    if value not in ("0", "1"):
+        raise ValueError("XR_SIMPLE_GESTURES_TOUCHPAD must be 0 or 1.")
+    return value
+
+
+def simple_pose_settings(settings):
+    result = {}
+    for name, default, low, high in (("TOUCHPAD_RADIUS_M", "0.10", .01, 1.),
+                                     ("POSE_YAW_OFFSET_DEGREES", "30", -180., 180.)):
+        key = "XR_SIMPLE_GESTURES_" + name
+        value = settings.get(key, default)
+        number = float(value)
+        if not math.isfinite(number) or not low <= number <= high:
+            raise ValueError(f"{key} must be from {low} to {high}.")
+        result["SIMPLE_GESTURES_" + name] = value
+    return result
 
 
 def csv_setting(settings, key):
@@ -740,8 +761,9 @@ class Runtime:
         return package_path(package, "bin/override_controller/configs/" + name)
 
     def generate_profile(self):
+        simple_touchpad = simple_touchpad_setting(self.settings)
         custom = self.config / "xr_client.json"
-        mode = self.settings.get("XR_CONTROLLER_MODE", "")
+        mode = self.settings.get("XR_CONTROLLER_MODE", "gearvr" if self.settings.get("XR_GEARVR") == "1" else "simple_gestures")
         if mode not in ("", "gearvr", "gestures", "simple_gestures", "no"):
             raise ValueError("XR_CONTROLLER_MODE must be gearvr, gestures, simple_gestures or no.")
         if custom.is_file() and not mode:
@@ -780,6 +802,8 @@ class Runtime:
                 if service.get("name") == "xr_runtime_adapter" and mode:
                     service.setdefault("env", {}).update({
                         "SIMPLE_GESTURES": "1" if mode == "simple_gestures" else "0",
+                        "SIMPLE_GESTURES_TOUCHPAD": simple_touchpad,
+                        **simple_pose_settings(self.settings),
                         "EMULATION_CONTROLLER": "0" if mode in ("simple_gestures", "no") else "1",
                     })
                 if service.get("name") == "override_controller":
@@ -825,11 +849,13 @@ class Runtime:
         profile = self.generate_profile()
         env = dict(os.environ, AUTO_BUILD="0", RUNTIME_APP_TCP="1",
                    RUNTIME_APP_TCP_HOST=host, RUNTIME_APP_TCP_PORT=str(port),
-                   XR_CONTROLLER_MODE=self.settings.get("XR_CONTROLLER_MODE", ""),
+                   XR_CONTROLLER_MODE=self.settings.get("XR_CONTROLLER_MODE", "gearvr" if self.settings.get("XR_GEARVR") == "1" else "simple_gestures"),
                    ROOT_PROJECT=str(package), XR_ROOT_PROJECT=str(package))
-        mode = self.settings.get("XR_CONTROLLER_MODE", "")
+        mode = self.settings.get("XR_CONTROLLER_MODE", "gearvr" if self.settings.get("XR_GEARVR") == "1" else "simple_gestures")
         if mode:
             env.update(SIMPLE_GESTURES="1" if mode == "simple_gestures" else "0",
+                       SIMPLE_GESTURES_TOUCHPAD=simple_touchpad_setting(self.settings),
+                       **simple_pose_settings(self.settings),
                        EMULATION_CONTROLLER="0" if mode in ("simple_gestures", "no") else "1")
         camera = self.capture_device()
         if camera:

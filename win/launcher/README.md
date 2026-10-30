@@ -25,9 +25,61 @@ Hardware settings belong in `win/hardware/*.env`; overrides belong in `.env`. Ke
 Display protection does not change display topology, resolution, refresh rate, focus or SteamVR settings, and does not create an overlay over the compositor. Windows moved back to the desktop remain there after Stop. It is a desktop guard, not exclusive display ownership: elevated applications and exclusive fullscreen mode changes can bypass it. If SteamVR still fails when an application enters fullscreen on another monitor, collect `vrcompositor.txt` and `vrserver.txt`; protecting the XR screen does not establish the cause of that failure. Native hook and SteamVR behavior require testing on Windows with the actual displays.
 
 
-The Controllers list offers **Gestures (controller emulation)** (default) and
-**Gestures (grab / pinch)**. Existing `XR_CONTROLLER_MODE=gestures` settings keep
-the controller emulation mode; the original gestures use `simple_gestures`.
-The **Gestures** button opens the matching illustrated tab. **Support VR controllers**
+The Controllers list offers **Gestures** (simple mode, default) and
+**Gestures (controller emulation)**. Existing `XR_CONTROLLER_MODE=gestures` settings keep
+the controller emulation mode; `simple_gestures` uses pinch for Trigger and an
+open palm facing the user for Grip. Outside the touchpad, a fist holds Grip +
+Trigger, V sends left X / right A, thumbs-up sends left Y / right B, and two index
+fingers pointing toward each other send Menu. No calibration is needed.
+The **Gestures** button opens simple gestures first. The compact guide has gesture
+tables and a touchpad movement illustration; controller emulation is on the other tab. **Support VR controllers**
 opens the Samsung Gear VR Controller layouts for LEFT and RIGHT and explains IMU-assisted tracking.
 Both guides work offline and ship in the Windows package.
+
+Simple mode's virtual touchpad is enabled by default. Fully straighten all five
+fingers, separate thumb and index, and point the palm directly away from your
+head briefly to capture a head-relative centre. Move within a 10 cm radius,
+then make a fist with the thumb lifted straight up to click. Moving the held
+pose still changes the panel direction.
+Wrist rotation does not exit the panel; the open-palm 35-degree limit gates activation. Loss of hand/head tracking exits. V also exits without pressing X/A. Release the exit pose before
+using it as a normal button. Set `XR_SIMPLE_GESTURES_TOUCHPAD=0`
+in `.env` to disable only the panel; restart tracking after changing it.
+
+During a simple-mode touchpad session, pinch sends Trigger, an open palm toward
+yourself sends Grip, and a fist with the thumb lifted straight up clicks the panel
+while the axes keep working. It sends no B/Y. A fist with a tucked thumb does not
+click. V exits without pressing X/A; release V before using it as a normal button.
+For V, point the fingers up and the palm away from you; an angled V does not exit.
+For the click, curl index, middle, ring and pinky into a fist. Keep the thumb away
+from the palm and point its main phalanx straight up. The tip may be straight or
+bent; a backward arch is not required. The existing angle limits are unchanged.
+
+
+Simple gestures are the default for new sessions/settings. To explicitly select
+controller emulation on Linux, use `SIMPLE_GESTURES=0 EMULATION_CONTROLLER=1`.
+Existing saved launcher selections are preserved.
+
+Simple-mode settings in `start_xr_runtime_adapter_shm.sh` (or launch environment):
+
+```bash
+SIMPLE_GESTURES=1
+SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=0
+```
+
+The radius is in metres (0.01–1.0). You can change the extra yaw angle.
+Positive yaw turns both output hands outward,
+over all existing offsets; set it to 0 to disable. The correction affects the
+whole skeleton and virtual controller after recognition, so gesture directions
+and touchpad axes remain head-relative. As in controller emulation, it is skipped
+on a side using controller IMU orientation and returns when that side switches
+back to optical hand orientation. It does not accumulate on reconnect.
+In the Windows `.env`, use the same radius/yaw names prefixed with `XR_`.
+Restart tracking after changing them.
+
+The simple mode is labeled **Gestures** and appears first in the input list. New
+settings select it by default; saved explicit input choices keep their identifiers.
+The Gestures help button always opens the simple-gesture tab first. Both the
+text and illustration show a touchpad radius of **10 cm**. The Samsung Gear VR
+guide starts with the Bluetooth requirement and recommends a dedicated external
+USB Bluetooth adapter for a stable controller connection.

@@ -49,6 +49,10 @@ class Source:
     def __init__(self, port):
         self.port = port
         self.visible = True
+        self.hmd_position = (.25, 1.5, -.75)
+        self.hmd_quaternion = (1., 0., 0., 0.)
+        self.send_head = True
+        self.hand_count = 2
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run)
         self.thread.start()
@@ -60,11 +64,12 @@ class Source:
                 sequence += 1
                 timestamp = time.monotonic_ns()
                 pose = HMD.pack(1, HMD.size, sequence, timestamp, timestamp, 0,
-                                0.25, 1.5, -0.75, 1.0, 0.0, 0.0, 0.0, *([0.0] * 6), 2, 1, 1.0, 0)
-                sock.sendto(packet(1, sequence * 2, timestamp, pose), ("127.0.0.1", self.port))
+                                *self.hmd_position, *self.hmd_quaternion, *([0.0] * 6), 2, 1, 1.0, 0)
+                if self.send_head:
+                    sock.sendto(packet(1, sequence * 2, timestamp, pose), ("127.0.0.1", self.port))
                 visible = self.visible
                 hands = HAND_HEADER.pack(2, 2200, sequence, timestamp, timestamp, 0,
-                                         int(visible), 15 if visible else 0, float(visible), 2 if visible else 0)
+                                         int(visible), 15 if visible else 0, float(visible), self.hand_count if visible else 0)
                 hands += hand_side(1, visible) + hand_side(2, visible)
                 sock.sendto(packet(5, sequence * 2 + 1, timestamp, hands), ("127.0.0.1", self.port))
                 self.stop.wait(1 / 240)
@@ -105,11 +110,17 @@ class Client:
 
 
 @contextlib.contextmanager
-def runtime(enabled=True, extra=()):
+def runtime(enabled=True, extra=(), default_mode=False):
     tcp_port, udp_port = free_port(), free_port(socket.SOCK_DGRAM)
     args = [ADAPTER, "--input", "udp", "--udp-bind-host", "127.0.0.1", "--udp-bind-port", str(udp_port),
             "--mode", "tick", "--tick-rate", "240", "--no-prediction", "--consume-stale-as-lost",
-            "--app-tcp-port", str(tcp_port), "--print-every", "0", *extra]
+            "--app-tcp-port", str(tcp_port), "--print-every", "0"]
+    if not default_mode and "--emulation-controller" not in extra:
+        args += ["--emulation-controller", "1"]
+    if not default_mode:
+        for key,value in (("--simple-gestures-touchpad-radius-m","0.30"),("--simple-gestures-pose-yaw-offset-degrees","0")):
+            if key not in extra: args += [key,value]
+    args += list(extra)
     if enabled:
         args += ["--app-tcp", "--app-tcp-max-clients", "2", "--app-tcp-rate", "240"]
     with tempfile.TemporaryFile(mode="w+") as log:
@@ -160,7 +171,7 @@ class AppTcpTest(unittest.TestCase):
             self.assertIn("simple_gestures: true",result.stdout)
             self.assertIn("emulation_controller: false",result.stdout)
 
-    def test_original_grab_and_pinch_are_selected_instead_of_emulation(self):
+    def test_simple_invalid_geometry_cannot_bypass_recognizer_with_backend_values(self):
         def backend_side(side,visible):
             p=[.1*side,1.,-.3,1.,0.,0.,0.]
             base=HAND_SIDE.pack(side,int(visible),57 if visible else 0,float(visible),
@@ -174,9 +185,9 @@ class AppTcpTest(unittest.TestCase):
                         frame=client.frame(lambda f:f.get("controllers") and f.get("hands") and f["hands"]["hand_count"]==2)
                         for name in ("left","right"):
                             control=frame["controllers"][name]
-                            self.assertEqual(int(control["buttons"])&3,3 if simple else 0)
-                            self.assertAlmostEqual(control["trigger"],.9 if simple else 0,places=4)
-                            self.assertAlmostEqual(control["grip"],.8 if simple else 0,places=4)
+                            self.assertEqual(int(control["buttons"])&3,0)
+                            self.assertEqual(control["trigger"],0)
+                            self.assertEqual(control["grip"],0)
                     finally:client.close()
 
     def test_invalid_server_configuration(self):

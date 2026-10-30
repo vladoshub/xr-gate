@@ -146,6 +146,28 @@ Gestures try to emulate the controller as much as possible - dpad, trigger, grip
 
 See [GESTURES](runtime_adapters/xr_runtime_adapter/configs/GESTURES.md)
 
+With `SIMPLE_GESTURES=1`, pinch presses Trigger and an open palm facing you presses
+Grip. Spread all five fingers; turn the palm away or bend them to release.
+Outside an active touchpad, a fist holds Grip + Trigger, V sends X/A (left/right),
+and thumbs-up sends Y/B. Point both index fingers toward each other for Menu.
+No calibration is needed. See the launcher's **Gestures** tab.
+
+The simple mode also has a virtual touchpad enabled by default: fully straighten
+all five fingers, separate thumb and index, and point the palm directly away
+from your head briefly to set its centre. Move the hand within a 10 cm radius
+relative to your head. Make a fist with the thumb lifted straight up to click;
+move the held pose to change direction. Wrist rotation does not exit the panel; the open-palm 35-degree limit gates activation. Loss of hand/head tracking exits. V also exits without pressing X/A.
+Use `SIMPLE_GESTURES_TOUCHPAD=0` to disable only this panel.
+
+During a simple-mode touchpad session, pinch sends Trigger, an open palm toward
+yourself sends Grip, and a fist with the thumb lifted straight up clicks the panel
+while the axes keep working. It sends no B/Y. A fist with a tucked thumb does not
+click. V exits without pressing X/A; release V before using it as a normal button.
+For V, point the fingers up and the palm away from you; an angled V does not exit.
+For the click, curl index, middle, ring and pinky into a fist. Keep the thumb away
+from the palm and point its main phalanx straight up. The tip may be straight or
+bent; a backward arch is not required. The existing angle limits are unchanged.
+
 ## Bluetooth controlles
 Currently, two types of Bluetooth controllers are supported: those with and without an IMU.
 The difference is that controllers with an IMU allow you to track hand orientation from the IMU, which greatly improves sensitivity and accuracy. 
@@ -496,13 +518,6 @@ cd ~/xr-gate-release/xr-gate
 ```
 
 
-Run with only pinch / grab gestures (Only if you don't have controllers)
-```bash
-cd ~/xr-gate-release/xr-gate
-SIMPLE_GESTURES=1 ./run_xr_client.sh --config xreal_ultra
-```
-
-
 ## SteamVR
 
 **Steam and SteamVR must be installed from the Steam website, not from Snap**
@@ -543,6 +558,9 @@ starting SteamVR to avoid display problems:
 ./configure_openvr_display.sh 3840x1080     # 60 Hz by default
 ./configure_openvr_display.sh 3840x1080 90  # optional explicit rate
 ```
+
+**If you have a monitor with the same aspect ratio as your device (e.g. 32:9), it's recommended to change the resolution so that the aspect ratio is different from the device's. Otherwise, the window may render on the monitor.**
+
 
 If some apps in steam desktop mirror covers the stereo window in `extended_sbs`, add
 `-nowindow` to APP → **Properties → Launch Options** in Steam.

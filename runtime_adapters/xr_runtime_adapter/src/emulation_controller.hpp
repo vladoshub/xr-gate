@@ -129,6 +129,13 @@ struct Config {
 Config config_from_json(const nlohmann::json& json);
 Config load_config(const std::string& path);
 HandMeasurement measure_hand(const xr_runtime::HandSideF32V2& hand, double min_confidence);
+struct OpenPalmPose {
+  bool opened = false, toward_viewer = false, away_from_viewer = false;
+};
+// Shared by the emulated touchpad click and SIMPLE_GESTURES Grip.
+OpenPalmPose measure_open_palm_pose(const HandMeasurement& hand, bool fingers_extended,
+                                   const Config& config, const Vec3* viewer_position,
+                                   bool was_toward_viewer, bool was_away_from_viewer);
 // Anatomical curl strengths; {-1,-1} means invalid or outside the sample range.
 std::array<double, 2> project_finger_pair(const FingerPairCalibration& config,
                                        const HandMeasurement& hand);

@@ -67,7 +67,7 @@ class HardwareTest(unittest.TestCase):
 
     def test_profile_and_controller_provider_come_from_settings(self):
         with tempfile.TemporaryDirectory() as folder:
-            runtime = self.runtime(Path(folder), {"XR_PROFILE": "custom_camera", "XR_CONTROLLER_PROVIDERS": "custom_input"})
+            runtime = self.runtime(Path(folder), {"XR_PROFILE": "custom_camera", "XR_CONTROLLER_PROVIDERS": "custom_input", "XR_CONTROLLER_MODE": ""})
             profile = runtime.current / "bin/python/xr_client/configs/custom_camera.json"
             profile.parent.mkdir(parents=True)
             profile.write_text(json.dumps({"post_gate_services": [{"name": "override_controller", "env": {}}]}))

@@ -1,5 +1,9 @@
 # Controller Gestures
 
+Simple gestures are the default. For controller emulation, keep index and middle straight, ring and
+pinky bent, and the thumb relaxed. Turn the hands inward toward your body for
+better recognition; the configured offset turns the virtual hands forward.
+
 Left hand: X/Y. Right hand: A/B. Menu requires both hands.
 
 | Button | Gesture |
@@ -35,3 +39,76 @@ positions and diagonals use the existing calibration.
 In wrist mode, keep your thumb out and tilt your wrist in the desired direction.
 Tucking your thumb stops movement. After an X/Y or A/B gesture, return to the
 released pose before using the gameplay buttons again.
+
+## Simple gestures
+
+Select **Gestures** in the launcher, or restart tracking with
+`SIMPLE_GESTURES=1` on Linux.
+
+| Button | Gesture |
+| --- | --- |
+| Trigger | Touch thumb and index fingertips. Separate them to release. |
+| Grip | Open one palm toward yourself: all five fingers straight and spread. Turn it away or bend the fingers to release. |
+| Grip + Trigger | Close a fist with the thumb folded against the fingers. Open it to release both. |
+| X (left) / A (right) | Show V: spread straight index and middle fingers; bend ring and pinky. Point the fingers up, palm away from you. |
+| Y (left) / B (right) | Curl index, middle, ring and pinky into a fist. Keep the thumb away from the palm and point it straight up. The tip may be straight or bent. |
+| Menu | Straighten only the index on each hand and point the two index fingers toward each other. Keep both hands visible. |
+
+No calibration is needed. Pinch and palm Grip also work during an active
+touchpad session. In that session, a fist with the thumb lifted straight up clicks the panel
+instead of B/Y, and V exits instead of X/A.
+
+### Virtual touchpad (enabled by default)
+
+Fully straighten all five fingers and separate thumb and index. Point the open
+palm away from your head, like a stop sign, with fingers unfolded at the knuckles.
+Keep this pose briefly to activate the panel. Its position relative to your head
+then becomes the centre. Move the hand left/right and up/down; diagonals
+work. The edge is 10 cm from the centre. Movement beyond it stays at the edge.
+
+Make a fist with the other four fingers, lift the thumb away from the palm
+and point it straight up to press. The thumb tip may be straight or bent.
+Release the pose to release the click. The centre stays fixed, and moving
+the held pose still changes direction. It sends no B/Y during the session.
+A fist with a tucked thumb does not click. Pinch sends Trigger and an open
+palm toward yourself sends Grip, while the axes keep working.
+The other hand stays independent.
+
+Show V to exit: spread the straight index and middle fingers; bend ring and
+pinky. Point the fingers up and the palm away from you. An angled V does not
+exit. This exits without pressing X/A; release V before using it as a normal
+button. No replacement gesture is assigned to X/A or B/Y inside the panel.
+Wrist rotation does not exit the panel, including turning the open palm toward
+yourself. The open-palm 35-degree orientation limit gates activation. V has its own
+orientation check.
+Loss of hand or head tracking also exits.
+The next activation captures a new centre.
+
+To disable only the panel, add `SIMPLE_GESTURES_TOUCHPAD=0` to the Linux launch
+command. In the Windows launcher's `.env`, use `XR_SIMPLE_GESTURES_TOUCHPAD=0`.
+Restart tracking after changing it.
+
+
+Simple gestures are the default for new sessions/settings. To explicitly select
+controller emulation on Linux, use `SIMPLE_GESTURES=0 EMULATION_CONTROLLER=1`.
+Existing saved launcher selections are preserved.
+
+Simple-mode settings in `start_xr_runtime_adapter_shm.sh` (or launch environment):
+
+```bash
+SIMPLE_GESTURES=1
+SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=0
+```
+
+The radius is in metres (0.01–1.0). You can change the extra yaw angle.
+Positive yaw turns both output hands outward,
+over all existing offsets; set it to 0 to disable. The correction affects the
+whole skeleton and virtual controller after recognition, so gesture directions
+and touchpad axes remain head-relative. As in controller emulation, it is skipped
+on a side using controller IMU orientation and returns when that side switches
+back to optical hand orientation. It does not accumulate on reconnect.
+In the Windows `.env`, use the same radius/yaw names prefixed with `XR_`.
+Restart tracking after changing them.
+
+A touching pinch remains Trigger. The upward thumb requires a fist, so an open palm or V does not trigger it.

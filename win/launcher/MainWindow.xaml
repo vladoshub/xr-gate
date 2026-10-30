@@ -137,7 +137,7 @@
       <TextBlock Text="Controllers" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" />
       <TextBlock Text="Controller input" />
       <ComboBox x:Name="ControllerModeBox" SelectedValuePath="Id" SelectedValue="{Binding ControllerMode, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" ItemTemplate="{StaticResource BluetoothControllerLabelTemplate}" IsSynchronizedWithCurrentItem="False" Foreground="#162438" Background="{StaticResource InputSurface}" Margin="0,6,0,12" />
-      <TextBlock Text="Gestures (controller emulation) is the default. Gestures (grab / pinch) uses the original hand gestures. Gear VR Controllers uses physical controllers. No enables head tracking without controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
+      <TextBlock Text="Gestures is the default and uses simple hand gestures. Gestures (controller emulation) uses finger gestures to emulate controller inputs. Gear VR Controllers uses physical controllers. No enables head tracking without controllers. Stop tracking before changing modes or pairing." Foreground="#ACBED5" TextWrapping="Wrap" Margin="0,0,0,12" />
       <CheckBox x:Name="BluetoothEnabledBox" Content="Enable Bluetooth" IsChecked="{Binding BluetoothEnabled, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />
       <TextBlock Text="For better tracking performance, use a dedicated external Bluetooth adapter." Foreground="#ACBED5" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
       <TextBlock Text="Bluetooth USB BUSID (optional; overrides VID:PID)" /><TextBox x:Name="BluetoothBusIdBox" Text="{Binding BluetoothBusId, UpdateSourceTrigger=PropertyChanged, NotifyOnSourceUpdated=True}" />

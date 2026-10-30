@@ -33,8 +33,11 @@ RUNTIME_APP_TCP_HOST="${RUNTIME_APP_TCP_HOST:-127.0.0.1}"
 RUNTIME_APP_TCP_PORT="${RUNTIME_APP_TCP_PORT:-45810}"
 RUNTIME_APP_TCP_RATE="${RUNTIME_APP_TCP_RATE:-60}"
 RUNTIME_APP_TCP_MAX_CLIENTS="${RUNTIME_APP_TCP_MAX_CLIENTS:-8}"
-EMULATION_CONTROLLER="${EMULATION_CONTROLLER:-1}" # controller emulation is the default
-SIMPLE_GESTURES="${SIMPLE_GESTURES:-0}" # 1 selects the original grab/pinch pipeline
+EMULATION_CONTROLLER="${EMULATION_CONTROLLER:-1}" # used when SIMPLE_GESTURES=0
+SIMPLE_GESTURES="${SIMPLE_GESTURES:-1}" # 1 selects pinch Trigger and open-palm Grip
+SIMPLE_GESTURES_TOUCHPAD="${SIMPLE_GESTURES_TOUCHPAD:-${XR_SIMPLE_GESTURES_TOUCHPAD:-1}}" # simple mode only
+SIMPLE_GESTURES_TOUCHPAD_RADIUS_M="${SIMPLE_GESTURES_TOUCHPAD_RADIUS_M:-${XR_SIMPLE_GESTURES_TOUCHPAD_RADIUS_M:-0.10}}"
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES="${SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES:-${XR_SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES:-0}}"
 EMULATION_CONTROLLER_CONFIG="${EMULATION_CONTROLLER_CONFIG:-}" # optional JSON profile
 #ORIGIN_MODE="${ORIGIN_MODE:-start_pose}"
 ORIGIN_MODE="${ORIGIN_MODE:-none}" # runtime origin policy; none keeps upstream origin
@@ -321,11 +324,18 @@ RUNTIME_VIDEO_SHM_NAME="${RUNTIME_VIDEO_SHM_NAME:-runtime_stereo_video}" # runti
 
 # Head-only sessions must override inherited device/profile controller settings.
 # The existing synthesis mode publishes disconnected, invalid controller poses.
+if [[ "${XR_CONTROLLER_MODE:-}" == "gestures" || "${XR_CONTROLLER_MODE:-}" == "gearvr" ]]; then
+  SIMPLE_GESTURES=0
+fi
 if [[ "${XR_CONTROLLER_MODE:-}" == "simple_gestures" ]]; then
   SIMPLE_GESTURES=1
 fi
 if [[ "$SIMPLE_GESTURES" != "0" && "$SIMPLE_GESTURES" != "1" ]]; then
   echo "SIMPLE_GESTURES must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$SIMPLE_GESTURES_TOUCHPAD" != "0" && "$SIMPLE_GESTURES_TOUCHPAD" != "1" ]]; then
+  echo "SIMPLE_GESTURES_TOUCHPAD must be 0 or 1" >&2
   exit 1
 fi
 if [[ "$SIMPLE_GESTURES" == "1" ]]; then
@@ -564,6 +574,9 @@ if [[ "$HMD_3DOF_PRIORITY" == "1" ]]; then
   args+=(--hmd-3dof-priority)
 fi
 args+=(--emulation-controller "$EMULATION_CONTROLLER")
+args+=(--simple-gestures-touchpad "$SIMPLE_GESTURES_TOUCHPAD")
+args+=(--simple-gestures-touchpad-radius-m "$SIMPLE_GESTURES_TOUCHPAD_RADIUS_M")
+args+=(--simple-gestures-pose-yaw-offset-degrees "$SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES")
 if [[ "$SIMPLE_GESTURES" == "1" ]]; then
   args+=(--simple-gestures)
 elif [[ "$EMULATION_CONTROLLER" == "1" ]]; then
@@ -659,7 +672,10 @@ TRACKING_REGISTRY=$TRACKING_REGISTRY # source tracking SHM registry path
 RUNTIME_TRACKING_REGISTRY=$RUNTIME_TRACKING_REGISTRY # runtime-output tracking SHM registry path
 TRACKING_TRANSFORM_CONFIG=$TRACKING_TRANSFORM_CONFIG # runtime coordinate/hand transform profile
 EMULATION_CONTROLLER=$EMULATION_CONTROLLER # independent emulation input; legacy gestures disabled on selected sides
-SIMPLE_GESTURES=$SIMPLE_GESTURES # original grab/pinch pipeline; takes priority over emulation
+SIMPLE_GESTURES=$SIMPLE_GESTURES # pinch Trigger + open-palm Grip; takes priority over emulation
+SIMPLE_GESTURES_TOUCHPAD=$SIMPLE_GESTURES_TOUCHPAD # head-relative panel; configurable radius; simple mode only
+SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=$SIMPLE_GESTURES_TOUCHPAD_RADIUS_M
+SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=$SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES
 EMULATION_CONTROLLER_CONFIG=$EMULATION_CONTROLLER_CONFIG
 ADAPTER=$ADAPTER # adapter backend mode used by xr_runtime_adapter
 MODE=$MODE # main runtime loop mode

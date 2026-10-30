@@ -83,11 +83,11 @@ public sealed class LauncherSettings : INotifyPropertyChanged
     public string BluetoothBusId { get; set; } = "";
     public string BluetoothUsbId { get; set; } = "";
     public bool BluetoothEnabled { get; set; }
-    private string controllerMode = "gestures";
+    private string controllerMode = "simple_gestures";
     public bool GearVr
     {
         get => controllerMode == "gearvr";
-        set { if (value) ControllerMode = "gearvr"; else if (GearVr) ControllerMode = "gestures"; }
+        set { if (value) ControllerMode = "gearvr"; else if (GearVr) ControllerMode = "simple_gestures"; }
     }
     public string ControllerMode
     {
@@ -186,7 +186,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
         bool Flag(string key, bool fallback) => Get(key) switch { "1" => true, "0" => false, _ => fallback };
         string controllerMode = Get("XR_CONTROLLER_MODE");
         if (!overrides.ContainsKey("XR_CONTROLLER_MODE") && overrides.GetValueOrDefault("XR_GEARVR") is "0" or "1")
-            controllerMode = overrides["XR_GEARVR"] == "1" ? "gearvr" : "gestures";
+            controllerMode = overrides["XR_GEARVR"] == "1" ? "gearvr" : "simple_gestures";
         if (controllerMode is not ("" or "gearvr" or "gestures" or "simple_gestures" or "no"))
             throw new SettingsReadException(Path.Combine(root, ".env"), "XR_CONTROLLER_MODE must be gearvr, gestures, simple_gestures or no, or empty for legacy settings.");
         string bluetoothInstance = Get("XR_BLUETOOTH_INSTANCE_ID", saved.GetValueOrDefault("BluetoothInstanceId", ""));
@@ -205,7 +205,7 @@ public sealed class LauncherSettings : INotifyPropertyChanged
             BluetoothUsbId = Get("XR_BLUETOOTH_USB_ID"),
             BluetoothEnabled = Flag("XR_BLUETOOTH", false),
             ControllerMode = controllerMode.Length > 0 ? controllerMode :
-                Flag("XR_GEARVR", saved.GetValueOrDefault("GearVR", "False").Equals("True", StringComparison.OrdinalIgnoreCase)) ? "gearvr" : "gestures",
+                Flag("XR_GEARVR", saved.GetValueOrDefault("GearVR", "False").Equals("True", StringComparison.OrdinalIgnoreCase)) ? "gearvr" : "simple_gestures",
             GlobalHotkeys = Flag("XR_GLOBAL_HOTKEYS", true),
             ProtectDeviceDisplay = Flag("XR_PROTECT_DEVICE_DISPLAY", true),
             ShowCommandPrompt = Flag("XR_SHOW_COMMAND_PROMPT", false),

@@ -740,6 +740,23 @@ bool Controller::is_released_pose(const SideState& s) const {
   return s.fingers[1] == Finger::Curled && s.fingers[2] == Finger::Curled && s.trigger_released &&
          grip_released;
 }
+OpenPalmPose measure_open_palm_pose(const HandMeasurement& h, bool fingers_extended,
+                                   const Config& c, const Vec3* viewer,
+                                   bool was_toward, bool was_away) {
+  OpenPalmPose pose;
+  pose.opened = fingers_extended && h.palm_valid && h.thumb_valid &&
+      h.thumb_clearance >= c.thumb_enable_clearance &&
+      h.thumb_straightness >= c.thumb_extension_on;
+  if (!pose.opened || !viewer || !finite(*viewer)) return pose;
+  Vec3 toward = sub(*viewer, h.palm_center);
+  const double distance = length(toward);
+  if (distance < .05 || distance > 2 || !unit(toward)) return pose;
+  const double facing = dot(h.palm_basis[2], toward);
+  pose.toward_viewer = facing >= (was_toward ? c.palm_facing_off : c.palm_facing_on);
+  pose.away_from_viewer = -facing >= (was_away ? c.palm_facing_off : c.palm_facing_on);
+  return pose;
+}
+
 void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
                                 SideState& s, uint64_t stamp) {
   const auto all = [&](Finger state) {
@@ -747,17 +764,11 @@ void Controller::update_buttons(const HandMeasurement& h, const HandConfig& c,
                        [state](Finger f) { return f == state; });
   };
   if (config_.thumbstick_click_gesture == "open_palm") {
-    const bool opened = all(Finger::Extended) && h.palm_valid && h.thumb_valid &&
-        h.thumb_clearance >= config_.thumb_enable_clearance &&
-        h.thumb_straightness >= config_.thumb_extension_on;
-    Vec3 toward = sub(viewer_position_, h.palm_center);
-    const double distance = length(toward);
-    const bool facing_valid = viewer_valid_ && distance >= .05 && distance <= 2 && unit(toward);
-    const double facing = facing_valid ? dot(h.palm_basis[2], toward) : 0;
-    const bool clicking = opened && facing_valid && facing >=
-        (s.palm_click ? config_.palm_facing_off : config_.palm_facing_on);
-    const bool menu = opened && facing_valid && -facing >=
-        (s.menu_open ? config_.palm_facing_off : config_.palm_facing_on);
+    const auto palm = measure_open_palm_pose(h, all(Finger::Extended), config_,
+        viewer_valid_ ? &viewer_position_ : nullptr, s.palm_click, s.menu_open);
+    const bool opened = palm.opened;
+    const bool clicking = palm.toward_viewer;
+    const bool menu = palm.away_from_viewer;
     s.menu_open = menu;
     if (opened) {
       // Reserve the whole open-palm pose, including transitions through the
