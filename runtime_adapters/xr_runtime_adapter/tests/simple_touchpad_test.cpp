@@ -184,13 +184,13 @@ void wrist_rotation_keeps_panel_active() {
     auto p=recorded();SimpleTouchpad pad;activate(pad,p);
     auto& hand=left?p.hands.left:p.hands.right;const auto open=hand;
     advance(p);vee(hand);step(pad,p);advance(p,45);step(pad,p);
-    for(double angle:{34.9,35.1,90.,160.}) {
+    for(double angle:{90.,160.}) {
       advance(p);face_away(hand,p.head,angle);move(hand,.01,0,0);
       auto out=step(pad,p);const auto side=left?out.left:out.right;
-      check(side.touches==CONTROLLER_BUTTON_THUMBSTICK && side.buttons==CONTROLLER_BUTTON_THUMBSTICK,
-            "wrist rotation cancelled held panel click");
+      check(side.touches==CONTROLLER_BUTTON_THUMBSTICK && side.buttons==0,
+            "angled V failed to release click while keeping panel active");
       check(side.thumbstick_x>0,"rotated V lost axes");
-      check(side.release_counters[5]==0,"rotation released click");
+      check(side.release_counters[5]==1,"angled V did not release once");
     }
     // An open palm toward the viewer is also not an exit during a session.
     hand=open;face_away(hand,p.head,160);advance(p);auto out=step(pad,p);
@@ -215,10 +215,15 @@ void thumb_exit_is_confirmed_and_consumed() {
     const auto m=em::measure_hand(hand,.3);const auto base=hand.joints[5];
     for(size_t i=0;i<4;++i) {
       auto& j=hand.joints[1+i];const double d=-.035+double(i)*(.11/3);
-      j.px=base.px+.025*m.palm_basis[0][0]+d*m.palm_basis[1][0];
-      j.py=base.py+.025*m.palm_basis[0][1]+d*m.palm_basis[1][1];
-      j.pz=base.pz+.025*m.palm_basis[0][2]+d*m.palm_basis[1][2];
+      j.px=base.px+.025*m.palm_basis[0][0];
+      j.py=base.py+.025*m.palm_basis[0][1]+d;
+      j.pz=base.pz+.025*m.palm_basis[0][2];
     }
+    // Strong IP extension away from the palm, with the main phalanx still up.
+    const auto ip=hand.joints[3];
+    hand.joints[4].px=ip.px-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][0];
+    hand.joints[4].py=ip.py+.035*.5-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][1];
+    hand.joints[4].pz=ip.pz-.035*std::sin(std::acos(-1)/3)*m.palm_basis[2][2];
     advance(p);out=step(pad,p);
     check(left?pad.left_active():pad.right_active(),"thumb exit skipped confirmation");
     check((left?out.left:out.right).buttons==0,"thumb exit pose pressed the panel");

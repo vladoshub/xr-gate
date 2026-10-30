@@ -47,6 +47,11 @@ in `.env` to disable only the panel; restart tracking after changing it.
 During a simple-mode touchpad session, pinch sends Trigger, an open palm toward
 yourself sends Grip, and V clicks the panel while the axes keep working.
 V sends no A/X in this mode, a fist does not click, and thumbs-up exits without pressing B/Y.
+For V, point the fingers up and the palm away from you. An angled wrist
+releases the V button while keeping the panel active. For the thumb gesture, curl index, middle, ring and pinky into a fist. Keep
+the thumb away from the palm and point its main phalanx straight up. The tip
+may be straight or bent; a backward arch is not required. The upward angle
+limit stays at 15 degrees (20 while holding).
 
 
 Simple gestures are the default for new sessions/settings. To explicitly select

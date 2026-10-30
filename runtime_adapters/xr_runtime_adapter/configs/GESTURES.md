@@ -50,8 +50,8 @@ Select **Gestures (grab / pinch)** in the launcher, or restart tracking with
 | Trigger | Touch thumb and index fingertips. Separate them to release. |
 | Grip | Open one palm toward yourself: all five fingers straight and spread. Turn it away or bend the fingers to release. |
 | Grip + Trigger | Close a fist with the thumb folded against the fingers. Open it to release both. |
-| X (left) / A (right) | Show V: spread straight index and middle fingers; bend ring and pinky. |
-| Y (left) / B (right) | Thumbs-up: extend the thumb above the folded knuckles; bend the other four fingers. |
+| X (left) / A (right) | Show V: spread straight index and middle fingers; bend ring and pinky. Point the fingers up, palm away from you. |
+| Y (left) / B (right) | Curl index, middle, ring and pinky into a fist. Keep the thumb away from the palm and point it straight up. The tip may be straight or bent. |
 | Menu | Straighten only the index on each hand and point the two index fingers toward each other. Keep both hands visible. |
 
 No calibration is needed. Pinch and palm Grip also work during an active
@@ -66,13 +66,16 @@ then becomes the centre. Move the hand left/right and up/down; diagonals
 work. The edge is 10 cm from the centre. Movement beyond it stays at the edge.
 
 Show V to press: spread the straight index and middle fingers, with ring and
-pinky bent. Release V to release the click. The centre stays fixed, and moving
+pinky bent. Keep the fingers pointing up and the palm facing away from you.
+An angled wrist releases the click, while the panel stays active. Release V to release the click. The centre stays fixed, and moving
 a held V still changes direction. V only clicks after activation and sends no
 X/A during the session; no replacement gesture is assigned to X/A. A fist does
 not click. Pinch sends Trigger and an open palm toward yourself sends Grip,
 while the axes keep working. The other hand stays independent.
 
-Show thumbs-up (other four fingers bent) to exit without pressing B/Y. Release
+Make a fist with the other four fingers, lift the thumb away from the palm
+and point it straight up to exit without pressing B/Y. The thumb tip may be
+straight or bent. An open hand, V or tucked thumb does not exit. Release
 the pose before using thumbs-up as a normal button.
 Wrist rotation does not exit the panel, including turning the open palm toward
 yourself. The 35-degree orientation limit is checked only when activating.
@@ -104,3 +107,5 @@ on a side using controller IMU orientation and returns when that side switches
 back to optical hand orientation. It does not accumulate on reconnect.
 In the Windows `.env`, use the same radius/yaw names prefixed with `XR_`.
 Restart tracking after changing them.
+
+A touching pinch remains Trigger. The upward thumb requires a fist, so an open palm or V does not trigger it.

@@ -6468,7 +6468,8 @@ int main(int argc, char** argv) {
                 frame_runtime_right_hand_gestures_enabled && runtime_visual_hand_tracking_fresh,
                 controller_left_connected, controller_right_connected,
                 simple_touchpad.left_active(),simple_touchpad.right_active(),
-                simple_touchpad.left_exit_held(),simple_touchpad.right_exit_held());
+                simple_touchpad.left_exit_held(),simple_touchpad.right_exit_held(),
+                runtime_hmd_position_for_distance ? &frame.hmd : nullptr);
           };
           if (frame.hand_v2.sequence) {
             apply_simple(frame.hand_v2);

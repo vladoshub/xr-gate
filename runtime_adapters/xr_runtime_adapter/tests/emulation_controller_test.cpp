@@ -1925,6 +1925,7 @@ HandSideF32V2 simple_pose(int kind,bool left) {
   auto h=pose(kind==0?3:kind==4?1:0,kind==3?2:0,left);
   if(kind==0)for(size_t f=0;f<2;++f)for(size_t k=1;k<4;++k)
     h.joints[5+4*f+k].px+=float(double(k)*(left?-1.:1.)*(f==0?1.:-1.)*.012);
+  if(kind==0)tilt(h,-std::acos(-1)/4,0);
   if(kind==1) {
     const auto m=em::measure_hand(h,.3);const auto base=h.joints[5];
     for(size_t i=0;i<4;++i) {
@@ -1933,6 +1934,12 @@ HandSideF32V2 simple_pose(int kind,bool left) {
       j.py=base.py+.025*m.palm_basis[0][1]+d*m.palm_basis[1][1];
       j.pz=base.pz+.025*m.palm_basis[0][2]+d*m.palm_basis[1][2];
     }
+    tilt(h,-std::acos(-1)/4,0);
+    const auto upright=em::measure_hand(h,.3);
+    const auto ip=h.joints[3];
+    h.joints[4].px=ip.px-.035*std::sin(std::acos(-1)/3)*upright.palm_basis[2][0];
+    h.joints[4].py=ip.py+.035*.5-.035*std::sin(std::acos(-1)/3)*upright.palm_basis[2][1];
+    h.joints[4].pz=ip.pz-.035*std::sin(std::acos(-1)/3)*upright.palm_basis[2][2];
   }
   return h;
 }
@@ -1948,7 +1955,12 @@ HandSideF32V2 menu_point(bool left,bool inward=true) {
 }
 RuntimeControllerStateFrameV1 simple_apply(xr_runtime_adapter::gestures::SimpleControllerGestures& c,
     HandTrackingFrameF32V2& f,bool left_pad=false,bool right_pad=false) {
-  c.apply(f,nullptr,f.timestamp_ns,0,true,true,false,false,left_pad,right_pad);
+  const auto m=em::measure_hand(f.left.status==1?f.left:f.right,.3);
+  HmdPoseF64V1 head{};head.qw=1;head.flags=HMD_FLAG_POSE_VALID;head.tracking_status=2;
+  head.px=m.palm_center[0]-.5*m.palm_basis[2][0];
+  head.py=m.palm_center[1]-.5*m.palm_basis[2][1];
+  head.pz=m.palm_center[2]-.5*m.palm_basis[2][2];
+  c.apply(f,nullptr,f.timestamp_ns,0,true,true,false,false,left_pad,right_pad,false,false,&head);
   RuntimeControllerStateFrameV1 out{};
   for(bool left:{false,true}) {
     const auto& h=left?f.left:f.right;auto& s=left?out.left:out.right;
@@ -1981,6 +1993,46 @@ void simple_new_layout_and_conflicts() {
     advance(f,60);out=simple_apply(c,f);s=left?out.left:out.right;
     check(counters==s.press_counters[0]+s.press_counters[1]+s.press_counters[left?11:3]+s.press_counters[left?12:4],"held simple gesture repeated presses");
     h.status=2;advance(f);out=simple_apply(c,f);check((left?out.left:out.right).buttons==0,"lost simple hand kept buttons");
+  }
+  {
+    auto h=simple_pose(1,false);
+    HmdPoseF64V1 head{};head.qw=1;head.flags=HMD_FLAG_POSE_VALID;head.tracking_status=2;
+    using xr_runtime_adapter::gestures::simple_thumb_up;
+    check(simple_thumb_up(h,&head,.3,false),"vertical thumb rejected");
+    const auto closed=h;
+    auto opened=pose(15,0,false);tilt(opened,-std::acos(-1)/4,0);
+    for(size_t finger=0;finger<4;++finger) {
+      h=closed;
+      for(size_t k=0;k<4;++k)h.joints[5+4*finger+k]=opened.joints[5+4*finger+k];
+      check(!simple_thumb_up(h,&head,.3,false),"thumb accepted without all four fingers folded");
+    }
+    h=closed;h.joints[8].flags=0;
+    check(!simple_thumb_up(h,&head,.3,false),"missing finger joint guessed a fist");
+    h=closed;
+    const auto base=h.joints[2];
+    const auto normal=em::measure_hand(h,.3).palm_basis[2];
+    const auto arch=[&](double tilt,double bend,bool sideways=false) {
+      const double t=tilt*std::acos(-1)/180,b=bend*std::acos(-1)/180;
+      em::Vec3 p{std::sin(t),std::cos(t),0};
+      auto& ip=h.joints[3];auto& tip=h.joints[4];
+      ip.px=base.px+.035*p[0];ip.py=base.py+.035*p[1];ip.pz=base.pz;
+      tip.px=ip.px+.025*(std::cos(b)*p[0]+std::sin(b)*(sideways?1.:-normal[0]));
+      tip.py=ip.py+.025*(std::cos(b)*p[1]-std::sin(b)*normal[1]);
+      tip.pz=ip.pz-.025*std::sin(b)*(sideways?0:normal[2]);
+    };
+    arch(0,0);check(simple_thumb_up(h,&head,.3,false),"straight lifted thumb rejected");
+    arch(0,25);check(simple_thumb_up(h,&head,.3,false),"weakly bent lifted thumb rejected");
+    arch(0,-60);check(simple_thumb_up(h,&head,.3,false),"tip bend direction incorrectly required");
+    arch(0,60,true);check(simple_thumb_up(h,&head,.3,false),"sideways tip bend incorrectly required");
+    arch(25,60);check(!simple_thumb_up(h,&head,.3,false),"25-degree upward cone remained enabled");
+    arch(10,60);check(simple_thumb_up(h,&head,.3,false),"10-degree strong back arch rejected");
+    arch(18,60);check(!simple_thumb_up(h,&head,.3,false) && simple_thumb_up(h,&head,.3,true),"narrow-angle hysteresis failed");
+    arch(0,40);check(simple_thumb_up(h,&head,.3,false),"old 45-degree arch threshold remained");
+    h.joints[4].px=h.joints[5].px;h.joints[4].py=h.joints[5].py;h.joints[4].pz=h.joints[5].pz+.005;
+    check(!simple_thumb_up(h,&head,.3,false),"thumb pressed to palm accepted");
+    arch(0,60);h.joints[9].flags=0;
+    check(!simple_thumb_up(h,&head,.3,false),"missing palm basis guessed thumb clearance");
+    check(!simple_thumb_up(h,nullptr,.3,false),"thumb accepted without head orientation");
   }
   SimpleControllerGestures c;auto f=frame();f.left=menu_point(true);f.right=menu_point(false);
   simple_apply(c,f);advance(f,45);auto out=simple_apply(c,f);

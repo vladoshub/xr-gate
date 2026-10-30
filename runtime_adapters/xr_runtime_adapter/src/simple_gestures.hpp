@@ -17,10 +17,71 @@ inline emulation::Config simple_palm_config() {
   return c;
 }
 
-inline bool simple_thumb_up(const emulation::HandMeasurement& h, bool fingers_closed, bool holding) {
-  return fingers_closed && (h.index_chain_curl>=.80 || h.index_knuckle_curl>=.95) &&
-      h.thumb_valid && h.thumb_clearance>=(holding?.70:.78) &&
-      h.thumb_straightness>=(holding?.70:.76) && h.thumb_pose[11]>=(holding?.15:.25);
+inline bool simple_head_up(const xr_runtime::HmdPoseF64V1* head,emulation::Vec3& up) {
+  if (!head || !(head->flags & xr_runtime::HMD_FLAG_POSE_VALID) ||
+      head->tracking_status!=2) return false;
+  std::array<double,4> q{{head->qw,head->qx,head->qy,head->qz}};
+  double norm=0;for(double v:q){if(!std::isfinite(v))return false;norm+=v*v;}
+  if(norm<1e-8 || !std::isfinite(norm))return false;
+  norm=std::sqrt(norm);for(auto& v:q)v/=norm;
+  const double w=q[0],x=q[1],y=q[2],z=q[3];
+  up={2*(x*y-w*z),1-2*(x*x+z*z),2*(y*z+w*x)};
+  return true;
+}
+
+inline bool simple_joint(const xr_runtime::HandSideF32V2& hand,size_t id,
+                         double confidence,emulation::Vec3& out) {
+  if(id>=hand.joint_count || id>=xr_runtime::HAND_JOINT_COUNT_V2)return false;
+  const auto& j=hand.joints[id];
+  if(!(j.flags&2) || !std::isfinite(j.confidence) || j.confidence<confidence)return false;
+  out={j.px,j.py,j.pz};
+  return std::all_of(out.begin(),out.end(),[](double v){return std::isfinite(v);});
+}
+
+inline bool simple_thumb_up(const xr_runtime::HandSideF32V2& hand,
+                            const xr_runtime::HmdPoseF64V1* head,
+                            double confidence,bool holding) {
+  // A fist plus a thumb lifted away from the palm and pointing up. The tip may
+  // be straight or bent; no signed backward-arch requirement remains.
+  emulation::Vec3 up{},mcp{},ip{},tip{};
+  if(!simple_head_up(head,up) || !simple_joint(hand,2,confidence,mcp) ||
+      !simple_joint(hand,3,confidence,ip) || !simple_joint(hand,4,confidence,tip))return false;
+  const auto palm=emulation::measure_hand(hand,confidence);
+  const double curl=holding?.45:.65;
+  if(!palm.palm_valid || !palm.thumb_valid ||
+      palm.thumb_clearance<(holding?.32:.40) ||
+      std::any_of(palm.curl.begin(),palm.curl.end(),[curl](double v){return !std::isfinite(v) || v<curl;}))return false;
+  double first2=0,last2=0,upward=0;
+  emulation::Vec3 first{},last{};
+  for(size_t i=0;i<3;++i){
+    first[i]=ip[i]-mcp[i];last[i]=tip[i]-ip[i];
+    first2+=first[i]*first[i];last2+=last[i]*last[i];upward+=first[i]*up[i];
+  }
+  const double length=std::sqrt(first2)+std::sqrt(last2);
+  if(length<.012 || length>.15 || first2<1e-8 || last2<1e-8)return false;
+  const double threshold=std::cos((holding?38.:30.)*3.141592653589793/180.);
+  if(upward/std::sqrt(first2)<threshold)return false;
+  // An actual touching pinch keeps Trigger.
+  emulation::Vec3 index{};
+  if(simple_joint(hand,8,confidence,index)) {
+    double gap2=0;for(size_t i=0;i<3;++i){const double d=tip[i]-index[i];gap2+=d*d;}
+    const double touching=std::clamp(length*.15,.006,.012);
+    if(gap2<touching*touching)return false;
+  }
+  return true;
+}
+
+inline bool simple_v_facing(const emulation::HandMeasurement& h,
+                            const xr_runtime::HmdPoseF64V1* head, bool holding) {
+  emulation::Vec3 up{};
+  if(!h.palm_valid || !simple_head_up(head,up))return false;
+  const emulation::Vec3 away{{h.palm_center[0]-head->px,h.palm_center[1]-head->py,h.palm_center[2]-head->pz}};
+  double upright=0,facing=0,distance2=0;
+  for(size_t i=0;i<3;++i){upright+=h.palm_basis[1][i]*up[i];
+    facing+=h.palm_basis[2][i]*away[i];distance2+=away[i]*away[i];}
+  const double threshold=std::cos((holding?40.:35.)*3.141592653589793/180.);
+  return std::isfinite(distance2) && distance2>=.0025 && distance2<=4 &&
+      upright>=threshold && facing/std::sqrt(distance2)>=threshold;
 }
 
 inline bool simple_pinch(const emulation::HandMeasurement& h, bool holding) {
