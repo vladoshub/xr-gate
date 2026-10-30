@@ -78,6 +78,9 @@ A touching pinch remains Trigger. The upward thumb requires a fist, so an open p
 
 ## Controller emulation
 
+Select **Gestures (controller emulation)** in the launcher, or restart tracking with
+`SIMPLE_GESTURES=0 EMULATION_CONTROLLER=1` on Linux.
+
 For controller emulation, keep index and middle straight, ring and
 pinky bent, and the thumb relaxed. Turn the hands inward toward your body for
 better recognition; the configured offset turns the virtual hands forward.
