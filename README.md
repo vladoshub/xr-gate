@@ -9,6 +9,10 @@ Supported:
 2. Image analysis-based hand tracking (Mercury hand tracking integration)
 3. Various input devices emulate VR controllers, including those with their own IMUs for precise tracking (Samsung Gear VR support or VR-like Bluetooth controllers)
 
+
+**Release builds are automatically built and packaged using GitHub Actions.**
+
+
 **For installation and usage instructions, see:**
 
 [Quick Start Linux](#quick-start-linux)
