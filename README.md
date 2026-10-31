@@ -189,8 +189,13 @@ The controllers emulate the buttons of real VR controllers - at the moment, the 
 
 Requires Windows 11. Default packages require AVX2 support CPU instructions
 
-Install SteamVR, open it once and close it. Download from [latest release](https://github.com/vladoshub/xr-gate/releases/latest) the last xr-gate-windows-wsl2-usbip.zip, connect device to PC and enable SBS mode
-if it is supported. Then Open XR-Gate.exe
+Install **SteamVR**, open it once and close it. 
+
+Download from [latest release](https://github.com/vladoshub/xr-gate/releases/latest) the last **xr-gate-windows-wsl2-usbip.zip**
+
+Connect device to PC and enable **SBS** mode if it is supported.
+
+Then Open **XR-Gate.exe**
 
 WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
 
@@ -210,11 +215,11 @@ Download these artifacts:
 
 [latest release](https://github.com/vladoshub/xr-gate/releases/latest)
 
-1. xr-gate-linux-x64.tar.gz
+1. **xr-gate-linux-x64.tar.gz**
 
-2. hand-tracking-models-mercury.tar.gz
+2. **hand-tracking-models-mercury.tar.gz**
 
-3. unpack_xr_gate.sh
+3. **unpack_xr_gate.sh**
 
 Mercury ONNX models are distributed separately in hand-tracking-models-mercury.tar.gz. They are not included in the core runtime package and are not downloaded by the default build.
 
