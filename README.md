@@ -186,19 +186,17 @@ See the [Windows Bluetooth notes](win/README.md#bluetooth-adapter-for-wsl2), inc
 The controllers emulate the buttons of real VR controllers - at the moment, the Samsung Gear VR covers most of the main buttons and has a touch panel, and also has an IMU
 
 # Quick start Windows
-**If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
 
-Requires Windows 11. Default packages require AVX2; for the Linux/WSL runtime
-on CPUs without AVX2, build with the [`generic` CPU profile](docs/ubuntu-builds.md).
+Requires Windows 11. Default packages require AVX2 support CPU instructions
 
 Install SteamVR, open it once and close it. Download from [latest release](https://github.com/vladoshub/xr-gate/releases/latest) the last xr-gate-windows-wsl2-usbip.zip, connect device to PC and enable SBS mode
 if it is supported. Then Open XR-Gate.exe
 
 WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
 
+For the Linux/WSL runtime on CPUs without AVX2, build with the [`generic` CPU profile](docs/ubuntu-builds.md).
 
 # Quick start Linux
-**If your device has a proximity sensor, it may turn off the glasses when you remove them, and the glasses may become detached from the driver. To prevent this, I covered the sensor with Velcro while using it.**
 
 Default packages require AVX2. CPUs without AVX2 can use the
 [`generic` CPU profile](docs/ubuntu-builds.md).
