@@ -2040,6 +2040,15 @@ void simple_new_layout_and_conflicts() {
   for(auto* h:{&f.left,&f.right}){yaw(*h,.9);for(auto& j:h->joints){j.px+=.3f;j.py+=.2f;}}
   advance(f);out=simple_apply(c,f);check(out.left.buttons==CONTROLLER_BUTTON_MENU,"Menu depends on world orientation");
   f.left=menu_point(true);
+  f.right=menu_point(false);
+  for(auto& j:f.right.joints)j.px+=.4f;
+  advance(f);out=simple_apply(c,f);
+  check(out.left.buttons==0,"wide pointing kept Menu during confirmation");
+  advance(f,45);out=simple_apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_SYSTEM && out.right.buttons==0,
+        "wide pointing did not make one System click");
+  f.right=menu_point(false);advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_MENU,"close pointing did not restore Menu");
   f.right=menu_point(false,false);advance(f);out=simple_apply(c,f);
   check(!(out.left.buttons&CONTROLLER_BUTTON_MENU),"parallel pointing kept Menu");
   f.right=menu_point(false);advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f,true,false);

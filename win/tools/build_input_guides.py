@@ -129,8 +129,8 @@ def gestures(ru=False):
             'Сожми кулак, прижав большой к согнутым пальцам. Работает вне активного тачпада.')),
         ('X (left) / A (right)',tr('Outside the touchpad, show V: spread your straight index and middle fingers; bend ring and pinky. Fingers point up, palm away from you. An angled wrist does not press the button.','Вне тачпада покажи V: прямые указательный и средний разведены, безымянный и мизинец согнуты. Пальцы вверх, ладонь от себя. При наклонённой кисти кнопка не нажимается.')),
         ('Y (left) / B (right)',tr('Curl index, middle, ring and pinky into a fist. Keep the thumb away from the palm and point its main phalanx straight up. Its tip may be straight or bent; no backward arch is required.','Сожми указательный, средний, безымянный и мизинец в кулак. Большой отведи от ладони и направь прямо вверх. Кончик может быть прямым или согнутым, обязательного загиба назад нет.')),
-        ('Menu',tr('Straighten only the index finger on each hand. Point the two index fingers toward each other, with both hands visible.',
-            'Выпрями только указательные на обеих руках. Направь их друг на друга, удерживая обе руки в поле зрения.'))])
+        ('Menu',tr('Straighten only the index finger on each hand. Point the two index fingers toward each other, with both hands visible. Up to 60 cm between the index knuckles sends Menu. Over 60 cm sends System (SteamVR Dashboard).',
+            'Выпрями только указательные на обеих руках. Направь их друг на друга, удерживая обе руки в поле зрения. До 60 см между костяшками указательных пальцев срабатывает Menu, свыше 60 см — System (панель SteamVR).'))])
     simple+='<h2>'+tr('Virtual touchpad','Виртуальный тачпад')+'</h2><p>'+tr(
         'Enabled by default, independently for each hand. Fully straighten all five fingers and separate thumb and index. Point the open palm away from your head, like a stop sign: you see the back of your hand, with the fingers unfolded at the knuckles. Keep this pose briefly to activate. Its position relative to your head then becomes the centre. Head movement and rotation are accounted for continuously.',
         'Включён по умолчанию, отдельно для каждой руки. Полностью раскрой все пять пальцев и разведи большой с указательным. Направь ладонь от головы, как знак «стоп»: ты видишь тыльную сторону руки, пальцы выпрямлены и в костяшках. Ненадолго сохрани позу для включения. Тогда положение руки относительно головы станет центром. Перемещение и повороты головы учитываются постоянно.')+'</p>'+touchpad_picture(ru)+table([tr('Action','Действие'),tr('Gesture','Жест')],[
@@ -187,7 +187,7 @@ def controller_picture(side,ru=False):
     # One identical licensed model image on both sides, with side-specific labels.
     xa='X' if side=='LEFT' else 'A';yb='Y' if side=='LEFT' else 'B'
     labels=[(16,90,350,115,'Touchpad → stick X/Y'),(16,200,312,195,'Back → Grip'),
-        (493,200,355,191,'Home → Menu'),(16,266,334,235,f'Volume + → {xa}'),
+        (493,200,355,191,'Home → System' if side=='LEFT' else 'Home → Menu'),(16,266,334,235,f'Volume + → {xa}'),
         (493,292,333,283,f'Volume − → {yb}'),(16,368,344,145,'Press → stick click')]
     body=f'<text x="350" y="28" fill="#64dfce" text-anchor="middle" font-size="28" font-weight="700">{side}</text>'
     body+=f'<image href="data:image/png;base64,{image}" x="200" y="40" width="300" height="380"/>'
@@ -208,7 +208,7 @@ def support(ru=False):
         'Для подключения Samsung Gear VR требуется Bluetooth. Для качественной и стабильной связи с контроллерами рекомендуется отдельный внешний USB Bluetooth-адаптер.')+'</p>'
     intro+='<p>'+tr('Default XR Gate → SteamVR mapping. The same Samsung Gear VR Controller works on either side; assign one to LEFT and the other to RIGHT in the launcher.',
         'Стандартная раскладка XR Gate → SteamVR. Одинаковые Samsung Gear VR Controller используются с обеих сторон: назначь один LEFT, другой RIGHT в лаунчере.')+'</p>'
-    content=intro+'<div class="grid mapping">'+card('LEFT',tr('Volume + is X; volume − is Y.','Громкость + — X, громкость − — Y.'),controller_picture('LEFT',ru))
+    content=intro+'<div class="grid mapping">'+card('LEFT',tr('Volume + is X; volume − is Y. Home sends System to open SteamVR Dashboard. For an existing Gear VR config, set the left KEY_HOMEPAGE action to system.','Громкость + — X, громкость − — Y. Home открывает панель SteamVR. В существующем конфиге Gear VR назначь system на левый KEY_HOMEPAGE.'),controller_picture('LEFT',ru))
     content+=card('RIGHT',tr('Volume + is A; volume − is B.','Громкость + — A, громкость − — B.'),controller_picture('RIGHT',ru))+'</div>'
     content+='<h2>'+tr('Tracking and motion prediction','Трекинг и предсказание движения')+'</h2><p>'+tr(
         'XR Gate combines optical hand tracking with the controller’s IMU. Its gyroscope and accelerometer improve orientation tracking and motion prediction through brief optical tracking gaps. Keep the controller in the tracked hand.',

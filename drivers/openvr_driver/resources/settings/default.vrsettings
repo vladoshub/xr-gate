@@ -32,7 +32,7 @@
     "handControllerMode": "sticks",
     "handControllerPoseMode": "runtime_absolute",
     "handControllerRenderModel": "xr_tracking_hidden_controller",
-    "handControllerExposeSystemButton": false,
+    "handControllerExposeSystemButton": true,
     "runtimeHandTransport": "auto",
     "runtimeHandRegistryPath": "/tmp/runtime_tracking_streams.json",
     "runtimeHandStream": "runtime_hand_tracking",

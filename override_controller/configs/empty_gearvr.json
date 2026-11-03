@@ -33,7 +33,7 @@
       "side": "left"
     },
     {
-      "action": "menu",
+      "action": "system",
       "device_id": 1,
       "input": {
         "abs_direction": 0,

@@ -23,12 +23,12 @@ class SimpleControllerGestures {
                      left_physical,right_physical);
     update(hands.left,left_,stamp,fresh&&left_enabled,left_physical,left_pad,left_pad_exit,true,head);
     update(hands.right,right_,stamp,fresh&&right_enabled,right_physical,right_pad,right_pad_exit,false,head);
-    const bool inward=pointing_together(hands.left,hands.right);
-    if (!inward) menu_={};
-    else {
-      confirm(menu_,Pose::Menu,stamp);
+    const Pose menu_pose=pointing_menu(hands.left,hands.right);
+    confirm(menu_,menu_pose,stamp);
+    if(menu_pose!=Pose::None) {
       clear(hands.left);clear(hands.right);
       if(menu_.active==Pose::Menu)hands.left.reserved0=xr_runtime::CONTROLLER_BUTTON_MENU;
+      if(menu_.active==Pose::System)hands.left.reserved0=xr_runtime::CONTROLLER_BUTTON_SYSTEM;
     }
     hands.flags |= xr_runtime::HAND_FLAG_GESTURES_VALID;
   }
@@ -38,7 +38,7 @@ class SimpleControllerGestures {
   }
 
  private:
-  enum class Pose {None,V,ThumbUp,Pinch,Fist,Menu};
+  enum class Pose {None,V,ThumbUp,Pinch,Fist,Menu,System};
   struct Channel {Pose candidate=Pose::None,active=Pose::None;uint64_t since=0,sample=0;};
   struct Side {
     std::array<bool,4> extended{},curled{};
@@ -47,7 +47,7 @@ class SimpleControllerGestures {
   };
   struct Counters {uint64_t previous=0;std::array<uint32_t,32> press{},release{};};
   static constexpr uint64_t managed=xr_runtime::CONTROLLER_BUTTON_TRIGGER|xr_runtime::CONTROLLER_BUTTON_GRIP|
-      xr_runtime::CONTROLLER_BUTTON_MENU|xr_runtime::CONTROLLER_BUTTON_A|xr_runtime::CONTROLLER_BUTTON_B|
+      xr_runtime::CONTROLLER_BUTTON_MENU|xr_runtime::CONTROLLER_BUTTON_SYSTEM|xr_runtime::CONTROLLER_BUTTON_A|xr_runtime::CONTROLLER_BUTTON_B|
       xr_runtime::CONTROLLER_BUTTON_X|xr_runtime::CONTROLLER_BUTTON_Y;
 
   static emulation::Vec3 sub(const emulation::Vec3& a,const emulation::Vec3& b) {return {a[0]-b[0],a[1]-b[1],a[2]-b[2]};}
@@ -120,14 +120,17 @@ class SimpleControllerGestures {
     h.reserved0 |= pad_click;
   }
 
-  bool pointing_together(const xr_runtime::HandSideF32V2& l,const xr_runtime::HandSideF32V2& r) const {
-    if(!left_.valid || !right_.valid || !left_.point || !right_.point)return false;
+  Pose pointing_menu(const xr_runtime::HandSideF32V2& l,const xr_runtime::HandSideF32V2& r) const {
+    if(!left_.valid || !right_.valid || !left_.point || !right_.point)return Pose::None;
     auto across=sub(joint(r,5),joint(l,5));const double span=std::sqrt(dot(across,across));
     auto tips=sub(joint(r,8),joint(l,8));
-    if(span<.08 || span>1.0 || std::sqrt(dot(tips,tips))>.55 || !unit(across))return false;
+    if(span<.08 || !unit(across))return Pose::None;
+    const Pose pose=span>.60?Pose::System:Pose::Menu;
+    if(pose==Pose::Menu && std::sqrt(dot(tips,tips))>.55)return Pose::None;
     auto a=sub(joint(l,8),joint(l,5)),b=sub(joint(r,8),joint(r,5));
-    const double threshold=menu_.active==Pose::Menu?.70:.80;
-    return unit(a)&&unit(b)&&dot(a,across)>=threshold && dot(b,across)<=-threshold;
+    const double threshold=menu_.active==pose?.70:.80;
+    return unit(a)&&unit(b)&&dot(a,across)>=threshold && dot(b,across)<=-threshold
+        ? pose : Pose::None;
   }
 
   static void publish_side(xr_runtime::RuntimeControllerSideStateV1& out,Counters& c) {

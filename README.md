@@ -153,7 +153,7 @@ See [GESTURES](runtime_adapters/xr_runtime_adapter/configs/GESTURES.md)
 With `SIMPLE_GESTURES=1`, pinch presses Trigger and an open palm facing you presses
 Grip. Spread all five fingers; turn the palm away or bend them to release.
 Outside an active touchpad, a fist holds Grip + Trigger, V sends X/A (left/right),
-and thumbs-up sends Y/B. Point both index fingers toward each other for Menu.
+and thumbs-up sends Y/B. Point both index fingers toward each other for Menu (up to 60 cm between index knuckles) or SteamVR Dashboard (over 60 cm).
 No calibration is needed. See the launcher's **Gestures** tab.
 
 The simple mode also has a virtual touchpad enabled by default: fully straighten
