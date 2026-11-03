@@ -97,7 +97,7 @@ Left hand: X/Y. Right hand: A/B. Menu requires both hands.
 | X / A | Make a thumb–index circle; keep the other three fingers straight. |
 | Y / B | Make a thumb–index circle; bend the other three fingers. |
 | Thumbstick click / touchpad press | Open one hand toward yourself, with all five fingers straight and spread. Return to your gameplay pose to release. |
-| Menu | Hold both hands open, palms facing away from you, like a stop sign. You should see the backs of your hands. |
+| Menu / SteamVR Dashboard | Hold both hands open, palms facing away from you, like a stop sign. Keep both index knuckles tracked. Under 35 cm between them sends Menu. Over 45 cm sends System. From 35 to 45 cm neither button starts. The selected button stays active until you release the pose. |
 
 **Trigger and Grip may work with only a partial bend.**
 

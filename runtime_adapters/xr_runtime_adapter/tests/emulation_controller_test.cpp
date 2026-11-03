@@ -774,6 +774,42 @@ void two_hand_menu() {
     check(!(out.left.buttons & CONTROLLER_BUTTON_MENU), "lost second hand fired Menu");
   }
 }
+void two_hand_menu_distance() {
+  auto cfg = immediate();
+  cfg.menu_hold_ms = 90;
+  em::Controller c(cfg);
+  auto f = frame();
+  apply(c, f);
+  f.left = pose(15, 1, true);
+  const auto set_distance = [&](float meters) {
+    f.right = pose(15, 1);
+    const float offset = f.left.joints[5].px + meters - f.right.joints[5].px;
+    for (auto& joint : f.right.joints) joint.px += offset;
+  };
+  set_distance(.40f);
+  advance(f);
+  apply(c, f);
+  advance(f, 100);
+  auto out = apply(c, f);
+  check(out.left.buttons == 0 && out.right.buttons == 0, "Menu dead zone leaked a button");
+  set_distance(.50f);
+  advance(f);
+  out = apply(c, f);
+  check(out.left.buttons == 0, "dead zone counted toward System confirmation");
+  advance(f, 100);
+  out = apply(c, f);
+  check(out.left.buttons == CONTROLLER_BUTTON_SYSTEM && out.right.buttons == 0,
+        "wide open palms did not press System");
+  set_distance(.30f);
+  advance(f, 100);
+  out = apply(c, f);
+  check(out.left.buttons == CONTROLLER_BUTTON_SYSTEM, "held System switched to Menu");
+  f.right.joints[5].confidence = 0;
+  advance(f);
+  out = apply(c, f);
+  check(out.left.buttons == 0 && out.right.buttons == 0,
+        "losing the index knuckle did not release System");
+}
 void source_reset_and_confirmation() {
   auto cfg = immediate();
   cfg.button_confirm_ms = 45;
@@ -2148,6 +2184,7 @@ int main() {
     no_thumb_steering_and_invalid_joints();
     photo_poses_and_rearm();
     two_hand_menu();
+    two_hand_menu_distance();
     source_reset_and_confirmation();
     physical_controller_merge();
     physical_short_taps_and_counter_reset();

@@ -202,7 +202,7 @@ class Controller {
                       SideState& state, uint64_t sample_ns);
   void update_pad(const HandMeasurement& hand, const HandConfig& config, SideState& state,
                   double dt_ms, bool blocked);
-  void update_menu();
+  void update_menu(const xr_runtime::HandTrackingFrameF32V2* hands);
   void publish_side(xr_runtime::RuntimeControllerSideStateV1& output, const HandConfig& config,
                     SideState& state, bool left);
   static void clear_input(SideState& state);
@@ -211,7 +211,8 @@ class Controller {
   bool viewer_valid_ = false;
   Vec3 viewer_position_{};
   SideState left_, right_;
-  bool menu_candidate_ = false, menu_active_ = false;
+  bool menu_pose_ = false;
+  uint64_t menu_candidate_ = 0, menu_active_ = 0;
   uint64_t menu_since_ns_ = 0, menu_sample_ns_ = 0;
 };
 }  // namespace xr_runtime_adapter::emulation

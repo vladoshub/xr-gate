@@ -104,8 +104,8 @@ def gestures(ru=False):
         ('Y (left) / B (right)',tr('Make a thumb–index circle; bend the other three fingers.','Соедини большой и указательный в кольцо; остальные три пальца согнуты.')),
         (tr('Thumbstick click / touchpad press','Нажатие стика / тачпада'),tr('Open one palm toward yourself, with all five fingers straight and spread. Change the pose to release.',
             'Раскрой одну ладонь к себе: все пять пальцев прямые и разведены. Смени позу, чтобы отпустить.')),
-        ('Menu',tr('Hold both hands open, palms away from you, like a stop sign. You should see the backs of your hands.',
-            'Ненадолго удерживай обе раскрытые ладони от себя, как знак «стоп». Ты видишь тыльную сторону рук.'))])
+        ('Menu / System',tr('Hold both hands open, palms away from you, like a stop sign. Keep both index knuckles tracked. Under 35 cm between them sends Menu. Over 45 cm sends System (SteamVR Dashboard). From 35 to 45 cm neither button starts. Release the pose to switch buttons.',
+            'Ненадолго удерживай обе раскрытые ладони от себя, как знак «стоп». Костяшки указательных пальцев должны отслеживаться. Расстояние меньше 35 см включает Menu, больше 45 см — System (панель SteamVR). В диапазоне 35–45 см новое нажатие не начинается. Чтобы сменить кнопку, отпусти жест.'))])
     em+='<p><strong>'+tr('For Trigger and Grip, try bending the finger only partway. A full curl may not be necessary.',
         'Для Trigger и Grip можно попробовать сгибать палец не до конца.')+'</strong></p><p>'+tr(
         'Left hand: X/Y. Right hand: A/B. Trigger, Grip and D-pad can work together. The open-palm touchpad gesture pauses movement, Trigger and Grip.',

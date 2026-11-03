@@ -1277,38 +1277,48 @@ void Controller::update_side(const HandSideF32V2* hand, const HandConfig& c, Sid
   update_buttons(h, c, s, stamp);
   update_pad(h, c, s, dt, s.wait_for_neutral || s.candidate != Pose::None);
 }
-void Controller::update_menu() {
-  const bool both = config_.left.enabled && config_.right.enabled && left_.valid && right_.valid &&
+void Controller::update_menu(const HandTrackingFrameF32V2* hands) {
+  Vec3 left_knuckle{}, right_knuckle{};
+  constexpr uint32_t index_base_joint = 5;
+  const bool both = hands && config_.left.enabled && config_.right.enabled && left_.valid && right_.valid &&
                     left_.menu_open && right_.menu_open &&
+                    position(hands->left, index_base_joint, config_.min_confidence, left_knuckle) &&
+                    position(hands->right, index_base_joint, config_.min_confidence, right_knuckle) &&
                     (config_.thumbstick_click_gesture == "layout_default" ||
                      (!left_.click_neutral_required && !right_.click_neutral_required));
   if (!both || left_.reset_event || right_.reset_event) {
-    if (menu_candidate_)
+    if (menu_pose_)
       for (auto* s : {&left_, &right_}) {
         clear_input(*s);
         s->wait_for_neutral = true;
       }
-    menu_candidate_ = menu_active_ = false;
+    menu_pose_ = false;
+    menu_candidate_ = menu_active_ = 0;
     menu_since_ns_ = menu_sample_ns_ = 0;
     return;
   }
+  menu_pose_ = true;
   const uint64_t sample = std::min(left_.sample_ns, right_.sample_ns);
-  if (!menu_candidate_) {
-    menu_candidate_ = true;
-    menu_since_ns_ = sample;
-  }
-  if (sample != menu_sample_ns_) {
+  if (!menu_active_ && sample != menu_sample_ns_) {
     menu_sample_ns_ = sample;
-    if (double(sample - menu_since_ns_) / 1e6 >= config_.menu_hold_ms) menu_active_ = true;
+    const auto across = sub(right_knuckle, left_knuckle);
+    const double distance_squared = dot(across, across);
+    uint64_t candidate = 0;
+    if (distance_squared < .35 * .35) candidate = CONTROLLER_BUTTON_MENU;
+    if (distance_squared > .45 * .45) candidate = CONTROLLER_BUTTON_SYSTEM;
+    if (candidate != menu_candidate_) {
+      menu_candidate_ = candidate;
+      menu_since_ns_ = sample;
+    }
+    if (double(sample - menu_since_ns_) / 1e6 >= config_.menu_hold_ms)
+      menu_active_ = menu_candidate_;
   }
   for (auto* s : {&left_, &right_}) {
     clear_input(*s);
     s->thumb_active = false;
   }
-  if (menu_active_) {
-    left_.buttons = CONTROLLER_BUTTON_MENU;
-    left_.touches = CONTROLLER_BUTTON_MENU;
-  }
+  left_.buttons = menu_active_;
+  left_.touches = menu_active_;
 }
 void Controller::publish_side(RuntimeControllerSideStateV1& out, const HandConfig& c,
                               SideState& s, bool left) {
@@ -1402,7 +1412,7 @@ void Controller::apply(RuntimeControllerStateFrameV1& out, const HandTrackingFra
               origin);
   update_side(hands && !gestures_blocked ? &hands->right : nullptr, config_.right, right_, hands,
               now, origin);
-  update_menu();
+  update_menu(hands);
   publish_side(out.left, config_.left, left_, true);
   publish_side(out.right, config_.right, right_, false);
   const auto flag = [&](bool enabled, const RuntimeControllerSideStateV1& side, uint32_t side_bit,
