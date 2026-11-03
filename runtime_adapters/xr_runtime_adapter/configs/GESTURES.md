@@ -14,8 +14,10 @@ Select **Gestures** in the launcher, or restart tracking with
 | Grip + Trigger | Close a fist with the thumb folded against the fingers. Open it to release both. |
 | X (left) / A (right) | Show V: spread straight index and middle fingers; bend ring and pinky. Point the fingers up, palm away from you. |
 | Y (left) / B (right) | Curl index, middle, ring and pinky into a fist. Keep the thumb away from the palm and point it straight up. The tip may be straight or bent. |
-| Menu | Point both index fingers toward each other with up to 60 cm between their base knuckles. Keep both hands visible. |
-| SteamVR Dashboard | Use the same pose with more than 60 cm between the index knuckles. This sends System on the left hand. |
+| Menu | Point both index fingers toward each other with less than 35 cm between their base knuckles. Keep both hands visible. |
+| SteamVR Dashboard | Use the same pose with more than 45 cm between the index knuckles. This sends System on the left hand. |
+
+From 35 to 45 cm neither button starts. Once a button fires, it stays active until you release the pointing pose.
 
 No calibration is needed. Pinch and palm Grip also work during an active
 touchpad session. In that session, a fist with the thumb lifted straight up clicks the panel

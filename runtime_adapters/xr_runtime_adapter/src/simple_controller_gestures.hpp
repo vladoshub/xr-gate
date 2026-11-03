@@ -122,15 +122,17 @@ class SimpleControllerGestures {
 
   Pose pointing_menu(const xr_runtime::HandSideF32V2& l,const xr_runtime::HandSideF32V2& r) const {
     if(!left_.valid || !right_.valid || !left_.point || !right_.point)return Pose::None;
-    auto across=sub(joint(r,5),joint(l,5));const double span=std::sqrt(dot(across,across));
-    auto tips=sub(joint(r,8),joint(l,8));
+    auto across=sub(joint(r,5),joint(l,5));
+    const double span=std::sqrt(dot(across,across));
     if(span<.08 || !unit(across))return Pose::None;
-    const Pose pose=span>.60?Pose::System:Pose::Menu;
-    if(pose==Pose::Menu && std::sqrt(dot(tips,tips))>.55)return Pose::None;
     auto a=sub(joint(l,8),joint(l,5)),b=sub(joint(r,8),joint(r,5));
-    const double threshold=menu_.active==pose?.70:.80;
-    return unit(a)&&unit(b)&&dot(a,across)>=threshold && dot(b,across)<=-threshold
-        ? pose : Pose::None;
+    const double threshold=menu_.active==Pose::None?.80:.70;
+    if(!unit(a) || !unit(b) || dot(a,across)<threshold || dot(b,across)>-threshold)
+      return Pose::None;
+    if(menu_.active!=Pose::None)return menu_.active;
+    if(span<.35)return Pose::Menu;
+    if(span>.45)return Pose::System;
+    return Pose::None;
   }
 
   static void publish_side(xr_runtime::RuntimeControllerSideStateV1& out,Counters& c) {

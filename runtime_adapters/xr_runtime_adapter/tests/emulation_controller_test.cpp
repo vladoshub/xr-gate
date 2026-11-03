@@ -2034,25 +2034,36 @@ void simple_new_layout_and_conflicts() {
     check(!simple_thumb_up(h,&head,.3,false),"missing palm basis guessed thumb clearance");
     check(!simple_thumb_up(h,nullptr,.3,false),"thumb accepted without head orientation");
   }
-  SimpleControllerGestures c;auto f=frame();f.left=menu_point(true);f.right=menu_point(false);
+  SimpleControllerGestures c;
+  auto f=frame();
+  const auto point_at_span=[&](float span) {
+    f.left=menu_point(true);
+    f.right=menu_point(false);
+    const float offset=f.left.joints[5].px+span-f.right.joints[5].px;
+    for(auto& joint:f.right.joints)joint.px+=offset;
+  };
+  point_at_span(.40f);
   simple_apply(c,f);advance(f,45);auto out=simple_apply(c,f);
-  check(out.left.buttons==CONTROLLER_BUTTON_MENU && out.right.buttons==0,"inward pointing did not make one Menu");
+  check(out.left.buttons==0 && out.right.buttons==0,"dead zone fired a menu button");
+  point_at_span(.30f);
+  advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_MENU && out.right.buttons==0,"close pointing did not make one Menu");
   for(auto* h:{&f.left,&f.right}){yaw(*h,.9);for(auto& j:h->joints){j.px+=.3f;j.py+=.2f;}}
   advance(f);out=simple_apply(c,f);check(out.left.buttons==CONTROLLER_BUTTON_MENU,"Menu depends on world orientation");
-  f.left=menu_point(true);
-  f.right=menu_point(false);
-  for(auto& j:f.right.joints)j.px+=.4f;
+  point_at_span(.50f);
   advance(f);out=simple_apply(c,f);
-  check(out.left.buttons==0,"wide pointing kept Menu during confirmation");
-  advance(f,45);out=simple_apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_MENU,"wide pointing switched a held Menu");
+  f.right=menu_point(false,false);advance(f);out=simple_apply(c,f);
+  check(out.left.buttons==0,"parallel pointing kept Menu");
+  point_at_span(.50f);
+  advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f);
   check(out.left.buttons==CONTROLLER_BUTTON_SYSTEM && out.right.buttons==0,
         "wide pointing did not make one System click");
-  f.right=menu_point(false);advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f);
-  check(out.left.buttons==CONTROLLER_BUTTON_MENU,"close pointing did not restore Menu");
-  f.right=menu_point(false,false);advance(f);out=simple_apply(c,f);
-  check(!(out.left.buttons&CONTROLLER_BUTTON_MENU),"parallel pointing kept Menu");
-  f.right=menu_point(false);advance(f);simple_apply(c,f);advance(f,45);out=simple_apply(c,f,true,false);
-  check(!(out.left.buttons&CONTROLLER_BUTTON_MENU),"touchpad hand joined Menu");
+  point_at_span(.40f);
+  advance(f);out=simple_apply(c,f);
+  check(out.left.buttons==CONTROLLER_BUTTON_SYSTEM,"dead zone released a held System click");
+  advance(f);out=simple_apply(c,f,true,false);
+  check(out.left.buttons==0,"touchpad hand kept System held");
   f.left=simple_pose(2,true);f.left.pinch_active=f.left.grab_active=0;f.left.pinch_strength=f.left.grab_strength=0;
   f.left.reserved0=CONTROLLER_BUTTON_THUMBSTICK;advance(f,60);out=simple_apply(c,f,true,false);
   check(out.left.buttons==CONTROLLER_BUTTON_THUMBSTICK && out.left.trigger==0 && out.left.grip==0,"touchpad fist leaked gameplay channels");
