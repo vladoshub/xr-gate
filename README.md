@@ -193,9 +193,9 @@ Install **SteamVR**, open it once and close it.
 
 Download from [latest release](https://github.com/vladoshub/xr-gate/releases/latest) the last **xr-gate-windows-wsl2-usbip.zip**
 
-Connect device to PC and enable **SBS** mode if it is supported.
+Open **XR-Gate.exe**
 
-Then Open **XR-Gate.exe**
+Then Connect device to PC and enable **SBS** mode if it is supported.
 
 WSL2 will be installed. The installation is automated — follow the instructions in the interface. For your convenience, the buttons you need to press during installation will flash.
 
