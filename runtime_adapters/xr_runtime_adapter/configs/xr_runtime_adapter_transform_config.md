@@ -119,7 +119,7 @@ coordinate_transform
 hmd_relative
 orientation_transform
 orientation_offset
-hand_orientation_offset
+virtual_controller_orientation_offset
 mesh_runtime
 ```
 
@@ -610,12 +610,12 @@ pitch/yaw/roll signs.
 
 ---
 
-## 7. `hand_orientation_offset`
+## 7. `virtual_controller_orientation_offset`
 
 Example:
 
 ```json
-"hand_orientation_offset": {
+"virtual_controller_orientation_offset": {
   "enabled": true,
   "only_optic": true,
   "multiply_order": "post",
@@ -640,14 +640,29 @@ Example:
 }
 ```
 
-This block is for final hand/controller orientation tuning.
+This block is for final virtual controller orientation tuning.
+
+Existing `hand_orientation_offset` and `controller_orientation_offset` keys
+remain supported. `virtual_controller_orientation_offset` takes precedence
+when both the current name and a legacy name are present.
+
+Each side can also define an `aim_offset` with `pitch_deg` and `yaw_deg`. The
+runtime composes the mounting angles and aim angles into one rotation. With
+`multiply_order: "post"`, the result follows the optical controller's local
+axes. `apply_to.joints: true` carries the whole skeleton with the controller.
+Set `apply_gesture_yaw: false` on this block to use its rotation as the only aim
+adjustment for simple gestures and controller emulation. The default is `true`.
+
+In simple mode, `SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON=1` also carries the
+skeleton with that yaw. Its default is `0`. An enabled
+`hand_skeleton_orientation_offset` takes priority for the skeleton.
 
 `only_optic` defaults to `true`. When enabled, this offset is applied only to a
 side whose effective controller orientation source is optical hand tracking. If
 a fresh controller IMU is actively driving that side, the offset is skipped; use
 `controller_override.imu_orientation.<side>.orientation_offset` for the IMU
 mounting/presentation correction instead. Set `only_optic` to `false` to retain
-the legacy behavior and apply `hand_orientation_offset` to both optical and IMU
+the legacy behavior and apply `virtual_controller_orientation_offset` to both optical and IMU
 controller modes.
 
 Use it when:
@@ -728,6 +743,34 @@ Example:
 ```
 
 Use separate values when only one controller/hand model is visually rotated.
+
+### 7.4 `hand_skeleton_orientation_offset`
+
+Place this optional block inside `streams.hand_tracking_21_joint`, alongside
+`virtual_controller_orientation_offset`.
+
+```json
+"hand_skeleton_orientation_offset": {
+  "enabled": true,
+  "left": { "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": -15.0 },
+  "right": { "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": 15.0 }
+}
+```
+
+The adapter takes the optical skeleton from the backend and converts it to
+runtime coordinates. It applies one rigid rotation in the wrist's local axes
+to the palm, wrist and every joint. The wrist is the pivot. The two sides can
+use different angles, an optional `aim_offset`, or an explicit `enabled: false`.
+
+For an enabled side, this output takes priority over `apply_gesture_yaw` and
+the `palm`, `wrist` and `joints` targets of
+`virtual_controller_orientation_offset`. It works with either optical or IMU
+controller orientation. Zero angles select the
+optical skeleton after coordinate conversion. Controller pose, motion and
+gesture recognition use their own paths. This block defaults to disabled
+and uses the hand stream that carries joints. The former top-level
+`hand_skeleton_orientation_offset` remains a fallback for existing configs.
+The nested block takes precedence when both locations are present.
 
 ---
 
@@ -1404,6 +1447,10 @@ provider and the XR runtime.
 `orientation_offset` aligns the physical controller/sensor mounting with the
 virtual controller orientation.
 
+The optional `orientation_offset.aim_offset` uses the same composition as the
+optical mounting adjustment. It applies pitch about X and yaw about Y after
+the mounting rotation. Negative pitch aims down.
+
 ```text
 multiply_order=post/local:
   q_output = q_transformed * q_offset
@@ -1423,7 +1470,7 @@ applied.
 For IMU yaw correction, `orientation_transform` remains part of the canonical
 IMU reference, but `orientation_offset` is excluded from the yaw comparison.
 The optical reference similarly receives the normal backend-to-runtime/HMD
-coordinate transforms but excludes `hand_orientation_offset`. Both offsets are
+coordinate transforms but excludes `virtual_controller_orientation_offset`. Both offsets are
 still applied to their final published poses. Therefore the yaw trigger measures
 sensor drift rather than presentation or controller-mount alignment.
 
@@ -1508,8 +1555,8 @@ Lower hands:
 Edit:
 
 ```text
-streams.hand_tracking_21_joint.hand_orientation_offset.left
-streams.hand_tracking_21_joint.hand_orientation_offset.right
+streams.hand_tracking_21_joint.virtual_controller_orientation_offset.left
+streams.hand_tracking_21_joint.virtual_controller_orientation_offset.right
 ```
 
 Example:
@@ -1746,7 +1793,7 @@ Recommended order:
 3. coordinate_transform.offset_m
 4. orientation_transform
 5. orientation_offset
-6. hand_orientation_offset
+6. virtual_controller_orientation_offset
 7. mesh_runtime.extra_*
 ```
 
@@ -1851,7 +1898,7 @@ streams.hand_skeleton26.hmd_relative
 Adjust:
 
 ```text
-streams.hand_tracking_21_joint.hand_orientation_offset
+streams.hand_tracking_21_joint.virtual_controller_orientation_offset
 ```
 
 ### Spatial mesh does not appear
@@ -1958,7 +2005,7 @@ Main blocks:
 
 ```text
 streams.hand_tracking_21_joint.hmd_relative.offset_m
-streams.hand_tracking_21_joint.hand_orientation_offset
+streams.hand_tracking_21_joint.virtual_controller_orientation_offset
 controller_override.synthetic_hmd_relative_pose
 controller_override.static_orientation
 ```
@@ -1990,7 +2037,7 @@ streams.hand_tracking_21_joint.hmd_relative.offset_m
 ### Hand/controller orientation
 
 ```text
-streams.hand_tracking_21_joint.hand_orientation_offset
+streams.hand_tracking_21_joint.virtual_controller_orientation_offset
 ```
 
 ### Spatial mesh axis/direction

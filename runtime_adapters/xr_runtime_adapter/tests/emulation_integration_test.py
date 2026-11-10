@@ -187,7 +187,8 @@ class EmulationIntegrationTest(unittest.TestCase):
 
     def test_default_simple_radius_and_outward_yaw(self):
         snapshots=[]
-        for extra in ([],["--simple-gestures-pose-yaw-offset-degrees","0"]):
+        for extra in ([],["--simple-gestures-pose-yaw-offset-degrees","0"],
+                      ["--simple-gestures-pose-yaw-apply-to-skeleton","1"]):
             STATE.update(left=dict(extended=15,tilt_x=1.2+math.pi),
                          right=dict(extended=15,tilt_x=1.2+math.pi))
             with harness.runtime(extra=extra,default_mode=True) as (_,_,port):
@@ -206,8 +207,11 @@ class EmulationIntegrationTest(unittest.TestCase):
             x,y,z,w=base;c=math.cos(math.pi/12);s=sign*math.sin(math.pi/12)
             expected=[c*x+s*z,c*y+s*w,c*z-s*x,c*w-s*y]
             self.assertAlmostEqual(abs(sum(a*b for a,b in zip(actual,expected))),1,places=5)
-            # The published skeleton and controller use the same correction.
-            self.assertNotEqual(snapshots[0]["hands"][name]["joints"][8]["position"],
+            for target in ("palm", "wrist", "joints"):
+                self.assertEqual(snapshots[0]["hands"][name][target], snapshots[1]["hands"][name][target])
+            self.assertEqual(snapshots[0]["controllers"][name]["orientation_xyzw"],
+                             snapshots[2]["controllers"][name]["orientation_xyzw"])
+            self.assertNotEqual(snapshots[2]["hands"][name]["joints"][8]["position"],
                                 snapshots[1]["hands"][name]["joints"][8]["position"])
 
     def test_simple_panel_pinch_palm_grip_and_thumb_keep_live_axes(self):

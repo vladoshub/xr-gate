@@ -57,6 +57,11 @@ def simple_pose_settings(settings):
         if not math.isfinite(number) or not low <= number <= high:
             raise ValueError(f"{key} must be from {low} to {high}.")
         result["SIMPLE_GESTURES_" + name] = value
+    key = "XR_SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"
+    value = settings.get(key, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{key} must be 0 or 1.")
+    result["SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"] = value
     return result
 
 

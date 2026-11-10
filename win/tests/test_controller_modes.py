@@ -26,7 +26,7 @@ class ControllerModesTest(unittest.TestCase):
                 self.assertNotIn("override_controller",names)
                 self.assertNotIn("override_controller_service",names)
                 env=next(s for s in data["post_gate_services"] if s["name"]=="xr_runtime_adapter")["env"]
-                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"1","SIMPLE_GESTURES_TOUCHPAD_RADIUS_M":"0.10","SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES":"30","KEEP":"yes"})
+                self.assertEqual(env,{"EMULATION_CONTROLLER":"0","SIMPLE_GESTURES":"1","SIMPLE_GESTURES_TOUCHPAD":"1","SIMPLE_GESTURES_TOUCHPAD_RADIUS_M":"0.10","SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES":"30","SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON":"0","KEEP":"yes"})
                 self.assertEqual(source.read_bytes(),before)
                 runtime.settings["XR_TCP_PORT"]="45810"; captured={}
                 runtime.run_managed=lambda args,env,handle:captured.update(env)
@@ -41,9 +41,15 @@ class ControllerModesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             runtime,_=self.fixture(Path(folder),"simple_gestures",False)
             runtime.settings["XR_SIMPLE_GESTURES_TOUCHPAD"]="0"
+            runtime.settings["XR_SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"]="1"
             data=json.loads(runtime.generate_profile().read_text())
             env=next(s for s in data["post_gate_services"] if s["name"]=="xr_runtime_adapter")["env"]
             self.assertEqual(env["SIMPLE_GESTURES_TOUCHPAD"],"0")
+            self.assertEqual(env["SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"],"1")
+            runtime.settings["XR_SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"]="bad"
+            with self.assertRaisesRegex(ValueError,"XR_SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"):
+                runtime.generate_profile()
+            runtime.settings["XR_SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON"]="0"
             runtime.settings["XR_SIMPLE_GESTURES_TOUCHPAD"]="bad"
             with self.assertRaisesRegex(ValueError,"XR_SIMPLE_GESTURES_TOUCHPAD"):
                 runtime.generate_profile()

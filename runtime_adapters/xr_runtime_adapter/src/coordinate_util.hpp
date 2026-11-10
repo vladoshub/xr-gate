@@ -33,6 +33,7 @@ double yaw_from_q_z_up(const Qd& q_raw);
 Qd q_from_yaw_z_up(double yaw);
 Qd q_from_axis_angle(double ax, double ay, double az, double radians);
 Qd q_from_euler_basis_xyz(const V3d& radians);
+Qd compose_aim_offset_deg(const Qd& mounting, double pitch_deg, double yaw_deg);
 Qd apply_basis_quat_transform(const Qd& basis_q, const Qd& in);
 
 struct CoordinateTransformConfig {
@@ -86,12 +87,19 @@ struct HandOrientationOffsetConfig {
   bool apply_to_wrist = true;
   // Rotate all joint positions/orientations rigidly around the controller (v1: palm).
   bool apply_to_joints = false;
+  bool apply_gesture_yaw = true;
   // Apply this optical hand-alignment offset only while the effective
   // controller orientation source for the side is not IMU. Enabled by
   // default so IMU-controlled wrists use only their dedicated
   // controller_override.imu_orientation.*.orientation_offset.
   bool only_optic = true;
   bool pre_multiply = false;
+};
+
+struct HandSkeletonOrientationOffsetConfig {
+  bool enabled = false;
+  HandSideOrientationOffsetConfig left{};
+  HandSideOrientationOffsetConfig right{};
 };
 
 struct SpatialMeshRuntimeConfig {
@@ -130,6 +138,7 @@ struct StreamTransformConfig {
   OrientationOffsetConfig orientation_offset{};
   HmdRelativeConfig hmd_relative{};
   HandOrientationOffsetConfig hand_orientation_offset{};
+  HandSkeletonOrientationOffsetConfig hand_skeleton_orientation_offset{};
   SpatialMeshRuntimeConfig spatial_mesh{};
 };
 
@@ -186,6 +195,10 @@ void apply_aligned_hand_skeleton_offset(xr_runtime::HandTrackingFrameF64V1& hand
                                          const StreamTransformConfig& cfg,
                                          bool left = true, bool right = true,
                                          const std::array<Qd, 2>* aligned_reference = nullptr);
+// Replace only the output skeleton using the backend poses in runtime coordinates.
+void apply_hand_skeleton_orientation_offset(xr_runtime::HandTrackingFrameF32V2& output,
+                                            const xr_runtime::HandTrackingFrameF32V2& optical,
+                                            const HandSkeletonOrientationOffsetConfig& cfg);
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,
                                         const StreamTransformConfig& cfg,
                                         const V3d* hmd_position = nullptr);

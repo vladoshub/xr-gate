@@ -79,90 +79,49 @@
           "rz_deg": 0.0
         }
       },
-      "hand_orientation_offset": {
+      "virtual_controller_orientation_offset": {
         "enabled": true,
         "only_optic": true,
         "multiply_order": "post",
+        "apply_gesture_yaw": false,
         "apply_to": {
           "controller": true,
-          "palm": true,
-          "wrist": true,
+          "palm": false,
+          "wrist": false,
           "joints": false
         },
         "left": {
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": -60.0
+          "rz_deg": -60.0,
+          "aim_offset": {
+            "pitch_deg": -30.0,
+            "yaw_deg": 30.0
+          }
         },
         "right": {
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 60.0
-        }
-      }
-    },
-    "hand_skeleton26": {
-      "coordinate_transform": {
-        "axis_map": [
-          "x",
-          "z",
-          "y"
-        ],
-        "invert_x": false,
-        "invert_y": true,
-        "invert_z": false,
-        "rotation_deg": {
-          "x": 0.0,
-          "y": 0.0,
-          "z": 0.0
-        },
-        "scale": 1.0,
-        "offset_m": {
-          "x": 0.0,
-          "y": 0.0,
-          "z": 0.0
+          "rz_deg": 60.0,
+          "aim_offset": {
+            "pitch_deg": -30.0,
+            "yaw_deg": -30.0
+          }
         }
       },
-      "hmd_relative": {
-        "enabled": true,
-        "offset_m": {
-          "x": 0.0,
-          "y": 0.0,
-          "z": 0.0
-        },
-        "rotate_with_hmd_orientation": true
-      },
-      "orientation_transform": {
+      "hand_skeleton_orientation_offset": {
         "enabled": false,
-        "basis_rotation": {
+        "left": {
           "rx_deg": 0.0,
           "ry_deg": 0.0,
           "rz_deg": 0.0
-        }
-      },
-      "hand_orientation_offset": {
-        "enabled": true,
-        "only_optic": true,
-        "multiply_order": "post",
-        "apply_to": {
-          "controller": true,
-          "palm": true,
-          "wrist": true,
-          "joints": false
-        },
-        "left": {
-          "enabled": true,
-          "rx_deg": 0.0,
-          "ry_deg": 0.0,
-          "rz_deg": -60.0
         },
         "right": {
-          "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 60.0
+          "rz_deg": 0.0
         }
       }
     },
@@ -346,9 +305,11 @@
           "enabled": true,
           "multiply_order": "post",
           "rotation_deg": {
-            "rx_deg": 0.0,
-            "ry_deg": 0.0,
             "rz_deg": -40.0
+          },
+          "aim_offset": {
+            "pitch_deg": -30.0,
+            "yaw_deg": -30.0
           }
         }
       },
@@ -357,9 +318,11 @@
           "enabled": true,
           "multiply_order": "post",
           "rotation_deg": {
-            "rx_deg": 0.0,
-            "ry_deg": 0.0,
             "rz_deg": 40.0
+          },
+          "aim_offset": {
+            "pitch_deg": -30.0,
+            "yaw_deg": 30.0
           }
         }
       }

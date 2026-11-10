@@ -82,6 +82,7 @@ using ::xr_runtime_adapter::coordinate_util::apply_hand_frame_transform;
 using ::xr_runtime_adapter::coordinate_util::apply_hmd_pose_transform;
 using ::xr_runtime_adapter::coordinate_util::apply_stream_position_transform;
 using ::xr_runtime_adapter::coordinate_util::apply_stream_vector_transform;
+using ::xr_runtime_adapter::coordinate_util::compose_aim_offset_deg;
 using ::xr_runtime_adapter::coordinate_util::load_tracking_transform_config;
 using ::xr_runtime_adapter::coordinate_util::log_stream_transform;
 using ::xr_runtime_adapter::coordinate_util::normalize_q;
@@ -405,8 +406,20 @@ void parse_controller_imu_orientation_side(
     if (!o.is_object()) {
       throw std::runtime_error(context + ".orientation_offset must be an object");
     }
-    const auto q = parse_orientation_rotation_quat(
+    auto q = parse_orientation_rotation_quat(
         o, context + ".orientation_offset", false);
+    if (o.contains("aim_offset")) {
+      const auto& aim = o.at("aim_offset");
+      if (!aim.is_object()) {
+        throw std::runtime_error(context + ".orientation_offset.aim_offset must be an object");
+      }
+      const auto mount = q.value_or(std::array<float, 4>{0, 0, 0, 1});
+      const Qd combined = compose_aim_offset_deg({mount[3], mount[0], mount[1], mount[2]},
+                                                aim.value("pitch_deg", 0.0),
+                                                aim.value("yaw_deg", 0.0));
+      q = std::array<float, 4>{static_cast<float>(combined.x), static_cast<float>(combined.y),
+                               static_cast<float>(combined.z), static_cast<float>(combined.w)};
+    }
     out.offset_enabled = o.value("enabled", q.has_value());
     if (q) copy_quat_xyzw(out.offset_rotation_xyzw, *q);
 
@@ -3039,6 +3052,7 @@ int main(int argc, char** argv) {
   bool simple_gestures = true;
   double simple_gestures_touchpad_radius_m = .10;
   double simple_gestures_pose_yaw_offset_degrees = 30;
+  bool simple_gestures_pose_yaw_apply_to_skeleton = false;
   bool simple_gestures_touchpad = true;
   std::string emulation_controller_config_path;
   bool runtime_derive_extra_gesture_buttons = true;
@@ -3349,7 +3363,7 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
                  "Right controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
   app.add_option("--hand-orientation-offset-only-runtime", hand_orientation_offset_only_runtime,
-                 "Apply hand_orientation_offset only to sides present in fresh ControllerInputV3 input or enabled for emulation. Enabled by default; false restores unconditional offset application.");
+                 "Apply virtual_controller_orientation_offset only to sides present in fresh ControllerInputV3 input or enabled for emulation. Enabled by default; false restores unconditional offset application.");
   app.add_option("--runtime-controller-left-imu-acceleration-integration", runtime_controller_left_imu_acceleration_integration,
                  "Enable left-controller accelerometer integration. Effective only with IMU_OVERRIDE_CONTROLLER_RUNTIME and current valid accelerometer/orientation data.");
   app.add_option("--runtime-controller-right-imu-acceleration-integration", runtime_controller_right_imu_acceleration_integration,
@@ -3662,8 +3676,11 @@ int main(int argc, char** argv) {
                  "Simple touchpad radius in metres (default 0.10)")
       ->envname("SIMPLE_GESTURES_TOUCHPAD_RADIUS_M")->check(CLI::Range(.01, 1.0));
   app.add_option("--simple-gestures-pose-yaw-offset-degrees", simple_gestures_pose_yaw_offset_degrees,
-                 "Extra outward yaw for simple-mode hands and controllers (default 30)")
+                 "Extra outward yaw for simple-mode virtual controllers (default 30)")
       ->envname("SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES")->check(CLI::Range(-180.0, 180.0));
+  app.add_option("--simple-gestures-pose-yaw-apply-to-skeleton", simple_gestures_pose_yaw_apply_to_skeleton,
+                 "Also apply simple-mode yaw to the optical skeleton (default 0)")
+      ->envname("SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON");
   app.add_option("--emulation-controller-config", emulation_controller_config_path,
                  "Optional controller emulation JSON profile; ignored with --simple-gestures");
   CLI::Option* runtime_left_hand_gestures_enabled_option =
@@ -4512,6 +4529,8 @@ int main(int argc, char** argv) {
     std::cout << "simple_gestures: " << (simple_gestures ? "true" : "false") << "\n";
     std::cout << "simple_gestures_touchpad_radius_m: " << simple_gestures_touchpad_radius_m << "\n";
     std::cout << "simple_gestures_pose_yaw_offset_degrees: " << simple_gestures_pose_yaw_offset_degrees << "\n";
+    std::cout << "simple_gestures_pose_yaw_apply_to_skeleton: "
+              << (simple_gestures_pose_yaw_apply_to_skeleton ? "true" : "false") << "\n";
     std::cout << "simple_gestures_touchpad: " << (simple_gestures_touchpad ? "true" : "false") << "\n";
     std::cout << "emulation_controller: " << (emulation_controller_enabled ? "true" : "false") << "\n";
     std::cout << "runtime_derive_extra_gesture_buttons_with_controller_input: "
@@ -5940,9 +5959,8 @@ int main(int argc, char** argv) {
           controller_input_for_tracking_profiles,
           false);
 
-      // Keep the transformed but ungated backend hand frame for optical yaw
-      // sampling. The controller pose continues to use the selected hand-gate
-      // profile, but held/predicted poses must never enter yaw correction.
+      // Capture the backend frame before the controller-specific hand gate.
+      // Yaw alignment and the standalone output skeleton use these optical poses.
       std::optional<xr_runtime::HandTrackingFrameF32V2> raw_optical_yaw_hand;
       if (frame.hand_v2.sequence != 0) {
         raw_optical_yaw_hand = frame.hand_v2;
@@ -6266,6 +6284,8 @@ int main(int argc, char** argv) {
         const StreamTransformConfig& hand_transform = skeleton26_input_used
             ? tracking_transform_config.hand_skeleton26
             : tracking_transform_config.hand_tracking_21_joint;
+        const auto& skeleton_orientation_offset = hand_transform.hand_skeleton_orientation_offset;
+        std::optional<xr_runtime::HandTrackingFrameF32V2> optical_skeleton;
         const auto should_apply_hand_orientation_offset =
             [&](const StreamTransformConfig& transform, bool controller_connected,
                 bool emulation_enabled, bool uses_imu_profile) {
@@ -6282,12 +6302,12 @@ int main(int argc, char** argv) {
           }
           const V3d* hmd_position_ptr = transformed_hmd_position ? &(*transformed_hmd_position) : nullptr;
           const Qd* hmd_orientation_ptr = transformed_hmd_orientation ? &(*transformed_hmd_orientation) : nullptr;
-          // hand_orientation_offset is optical/controller-alignment data.
+          // virtual_controller_orientation_offset is optical/controller-alignment data.
           // HAND_ORIENTATION_OFFSET_ONLY_RUNTIME optionally limits it to sides
           // present in fresh ControllerInputV3 input or enabled for emulation.
           // An emulated controller still needs its optical alignment after
           // override_controller stops. The per-stream
-          // hand_orientation_offset.only_optic policy (enabled by default)
+          // virtual_controller_orientation_offset.only_optic policy (enabled by default)
           // additionally suppresses it whenever that side is currently using
           // an active IMU orientation source. All other transforms still apply.
           if (frame.hand_v2.sequence != 0) {
@@ -6315,9 +6335,16 @@ int main(int argc, char** argv) {
                 frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
+            if (skeleton_orientation_offset.enabled && frame.hand_v2.sequence != 0) {
+              optical_skeleton = *raw_optical_yaw_hand;
+              auto skeleton_transform = hand_transform;
+              skeleton_transform.orientation_offset.enabled = false;
+              apply_hand_frame_transform(*optical_skeleton, skeleton_transform,
+                                         hmd_position_ptr, hmd_orientation_ptr, false, false);
+            }
             // Yaw correction uses a clean optical reference: apply the normal
             // backend->runtime coordinate/HMD transforms, but deliberately
-            // exclude hand_orientation_offset. That offset is presentation
+            // exclude virtual_controller_orientation_offset. That offset is presentation
             // alignment for the final visual/controller output and must not be
             // interpreted as IMU yaw drift.
             apply_hand_frame_transform(*raw_optical_yaw_hand,
@@ -6518,10 +6545,16 @@ int main(int argc, char** argv) {
               hand_transform.hand_orientation_offset.apply_to_joints) ||
              (frame.hand.sequence && legacy_hand_transform.hand_orientation_offset.enabled &&
               legacy_hand_transform.hand_orientation_offset.apply_to_joints));
+        const auto& active_hand_offset =
+            (frame.hand_v2.sequence ? hand_transform : legacy_hand_transform).hand_orientation_offset;
         const bool emulation_yaw = (emulation_controller || simple_gestures) &&
-            presentation_yaw_config.pose_yaw_offset_degrees != 0;
+            presentation_yaw_config.pose_yaw_offset_degrees != 0 &&
+            (!tracking_transform_config.enabled || !active_hand_offset.enabled ||
+             active_hand_offset.apply_gesture_yaw);
+        const bool gesture_yaw_rotates_skeleton =
+            !simple_gestures || simple_gestures_pose_yaw_apply_to_skeleton;
         std::optional<xr_runtime::RuntimeFrame> presentation_frame;
-        if (skeleton_offset || emulation_yaw) {
+        if (skeleton_offset || emulation_yaw || optical_skeleton) {
           presentation_frame = frame;
           if (skeleton_offset) {
             xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
@@ -6540,10 +6573,16 @@ int main(int argc, char** argv) {
           if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
                 presentation_frame->hand_v2, presentation_yaw_config,
-                !left_uses_imu_profile, !right_uses_imu_profile);
-            xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                presentation_frame->hand, presentation_yaw_config,
-                !left_uses_imu_profile, !right_uses_imu_profile);
+                !left_uses_imu_profile, !right_uses_imu_profile, gesture_yaw_rotates_skeleton);
+            if (gesture_yaw_rotates_skeleton) {
+              xr_runtime_adapter::emulation::apply_pose_yaw_offset(
+                  presentation_frame->hand, presentation_yaw_config,
+                  !left_uses_imu_profile, !right_uses_imu_profile);
+            }
+          }
+          if (optical_skeleton) {
+            xr_runtime_adapter::coordinate_util::apply_hand_skeleton_orientation_offset(
+                presentation_frame->hand_v2, *optical_skeleton, skeleton_orientation_offset);
           }
         }
         const auto& output_frame = presentation_frame ? *presentation_frame : frame;
@@ -6654,7 +6693,7 @@ int main(int argc, char** argv) {
                 left_imu_orientation_used,
                 right_imu_orientation_used);
           }
-          if (emulation_controller || simple_gestures) {
+          if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
                 runtime_controller_state, presentation_yaw_config);
           }
@@ -6670,6 +6709,11 @@ int main(int argc, char** argv) {
           xr_tracking::HandTrackingFrameF32V2 runtime_hand{};
           if (frame.hand_v2_valid) {
             runtime_hand = runtime_hand_frame_v2_from_runtime(output_frame.hand_v2, frame.read_timestamp_ns);
+          } else if (frame.hand_valid && emulation_yaw && !gesture_yaw_rotates_skeleton) {
+            auto hand = gestures::runtime_hand_v2_from_runtime_v1(output_frame.hand);
+            xr_runtime_adapter::emulation::apply_pose_yaw_offset(
+                hand, presentation_yaw_config, !left_uses_imu_profile, !right_uses_imu_profile, false);
+            runtime_hand = runtime_hand_frame_v2_from_runtime(hand, frame.read_timestamp_ns);
           } else if (frame.hand_valid) {
             runtime_hand = runtime_hand_frame_v2_from_v1(output_frame.hand, frame.read_timestamp_ns);
           } else {

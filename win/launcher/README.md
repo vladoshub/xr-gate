@@ -65,13 +65,16 @@ Simple-mode settings in `start_xr_runtime_adapter_shm.sh` (or launch environment
 SIMPLE_GESTURES=1
 SIMPLE_GESTURES_TOUCHPAD_RADIUS_M=0.10
 SIMPLE_GESTURES_POSE_YAW_OFFSET_DEGREES=0
+SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON=0
 ```
 
 The radius is in metres (0.01–1.0). You can change the extra yaw angle.
-Positive yaw turns both output hands outward,
-over all existing offsets; set it to 0 to disable. The correction affects the
-whole skeleton and virtual controller after recognition, so gesture directions
-and touchpad axes remain head-relative. As in controller emulation, it is skipped
+Positive yaw turns the virtual controllers outward,
+over all existing offsets; set it to 0 to disable. Set
+`SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON=1` to carry the skeleton with the
+controller. An enabled `hand_skeleton_orientation_offset` takes priority for
+the skeleton. Gesture directions and touchpad axes stay head-relative.
+As in controller emulation, the yaw is skipped
 on a side using controller IMU orientation and returns when that side switches
 back to optical hand orientation. It does not accumulate on reconnect.
 In the Windows `.env`, use the same radius/yaw names prefixed with `XR_`.

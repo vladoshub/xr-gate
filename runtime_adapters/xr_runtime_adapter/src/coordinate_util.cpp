@@ -225,7 +225,8 @@ void parse_hmd_relative(const nlohmann::json& j, HmdRelativeConfig& out) {
 
 void parse_hand_side_orientation_offset(const nlohmann::json& j,
                                         HandSideOrientationOffsetConfig& out,
-                                        bool parent_enabled) {
+                                        bool parent_enabled,
+                                        const char* context = "virtual_controller_orientation_offset") {
   if (!j.is_object()) return;
   out.enabled = j.value("enabled", parent_enabled);
 
@@ -246,18 +247,26 @@ void parse_hand_side_orientation_offset(const nlohmann::json& j,
   if (!std::isfinite(out.rotation_rad.x) ||
       !std::isfinite(out.rotation_rad.y) ||
       !std::isfinite(out.rotation_rad.z)) {
-    throw std::runtime_error("hand_orientation_offset rotation must contain finite rx_deg/ry_deg/rz_deg values");
+    throw std::runtime_error(std::string(context) + " rotation must contain finite rx_deg/ry_deg/rz_deg values");
   }
   out.q = q_from_euler_basis_xyz(out.rotation_rad);
+  if (j.contains("aim_offset")) {
+    const auto& aim = j.at("aim_offset");
+    if (!aim.is_object()) {
+      throw std::runtime_error(std::string(context) + " aim_offset must be an object");
+    }
+    out.q = compose_aim_offset_deg(out.q, aim.value("pitch_deg", 0.0), aim.value("yaw_deg", 0.0));
+  }
 }
 
-void parse_hand_orientation_offset(const nlohmann::json& j, HandOrientationOffsetConfig& out) {
+void parse_virtual_controller_orientation_offset(const nlohmann::json& j, HandOrientationOffsetConfig& out) {
   if (!j.is_object()) return;
   out.enabled = j.value("enabled", out.enabled);
   out.apply_to_controller = j.value("apply_to_controller", out.apply_to_controller);
   out.apply_to_palm = j.value("apply_to_palm", out.apply_to_palm);
   out.apply_to_wrist = j.value("apply_to_wrist", out.apply_to_wrist);
   out.apply_to_joints = j.value("apply_to_joints", out.apply_to_joints);
+  out.apply_gesture_yaw = j.value("apply_gesture_yaw", out.apply_gesture_yaw);
   out.only_optic = j.value("only_optic", out.only_optic);
 
   if (j.contains("apply_to") && j.at("apply_to").is_object()) {
@@ -274,11 +283,28 @@ void parse_hand_orientation_offset(const nlohmann::json& j, HandOrientationOffse
   } else if (multiply_order == "post" || multiply_order == "local") {
     out.pre_multiply = false;
   } else {
-    throw std::runtime_error("hand_orientation_offset.multiply_order must be 'post'/'local' or 'pre'/'world'");
+    throw std::runtime_error("virtual_controller_orientation_offset.multiply_order must be 'post'/'local' or 'pre'/'world'");
   }
 
   if (j.contains("left")) parse_hand_side_orientation_offset(j.at("left"), out.left, out.enabled);
   if (j.contains("right")) parse_hand_side_orientation_offset(j.at("right"), out.right, out.enabled);
+}
+
+void parse_hand_skeleton_orientation_offset(const nlohmann::json& j,
+                                            HandSkeletonOrientationOffsetConfig& out) {
+  if (!j.is_object()) {
+    throw std::runtime_error("hand_skeleton_orientation_offset must be an object");
+  }
+  out = {};
+  out.enabled = j.value("enabled", false);
+  if (j.contains("left")) {
+    parse_hand_side_orientation_offset(j.at("left"), out.left,
+                                       out.enabled, "hand_skeleton_orientation_offset.left");
+  }
+  if (j.contains("right")) {
+    parse_hand_side_orientation_offset(j.at("right"), out.right,
+                                       out.enabled, "hand_skeleton_orientation_offset.right");
+  }
 }
 
 void parse_spatial_mesh_runtime_binding(const nlohmann::json& j, SpatialMeshRuntimeConfig& out) {
@@ -371,12 +397,20 @@ void parse_stream_transform(const nlohmann::json& j, StreamTransformConfig& out)
   if (j.contains("hmd_relative")) {
     parse_hmd_relative(j.at("hmd_relative"), out.hmd_relative);
   }
-  if (j.contains("hand_orientation_offset")) {
-    parse_hand_orientation_offset(j.at("hand_orientation_offset"), out.hand_orientation_offset);
+  if (j.contains("virtual_controller_orientation_offset")) {
+    parse_virtual_controller_orientation_offset(j.at("virtual_controller_orientation_offset"),
+                                                 out.hand_orientation_offset);
+  } else {
+    if (j.contains("hand_orientation_offset")) {
+      parse_virtual_controller_orientation_offset(j.at("hand_orientation_offset"), out.hand_orientation_offset);
+    }
+    if (j.contains("controller_orientation_offset")) {
+      parse_virtual_controller_orientation_offset(j.at("controller_orientation_offset"), out.hand_orientation_offset);
+    }
   }
-  // Alias for controller-centric configs.
-  if (j.contains("controller_orientation_offset")) {
-    parse_hand_orientation_offset(j.at("controller_orientation_offset"), out.hand_orientation_offset);
+  if (j.contains("hand_skeleton_orientation_offset")) {
+    parse_hand_skeleton_orientation_offset(j.at("hand_skeleton_orientation_offset"),
+                                            out.hand_skeleton_orientation_offset);
   }
   if (j.contains("mesh_runtime")) {
     parse_spatial_mesh_runtime(j.at("mesh_runtime"), out.spatial_mesh);
@@ -811,6 +845,16 @@ Qd q_from_euler_basis_xyz(const V3d& radians) {
   return q_mul(qz, q_mul(qy, qx));
 }
 
+Qd compose_aim_offset_deg(const Qd& mounting, double pitch_deg, double yaw_deg) {
+  if (!std::isfinite(pitch_deg) || std::abs(pitch_deg) > 180.0 ||
+      !std::isfinite(yaw_deg) || std::abs(yaw_deg) > 180.0) {
+    throw std::runtime_error("aim_offset.pitch_deg and yaw_deg must be between -180 and 180 degrees");
+  }
+  // Apply pitch and yaw around the unrolled aim axes after the mounting rotation.
+  return q_mul(q_from_euler_basis_xyz({pitch_deg * kPi / 180.0, yaw_deg * kPi / 180.0, 0}),
+               mounting);
+}
+
 Qd apply_basis_quat_transform(const Qd& basis_q, const Qd& in) {
   return q_mul(q_mul(basis_q, in), q_conj(basis_q));
 }
@@ -827,6 +871,11 @@ TrackingTransformConfig load_tracking_transform_config(const std::string& path) 
   nlohmann::json j;
   in >> j;
   cfg.enabled = j.value("enabled", true);
+  if (j.contains("hand_skeleton_orientation_offset")) {
+    // Older configs kept this block at the root. A nested block overrides it.
+    parse_hand_skeleton_orientation_offset(j.at("hand_skeleton_orientation_offset"),
+                                            cfg.hand_tracking_21_joint.hand_skeleton_orientation_offset);
+  }
   if (j.contains("streams")) {
     const auto& streams = j.at("streams");
     if (streams.contains("hmd")) parse_stream_transform(streams.at("hmd"), cfg.hmd);
@@ -986,6 +1035,62 @@ void apply_aligned_hand_skeleton_offset(xr_runtime::HandTrackingFrameF64V1& hand
                                  aligned_reference ? &(*aligned_reference)[1] : nullptr);
 }
 
+void apply_hand_skeleton_orientation_offset(xr_runtime::HandTrackingFrameF32V2& output,
+                                            const xr_runtime::HandTrackingFrameF32V2& optical,
+                                            const HandSkeletonOrientationOffsetConfig& cfg) {
+  if (!cfg.enabled) return;
+  const bool matching_frame = output.sequence == optical.sequence &&
+      output.source_timestamp_ns == optical.source_timestamp_ns &&
+      output.reset_counter == optical.reset_counter;
+  constexpr uint32_t required = xr_runtime::HAND_POSE_VALID | xr_runtime::HAND_JOINTS_VALID;
+  const auto apply_side = [&](xr_runtime::HandSideF32V2& out,
+                              const xr_runtime::HandSideF32V2& source,
+                              const HandSideOrientationOffsetConfig& offset, uint32_t side_flag) {
+    if (!offset.enabled || !(out.flags & xr_runtime::HAND_JOINTS_VALID)) return;
+
+    const V3d pivot{source.wrist_px, source.wrist_py, source.wrist_pz};
+    const Qd wrist{source.wrist_qw, source.wrist_qx, source.wrist_qy, source.wrist_qz};
+    if (!matching_frame || !(output.flags & optical.flags & side_flag) ||
+        (out.flags & required) != required || (source.flags & required) != required ||
+        !hand_side_has_transformable_payload(source) || source.joint_count == 0 ||
+        !finite_v3(pivot) || !nonzero_q(wrist)) {
+      // The controller can hold or predict a pose after the optical skeleton is lost.
+      out.flags &= ~xr_runtime::HAND_JOINTS_VALID;
+      out.joint_count = 0;
+      return;
+    }
+
+    const Qd wrist_orientation = normalize_q(wrist);
+    const Qd rotation = q_mul(q_mul(wrist_orientation, offset.q), q_conj(wrist_orientation));
+    const auto pose = [&](float& x, float& y, float& z, float& w, float& qx, float& qy, float& qz,
+                          const V3d& position, const Qd& orientation) {
+      assign_v3(x, y, z, position);
+      rotate_about_pivot(x, y, z, rotation, pivot);
+      const Qd q = nonzero_q(orientation) ? q_mul(rotation, orientation) : orientation;
+      w = static_cast<float>(q.w);
+      assign_v3(qx, qy, qz, {q.x, q.y, q.z});
+    };
+    pose(out.palm_px, out.palm_py, out.palm_pz, out.palm_qw, out.palm_qx, out.palm_qy, out.palm_qz,
+         {source.palm_px, source.palm_py, source.palm_pz},
+         {source.palm_qw, source.palm_qx, source.palm_qy, source.palm_qz});
+    pose(out.wrist_px, out.wrist_py, out.wrist_pz, out.wrist_qw, out.wrist_qx, out.wrist_qy, out.wrist_qz,
+         pivot, wrist_orientation);
+    out.joint_count = std::min(source.joint_count, xr_runtime::HAND_JOINT_COUNT_V2);
+    for (uint32_t i = 0; i < out.joint_count; ++i) {
+      auto& joint = out.joints[i];
+      joint = source.joints[i];
+      if (!joint.flags) continue;
+      pose(joint.px, joint.py, joint.pz, joint.qw, joint.qx, joint.qy, joint.qz,
+           {joint.px, joint.py, joint.pz}, {joint.qw, joint.qx, joint.qy, joint.qz});
+    }
+  };
+  apply_side(output.left, optical.left, cfg.left, xr_runtime::HAND_FLAG_LEFT_VALID);
+  apply_side(output.right, optical.right, cfg.right, xr_runtime::HAND_FLAG_RIGHT_VALID);
+  if (((output.left.flags | output.right.flags) & xr_runtime::HAND_JOINTS_VALID) == 0u) {
+    output.flags &= ~xr_runtime::HAND_FLAG_JOINTS_VALID;
+  }
+}
+
 void apply_body_tracker_frame_transform(xr_tracking::BodyTrackerSetFrameF32V1& frame,
                                         const StreamTransformConfig& cfg,
                                         const V3d* hmd_position) {
@@ -1033,9 +1138,9 @@ void log_stream_transform(const char* name, const StreamTransformConfig& cfg, bo
             << " hmd_offset_m=(" << cfg.hmd_relative.offset_m.x << ","
             << cfg.hmd_relative.offset_m.y << ","
             << cfg.hmd_relative.offset_m.z << ")"
-            << " hand_orientation_offset_enabled="
+            << " virtual_controller_orientation_offset_enabled="
             << (cfg.hand_orientation_offset.enabled ? "true" : "false")
-            << " hand_orientation_offset_only_optic="
+            << " virtual_controller_orientation_offset_only_optic="
             << (cfg.hand_orientation_offset.only_optic ? "true" : "false");
   if (include_mesh_runtime) {
     std::cout << " mesh_triangle_winding=" << cfg.spatial_mesh.triangle_winding

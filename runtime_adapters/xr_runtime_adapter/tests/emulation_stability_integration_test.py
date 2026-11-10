@@ -30,8 +30,10 @@ def source_side(role, visible):
     angle = math.radians(value.get('yaw',0))
     q = [math.cos(angle/2),0,math.sin(angle/2),0]
     pose = [0,.03,0,*q]
+    palm = [0,value.get('palm_y',.03),0,*q]
+    wrist = [0,value.get('wrist_y',.03),0,*q]
     header = harness.HAND_SIDE.pack(role,int(visible),57 if visible else 0,float(visible),
-        *(pose*3+[0.0]*6+[1.0,1.0]),1,1,21,8)
+        *(pose+palm+wrist+[0.0]*6+[1.0,1.0]),1,1,21,8)
     vertices = [[math.cos(angle)*x+math.sin(angle)*z,y,-math.sin(angle)*x+math.cos(angle)*z]
                 for x,y,z in points(value['phase'],name)]
     return header+b''.join(harness.JOINT.pack(i,2,*p,*q,.008,1) for i,p in enumerate(vertices))
@@ -123,13 +125,131 @@ class StabilityIntegrationTest(unittest.TestCase):
         for relative in ('configs/xr_21_joint_hand_viewer_verified.json',
                 '../../devices/xreal_ultra/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json'):
             cfg=json.loads((ROOT/relative).read_text())
-            for stream in ('hand_tracking_21_joint','hand_skeleton26'):
-                offset=cfg['streams'][stream]['hand_orientation_offset']
+            for stream, key in (('hand_tracking_21_joint','virtual_controller_orientation_offset'),
+                                ('hand_skeleton26','hand_orientation_offset')):
+                offset=cfg['streams'][stream][key]
                 self.assertTrue(offset['apply_to']['joints'])
                 self.assertTrue(offset['only_optic'])
-            offset=cfg['streams']['hand_tracking_21_joint']['hand_orientation_offset']
+            offset=cfg['streams']['hand_tracking_21_joint']['virtual_controller_orientation_offset']
             self.assertEqual(offset['left']['rz_deg'],-60)
             self.assertEqual(offset['right']['rz_deg'],60)
+
+    def test_shipped_mount_offset_carries_the_joints_with_one_aim_rotation(self):
+        cfg = json.loads((ROOT/'configs/xr_21_joint_hand_viewer_verified.json').read_text())
+        offset = cfg['streams']['hand_tracking_21_joint']['virtual_controller_orientation_offset']
+        with tempfile.TemporaryDirectory() as tmp:
+            transform = Path(tmp)/'transform.json'
+            transform.write_text(json.dumps(dict(enabled=True, streams=dict(
+                hand_tracking_21_joint=dict(virtual_controller_orientation_offset=offset)))))
+            emulation = copy.deepcopy(FIXTURE['profile'])
+            emulation.update(wrist_filter_enabled=False, pose_yaw_offset_degrees=25)
+            profile = Path(tmp)/'emulation.json'
+            profile.write_text(json.dumps(emulation))
+            for options in (['--simple-gestures', '--simple-gestures-pose-yaw-offset-degrees', '30'],
+                            ['--emulation-controller', '1', '--emulation-controller-config', str(profile)]):
+                with self.subTest(mode=options[0]), harness.runtime(
+                        extra=options+['--tracking-transform-config', str(transform)]) as (_, _, port):
+                    client = harness.Client(port)
+                    try:
+                        event = client.frame(lambda f: f.get('hands') and f.get('controllers') and
+                            all(f['hands'][s]['joints'] and f['controllers'][s]['pose_valid']
+                                for s in ('left', 'right')))
+                        for side, sign in (('left', -1), ('right', 1)):
+                            q = event['controllers'][side]['orientation_xyzw']
+                            x, y, z, w = q
+                            forward = (-2*(x*z+y*w), 2*(x*w-y*z), 2*(x*x+y*y)-1)
+                            for actual, wanted in zip(forward, (sign*math.sqrt(3)/4, -.5, -.75)):
+                                self.assertAlmostEqual(actual, wanted, places=5)
+                            hand = event['hands'][side]
+                            for pose in (hand['controller'], hand['palm'], hand['wrist'], *hand['joints']):
+                                for actual, wanted in zip(pose['orientation_xyzw'], q):
+                                    self.assertAlmostEqual(actual, wanted, places=5)
+                    finally:
+                        client.close()
+
+    def test_standalone_skeleton_takes_priority_with_optical_and_imu_controllers(self):
+        STATE['left'].update(yaw=10, palm_y=.06, wrist_y=.04)
+        imu_orientation_mask = 1 << 9
+
+        def imu_payload(sequence, stamp):
+            return struct.pack('<4I4Q8f',3,8,8|256,0,sequence,stamp,0,stamp,
+                               0,0,0,1,1,1,0,0) + bytes(8*64)
+
+        def yaw_quaternion(degrees):
+            half = math.radians(degrees) / 2
+            return [0, math.sin(half), 0, math.cos(half)]
+
+        with tempfile.TemporaryDirectory() as tmp, ControllerSource() as physical:
+            transform = Path(tmp) / 'transform.json'
+            transform.write_text(json.dumps({
+                'streams': {'hand_tracking_21_joint': {
+                    'hand_skeleton_orientation_offset': {
+                        'enabled': True,
+                        'left': {'rz_deg': 90},
+                        'right': {'enabled': False},
+                    },
+                    'coordinate_transform': {'offset_m': {'x': .125}},
+                    'orientation_offset': {'rotation_deg': {'ry_deg': 25}},
+                    'virtual_controller_orientation_offset': {
+                        'enabled': True, 'only_optic': True, 'apply_gesture_yaw': True,
+                        'apply_to': {'controller': True, 'palm': True, 'wrist': False, 'joints': True},
+                        'left': {'ry_deg': 40}, 'right': {'ry_deg': 40},
+                    },
+                }},
+                'controller_override': {'imu_orientation': {'left': {
+                    'orientation_offset': {'rotation_deg': {'ry_deg': 30}},
+                }}},
+            }))
+            physical.update('left', present=True)
+            extra = ['--simple-gestures', '--simple-gestures-pose-yaw-offset-degrees', '45',
+                     '--simple-gestures-pose-yaw-apply-to-skeleton', '1',
+                     '--tracking-transform-config', str(transform),
+                     '--controller-input-mode', 'hand_plus_controller',
+                     '--controller-input-transport', 'tcp',
+                     '--controller-input-host', '127.0.0.1',
+                     '--controller-input-port', str(physical.port),
+                     '--runtime-controller-left-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME']
+            with harness.runtime(extra=extra) as (_, source, port):
+                client = harness.Client(port)
+                try:
+                    def assert_vector(actual, expected):
+                        self.assertEqual(len(actual), len(expected))
+                        for a, b in zip(actual, expected):
+                            self.assertAlmostEqual(a, b, places=5)
+
+                    yaw = math.radians(10)
+                    wrist_y = STATE['left']['wrist_y']
+                    expected_quat = [math.sin(yaw/2) * math.sqrt(.5), math.sin(yaw/2) * math.sqrt(.5),
+                                     math.cos(yaw/2) * math.sqrt(.5), math.cos(yaw/2) * math.sqrt(.5)]
+
+                    def assert_pose(pose, original):
+                        x, y, z = original
+                        turned_x = wrist_y - y
+                        assert_vector(pose['position'], [.125 + math.cos(yaw)*turned_x + math.sin(yaw)*z,
+                                                         wrist_y + x, -math.sin(yaw)*turned_x + math.cos(yaw)*z])
+                        assert_vector(pose['orientation_xyzw'], expected_quat)
+
+                    for using_imu in (False, True):
+                        if using_imu:
+                            physical.update('left', imu=imu_payload)
+                        event = client.frame(lambda f: f.get('hands') and f.get('controllers') and
+                            f['hands']['hand_count'] == 2 and
+                            bool(int(f['controllers']['left']['source_mask']) & imu_orientation_mask) == using_imu)
+                        hand = event['hands']['left']
+                        assert_vector(event['controllers']['left']['orientation_xyzw'],
+                                      yaw_quaternion(30 if using_imu else 120))
+                        assert_pose(hand['palm'], [0, STATE['left']['palm_y'], 0])
+                        assert_pose(hand['wrist'], [0, wrist_y, 0])
+                        self.assertEqual(len(hand['joints']), 21)
+                        for joint, point in zip(hand['joints'], points(STATE['left']['phase'], 'left')):
+                            assert_pose(joint, point)
+                        assert_vector(event['hands']['right']['palm']['orientation_xyzw'], yaw_quaternion(20))
+
+                    source.visible = False
+                    lost = client.frame(lambda f: f.get('hands') and f['hands']['hand_count'] == 0)
+                    self.assertEqual(lost['hands']['left']['joints'], [])
+                finally:
+                    client.close()
 
     def test_world_offset_remains_rigid_after_wrist_stabilization(self):
         with tempfile.TemporaryDirectory() as tmp:
