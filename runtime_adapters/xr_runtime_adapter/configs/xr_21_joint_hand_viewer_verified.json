@@ -83,7 +83,7 @@
         "enabled": true,
         "only_optic": true,
         "multiply_order": "post",
-        "apply_gesture_yaw": false,
+        "apply_gesture_yaw": true,
         "apply_to": {
           "controller": true,
           "palm": false,
