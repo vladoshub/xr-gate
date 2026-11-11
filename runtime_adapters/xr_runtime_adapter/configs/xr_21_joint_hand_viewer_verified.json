@@ -94,20 +94,20 @@
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": -60.0,
+          "rz_deg": -75.0,
           "aim_offset": {
             "pitch_deg": 0.0,
-            "yaw_deg": 50.0
+            "yaw_deg": 0.0
           }
         },
         "right": {
           "enabled": true,
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 60.0,
+          "rz_deg": 75.0,
           "aim_offset": {
             "pitch_deg": 0.0,
-            "yaw_deg": -50.0
+            "yaw_deg": 0.0
           }
         }
       },
@@ -116,12 +116,12 @@
         "left": {
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 0.0
+          "rz_deg": -90.0
         },
         "right": {
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 0.0
+          "rz_deg": 90.0
         }
       }
     },
@@ -305,11 +305,11 @@
           "enabled": true,
           "multiply_order": "post",
           "rotation_deg": {
-            "rz_deg": 50.0
+            "rz_deg": 5.0
           },
           "aim_offset": {
-            "pitch_deg": -30.0,
-            "yaw_deg": -30.0
+            "pitch_deg": 0.0,
+            "yaw_deg": 0.0
           }
         }
       },
@@ -318,11 +318,11 @@
           "enabled": true,
           "multiply_order": "post",
           "rotation_deg": {
-            "rz_deg": -50.0
+            "rz_deg": -5.0
           },
           "aim_offset": {
-            "pitch_deg": -30.0,
-            "yaw_deg": 30.0
+            "pitch_deg": 0.0,
+            "yaw_deg": 0.0
           }
         }
       }
@@ -334,20 +334,20 @@
         "enabled": true,
         "rx_deg": 0.0,
         "ry_deg": 0.0,
-        "rz_deg": -60.0,
+        "rz_deg": 5.0,
         "aim_offset": {
-          "pitch_deg": 60.0,
-          "yaw_deg": 30.0
+          "pitch_deg": 0.0,
+          "yaw_deg": 0.0
         }
       },
       "right": {
         "enabled": true,
         "rx_deg": 0.0,
         "ry_deg": 0.0,
-        "rz_deg": 60.0,
+        "rz_deg": -5.0,
         "aim_offset": {
-          "pitch_deg": 60.0,
-          "yaw_deg": -30.0
+          "pitch_deg": 0.0,
+          "yaw_deg": 0.0
         }
       }
     },
