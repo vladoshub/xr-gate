@@ -440,15 +440,23 @@
     "multiply_order": "post",
     "left": {
       "enabled": true,
-      "rx_deg": 46.032616487,
-      "ry_deg": -25.808568288,
-      "rz_deg": -23.322186998
+      "rx_deg": 0.0,
+      "ry_deg": 0.0,
+      "rz_deg": -40.0,
+      "aim_offset": {
+        "pitch_deg": -30.0,
+        "yaw_deg": -30.0
+      }
     },
     "right": {
       "enabled": true,
-      "rx_deg": 46.032616487,
-      "ry_deg": 25.808568288,
-      "rz_deg": 23.322186998
+      "rx_deg": 0.0,
+      "ry_deg": 0.0,
+      "rz_deg": 40.0,
+      "aim_offset": {
+        "pitch_deg": -30.0,
+        "yaw_deg": 30.0
+      }
     }
   },
   "provider_options": {

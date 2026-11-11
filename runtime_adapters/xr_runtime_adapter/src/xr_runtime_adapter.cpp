@@ -3407,7 +3407,7 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-right-orientation-source", runtime_controller_right_orientation_source,
                  "Right controller orientation source: HAND_TRACKING_BACKEND or IMU_OVERRIDE_CONTROLLER_RUNTIME. IMU mode falls back to hand tracking when current IMU orientation is unavailable.");
   app.add_option("--hand-orientation-offset-only-runtime", hand_orientation_offset_only_runtime,
-                 "Limit optional palm, wrist and joint mounting offsets to sides with fresh controller input or emulation.");
+                 "Apply virtual_controller_orientation_offset only to sides present in fresh ControllerInputV3 input or enabled for emulation. Enabled by default; false restores unconditional offset application.");
   app.add_option("--runtime-controller-left-imu-acceleration-integration", runtime_controller_left_imu_acceleration_integration,
                  "Enable left-controller accelerometer integration. Effective only with IMU_OVERRIDE_CONTROLLER_RUNTIME and current valid accelerometer/orientation data.");
   app.add_option("--runtime-controller-right-imu-acceleration-integration", runtime_controller_right_imu_acceleration_integration,
@@ -6329,9 +6329,9 @@ int main(int argc, char** argv) {
           spatial_proxy_mesh_thread->set_runtime_hmd_snapshot(runtime_hmd_snapshot);
         }
 
-        const auto& legacy_hand_transform = tracking_transform_config.hand_tracking_21_joint;
-        const auto& hand_transform = skeleton26_input_used
-            ? tracking_transform_config.hand_skeleton26 : legacy_hand_transform;
+        const StreamTransformConfig& hand_transform = skeleton26_input_used
+            ? tracking_transform_config.hand_skeleton26
+            : tracking_transform_config.hand_tracking_21_joint;
         const auto& skeleton_orientation_offset = hand_transform.hand_skeleton_orientation_offset;
         const auto runtime_profile = controller_snapshot_for_frame
             ? controller_snapshot_for_frame->runtime_profile : xr_runtime::ControllerRuntimeProfileV1{};
@@ -6344,7 +6344,7 @@ int main(int argc, char** argv) {
         const bool right_override_controller_orientation = controller_right_connected &&
             (controller_override_file_config.has_no_imu_controller_orientation || right_profile_offset);
         std::optional<xr_runtime::HandTrackingFrameF32V2> optical_skeleton;
-        const auto should_apply_skeleton_mounting_offset =
+        const auto should_apply_hand_orientation_offset =
             [&](const StreamTransformConfig& transform, bool controller_connected,
                 bool emulation_enabled, bool uses_imu_profile, bool profile_offset) {
               if (profile_offset ||
@@ -6355,18 +6355,6 @@ int main(int argc, char** argv) {
                       emulation_enabled) &&
                      (!transform.hand_orientation_offset.only_optic || !uses_imu_profile);
             };
-        const bool left_hand_mounting_offset = should_apply_skeleton_mounting_offset(
-            hand_transform, controller_left_connected, emulation_left_enabled || simple_gestures,
-            left_uses_imu_profile, left_profile_offset);
-        const bool right_hand_mounting_offset = should_apply_skeleton_mounting_offset(
-            hand_transform, controller_right_connected, emulation_right_enabled || simple_gestures,
-            right_uses_imu_profile, right_profile_offset);
-        const bool left_legacy_mounting_offset = should_apply_skeleton_mounting_offset(
-            legacy_hand_transform, controller_left_connected, emulation_left_enabled || simple_gestures,
-            left_uses_imu_profile, left_profile_offset);
-        const bool right_legacy_mounting_offset = should_apply_skeleton_mounting_offset(
-            legacy_hand_transform, controller_right_connected, emulation_right_enabled || simple_gestures,
-            right_uses_imu_profile, right_profile_offset);
         if (tracking_transform_config.enabled) {
           std::optional<V3d> transformed_hmd_position;
           std::optional<Qd> transformed_hmd_orientation;
@@ -6376,18 +6364,36 @@ int main(int argc, char** argv) {
           }
           const V3d* hmd_position_ptr = transformed_hmd_position ? &(*transformed_hmd_position) : nullptr;
           const Qd* hmd_orientation_ptr = transformed_hmd_orientation ? &(*transformed_hmd_orientation) : nullptr;
-          // The controller always gets its enabled base offset. The per-side
-          // mounting policy applies only to the optional skeleton targets.
+          // virtual_controller_orientation_offset is optical/controller-alignment data.
+          // HAND_ORIENTATION_OFFSET_ONLY_RUNTIME optionally limits it to sides
+          // present in fresh ControllerInputV3 input or enabled for emulation.
+          // An emulated controller still needs its optical alignment after
+          // override_controller stops. The per-stream
+          // virtual_controller_orientation_offset.only_optic policy (enabled by default)
+          // additionally suppresses it whenever that side is currently using
+          // an active IMU orientation source. All other transforms still apply.
           if (frame.hand_v2.sequence != 0) {
             apply_hand_frame_transform(
                 frame.hand_v2, hand_transform, hmd_position_ptr, hmd_orientation_ptr,
-                left_hand_mounting_offset, right_hand_mounting_offset,
-                frame.hmd_valid ? &frame.hmd : nullptr, true, true);
+                should_apply_hand_orientation_offset(
+                    hand_transform, controller_left_connected, emulation_left_enabled || simple_gestures,
+                    left_uses_imu_profile, left_profile_offset),
+                should_apply_hand_orientation_offset(
+                    hand_transform, controller_right_connected, emulation_right_enabled || simple_gestures,
+                    right_uses_imu_profile, right_profile_offset),
+                frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
           if (frame.hand.sequence != 0) {
+            const StreamTransformConfig& hand_v1_transform =
+                tracking_transform_config.hand_tracking_21_joint;
             apply_hand_frame_transform(
-                frame.hand, legacy_hand_transform, hmd_position_ptr, hmd_orientation_ptr,
-                left_legacy_mounting_offset, right_legacy_mounting_offset,
+                frame.hand, hand_v1_transform, hmd_position_ptr, hmd_orientation_ptr,
+                should_apply_hand_orientation_offset(
+                    hand_v1_transform, controller_left_connected, emulation_left_enabled || simple_gestures,
+                    left_uses_imu_profile, left_profile_offset),
+                should_apply_hand_orientation_offset(
+                    hand_v1_transform, controller_right_connected, emulation_right_enabled || simple_gestures,
+                    right_uses_imu_profile, right_profile_offset),
                 frame.hmd_valid ? &frame.hmd : nullptr, true);
           }
           if (raw_optical_yaw_hand && raw_optical_yaw_hand->sequence != 0) {
@@ -6595,6 +6601,7 @@ int main(int argc, char** argv) {
 
         // Recognition, optical/IMU alignment and synthesis retain the original
         // joint geometry. Skeleton mounting and the extra yaw affect output copies only.
+        const auto& legacy_hand_transform = tracking_transform_config.hand_tracking_21_joint;
         const bool skeleton_offset = tracking_transform_config.enabled &&
             ((frame.hand_v2.sequence && hand_transform.hand_orientation_offset.enabled &&
               hand_transform.hand_orientation_offset.apply_to_joints) ||
@@ -6616,10 +6623,16 @@ int main(int argc, char** argv) {
           if (skeleton_offset) {
             xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
                 presentation_frame->hand_v2, hand_transform,
-                left_hand_mounting_offset, right_hand_mounting_offset, &skeleton_aligned_reference);
+                should_apply_hand_orientation_offset(hand_transform, controller_left_connected,
+                    emulation_left_enabled || simple_gestures, left_uses_imu_profile, left_profile_offset),
+                should_apply_hand_orientation_offset(hand_transform, controller_right_connected,
+                    emulation_right_enabled || simple_gestures, right_uses_imu_profile, right_profile_offset), &skeleton_aligned_reference);
             xr_runtime_adapter::coordinate_util::apply_aligned_hand_skeleton_offset(
                 presentation_frame->hand, legacy_hand_transform,
-                left_legacy_mounting_offset, right_legacy_mounting_offset, &legacy_skeleton_aligned_reference);
+                should_apply_hand_orientation_offset(legacy_hand_transform, controller_left_connected,
+                    emulation_left_enabled || simple_gestures, left_uses_imu_profile, left_profile_offset),
+                should_apply_hand_orientation_offset(legacy_hand_transform, controller_right_connected,
+                    emulation_right_enabled || simple_gestures, right_uses_imu_profile, right_profile_offset), &legacy_skeleton_aligned_reference);
           }
           if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
@@ -6695,28 +6708,8 @@ int main(int argc, char** argv) {
           }
 
           auto runtime_controller_synthesis_cfg_for_frame = runtime_controller_synthesis_cfg;
-          const auto base_orientation_offset = [&](const auto& side) {
-            return override_controller::RuntimeControllerOrientationOffsetConfig{
-                tracking_transform_config.enabled && active_hand_offset.enabled &&
-                    active_hand_offset.apply_to_controller && side.enabled,
-                active_hand_offset.pre_multiply,
-                {static_cast<float>(side.q.x), static_cast<float>(side.q.y),
-                 static_cast<float>(side.q.z), static_cast<float>(side.q.w)}};
-          };
-          runtime_controller_synthesis_cfg_for_frame.left_base_orientation_offset =
-              base_orientation_offset(active_hand_offset.left);
-          runtime_controller_synthesis_cfg_for_frame.right_base_orientation_offset =
-              base_orientation_offset(active_hand_offset.right);
-          // V2 has a separate controller pose. A legacy V1 pose is derived
-          // from its palm, which may already carry the same mounting rotation.
-          runtime_controller_synthesis_cfg_for_frame.left_optical_pose_has_base_offset =
-              frame.hand_v2.sequence != 0 ||
-              (left_legacy_mounting_offset && active_hand_offset.apply_to_palm);
-          runtime_controller_synthesis_cfg_for_frame.right_optical_pose_has_base_offset =
-              frame.hand_v2.sequence != 0 ||
-              (right_legacy_mounting_offset && active_hand_offset.apply_to_palm);
-          // The profile selects the extra rotation after the base. Local
-          // fallback offsets and IMU calibration stay in their own fields.
+          // Replace only presentation offsets, preserving IMU basis/calibration.
+          // Never accumulate into the stored fallback config between frames.
           const auto apply_profile_offset = [](const auto& offset, auto& no_imu, auto& imu) {
             no_imu.enabled = (offset.flags & xr_runtime::CONTROLLER_RUNTIME_OFFSET_ENABLED) != 0;
             no_imu.pre_multiply = (offset.flags & xr_runtime::CONTROLLER_RUNTIME_OFFSET_PRE_MULTIPLY) != 0;

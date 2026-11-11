@@ -173,8 +173,7 @@ void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF32V2& hand,
                                 bool apply_left_hand_orientation_offset = true,
                                 bool apply_right_hand_orientation_offset = true,
                                 const xr_runtime::HmdPoseF64V1* hmd_motion = nullptr,
-                                bool defer_skeleton_offset = false,
-                                bool always_apply_controller_offset = false);
+                                bool defer_skeleton_offset = false);
 void apply_hand_frame_transform(xr_runtime::HandTrackingFrameF64V1& hand,
                                 const StreamTransformConfig& cfg,
                                 const V3d* hmd_position,

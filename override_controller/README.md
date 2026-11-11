@@ -45,8 +45,8 @@ Controller mappings are user-specific and normally live under:
 
 ### Profile provider options and runtime orientation
 
-Named profiles can store provider options and an extra orientation correction
-for both IMU and optical controller poses:
+Named profiles can store provider options and one common presentation offset
+for both IMU and optical controller orientation:
 
 ```json
 "provider_options": {
@@ -57,11 +57,13 @@ for both IMU and optical controller poses:
   "multiply_order": "post",
   "left": {
     "enabled": true,
-    "rx_deg": 46.032616487, "ry_deg": -25.808568288, "rz_deg": -23.322186998
+    "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": -40.0,
+    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": -30.0 }
   },
   "right": {
     "enabled": true,
-    "rx_deg": 46.032616487, "ry_deg": 25.808568288, "rz_deg": 23.322186998
+    "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": 40.0,
+    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": 30.0 }
   }
 }
 ```
@@ -73,23 +75,21 @@ numbers, booleans or strings; each provider validates its own options. Explicit
 The Gear VR template sets the gyro bias limit to `0.12` rad/s; the startup
 script no longer forces this setting for every profile.
 
-`optic_runtime_head_offset` is a rotation relative to the adapter's
-`virtual_controller_orientation_offset`. For each side with fresh physical
-input, the adapter applies the enabled base rotation and then the device
-correction to the optical or IMU pose. With two local (`post`) rotations the
-result is `q_source * q_base * q_device`.
+`optic_runtime_head_offset` is sent as versioned metadata. The runtime adapter
+applies it to the virtual controller every frame while fresh connected physical
+input is present for that side. It replaces both
+`controller_override.imu_controller_orientation.<side>.orientation_offset` and
+`controller_override.no_imu_controller_orientation.<side>`; it does not add a
+second rotation. The IMU basis transform, sensor calibration in
+`devices[].orientation_offset`, independent skeleton correction and
+`static_head_controller_orientation` remain separate.
 
-The device correction takes priority over the adapter's local extra rotation
-in `imu_controller_orientation.<side>.orientation_offset` or
-`no_imu_controller_orientation.<side>`. Without a transmitted block the
-adapter uses those local defaults. A disabled block, disabled side or omitted
-side inside a provided block selects the base rotation alone.
-
-Gear VR's template uses a correction calculated from the shipped base and
-the previous Gear VR orientation. VR-PARK sets `enabled: false` for its extra
-rotation. Update saved profiles from those templates. For a custom previous
-absolute local rotation, calculate the new local correction as
-`inverse(q_base) * q_previous`.
+The Gear VR template copies the IMU presentation offset; VR-PARK copies the
+optical offset (`rz = -60/+60`, aim pitch `-30`, yaw `+30/-30`). Their saved
+JSON keeps readable degrees. If the root block is absent, the adapter uses its
+own defaults. A provided disabled block or side explicitly selects no offset;
+an omitted side inside a provided block also selects identity. On disconnect
+or stale input, the normal optical controller settings take over again.
 
 TCP metadata is negotiated and sent once per subscriber and whenever it
 changes; reconnecting receives the current snapshot. The `ControllerInputV3`
