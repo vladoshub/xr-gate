@@ -43,6 +43,61 @@ Controller mappings are user-specific and normally live under:
 ~/.config/xr_tracking/override_controller/
 ```
 
+### Profile provider options and runtime orientation
+
+Named profiles can store provider options and an extra orientation correction
+for both IMU and optical controller poses:
+
+```json
+"provider_options": {
+  "gearvr_ble": { "gyro_bias.max_bias_rad_s": 0.12 }
+},
+"optic_runtime_head_offset": {
+  "enabled": true,
+  "multiply_order": "post",
+  "left": {
+    "enabled": true,
+    "rx_deg": 46.032616487, "ry_deg": -25.808568288, "rz_deg": -23.322186998
+  },
+  "right": {
+    "enabled": true,
+    "rx_deg": 46.032616487, "ry_deg": 25.808568288, "rz_deg": 23.322186998
+  }
+}
+```
+
+These are root fields of the controller JSON. Provider option values accept
+numbers, booleans or strings; each provider validates its own options. Explicit
+`--provider-option` arguments, including options passed by the launcher from
+`OVERRIDE_CONTROLLER_PROVIDER_OPTIONS`, override the profile's values.
+The Gear VR template sets the gyro bias limit to `0.12` rad/s; the startup
+script no longer forces this setting for every profile.
+
+`optic_runtime_head_offset` is a rotation relative to the adapter's
+`virtual_controller_orientation_offset`. For each side with fresh physical
+input, the adapter applies the enabled base rotation and then the device
+correction to the optical or IMU pose. With two local (`post`) rotations the
+result is `q_source * q_base * q_device`.
+
+The device correction takes priority over the adapter's local extra rotation
+in `imu_controller_orientation.<side>.orientation_offset` or
+`no_imu_controller_orientation.<side>`. Without a transmitted block the
+adapter uses those local defaults. A disabled block, disabled side or omitted
+side inside a provided block selects the base rotation alone.
+
+Gear VR's template uses a correction calculated from the shipped base and
+the previous Gear VR orientation. VR-PARK sets `enabled: false` for its extra
+rotation. Update saved profiles from those templates. For a custom previous
+absolute local rotation, calculate the new local correction as
+`inverse(q_base) * q_previous`.
+
+TCP metadata is negotiated and sent once per subscriber and whenever it
+changes; reconnecting receives the current snapshot. The `ControllerInputV3`
+sample size remains unchanged, and older publishers/readers keep their V3 path.
+SHM stores the snapshot in a versioned reserved header extension, so readers can
+attach after startup. Profile files are loaded on service start: restart
+`override_controller` after editing them; the adapter can stay running.
+
 
 ## Windows XInput
 
@@ -492,7 +547,8 @@ mounting angles enter the estimator.
 | `gyro_bias.max_force_error_m_s2` | `1.0` | Maximum difference from gravity magnitude |
 | `gyro_bias.max_force_range_m_s2` | `0.35` | Maximum vector range of force over the window |
 
-For example, a device profile can specify:
+Profiles can specify these values under `provider_options` as shown above.
+For a temporary launcher override:
 
 ```bash
 export PROVIDER_OPTIONS='gearvr_ble.gyro_bias.stable_ms=2000;gearvr_ble.gyro_bias.max_bias_rad_s=0.01745329252'

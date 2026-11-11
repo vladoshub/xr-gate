@@ -2,11 +2,13 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include <xr_runtime/contracts/controller_input_contract.hpp>
+#include <xr_runtime/contracts/controller_runtime_profile.hpp>
 #include <xr_override_controller/imu/controller_imu_processor.hpp>
 
 namespace xr_override_controller {
@@ -213,6 +215,8 @@ struct InputConfig {
   uint32_t event_wait_max_ms = 20;
 };
 
+using ProviderOptionValues = std::map<std::string, std::string>;
+
 struct AppConfig {
   std::string name = "default";
 
@@ -220,6 +224,10 @@ struct AppConfig {
   // migrations, while enabled providers append provider-owned migrations.
   // The caller persists the updated config atomically and then clears this list.
   std::vector<std::string> pending_migrations;
+  std::map<std::string, ProviderOptionValues> provider_options;
+  // Empty means no explicit profile offset; retain its original JSON for saves.
+  std::string optic_runtime_head_offset_json;
+  xr_runtime::ControllerRuntimeProfileV1 runtime_profile;
   PublishConfig publish;
   InputConfig input;
   std::vector<ConfigDevice> devices;
@@ -257,6 +265,7 @@ struct SideOutputState {
 };
 
 struct OutputState {
+  xr_runtime::ControllerRuntimeProfileV1 runtime_profile;
   SideOutputState left;
   SideOutputState right;
 };

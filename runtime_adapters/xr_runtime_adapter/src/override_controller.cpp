@@ -323,8 +323,8 @@ struct RuntimeImuSample {
   // compares this clean reference with the equally clean optical reference.
   Qf yaw_reference_orientation{};
   uint64_t yaw_reference_timestamp_ns = 0;
-  // Final IMU orientation used by controller presentation.
-  // This includes orientation_offset when configured.
+  // Basis-converted IMU orientation. The presentation copy receives the
+  // mounting rotations and yaw correction.
   Qf orientation{};
   float angular_velocity_rad_s[3] = {};
   std::vector<RuntimeAccelerationSample> acceleration_samples;
@@ -341,10 +341,6 @@ Qf transformed_imu_orientation(Qf orientation,
     orientation = apply_axis_inversion(orientation, cfg.invert_x, cfg.invert_y, cfg.invert_z);
     orientation = apply_basis_transform(q_from_xyzw(cfg.basis_rotation_xyzw), orientation);
   }
-  if (cfg.offset_enabled) {
-    const Qf offset = q_from_xyzw(cfg.offset_rotation_xyzw);
-    orientation = cfg.offset_pre_multiply ? q_mul(offset, orientation) : q_mul(orientation, offset);
-  }
   return orientation;
 }
 
@@ -355,26 +351,8 @@ RuntimeImuSample runtime_imu_sample(
   if (!controller_device_has_active_orientation_imu(controller)) return out;
 
   const Qf basis = q_from_xyzw(cfg.basis_rotation_xyzw);
-  const Qf offset = q_from_xyzw(cfg.offset_rotation_xyzw);
-  auto physical_cfg = cfg;
-  physical_cfg.offset_enabled = false;
-
-  Qf orientation = q_from_xyzw(controller.imu.orientation_xyzw);
-  if (cfg.transform_enabled) {
-    orientation = apply_axis_inversion(
-        orientation, cfg.invert_x, cfg.invert_y, cfg.invert_z);
-    orientation = apply_basis_transform(basis, orientation);
-  }
-  // Keep the axis/basis-corrected pose as the clean yaw reference. The
-  // optional orientation_offset is a final controller presentation/mounting
-  // adjustment and must not be mistaken for IMU yaw drift.
-  out.yaw_reference_orientation = orientation;
-  if (cfg.offset_enabled) {
-    orientation = cfg.offset_pre_multiply
-        ? q_mul(offset, orientation)
-        : q_mul(orientation, offset);
-  }
-  out.orientation = orientation;
+  out.orientation = transformed_imu_orientation(q_from_xyzw(controller.imu.orientation_xyzw), cfg);
+  out.yaw_reference_orientation = out.orientation;
   out.orientation_valid = true;
   out.timestamp_ns = controller.imu.orientation_timestamp_ns != 0
       ? controller.imu.orientation_timestamp_ns
@@ -394,10 +372,6 @@ RuntimeImuSample runtime_imu_sample(
       apply_axis_inversion_to_axial_vector(
           angular_velocity, cfg.invert_x, cfg.invert_y, cfg.invert_z);
       q_rotate(basis, angular_velocity, transformed);
-      std::copy(std::begin(transformed), std::end(transformed), angular_velocity);
-    }
-    if (cfg.offset_enabled && !cfg.offset_pre_multiply) {
-      q_rotate(q_conj(offset), angular_velocity, transformed);
       std::copy(std::begin(transformed), std::end(transformed), angular_velocity);
     }
     if (finite_v3(angular_velocity)) {
@@ -454,7 +428,7 @@ RuntimeImuSample runtime_imu_sample(
       }
     }
     orientation_valid[i] = reconstructed;
-    sample_orientations[i] = transformed_imu_orientation(provider_orientation, physical_cfg);
+    sample_orientations[i] = transformed_imu_orientation(provider_orientation, cfg);
     orientation_cursor_ns = source.timestamp_ns;
     interval_gyro = &source;
   }
@@ -1317,7 +1291,7 @@ void apply_runtime_yaw_correction(
   }
 }
 
-void apply_no_imu_controller_orientation(
+void apply_optical_controller_orientation_offset(
     xr_runtime::RuntimeControllerSideStateV1& out,
     const RuntimeControllerOrientationOffsetConfig& cfg) {
   if (!cfg.enabled ||
@@ -1331,6 +1305,25 @@ void apply_no_imu_controller_orientation(
     float velocity[3]{};
     q_rotate(offset, out.angular_velocity, velocity);
     std::copy(std::begin(velocity), std::end(velocity), out.angular_velocity);
+  }
+}
+
+void apply_imu_presentation_offset(RuntimeImuSample& imu,
+                                   bool pre_multiply,
+                                   const float* rotation_xyzw) {
+  if (!imu.orientation_valid) return;
+  const Qf offset = q_from_xyzw(rotation_xyzw);
+  if (pre_multiply) {
+    imu.orientation = q_mul(offset, imu.orientation);
+    return;
+  }
+  imu.orientation = q_mul(imu.orientation, offset);
+  if (imu.angular_velocity_valid) {
+    // The local axes changed with the pose. Preserve the world-space gyro.
+    float angular_velocity[3]{};
+    q_rotate(q_conj(offset), imu.angular_velocity_rad_s, angular_velocity);
+    std::copy(std::begin(angular_velocity), std::end(angular_velocity),
+              imu.angular_velocity_rad_s);
   }
 }
 
@@ -2712,6 +2705,12 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       (out.source_mask &
        xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE) != 0u;
 
+  const auto& base_offset = left ? cfg.left_base_orientation_offset
+                                 : cfg.right_base_orientation_offset;
+  if (!(left ? cfg.left_optical_pose_has_base_offset : cfg.right_optical_pose_has_base_offset)) {
+    apply_optical_controller_orientation_offset(out, base_offset);
+  }
+
   if (controller_side != nullptr) {
     fill_inputs_from_controller(out, *controller_side, cfg);
     const RuntimeControllerOrientationSource configured_orientation_source =
@@ -2789,6 +2788,16 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       }
       remember_imu_orientation(physical_imu);
       RuntimeImuSample presentation_imu = physical_imu;
+      // Build the IMU presentation with the same base as the optical pose.
+      // Keep both mounting rotations out of yaw reference and acceleration data.
+      if (base_offset.enabled) {
+        apply_imu_presentation_offset(presentation_imu, base_offset.pre_multiply,
+                                      base_offset.rotation_xyzw);
+      }
+      if (imu_orientation_cfg.offset_enabled) {
+        apply_imu_presentation_offset(presentation_imu, imu_orientation_cfg.offset_pre_multiply,
+                                      imu_orientation_cfg.offset_rotation_xyzw);
+      }
       const bool matching_optical_measurement = hand != nullptr && optical_yaw_hand != nullptr &&
           hand->sequence == optical_yaw_hand->sequence &&
           hand->source_timestamp_ns == optical_yaw_hand->source_timestamp_ns;
@@ -2838,7 +2847,7 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 
     if (orientation_source == RuntimeControllerOrientationSource::HandTrackingBackend &&
         controller_side_is_present(*controller_side)) {
-      apply_no_imu_controller_orientation(
+      apply_optical_controller_orientation_offset(
           out, left ? cfg.left_no_imu_orientation : cfg.right_no_imu_orientation);
     }
 

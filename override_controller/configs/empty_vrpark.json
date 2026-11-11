@@ -580,5 +580,8 @@
     "transport": "shm",
     "unlink_existing": true
   },
-  "version": 5
+  "version": 5,
+  "optic_runtime_head_offset": {
+    "enabled": false
+  }
 }

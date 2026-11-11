@@ -262,23 +262,18 @@ from calibrated controller-body axes with the final presentation orientation
 before publication. See [Alyx controller motion diagnostics](docs/alyx_controller_motion.md)
 for the optical velocity path, long-session tests and failure capture steps.
 
-`hand_orientation_offset` is optical controller-alignment data. Its
-`only_optic` field defaults to `true`, so the offset is applied only while the
-effective orientation source for that side is hand tracking rather than an
-active controller IMU. IMU-controlled sides should use their dedicated
-`controller_override.imu_orientation.*.orientation_offset` instead.
-
-Independently, the offset is applied per side only while a fresh
-`ControllerInputV3` frame marks that side as present:
+`virtual_controller_orientation_offset` is the base rotation for optical and
+IMU controller poses. A connected physical controller can supply an extra
+rotation through its profile. Its optional palm, wrist and joint targets are
+limited to optical orientation when `only_optic` is true. The following
+setting limits those optional targets to fresh physical input or emulation:
 
 ```bash
 HAND_ORIENTATION_OFFSET_ONLY_RUNTIME=1
 ```
 
-Set it to `0` to apply the configured offset even when
-`override_controller` is absent. This does not override `only_optic`; set
-`"only_optic": false` in the transform config to also apply the offset to
-IMU-controlled sides.
+Set it to `0` to permit those optional targets when `override_controller`
+is absent, subject to the configured orientation source policy.
 
 IMU yaw correction deliberately excludes `hand_orientation_offset` and
 `controller_override.imu_orientation.*.orientation_offset` from its comparison.

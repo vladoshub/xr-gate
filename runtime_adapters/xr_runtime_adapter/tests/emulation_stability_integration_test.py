@@ -238,7 +238,7 @@ class StabilityIntegrationTest(unittest.TestCase):
                             bool(int(f['controllers']['left']['source_mask']) & imu_orientation_mask) == using_imu)
                         hand = event['hands']['left']
                         assert_vector(event['controllers']['left']['orientation_xyzw'],
-                                      yaw_quaternion(30 if using_imu else 120))
+                                      yaw_quaternion(70 if using_imu else 120))
                         assert_pose(hand['palm'], [0, STATE['left']['palm_y'], 0])
                         assert_pose(hand['wrist'], [0, wrist_y, 0])
                         self.assertEqual(len(hand['joints']), 21)
@@ -328,24 +328,185 @@ class StabilityIntegrationTest(unittest.TestCase):
 
                     check_pose(45, -55)
                     physical.update('left', present=True)
-                    check_pose(55, -55)
+                    check_pose(70, -55)
                     physical.update('right', present=True, imu=imu_payload)
-                    check_pose(55, -75)
+                    check_pose(70, -90)
                     physical.update('left', imu=imu_payload)
-                    check_pose(75, -75)
+                    check_pose(90, -90)
                     physical.update('right', imu=None)
-                    check_pose(75, -65)
+                    check_pose(90, -80)
                     physical.update('left', present=False)
-                    check_pose(45, -65)
+                    check_pose(45, -80)
                     physical.paused.set()
                     check_pose(45, -55)
                     physical.update('left', present=True, imu=None)
                     physical.paused.clear()
-                    check_pose(55, -65)
+                    check_pose(70, -80)
                     physical.update('left', trigger=.5)
                     physical.update('right', trigger=.5)
                     source.visible = False
                     check_pose(15, -15, visible=False)
+                finally:
+                    client.close()
+
+    def test_transmitted_delta_stacks_on_base_only_while_override_is_present(self):
+        for with_local_offset in (True, False):
+            STATE['left']['yaw'], STATE['right']['yaw'] = 10, -20
+
+            def yaw(degrees):
+                half = math.radians(degrees) / 2
+                return [0, math.sin(half), 0, math.cos(half)]
+
+            def imu(sequence, stamp):
+                return struct.pack('<4I4Q8f', 3, 8, 8|256, 0, sequence, stamp, 0, stamp,
+                                   0, 0, 0, 1, 1, 1, 0, 0) + bytes(8*64)
+
+            with tempfile.TemporaryDirectory() as tmp, ControllerSource() as physical:
+                transform = Path(tmp) / 'transform.json'
+                transform.write_text(json.dumps({
+                    'streams': {'hand_tracking_21_joint': {
+                        'virtual_controller_orientation_offset': {
+                            'enabled': True, 'only_optic': True, 'apply_gesture_yaw': True,
+                            'apply_to': dict(controller=True, palm=False, wrist=False, joints=False),
+                            'left': {'ry_deg': 15}, 'right': {'ry_deg': -15},
+                        },
+                        'hand_skeleton_orientation_offset': {
+                            'enabled': True, 'left': {'rz_deg': 25}, 'right': {'rz_deg': -25},
+                        },
+                    }},
+                    'controller_override': {
+                        'imu_controller_orientation': {
+                            'left': {'orientation_offset': {'rotation_deg': {'ry_deg': 75}}},
+                            'right': {'orientation_offset': {'rotation_deg': {'ry_deg': -75}}},
+                        },
+                        'no_imu_controller_orientation': {
+                            'left': {'ry_deg': 45}, 'right': {'ry_deg': -45},
+                        },
+                    },
+                }))
+                if not with_local_offset:
+                    document = json.loads(transform.read_text())
+                    del document['controller_override']['no_imu_controller_orientation']
+                    transform.write_text(json.dumps(document))
+                physical.set_runtime_profile((3, yaw(25)), (3, yaw(-65)))
+                extra = ['--simple-gestures', '--simple-gestures-pose-yaw-offset-degrees', '20',
+                         '--simple-gestures-pose-yaw-apply-to-skeleton', '1',
+                         '--tracking-transform-config', str(transform),
+                         '--controller-input-mode', 'hand_plus_controller',
+                         '--controller-input-transport', 'tcp', '--controller-input-host', '127.0.0.1',
+                         '--controller-input-port', str(physical.port),
+                         '--runtime-controller-left-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME',
+                         '--runtime-controller-right-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME']
+                with harness.runtime(extra=extra) as (_, source, port):
+                    client = harness.Client(port)
+                    try:
+                        skeleton = {}
+                        def check(left, right):
+                            expected = {'left': yaw(left), 'right': yaw(right)}
+                            frame = client.frame(lambda f: f.get('hands') and f.get('controllers') and all(
+                                f['controllers'][side]['pose_valid'] and all(abs(a-b) < 1e-5 for a,b in zip(
+                                    f['controllers'][side]['orientation_xyzw'], expected[side])) for side in expected))
+                            for side in expected:
+                                geometry = {k: frame['hands'][side][k] for k in ('palm', 'wrist', 'joints')}
+                                skeleton.setdefault(side, geometry)
+                                self.assertEqual(skeleton[side], geometry)
+                        check(45, -55)  # Metadata alone does not activate override.
+                        physical.update('left', present=True)
+                        physical.update('right', present=True)
+                        check(50, -100)
+                        physical.update('left', imu=imu)
+                        check(40, -100)
+                        physical.update('right', imu=imu)
+                        check(40, -80)
+                        physical.set_runtime_profile((3, yaw(0)), (1, yaw(90)))
+                        check(15, -15)  # Identity and disabled select only the base.
+                        physical.update('left', imu=None)
+                        physical.update('right', imu=None)
+                        check(25, -35)
+                        physical.set_runtime_profile()
+                        check(*((70, -80) if with_local_offset else (45, -55)))
+                        # Absent settings restore the adapter's configured defaults.
+                        physical.set_runtime_profile((3, yaw(90)), (3, yaw(-90)))
+                        check(115, -125)
+                        physical.update('left', present=False)
+                        check(45, -125)
+                        physical.paused.set()
+                        check(45, -55)
+                        physical.paused.clear()
+                        check(45, -125)
+                    finally:
+                        client.close()
+
+    def test_shipped_controller_deltas_keep_their_mount_with_optical_and_imu_poses(self):
+        config = json.loads((ROOT/'configs/xr_21_joint_hand_viewer_verified.json').read_text())
+        base = config['streams']['hand_tracking_21_joint']['virtual_controller_orientation_offset']
+        profiles = ROOT.parents[1]/'override_controller/configs'
+        gear = json.loads((profiles/'empty_gearvr.json').read_text())['optic_runtime_head_offset']
+        vrpark = json.loads((profiles/'empty_vrpark.json').read_text())['optic_runtime_head_offset']
+        self.assertFalse(vrpark['enabled'])
+
+        def delta_quat(side):
+            half = [math.radians(gear[side][axis])/2 for axis in ('rx_deg', 'ry_deg', 'rz_deg')]
+            sx, sy, sz = map(math.sin, half)
+            cx, cy, cz = map(math.cos, half)
+            return [sx*cy*cz-cx*sy*sz, cx*sy*cz+sx*cy*sz,
+                    cx*cy*sz-sx*sy*cz, cx*cy*cz+sx*sy*sz]
+
+        def imu(sequence, stamp):
+            return struct.pack('<4I4Q8f', 3, 8, 8|256, 0, sequence, stamp, 0, stamp,
+                               0, 0, 0, 1, 1, 1, 0, 0) + bytes(8*64)
+
+        sides = ('left', 'right')
+        base_quats = [
+            [-.341506351, .091506351, -.408493649, .841506351],
+            [-.341506351, -.091506351, .408493649, .841506351],
+        ]
+        # These are the Gear VR poses with the previous absolute offsets.
+        gear_quats = [
+            [-.149418119, -.320428191, -.382056608, .853834146],
+            [-.149418119, .320428191, .382056608, .853834146],
+        ]
+        with tempfile.TemporaryDirectory() as tmp, ControllerSource() as physical:
+            transform = Path(tmp)/'transform.json'
+            transform.write_text(json.dumps({
+                'streams': {'hand_tracking_21_joint': {'virtual_controller_orientation_offset': base}},
+                'controller_override': {key: config['controller_override'][key] for key in (
+                    'no_imu_controller_orientation', 'imu_controller_orientation')},
+            }))
+            extra = ['--tracking-transform-config', str(transform),
+                     '--controller-input-mode', 'hand_plus_controller',
+                     '--controller-input-transport', 'tcp', '--controller-input-host', '127.0.0.1',
+                     '--controller-input-port', str(physical.port),
+                     '--runtime-controller-left-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME',
+                     '--runtime-controller-right-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME']
+            with harness.runtime(extra=extra) as (_, _, port):
+                client = harness.Client(port)
+                try:
+                    def check(quats, using_imu=False):
+                        def matches(frame):
+                            states = frame.get('controllers')
+                            return states and all(
+                                states[side]['pose_valid'] and
+                                bool(int(states[side]['source_mask']) & (1 << 9)) == using_imu and
+                                all(abs(a-b) < 1e-5 for a, b in zip(
+                                    states[side]['orientation_xyzw'], expected))
+                                for side, expected in zip(sides, quats))
+                        client.frame(matches)
+
+                    check(base_quats)  # Base also applies without physical input or gestures.
+                    physical.set_runtime_profile((1, [0, 0, 0, 1]), (1, [0, 0, 0, 1]))
+                    for side in sides:
+                        physical.update(side, present=True)
+                    check(base_quats)
+                    physical.set_runtime_profile(*[(3, delta_quat(side)) for side in sides])
+                    check(gear_quats)
+                    for side in sides:
+                        physical.update(side, imu=imu)
+                    check(gear_quats, using_imu=True)
+                    physical.set_runtime_profile()
+                    check(gear_quats, using_imu=True)  # Rebased local IMU defaults.
+                    physical.set_runtime_profile((1, [0, 0, 0, 1]), (1, [0, 0, 0, 1]))
+                    check(base_quats, using_imu=True)
                 finally:
                     client.close()
 
@@ -423,20 +584,20 @@ class StabilityIntegrationTest(unittest.TestCase):
                                 if not f.get('hands') or not f.get('controllers'):
                                     return False
                                 for side,expected in (('left',left_angle),('right',right_angle)):
-                                    q=f['hands'][side]['controller']['orientation_xyzw']
-                                    if abs(math.degrees(2*math.atan2(q[1],q[3]))-expected)>.01:
-                                        return False
+                                    for pose in (f['hands'][side]['controller'], f['controllers'][side]):
+                                        q=pose['orientation_xyzw']
+                                        if abs(math.degrees(2*math.atan2(q[1],q[3]))-expected)>.01:
+                                            return False
                                 return True
-                            # Active IMU uses its dedicated alignment, never the optical offset.
-                            client.frame(lambda f:aligned(f,0,0) and
-                                int(f['controllers']['right']['source_mask'])&16)
+                            # Both published poses include the base with active IMU.
+                            client.frame(lambda f:aligned(f,40,-40) and
+                                int(f['controllers']['right']['source_mask'])&(1 << 9))
                             physical.update('left',imu=None)
                             physical.update('right',imu=None)
                             client.frame(lambda f:aligned(f,40,-85 if enabled else -40))
-                            # Stop all override packets: only the enabled emulated side keeps
-                            # its configured optical alignment under the default runtime gate.
+                            # Both sides keep the base after the physical stream stops.
                             physical.paused.set()
-                            event=client.frame(lambda f:aligned(f,0,-85 if enabled else 0) and
+                            event=client.frame(lambda f:aligned(f,40,-85 if enabled else -40) and
                                 not int(f['controllers']['right']['source_mask'])&16)
                             for side in ('left','right'):
                                 angle=math.radians(-45 if side=='right' and enabled else 0)
@@ -450,8 +611,8 @@ class StabilityIntegrationTest(unittest.TestCase):
                             physical.update('left',imu=imu_payload)
                             physical.update('right',imu=imu_payload)
                             physical.paused.clear()
-                            client.frame(lambda f:aligned(f,0,0) and
-                                int(f['controllers']['right']['source_mask'])&16)
+                            client.frame(lambda f:aligned(f,40,-40) and
+                                int(f['controllers']['right']['source_mask'])&(1 << 9))
                         finally:
                             client.close()
 

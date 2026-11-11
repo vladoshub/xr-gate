@@ -34,6 +34,7 @@ class ControllerInputShmPublisher {
   size_t payload_size_ = sizeof(xr_runtime::ControllerInputV3);
   size_t slot_stride_ = 0;
   uint64_t sequence_ = 0;
+  xr_runtime::ControllerRuntimeProfileV1 runtime_profile_;
 };
 
 class ControllerInputTcpPublisher {

@@ -210,7 +210,7 @@ RUNTIME_JITTER_FILTER_BODY_TRACKER_ROT_SMOOTH_ALPHA="${RUNTIME_JITTER_FILTER_BOD
 # to HAND_TRACKING_BACKEND while current valid IMU orientation is unavailable.
 RUNTIME_CONTROLLER_LEFT_ORIENTATION_SOURCE="${RUNTIME_CONTROLLER_LEFT_ORIENTATION_SOURCE:-IMU_OVERRIDE_CONTROLLER_RUNTIME}"
 RUNTIME_CONTROLLER_RIGHT_ORIENTATION_SOURCE="${RUNTIME_CONTROLLER_RIGHT_ORIENTATION_SOURCE:-IMU_OVERRIDE_CONTROLLER_RUNTIME}"
-HAND_ORIENTATION_OFFSET_ONLY_RUNTIME="${HAND_ORIENTATION_OFFSET_ONLY_RUNTIME:-1}" # apply hand_orientation_offset only for sides present in fresh override_controller input
+HAND_ORIENTATION_OFFSET_ONLY_RUNTIME="${HAND_ORIENTATION_OFFSET_ONLY_RUNTIME:-1}" # limit optional palm, wrist and joint offsets to fresh controller input or emulation
 
 # Optional IMU motion features. Global values can enable both sides; per-side
 # values override them. Every feature also requires the corresponding side to

@@ -61,8 +61,8 @@ struct RuntimeControllerOrientationOffsetConfig {
   float rotation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
-// Optional per-side IMU basis conversion followed by a mounting correction.
-// q_world_controller = basis * q_sensor * inverse(basis) * local_offset.
+// Optional per-side IMU basis conversion and a fallback correction after the
+// common virtual-controller base.
 struct RuntimeControllerImuOrientationConfig {
   bool transform_enabled = false;
   // Coordinate-axis inversion applied before basis_rotation. These are basis
@@ -362,6 +362,12 @@ struct RuntimeControllerSynthesisConfig {
       RuntimeControllerOrientationSource::HandTrackingBackend;
   RuntimeControllerOrientationSource right_orientation_source =
       RuntimeControllerOrientationSource::HandTrackingBackend;
+
+  RuntimeControllerOrientationOffsetConfig left_base_orientation_offset{};
+  RuntimeControllerOrientationOffsetConfig right_base_orientation_offset{};
+  // Optical poses may already include the base offset from the hand transform.
+  bool left_optical_pose_has_base_offset = false;
+  bool right_optical_pose_has_base_offset = false;
 
   RuntimeControllerImuOrientationConfig left_imu_orientation{};
   RuntimeControllerImuOrientationConfig right_imu_orientation{};

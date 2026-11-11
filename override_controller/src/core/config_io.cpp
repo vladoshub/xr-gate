@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 #include <xr_runtime/registry/runtime_paths.hpp>
+#include <xr_runtime/config/controller_orientation_offset.hpp>
 
 namespace fs = std::filesystem;
 
@@ -443,6 +444,36 @@ AppConfig load_config_file(const fs::path& path) {
 
   AppConfig cfg;
   cfg.name = j.value("name", path.stem().string());
+  if (j.contains("provider_options")) {
+    const auto& providers = j.at("provider_options");
+    if (!providers.is_object()) throw std::runtime_error("provider_options must be an object");
+    for (const auto& provider : providers.items()) {
+      if (!provider.value().is_object()) throw std::runtime_error("provider_options entries must be objects");
+      auto name = provider.key();
+      std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+      for (const auto& option : provider.value().items()) {
+        const auto& value = option.value();
+        if (!value.is_string() && !value.is_boolean() && !value.is_number())
+          throw std::runtime_error("provider_options values must be strings, numbers or booleans");
+        cfg.provider_options[name][option.key()] = value.is_string() ? value.get<std::string>() : value.dump();
+      }
+    }
+  }
+  if (j.contains("optic_runtime_head_offset")) {
+    const auto& offset = j.at("optic_runtime_head_offset");
+    if (!offset.is_object()) throw std::runtime_error("optic_runtime_head_offset must be an object");
+    const bool enabled = offset.value("enabled", true);
+    const auto order = offset.value("multiply_order", std::string("post"));
+    // A provided block replaces both fallback presentation offsets. Missing
+    // sides deliberately mean identity, including when the root is disabled.
+    for (const char* side : {"left", "right"}) {
+      const auto value = offset.value(side, nlohmann::json::object());
+      auto parsed = xr_runtime::parse_controller_orientation_offset(
+          value, std::string("optic_runtime_head_offset.") + side, enabled, order);
+      (std::string(side) == "left" ? cfg.runtime_profile.left : cfg.runtime_profile.right) = parsed;
+    }
+    cfg.optic_runtime_head_offset_json = offset.dump();
+  }
   const auto pub = j.value("publish", nlohmann::json::object());
   cfg.publish.transport = pub.value("transport", cfg.publish.transport);
   cfg.publish.registry_path = pub.value("registry", pub.value("registry_path", xr_runtime::default_tracking_registry_path()));
@@ -561,6 +592,9 @@ void save_config_file(const AppConfig& cfg, const fs::path& path) {
   nlohmann::json j;
   j["version"] = 5;
   j["name"] = cfg.name;
+  if (!cfg.provider_options.empty()) j["provider_options"] = cfg.provider_options;
+  if (!cfg.optic_runtime_head_offset_json.empty())
+    j["optic_runtime_head_offset"] = nlohmann::json::parse(cfg.optic_runtime_head_offset_json);
   j["publish"] = {
       {"transport", cfg.publish.transport},
       {"registry", cfg.publish.registry_path},

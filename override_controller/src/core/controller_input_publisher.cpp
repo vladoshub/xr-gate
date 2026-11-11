@@ -1,4 +1,5 @@
 #include <xr_override_controller/controller_input_publisher.hpp>
+#include <new>
 
 #include <algorithm>
 #include <atomic>
@@ -257,6 +258,9 @@ ControllerInputShmPublisher::ControllerInputShmPublisher(PublishConfig cfg) : cf
   h->slot_header_size = static_cast<uint32_t>(slot_header_size_);
   h->payload_size = static_cast<uint32_t>(payload_size_);
   h->latest_sequence = 0;
+  static_assert(xr_runtime::CONTROLLER_RUNTIME_PROFILE_SHM_OFFSET >= sizeof(xr_runtime::RingHeaderV1));
+  static_assert(xr_runtime::CONTROLLER_RUNTIME_PROFILE_SHM_OFFSET + sizeof(xr_runtime::ControllerRuntimeProfileShmV1) <= 4096);
+  new (data_ + xr_runtime::CONTROLLER_RUNTIME_PROFILE_SHM_OFFSET) xr_runtime::ControllerRuntimeProfileShmV1{};
   write_metadata();
   update_registry();
 #else
@@ -281,6 +285,15 @@ ControllerInputShmPublisher::~ControllerInputShmPublisher() {
 void ControllerInputShmPublisher::publish(const OutputState& state) {
 #if XR_OVERRIDE_CONTROLLER_HAS_POSIX_SHM
   if (!data_) return;
+  auto profile = state.runtime_profile;
+  profile.revision = runtime_profile_.revision;
+  if (runtime_profile_.revision == 0 || std::memcmp(&profile, &runtime_profile_, sizeof(profile)) != 0) {
+    profile.revision = runtime_profile_.revision + 1;
+    runtime_profile_ = profile;
+    auto* metadata = reinterpret_cast<xr_runtime::ControllerRuntimeProfileShmV1*>(
+        data_ + xr_runtime::CONTROLLER_RUNTIME_PROFILE_SHM_OFFSET);
+    xr_runtime::write_controller_runtime_profile(*metadata, profile);
+  }
   xr_runtime::ControllerInputV3 frame = controller_input_frame_from_output(state, ++sequence_, now_ns_u64());
 
   const uint64_t committed_seq = frame.sequence * 2;
@@ -490,27 +503,58 @@ struct ControllerInputTcpPublisher::Impl {
     listen_fd = kInvalidSocket;
     if (accept_thread.joinable()) accept_thread.join();
     std::lock_guard<std::mutex> lock(mutex);
-    for (socket_t fd : clients) close_socket(fd);
+    for (const auto& client : clients) close_socket(client.fd);
     clients.clear();
   }
 
-  void publish_frame(const xr_runtime::ControllerInputV3& frame) {
+  void publish_frame(const xr_runtime::ControllerInputV3& frame,
+                     xr_runtime::ControllerRuntimeProfileV1 profile) {
+    profile.revision = runtime_profile.revision;
+    if (runtime_profile.revision == 0 || std::memcmp(&profile, &runtime_profile, sizeof(profile)) != 0) {
+      profile.revision = runtime_profile.revision + 1;
+      runtime_profile = profile;
+    }
     xr_runtime::ControllerInputTcpHeader header{};
     header.magic = xr_runtime::CONTROLLER_INPUT_TCP_MAGIC_V3;
     header.version = xr_runtime::CONTROLLER_INPUT_TCP_VERSION_V3;
     header.header_size = sizeof(header);
     header.payload_size = sizeof(frame);
+    header.reserved0 = xr_runtime::CONTROLLER_INPUT_TCP_PROFILE_SUPPORTED;
     header.sequence = frame.sequence;
     header.timestamp_ns = frame.timestamp_ns;
 
     std::lock_guard<std::mutex> lock(mutex);
     for (auto it = clients.begin(); it != clients.end();) {
       try {
-        send_all(*it, &header, sizeof(header));
-        send_all(*it, &frame, sizeof(frame));
+        // select() avoids a blocking read and works on both WinSock and POSIX.
+        if (it->hello_bytes < sizeof(it->hello)) {
+          fd_set reads;
+          FD_ZERO(&reads);
+          FD_SET(it->fd, &reads);
+          timeval timeout{};
+          if (select(static_cast<int>(it->fd + 1), &reads, nullptr, nullptr, &timeout) > 0) {
+            const int count = recv(it->fd, reinterpret_cast<char*>(&it->hello) + it->hello_bytes,
+                                   static_cast<int>(sizeof(it->hello) - it->hello_bytes), 0);
+            if (count <= 0) throw std::runtime_error("controller client closed during negotiation");
+            it->hello_bytes += static_cast<size_t>(count);
+            if (it->hello_bytes == sizeof(it->hello) && it->hello != xr_runtime::CONTROLLER_INPUT_TCP_PROFILE_HELLO)
+              throw std::runtime_error("invalid controller profile negotiation");
+          }
+        }
+        if (it->hello_bytes == sizeof(it->hello) && it->profile_revision != runtime_profile.revision) {
+          auto metadata_header = header;
+          metadata_header.magic = xr_runtime::CONTROLLER_INPUT_TCP_PROFILE_MAGIC;
+          metadata_header.version = 1;
+          metadata_header.payload_size = sizeof(runtime_profile);
+          send_all(it->fd, &metadata_header, sizeof(metadata_header));
+          send_all(it->fd, &runtime_profile, sizeof(runtime_profile));
+          it->profile_revision = runtime_profile.revision;
+        }
+        send_all(it->fd, &header, sizeof(header));
+        send_all(it->fd, &frame, sizeof(frame));
         ++it;
       } catch (...) {
-        close_socket(*it);
+        close_socket(it->fd);
         it = clients.erase(it);
       }
     }
@@ -532,7 +576,15 @@ struct ControllerInputTcpPublisher::Impl {
         continue;
       }
       std::lock_guard<std::mutex> lock(mutex);
-      clients.push_back(fd);
+      // Bound a slow consumer so it cannot stall all controller publication.
+#ifdef _WIN32
+      const DWORD timeout = 200;
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+      const timeval timeout{0, 200000};
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+      clients.push_back(Client{fd});
     }
   }
 
@@ -541,7 +593,14 @@ struct ControllerInputTcpPublisher::Impl {
   socket_t listen_fd = kInvalidSocket;
   std::thread accept_thread;
   std::mutex mutex;
-  std::vector<socket_t> clients;
+  struct Client {
+    socket_t fd;
+    uint64_t hello = 0;
+    size_t hello_bytes = 0;
+    uint64_t profile_revision = 0;
+  };
+  std::vector<Client> clients;
+  xr_runtime::ControllerRuntimeProfileV1 runtime_profile;
 };
 
 ControllerInputTcpPublisher::ControllerInputTcpPublisher(PublishConfig cfg)
@@ -549,7 +608,7 @@ ControllerInputTcpPublisher::ControllerInputTcpPublisher(PublishConfig cfg)
 ControllerInputTcpPublisher::~ControllerInputTcpPublisher() = default;
 void ControllerInputTcpPublisher::publish(const OutputState& state) {
   auto frame = controller_input_frame_from_output(state, ++sequence_, now_ns_u64());
-  impl_->publish_frame(frame);
+  impl_->publish_frame(frame, state.runtime_profile);
 }
 
 ControllerInputPublisher::ControllerInputPublisher(PublishConfig cfg) {

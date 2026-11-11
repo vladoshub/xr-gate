@@ -227,6 +227,12 @@ class TrackingRingReader {
 
   const StreamInfo& info() const { return info_; }
 
+  const uint8_t* header_extension(size_t offset, size_t size) const {
+    if (!shm_ || offset > info_.header_size || size > info_.header_size - offset ||
+        offset > shm_.size() || size > shm_.size() - offset) return nullptr;
+    return shm_.data() + offset;
+  }
+
   std::optional<PayloadT> latest() const {
     if (!shm_) return std::nullopt;
 

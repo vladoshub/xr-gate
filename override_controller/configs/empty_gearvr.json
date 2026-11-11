@@ -434,5 +434,26 @@
         0.987228851631989
       ]
     }
-  ]
+  ],
+  "optic_runtime_head_offset": {
+    "enabled": true,
+    "multiply_order": "post",
+    "left": {
+      "enabled": true,
+      "rx_deg": 46.032616487,
+      "ry_deg": -25.808568288,
+      "rz_deg": -23.322186998
+    },
+    "right": {
+      "enabled": true,
+      "rx_deg": 46.032616487,
+      "ry_deg": 25.808568288,
+      "rz_deg": 23.322186998
+    }
+  },
+  "provider_options": {
+    "gearvr_ble": {
+      "gyro_bias.max_bias_rad_s": 0.12
+    }
+  }
 }

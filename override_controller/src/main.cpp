@@ -1026,6 +1026,12 @@ AppConfig train_config(InputProvider& provider, const fs::path& config_path, con
   TrainingInputFilter training_filter = prompt_training_input_filter(devices);
 
   AppConfig cfg;
+  if (fs::is_regular_file(config_path)) {
+    const auto previous = load_config_file(config_path);
+    cfg.provider_options = previous.provider_options;
+    cfg.optic_runtime_head_offset_json = previous.optic_runtime_head_offset_json;
+    cfg.runtime_profile = previous.runtime_profile;
+  }
   cfg.name = prompt_line("Config name", name.empty() ? "default" : name);
   cfg.publish.registry_path = xr_runtime::default_tracking_registry_path();
   cfg.publish.stream_id = "controller_input";
@@ -1568,6 +1574,7 @@ OutputState compose_state(InputProvider& provider,
                           bool allow_shared_physical_device_sides,
                           bool* more_imu = nullptr) {
   OutputState out;
+  out.runtime_profile = cfg.runtime_profile;
   imu::configure_imu_calibrations(provider, cfg, devices);
   // Resolve/consume a physical device only once, even with multiple bindings
   // or explicit sharing between the two controller sides.
@@ -1791,6 +1798,7 @@ void clear_runtime_bindings(std::vector<RuntimeBinding>& bindings) {
 
 OutputState compose_neutral_state_from_config(const AppConfig& cfg, CounterState& counters) {
   OutputState out;
+  out.runtime_profile = cfg.runtime_profile;
   auto mark_configured = [&](const BindingConfig& b) {
     SideOutputState& side = b.side == ControllerSide::Left ? out.left : out.right;
     side.configured = true;
@@ -2563,13 +2571,21 @@ int main(int argc, char** argv) {
                 << current_backend_control_snapshot().gravity_magnitude << "\n";
     }
     const fs::path executable_dir = current_executable_dir(argc > 0 ? argv[0] : nullptr);
-    InputProviderOptions provider_options;
-    provider_options.providers = args.providers;
-    provider_options.provider_options = args.provider_options;
-    auto provider = make_input_provider(provider_options);
-    if (!provider) throw std::runtime_error("no input provider for this platform yet");
+    const auto create_provider = [&](const AppConfig& config) {
+      InputProviderOptions options;
+      options.providers = args.providers;
+      options.provider_options = config.provider_options;
+      for (const auto& provider : args.provider_options)
+        for (const auto& option : provider.second)
+          options.provider_options[provider.first][option.first] = option.second;
+      auto result = make_input_provider(options);
+      if (!result) throw std::runtime_error("no input provider for this platform yet");
+      return result;
+    };
+    std::unique_ptr<InputProvider> provider;
 
     if (args.list_devices) {
+      provider = create_provider(args.config_path.empty() ? AppConfig{} : load_config_file(args.config_path));
       auto devices = provider->scan_devices(true);
       print_devices(devices);
       return 0;
@@ -2590,6 +2606,7 @@ int main(int argc, char** argv) {
       selected_path = args.config_path.empty()
           ? choose_or_create_config_path(args.config_dir, args.config_name)
           : args.config_path;
+      provider = create_provider(fs::is_regular_file(selected_path) ? load_config_file(selected_path) : AppConfig{});
       cfg = train_config(*provider, selected_path, args.config_name);
     } else if (!args.config_path.empty()) {
       selected_path = args.config_path;
@@ -2611,6 +2628,7 @@ int main(int argc, char** argv) {
         std::cout << "No override_controller config found in " << args.config_dir << "\n";
         if (!ask_yes_no("Start interactive training now?", true)) return 1;
         selected_path = choose_or_create_config_path(args.config_dir, args.config_name);
+        provider = create_provider(fs::is_regular_file(selected_path) ? load_config_file(selected_path) : AppConfig{});
         cfg = train_config(*provider, selected_path, args.config_name);
       } else if (files.size() == 1) {
         selected_path = files[0];
@@ -2628,6 +2646,7 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (!provider) provider = create_provider(cfg);
     const ConfigMigrationResult provider_migration = provider->migrate_config(cfg);
     if (provider_migration.changed) {
       for (const auto& note : provider_migration.notes) {

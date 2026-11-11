@@ -120,6 +120,8 @@ class ControllerSource:
 
     def __init__(self):
         self.lock = threading.Lock()
+        self.runtime_profile = None
+        self.profile_revision = 0
         self.stop = threading.Event()
         self.paused = threading.Event()
         self.sides = {name: dict(present=False, buttons=0, touches=0, trigger=0, grip=0,
@@ -131,6 +133,14 @@ class ControllerSource:
         self.server.settimeout(.05)
         self.thread = threading.Thread(target=self.run)
         self.thread.start()
+
+    def set_runtime_profile(self, left=None, right=None):
+        """Send a new sideband snapshot; None sides restore adapter defaults."""
+        with self.lock:
+            self.profile_revision += 1
+            offsets = b''.join(struct.pack('<II4f', flags, 0, *quaternion)
+                for flags, quaternion in (left or (0, [0,0,0,1]), right or (0, [0,0,0,1])))
+            self.runtime_profile = struct.pack('<IIQ', 1, 64, self.profile_revision) + offsets
 
     def update(self, name, **values):
         with self.lock:
@@ -150,12 +160,14 @@ class ControllerSource:
                 continue
             with client:
                 client.settimeout(.1)
+                sent_profile = None
                 while not self.stop.is_set():
                     if not self.paused.is_set():
                         sequence += 1
                         stamp = time.monotonic_ns()
                         payload = self.frame.pack(3, 1432, sequence, stamp, stamp, 0, 0, 0, 0, 0)
                         with self.lock:
+                            profile = self.runtime_profile
                             for role, name in enumerate(("left", "right"), 1):
                                 side = self.sides[name]
                                 payload += self.device.pack(2 if side["present"] else 4, role,
@@ -165,8 +177,12 @@ class ControllerSource:
                                     *side["press"], *side["release"], bytes(64),
                                     side["imu"](sequence,stamp) if side.get("imu") else bytes(288))
                         try:
-                            client.sendall(self.header.pack(0x43495633, 3, 32, len(payload), 0,
-                                sequence, stamp)+payload)
+                            if profile is not None and profile != sent_profile:
+                                client.sendall(self.header.pack(0x43525031, 1, 32, len(profile), 1,
+                                    sequence, stamp)+profile)
+                                sent_profile = profile
+                            client.sendall(self.header.pack(0x43495633, 3, 32, len(payload),
+                                int(profile is not None), sequence, stamp)+payload)
                         except OSError:
                             break
                     self.stop.wait(1/240)

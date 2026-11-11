@@ -25,8 +25,6 @@ struct InputEvent {
   bool stop_requested = false;
 };
 
-using ProviderOptionValues = std::map<std::string, std::string>;
-
 struct InputProviderOptions {
   // Ordered list of enabled providers. Unknown names are rejected instead of
   // silently falling back to platform input, so release launchers cannot appear

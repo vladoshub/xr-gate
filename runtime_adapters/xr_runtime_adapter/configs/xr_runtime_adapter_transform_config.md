@@ -648,7 +648,7 @@ when both the current name and a legacy name are present.
 
 Each side can also define an `aim_offset` with `pitch_deg` and `yaw_deg`. The
 runtime composes the mounting angles and aim angles into one rotation. With
-`multiply_order: "post"`, the result follows the optical controller's local
+`multiply_order: "post"`, the result follows the controller's local
 axes. `apply_to.joints: true` carries the whole skeleton with the controller.
 Set `apply_gesture_yaw: false` on this block to use its rotation as the only aim
 adjustment for simple gestures and controller emulation. The default is `true`.
@@ -657,17 +657,12 @@ In simple mode, `SIMPLE_GESTURES_POSE_YAW_APPLY_TO_SKELETON=1` also carries the
 skeleton with that yaw. Its default is `0`. An enabled
 `hand_skeleton_orientation_offset` takes priority for the skeleton.
 
-`only_optic` defaults to `true`. When enabled, this offset is applied only to a
-side whose effective controller orientation source is optical hand tracking. If
-a fresh controller IMU is actively driving that side, the offset is skipped; use
-`controller_override.imu_controller_orientation.<side>.orientation_offset` for the IMU
-mounting/presentation correction instead. Set `only_optic` to `false` to retain
-the legacy behavior and apply `virtual_controller_orientation_offset` to both optical and IMU
-controller modes.
-
-When `controller_override.no_imu_controller_orientation` is configured, fresh
-physical controller input selects the per-controller corrections instead of
-this optical block. The selection is evaluated per side on every frame.
+The enabled controller target sets the base rotation for optical and IMU
+poses. Fresh physical input can add a device correction after this base.
+`only_optic` defaults to `true` and limits optional palm, wrist and joint
+corrections to the optical orientation source.
+`HAND_ORIENTATION_OFFSET_ONLY_RUNTIME` also limits those optional targets
+to sides with fresh physical input or active controller emulation.
 
 Use it when:
 
@@ -1450,8 +1445,9 @@ IMU angular velocity, which is treated as an axial vector.
 Use this for axis handedness/direction and basis differences between the IMU
 provider and the XR runtime.
 
-`orientation_offset` aligns the physical controller/sensor mounting with the
-virtual controller orientation.
+`orientation_offset` is the local fallback correction for the physical
+controller. Apply it after the base `virtual_controller_orientation_offset`
+when the profile supplies no `optic_runtime_head_offset`.
 
 The optional `orientation_offset.aim_offset` uses the same composition as the
 optical mounting adjustment. It applies pitch about X and yaw about Y after
@@ -1459,10 +1455,10 @@ the mounting rotation. Negative pitch aims down.
 
 ```text
 multiply_order=post/local:
-  q_output = q_transformed * q_offset
+  q_output = q_with_base * q_offset
 
 multiply_order=pre/world:
-  q_output = q_offset * q_transformed
+  q_output = q_offset * q_with_base
 ```
 
 `post` is normally appropriate for a fixed sensor-to-controller mounting offset.
@@ -1473,12 +1469,9 @@ When IMU data for a side is unavailable or invalid, that side falls back to
 `HAND_TRACKING_BACKEND`. Fresh physical controller input then selects
 `no_imu_controller_orientation` when configured.
 
-For IMU yaw correction, `orientation_transform` remains part of the canonical
-IMU reference, but `orientation_offset` is excluded from the yaw comparison.
-The optical reference similarly receives the normal backend-to-runtime/HMD
-coordinate transforms but excludes `virtual_controller_orientation_offset`. Both offsets are
-still applied to their final published poses. Therefore the yaw trigger measures
-sensor drift rather than presentation or controller-mount alignment.
+IMU yaw correction compares the basis-converted IMU pose with the optical
+pose after its backend-to-runtime/HMD transforms. The base and device
+corrections belong to the published controller orientation.
 
 The former `imu_orientation` name remains supported. The new name takes
 precedence when both are present.
@@ -1490,26 +1483,14 @@ This block belongs in `controller_override`, next to
 
 ```json
 "no_imu_controller_orientation": {
-  "enabled": true,
-  "multiply_order": "post",
-  "left": {
-    "enabled": true,
-    "rz_deg": -60.0,
-    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": 30.0 }
-  },
-  "right": {
-    "enabled": true,
-    "rz_deg": 60.0,
-    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": -30.0 }
-  }
+  "enabled": false
 }
 ```
 
-The runtime applies the offset to the optical controller pose while fresh
-`override_controller` input is present for that side and its effective
-orientation source is optical. It selects `imu_controller_orientation` when
-valid IMU orientation takes over. Disconnecting the controller returns the
-side to `virtual_controller_orientation_offset`.
+Set a left or right rotation here to add a correction after the base on the
+optical path while fresh physical input is present. This block supplies the
+fallback when the device profile has no correction. The shipped config uses
+the base rotation alone for this case.
 
 This block controls controller orientation and its angular velocity.
 Palm, wrist and joint poses use the separate skeleton output path. Gesture
@@ -1517,6 +1498,28 @@ yaw applies to the optical virtual-controller mode. Head-relative fallback
 and `hmd_pose` movement use `static_head_controller_orientation`.
 
 Existing configs without this block retain their optical mounting policy.
+
+### 10.8 Offsets from override-controller profiles
+
+The optional root `optic_runtime_head_offset` in an `override_controller`
+profile sets a per-side correction after the base rotation. For each fresh
+connected side it takes priority over the local IMU and no-IMU extra rotations,
+including when IMU data appears or becomes unavailable. A disabled or zero
+correction selects the base alone. If the profile omits the block, the adapter
+selects its local defaults. Disconnect or stale input returns to the optical
+base with the gesture-yaw policy.
+
+For existing absolute local offsets, migrate the extra rotation with
+`q_delta = inverse(q_base) * q_previous` when both use local (`post`)
+multiplication. The shipped Gear VR and runtime IMU defaults use this
+conversion. Skeleton mounting and head-relative synthetic orientation use
+their corresponding configuration blocks.
+
+Profiles are delivered once per TCP connection or change and cached by the
+adapter. SHM has a persistent versioned snapshot for late subscribers. Editing
+the controller JSON requires restarting `override_controller`, not the adapter.
+See [controller profiles](../../../override_controller/README.md#profile-provider-options-and-runtime-orientation)
+for JSON examples and template defaults.
 
 ---
 
