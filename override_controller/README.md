@@ -57,12 +57,12 @@ for both IMU and optical controller orientation:
   "multiply_order": "post",
   "left": {
     "enabled": true,
-    "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": -40.0,
+    "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": 50.0,
     "aim_offset": { "pitch_deg": -30.0, "yaw_deg": -30.0 }
   },
   "right": {
     "enabled": true,
-    "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": 40.0,
+    "rx_deg": 0.0, "ry_deg": 0.0, "rz_deg": -50.0,
     "aim_offset": { "pitch_deg": -30.0, "yaw_deg": 30.0 }
   }
 }
@@ -84,8 +84,8 @@ second rotation. The IMU basis transform, sensor calibration in
 `devices[].orientation_offset`, independent skeleton correction and
 `static_head_controller_orientation` remain separate.
 
-The Gear VR template copies the IMU presentation offset; VR-PARK copies the
-optical offset (`rz = -60/+60`, aim pitch `-30`, yaw `+30/-30`). Their saved
+The Gear VR template matches the adapter's IMU fallback. The VR-PARK template
+matches the no-IMU fallback (`rz = -60/+60`, aim pitch `+60`, yaw `+30/-30`). Their saved
 JSON keeps readable degrees. If the root block is absent, the adapter uses its
 own defaults. A provided disabled block or side explicitly selects no offset;
 an omitted side inside a provided block also selects identity. On disconnect

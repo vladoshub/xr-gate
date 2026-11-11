@@ -1498,12 +1498,12 @@ This block belongs in `controller_override`, next to
   "left": {
     "enabled": true,
     "rz_deg": -60.0,
-    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": 30.0 }
+    "aim_offset": { "pitch_deg": 60.0, "yaw_deg": 30.0 }
   },
   "right": {
     "enabled": true,
     "rz_deg": 60.0,
-    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": -30.0 }
+    "aim_offset": { "pitch_deg": 60.0, "yaw_deg": -30.0 }
   }
 }
 ```

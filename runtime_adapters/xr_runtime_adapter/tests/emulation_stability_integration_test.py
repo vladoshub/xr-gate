@@ -159,7 +159,8 @@ class StabilityIntegrationTest(unittest.TestCase):
                             q = event['controllers'][side]['orientation_xyzw']
                             x, y, z, w = q
                             forward = (-2*(x*z+y*w), 2*(x*w-y*z), 2*(x*x+y*y)-1)
-                            for actual, wanted in zip(forward, (sign*math.sqrt(3)/4, -.5, -.75)):
+                            yaw = math.radians(50)
+                            for actual, wanted in zip(forward, (sign*math.sin(yaw), 0, -math.cos(yaw))):
                                 self.assertAlmostEqual(actual, wanted, places=5)
                             hand = event['hands'][side]
                             for pose in (hand['controller'], hand['palm'], hand['wrist'], *hand['joints']):
