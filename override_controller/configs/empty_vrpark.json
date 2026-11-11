@@ -588,20 +588,20 @@
       "enabled": true,
       "rx_deg": 0.0,
       "ry_deg": 0.0,
-      "rz_deg": 5.0,
+      "rz_deg": 0.0,
       "aim_offset": {
         "pitch_deg": 0.0,
-        "yaw_deg": 0.0
+        "yaw_deg": -10.0
       }
     },
     "right": {
       "enabled": true,
       "rx_deg": 0.0,
       "ry_deg": 0.0,
-      "rz_deg": -5.0,
+      "rz_deg": 0.0,
       "aim_offset": {
         "pitch_deg": 0.0,
-        "yaw_deg": 0.0
+        "yaw_deg": 10.0
       }
     }
   }
