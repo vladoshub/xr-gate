@@ -116,12 +116,12 @@
         "left": {
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": -90.0
+          "rz_deg": 0.0
         },
         "right": {
           "rx_deg": 0.0,
           "ry_deg": 0.0,
-          "rz_deg": 90.0
+          "rz_deg": 0.0
         }
       }
     },

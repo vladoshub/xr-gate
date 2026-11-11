@@ -90,6 +90,7 @@ fi
 
 if should_run_step monado_driver; then
   add_packages libvulkan-dev vulkan-tools glslang-tools \
+    libopengl-dev libgl-dev libglx-dev \
     libx11-dev libx11-xcb-dev libxrandr-dev libxext-dev libxfixes-dev libxxf86vm-dev \
     libxcb1-dev libxcb-randr0-dev libxcb-present-dev libxcb-dri3-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
     libudev-dev libwayland-dev wayland-protocols libxkbcommon-dev libssl-dev libsystemd-dev libdbus-1-dev
