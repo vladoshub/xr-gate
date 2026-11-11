@@ -1,4 +1,4 @@
-# XREAL Air 2 Ultra SBS projection (raw tangents 0.700 horizontal, 0.394 vertical).
+# XREAL Air 2 Ultra SBS projection (raw tangents 0.795186 horizontal, 0.447576 vertical).
 display:
   width_px: 3840
   height_px: 1080
@@ -19,15 +19,15 @@ optics:
   left_eye:
     lens_center_uv: [0.5, 0.5]
     fov_deg:
-      left: 34.992020198558663
-      right: 34.992020198558663
-      up: 21.504440240813054
-      down: 21.504440240813054
+      left: 38.491228790748096
+      right: 38.491228790748096
+      up: 24.112143755155266
+      down: 24.112143755155266
 
   right_eye:
     lens_center_uv: [0.5, 0.5]
     fov_deg:
-      left: 34.992020198558663
-      right: 34.992020198558663
-      up: 21.504440240813054
-      down: 21.504440240813054
+      left: 38.491228790748096
+      right: 38.491228790748096
+      up: 24.112143755155266
+      down: 24.112143755155266
