@@ -123,9 +123,10 @@ void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF64V1& f, const Config& 
   if (c.left.enabled && left) output_yaw(f.left, c.pose_yaw_offset_degrees);
   if (c.right.enabled && right) output_yaw(f.right, -c.pose_yaw_offset_degrees);
 }
-void apply_pose_yaw_offset(xr_runtime::RuntimeControllerStateFrameV1& f, const Config& c) {
-  if (c.left.enabled) output_yaw(f.left, c.pose_yaw_offset_degrees);
-  if (c.right.enabled) output_yaw(f.right, -c.pose_yaw_offset_degrees);
+void apply_pose_yaw_offset(xr_runtime::RuntimeControllerStateFrameV1& f, const Config& c,
+                           bool left, bool right) {
+  if (c.left.enabled && left) output_yaw(f.left, c.pose_yaw_offset_degrees);
+  if (c.right.enabled && right) output_yaw(f.right, -c.pose_yaw_offset_degrees);
 }
 
 void WristPoseFilter::side(xr_runtime::HandSideF32V2& h, State& s,

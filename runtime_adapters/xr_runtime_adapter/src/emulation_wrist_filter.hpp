@@ -11,7 +11,8 @@ void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF32V2& frame, const Conf
                            bool rotate_skeleton = true);
 void apply_pose_yaw_offset(xr_runtime::HandTrackingFrameF64V1& frame, const Config& config,
                            bool left_optical = true, bool right_optical = true);
-void apply_pose_yaw_offset(xr_runtime::RuntimeControllerStateFrameV1& frame, const Config& config);
+void apply_pose_yaw_offset(xr_runtime::RuntimeControllerStateFrameV1& frame, const Config& config,
+                           bool left_optical = true, bool right_optical = true);
 
 // One shared rigid correction for the whole hand; finger articulation is untouched.
 class WristPoseFilter {

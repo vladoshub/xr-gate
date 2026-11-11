@@ -660,10 +660,14 @@ skeleton with that yaw. Its default is `0`. An enabled
 `only_optic` defaults to `true`. When enabled, this offset is applied only to a
 side whose effective controller orientation source is optical hand tracking. If
 a fresh controller IMU is actively driving that side, the offset is skipped; use
-`controller_override.imu_orientation.<side>.orientation_offset` for the IMU
+`controller_override.imu_controller_orientation.<side>.orientation_offset` for the IMU
 mounting/presentation correction instead. Set `only_optic` to `false` to retain
 the legacy behavior and apply `virtual_controller_orientation_offset` to both optical and IMU
 controller modes.
+
+When `controller_override.no_imu_controller_orientation` is configured, fresh
+physical controller input selects the per-controller corrections instead of
+this optical block. The selection is evaluated per side on every frame.
 
 Use it when:
 
@@ -1150,7 +1154,7 @@ Example:
       "z": -0.35
     }
   },
-  "imu_orientation": {
+  "imu_controller_orientation": {
     "left": {
       "orientation_transform": {
         "enabled": false,
@@ -1196,7 +1200,7 @@ Example:
       }
     }
   },
-  "static_orientation": {
+  "static_head_controller_orientation": {
     "left_euler_deg": {
       "roll": 0.0,
       "pitch": 0.0,
@@ -1364,10 +1368,10 @@ Lower them:
 "y": -0.35
 ```
 
-### 10.5 `static_orientation`
+### 10.5 `static_head_controller_orientation`
 
 ```json
-"static_orientation": {
+"static_head_controller_orientation": {
   "left_euler_deg": {
     "roll": 0.0,
     "pitch": 0.0,
@@ -1381,7 +1385,9 @@ Lower them:
 }
 ```
 
-Used for static wrist/controller orientation.
+Used for fixed controller orientation, HMD-relative fallback poses and
+`hmd_pose` movement. These modes derive orientation from their static/head
+reference. The former `static_orientation` name remains supported.
 
 If controller models point in the wrong direction in static mode, tune these values.
 
@@ -1395,13 +1401,13 @@ Example:
 }
 ```
 
-### 10.6 `imu_orientation`
+### 10.6 `imu_controller_orientation`
 
 This block is applied independently for the left and right controller only when
 that side is actually using `IMU_OVERRIDE_CONTROLLER_RUNTIME`.
 
 ```json
-"imu_orientation": {
+"imu_controller_orientation": {
   "left": {
     "orientation_transform": {
       "enabled": true,
@@ -1464,8 +1470,8 @@ For a post offset, sensor-local angular velocity is also converted into the
 resulting controller-local axes.
 
 When IMU data for a side is unavailable or invalid, that side falls back to
-`HAND_TRACKING_BACKEND`; neither the IMU transform nor the IMU offset is then
-applied.
+`HAND_TRACKING_BACKEND`. Fresh physical controller input then selects
+`no_imu_controller_orientation` when configured.
 
 For IMU yaw correction, `orientation_transform` remains part of the canonical
 IMU reference, but `orientation_offset` is excluded from the yaw comparison.
@@ -1473,6 +1479,44 @@ The optical reference similarly receives the normal backend-to-runtime/HMD
 coordinate transforms but excludes `virtual_controller_orientation_offset`. Both offsets are
 still applied to their final published poses. Therefore the yaw trigger measures
 sensor drift rather than presentation or controller-mount alignment.
+
+The former `imu_orientation` name remains supported. The new name takes
+precedence when both are present.
+
+### 10.7 `no_imu_controller_orientation`
+
+This block belongs in `controller_override`, next to
+`imu_controller_orientation`.
+
+```json
+"no_imu_controller_orientation": {
+  "enabled": true,
+  "multiply_order": "post",
+  "left": {
+    "enabled": true,
+    "rz_deg": -60.0,
+    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": 30.0 }
+  },
+  "right": {
+    "enabled": true,
+    "rz_deg": 60.0,
+    "aim_offset": { "pitch_deg": -30.0, "yaw_deg": -30.0 }
+  }
+}
+```
+
+The runtime applies the offset to the optical controller pose while fresh
+`override_controller` input is present for that side and its effective
+orientation source is optical. It selects `imu_controller_orientation` when
+valid IMU orientation takes over. Disconnecting the controller returns the
+side to `virtual_controller_orientation_offset`.
+
+This block controls controller orientation and its angular velocity.
+Palm, wrist and joint poses use the separate skeleton output path. Gesture
+yaw applies to the optical virtual-controller mode. Head-relative fallback
+and `hmd_pose` movement use `static_head_controller_orientation`.
+
+Existing configs without this block retain their optical mounting policy.
 
 ---
 
@@ -2007,7 +2051,7 @@ Main blocks:
 streams.hand_tracking_21_joint.hmd_relative.offset_m
 streams.hand_tracking_21_joint.virtual_controller_orientation_offset
 controller_override.synthetic_hmd_relative_pose
-controller_override.static_orientation
+controller_override.static_head_controller_orientation
 ```
 
 ---

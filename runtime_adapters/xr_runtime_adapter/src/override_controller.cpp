@@ -1317,6 +1317,23 @@ void apply_runtime_yaw_correction(
   }
 }
 
+void apply_no_imu_controller_orientation(
+    xr_runtime::RuntimeControllerSideStateV1& out,
+    const RuntimeControllerOrientationOffsetConfig& cfg) {
+  if (!cfg.enabled ||
+      (out.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION) == 0u ||
+      (out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) == 0u) return;
+  const Qf offset = q_from_xyzw(cfg.rotation_xyzw);
+  const Qf orientation = q_from_xyzw(out.orientation_xyzw);
+  set_orientation_xyzw(out, cfg.pre_multiply
+      ? q_mul(offset, orientation) : q_mul(orientation, offset));
+  if (cfg.pre_multiply) {
+    float velocity[3]{};
+    q_rotate(offset, out.angular_velocity, velocity);
+    std::copy(std::begin(velocity), std::end(velocity), out.angular_velocity);
+  }
+}
+
 void apply_imu_orientation_override(
     xr_runtime::RuntimeControllerSideStateV1& out,
     const RuntimeImuSample& imu) {
@@ -2819,6 +2836,12 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
       if (!runtime_state->acceleration_world_yaw_valid) runtime_state->acceleration_translation_yaw_confirmation.reset();
     }
 
+    if (orientation_source == RuntimeControllerOrientationSource::HandTrackingBackend &&
+        controller_side_is_present(*controller_side)) {
+      apply_no_imu_controller_orientation(
+          out, left ? cfg.left_no_imu_orientation : cfg.right_no_imu_orientation);
+    }
+
     const RuntimeControllerMovementSpace movement_space =
         effective_runtime_controller_movement_space(cfg, left, orientation_source);
     if (movement_space == RuntimeControllerMovementSpace::HmdPose &&
@@ -3057,6 +3080,7 @@ RuntimeControllerOrientationSource effective_runtime_controller_orientation_sour
     const xr_runtime::ControllerDeviceStateV3* controller) {
   if (configured == RuntimeControllerOrientationSource::ImuOverrideControllerRuntime &&
       controller != nullptr &&
+      controller_device_is_present(*controller) &&
       controller_device_has_active_orientation_imu(*controller)) {
     return RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
   }

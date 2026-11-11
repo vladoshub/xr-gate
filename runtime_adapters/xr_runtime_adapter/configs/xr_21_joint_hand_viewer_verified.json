@@ -299,7 +299,7 @@
         "z": -0.35
       }
     },
-    "imu_orientation": {
+    "imu_controller_orientation": {
       "left": {
         "orientation_offset": {
           "enabled": true,
@@ -327,7 +327,31 @@
         }
       }
     },
-    "static_orientation": {
+    "no_imu_controller_orientation": {
+      "enabled": true,
+      "multiply_order": "post",
+      "left": {
+        "enabled": true,
+        "rx_deg": 0.0,
+        "ry_deg": 0.0,
+        "rz_deg": -60.0,
+        "aim_offset": {
+          "pitch_deg": -30.0,
+          "yaw_deg": 30.0
+        }
+      },
+      "right": {
+        "enabled": true,
+        "rx_deg": 0.0,
+        "ry_deg": 0.0,
+        "rz_deg": 60.0,
+        "aim_offset": {
+          "pitch_deg": -30.0,
+          "yaw_deg": -30.0
+        }
+      }
+    },
+    "static_head_controller_orientation": {
       "left_euler_deg": {
         "roll": 0.0,
         "pitch": 0.0,

@@ -121,22 +121,23 @@ class StabilityIntegrationTest(unittest.TestCase):
                             else:self.assertEqual(input_state,baseline)
                     finally:client.close()
 
-    def test_shipped_profiles_enable_joint_offsets_without_changing_angles(self):
+    def test_shipped_profiles_separate_controller_and_skeleton_offsets(self):
         for relative in ('configs/xr_21_joint_hand_viewer_verified.json',
                 '../../devices/xreal_ultra/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json'):
             cfg=json.loads((ROOT/relative).read_text())
-            for stream, key in (('hand_tracking_21_joint','virtual_controller_orientation_offset'),
-                                ('hand_skeleton26','hand_orientation_offset')):
-                offset=cfg['streams'][stream][key]
-                self.assertTrue(offset['apply_to']['joints'])
-                self.assertTrue(offset['only_optic'])
             offset=cfg['streams']['hand_tracking_21_joint']['virtual_controller_orientation_offset']
+            self.assertTrue(offset['apply_to']['controller'])
+            for target in ('palm', 'wrist', 'joints'):
+                self.assertFalse(offset['apply_to'][target])
+            self.assertTrue(offset['only_optic'])
             self.assertEqual(offset['left']['rz_deg'],-60)
             self.assertEqual(offset['right']['rz_deg'],60)
 
     def test_shipped_mount_offset_carries_the_joints_with_one_aim_rotation(self):
         cfg = json.loads((ROOT/'configs/xr_21_joint_hand_viewer_verified.json').read_text())
         offset = cfg['streams']['hand_tracking_21_joint']['virtual_controller_orientation_offset']
+        offset['apply_gesture_yaw'] = False
+        offset['apply_to'] = dict(controller=True, palm=True, wrist=True, joints=True)
         with tempfile.TemporaryDirectory() as tmp:
             transform = Path(tmp)/'transform.json'
             transform.write_text(json.dumps(dict(enabled=True, streams=dict(
@@ -248,6 +249,103 @@ class StabilityIntegrationTest(unittest.TestCase):
                     source.visible = False
                     lost = client.frame(lambda f: f.get('hands') and f['hands']['hand_count'] == 0)
                     self.assertEqual(lost['hands']['left']['joints'], [])
+                finally:
+                    client.close()
+
+    def test_controller_offsets_switch_independently_with_live_override_and_imu(self):
+        STATE['left']['yaw'] = 10
+        STATE['right']['yaw'] = -20
+
+        def yaw_quaternion(degrees):
+            half = math.radians(degrees) / 2
+            return [0, math.sin(half), 0, math.cos(half)]
+
+        def imu_payload(sequence, stamp):
+            return struct.pack('<4I4Q8f', 3, 8, 8|256, 0, sequence, stamp, 0, stamp,
+                               0, 0, 0, 1, 1, 1, 0, 0) + bytes(8*64)
+
+        with tempfile.TemporaryDirectory() as tmp, ControllerSource() as physical:
+            transform = Path(tmp) / 'transform.json'
+            transform.write_text(json.dumps({
+                'streams': {'hand_tracking_21_joint': {
+                    'virtual_controller_orientation_offset': {
+                        'enabled': True, 'apply_gesture_yaw': True,
+                        'apply_to': dict(controller=True, palm=False, wrist=False, joints=False),
+                        'left': {'ry_deg': 15}, 'right': {'ry_deg': -15},
+                    },
+                    'hand_skeleton_orientation_offset': {
+                        'enabled': True, 'left': {'rz_deg': 25}, 'right': {'rz_deg': -25},
+                    },
+                }},
+                'controller_override': {
+                    'lost_hand_pose_fallback': 'hmd_relative_with_input',
+                    'imu_controller_orientation': {
+                        'left': {'orientation_offset': {'rotation_deg': {'ry_deg': 75}}},
+                        'right': {'orientation_offset': {'rotation_deg': {'ry_deg': -75}}},
+                    },
+                    'imu_orientation': {
+                        'left': {'orientation_offset': {'rotation_deg': {'ry_deg': -120}}},
+                    },
+                    'no_imu_controller_orientation': {
+                        'left': {'ry_deg': 45}, 'right': {'ry_deg': -45},
+                    },
+                    'static_head_controller_orientation': {
+                        'left_quat_xyzw': yaw_quaternion(15),
+                        'right_quat_xyzw': yaw_quaternion(-15),
+                    },
+                    'static_orientation': {'left_quat_xyzw': yaw_quaternion(80)},
+                },
+            }))
+            extra = ['--simple-gestures', '--simple-gestures-pose-yaw-offset-degrees', '20',
+                     '--simple-gestures-pose-yaw-apply-to-skeleton', '1',
+                     '--tracking-transform-config', str(transform),
+                     '--controller-input-mode', 'hand_plus_controller',
+                     '--controller-input-transport', 'tcp', '--controller-input-host', '127.0.0.1',
+                     '--controller-input-port', str(physical.port),
+                     '--runtime-controller-left-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME',
+                     '--runtime-controller-right-orientation-source', 'IMU_OVERRIDE_CONTROLLER_RUNTIME']
+            with harness.runtime(extra=extra) as (_, source, port):
+                client = harness.Client(port)
+                try:
+                    original_skeleton = {}
+
+                    def check_pose(left, right, visible=True):
+                        expected = {'left': yaw_quaternion(left), 'right': yaw_quaternion(right)}
+                        def matches(frame):
+                            return frame.get('hands') and frame.get('controllers') and all(
+                                frame['controllers'][side]['pose_valid'] and all(
+                                    abs(a-b) < 1e-5 for a, b in zip(
+                                        frame['controllers'][side]['orientation_xyzw'], expected[side]))
+                                for side in expected)
+                        event = client.frame(matches)
+                        if visible:
+                            for side in expected:
+                                geometry = {key: event['hands'][side][key] for key in ('palm', 'wrist', 'joints')}
+                                if side not in original_skeleton:
+                                    original_skeleton[side] = geometry
+                                self.assertEqual(geometry, original_skeleton[side])
+                        return event
+
+                    check_pose(45, -55)
+                    physical.update('left', present=True)
+                    check_pose(55, -55)
+                    physical.update('right', present=True, imu=imu_payload)
+                    check_pose(55, -75)
+                    physical.update('left', imu=imu_payload)
+                    check_pose(75, -75)
+                    physical.update('right', imu=None)
+                    check_pose(75, -65)
+                    physical.update('left', present=False)
+                    check_pose(45, -65)
+                    physical.paused.set()
+                    check_pose(45, -55)
+                    physical.update('left', present=True, imu=None)
+                    physical.paused.clear()
+                    check_pose(55, -65)
+                    physical.update('left', trigger=.5)
+                    physical.update('right', trigger=.5)
+                    source.visible = False
+                    check_pose(15, -15, visible=False)
                 finally:
                     client.close()
 

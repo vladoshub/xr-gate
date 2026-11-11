@@ -54,12 +54,15 @@ enum class RuntimeControllerOrientationSource {
   ImuOverrideControllerRuntime,
 };
 
-// Optional per-side conversion from an IMU provider/sensor frame into the
-// runtime controller frame. The basis transform changes coordinate convention:
-//   q' = basis * q * inverse(basis)
-// The offset then aligns the physical sensor/controller mounting. A post/local
-// offset is the normal mounting-offset form:
-//   q_out = q' * offset
+// Constant mounting correction for a published controller pose.
+struct RuntimeControllerOrientationOffsetConfig {
+  bool enabled = false;
+  bool pre_multiply = false;
+  float rotation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+};
+
+// Optional per-side IMU basis conversion followed by a mounting correction.
+// q_world_controller = basis * q_sensor * inverse(basis) * local_offset.
 struct RuntimeControllerImuOrientationConfig {
   bool transform_enabled = false;
   // Coordinate-axis inversion applied before basis_rotation. These are basis
@@ -362,6 +365,8 @@ struct RuntimeControllerSynthesisConfig {
 
   RuntimeControllerImuOrientationConfig left_imu_orientation{};
   RuntimeControllerImuOrientationConfig right_imu_orientation{};
+  RuntimeControllerOrientationOffsetConfig left_no_imu_orientation{};
+  RuntimeControllerOrientationOffsetConfig right_no_imu_orientation{};
   RuntimeControllerImuMotionConfig left_imu_motion{};
   RuntimeControllerImuMotionConfig right_imu_motion{};
 

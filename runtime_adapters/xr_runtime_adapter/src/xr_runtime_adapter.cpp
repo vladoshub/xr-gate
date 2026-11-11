@@ -126,6 +126,9 @@ struct ControllerOverrideFileConfig {
 
   override_controller::RuntimeControllerImuOrientationConfig left_imu_orientation{};
   override_controller::RuntimeControllerImuOrientationConfig right_imu_orientation{};
+  bool has_no_imu_controller_orientation = false;
+  override_controller::RuntimeControllerOrientationOffsetConfig left_no_imu_orientation{};
+  override_controller::RuntimeControllerOrientationOffsetConfig right_no_imu_orientation{};
 
   bool has_left_hand_gestures_enabled = false;
   bool left_hand_gestures_enabled = true;
@@ -380,6 +383,37 @@ std::optional<std::array<float, 4>> parse_orientation_rotation_quat(
   return std::nullopt;
 }
 
+override_controller::RuntimeControllerOrientationOffsetConfig parse_controller_orientation_offset(
+    const nlohmann::json& j, const std::string& context,
+    bool enabled = true, const std::string& default_order = "post") {
+  if (!j.is_object()) {
+    throw std::runtime_error(context + " must be an object");
+  }
+  override_controller::RuntimeControllerOrientationOffsetConfig out{};
+  auto q = parse_orientation_rotation_quat(j, context, false);
+  if (j.contains("aim_offset")) {
+    const auto& aim = j.at("aim_offset");
+    if (!aim.is_object()) {
+      throw std::runtime_error(context + ".aim_offset must be an object");
+    }
+    const auto mount = q.value_or(std::array<float, 4>{0, 0, 0, 1});
+    const Qd combined = compose_aim_offset_deg({mount[3], mount[0], mount[1], mount[2]},
+                                              aim.value("pitch_deg", 0.0),
+                                              aim.value("yaw_deg", 0.0));
+    q = std::array<float, 4>{static_cast<float>(combined.x), static_cast<float>(combined.y),
+                             static_cast<float>(combined.z), static_cast<float>(combined.w)};
+  }
+  out.enabled = enabled && j.value("enabled", q.has_value());
+  if (q) copy_quat_xyzw(out.rotation_xyzw, *q);
+  const std::string order = j.value("multiply_order", default_order);
+  if (order == "pre" || order == "world") {
+    out.pre_multiply = true;
+  } else if (order != "post" && order != "local") {
+    throw std::runtime_error(context + ".multiply_order must be 'post'/'local' or 'pre'/'world'");
+  }
+  return out;
+}
+
 void parse_controller_imu_orientation_side(
     const nlohmann::json& j,
     override_controller::RuntimeControllerImuOrientationConfig& out,
@@ -402,37 +436,12 @@ void parse_controller_imu_orientation_side(
   }
 
   if (j.contains("orientation_offset")) {
-    const auto& o = j.at("orientation_offset");
-    if (!o.is_object()) {
-      throw std::runtime_error(context + ".orientation_offset must be an object");
-    }
-    auto q = parse_orientation_rotation_quat(
-        o, context + ".orientation_offset", false);
-    if (o.contains("aim_offset")) {
-      const auto& aim = o.at("aim_offset");
-      if (!aim.is_object()) {
-        throw std::runtime_error(context + ".orientation_offset.aim_offset must be an object");
-      }
-      const auto mount = q.value_or(std::array<float, 4>{0, 0, 0, 1});
-      const Qd combined = compose_aim_offset_deg({mount[3], mount[0], mount[1], mount[2]},
-                                                aim.value("pitch_deg", 0.0),
-                                                aim.value("yaw_deg", 0.0));
-      q = std::array<float, 4>{static_cast<float>(combined.x), static_cast<float>(combined.y),
-                               static_cast<float>(combined.z), static_cast<float>(combined.w)};
-    }
-    out.offset_enabled = o.value("enabled", q.has_value());
-    if (q) copy_quat_xyzw(out.offset_rotation_xyzw, *q);
-
-    const std::string multiply_order = o.value("multiply_order", std::string("post"));
-    if (multiply_order == "pre" || multiply_order == "world") {
-      out.offset_pre_multiply = true;
-    } else if (multiply_order == "post" || multiply_order == "local") {
-      out.offset_pre_multiply = false;
-    } else {
-      throw std::runtime_error(
-          context + ".orientation_offset.multiply_order must be "
-          "'post'/'local' or 'pre'/'world'");
-    }
+    const auto offset = parse_controller_orientation_offset(
+        j.at("orientation_offset"), context + ".orientation_offset");
+    out.offset_enabled = offset.enabled;
+    out.offset_pre_multiply = offset.pre_multiply;
+    std::copy(std::begin(offset.rotation_xyzw), std::end(offset.rotation_xyzw),
+              out.offset_rotation_xyzw);
   }
 }
 
@@ -607,13 +616,37 @@ ControllerOverrideFileConfig load_controller_override_file_config(const std::str
     parse_controller_override_static_orientation(j.at("hand_position_static_orientation"), cfg,
                                                  "controller_override.hand_position_static_orientation");
   }
+  if (j.contains("static_head_controller_orientation")) {
+    parse_controller_override_static_orientation(j.at("static_head_controller_orientation"), cfg,
+                                                 "controller_override.static_head_controller_orientation");
+  }
 
   // Per-side IMU frame conversion and mounting alignment. These values are
   // consumed only when the effective source for that side is
-  // IMU_OVERRIDE_CONTROLLER_RUNTIME; hand-tracking fallback is unchanged.
-  if (j.contains("imu_orientation")) {
+  // IMU_OVERRIDE_CONTROLLER_RUNTIME. Optical controller mounting is configured separately.
+  if (j.contains("imu_controller_orientation")) {
+    parse_controller_override_imu_orientation(
+        j.at("imu_controller_orientation"), cfg, "controller_override.imu_controller_orientation");
+  } else if (j.contains("imu_orientation")) {
     parse_controller_override_imu_orientation(
         j.at("imu_orientation"), cfg, "controller_override.imu_orientation");
+  }
+  if (j.contains("no_imu_controller_orientation")) {
+    const auto& o = j.at("no_imu_controller_orientation");
+    if (!o.is_object()) {
+      throw std::runtime_error("controller_override.no_imu_controller_orientation must be an object");
+    }
+    cfg.has_no_imu_controller_orientation = true;
+    const bool enabled = o.value("enabled", true);
+    const std::string order = o.value("multiply_order", std::string("post"));
+    if (o.contains("left")) {
+      cfg.left_no_imu_orientation = parse_controller_orientation_offset(
+          o.at("left"), "controller_override.no_imu_controller_orientation.left", enabled, order);
+    }
+    if (o.contains("right")) {
+      cfg.right_no_imu_orientation = parse_controller_orientation_offset(
+          o.at("right"), "controller_override.no_imu_controller_orientation.right", enabled, order);
+    }
   }
 
   if (j.contains("publish_runtime_controller_state_shm")) {
@@ -5129,6 +5162,10 @@ int main(int argc, char** argv) {
         controller_override_file_config.left_imu_orientation;
     runtime_controller_synthesis_cfg.right_imu_orientation =
         controller_override_file_config.right_imu_orientation;
+    runtime_controller_synthesis_cfg.left_no_imu_orientation =
+        controller_override_file_config.left_no_imu_orientation;
+    runtime_controller_synthesis_cfg.right_no_imu_orientation =
+        controller_override_file_config.right_no_imu_orientation;
     const auto configure_imu_motion = [&](override_controller::RuntimeControllerImuMotionConfig& dst,
                                           bool acceleration_integration,
                                           bool position_prediction,
@@ -6285,10 +6322,17 @@ int main(int argc, char** argv) {
             ? tracking_transform_config.hand_skeleton26
             : tracking_transform_config.hand_tracking_21_joint;
         const auto& skeleton_orientation_offset = hand_transform.hand_skeleton_orientation_offset;
+        const bool left_override_controller_orientation =
+            controller_override_file_config.has_no_imu_controller_orientation && controller_left_connected;
+        const bool right_override_controller_orientation =
+            controller_override_file_config.has_no_imu_controller_orientation && controller_right_connected;
         std::optional<xr_runtime::HandTrackingFrameF32V2> optical_skeleton;
         const auto should_apply_hand_orientation_offset =
             [&](const StreamTransformConfig& transform, bool controller_connected,
                 bool emulation_enabled, bool uses_imu_profile) {
+              if (controller_override_file_config.has_no_imu_controller_orientation && controller_connected) {
+                return false;
+              }
               return (!hand_orientation_offset_only_runtime || controller_connected ||
                       emulation_enabled) &&
                      (!transform.hand_orientation_offset.only_optic || !uses_imu_profile);
@@ -6553,6 +6597,8 @@ int main(int argc, char** argv) {
              active_hand_offset.apply_gesture_yaw);
         const bool gesture_yaw_rotates_skeleton =
             !simple_gestures || simple_gestures_pose_yaw_apply_to_skeleton;
+        const bool left_gesture_yaw = !left_uses_imu_profile && !left_override_controller_orientation;
+        const bool right_gesture_yaw = !right_uses_imu_profile && !right_override_controller_orientation;
         std::optional<xr_runtime::RuntimeFrame> presentation_frame;
         if (skeleton_offset || emulation_yaw || optical_skeleton) {
           presentation_frame = frame;
@@ -6573,11 +6619,11 @@ int main(int argc, char** argv) {
           if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
                 presentation_frame->hand_v2, presentation_yaw_config,
-                !left_uses_imu_profile, !right_uses_imu_profile, gesture_yaw_rotates_skeleton);
+                left_gesture_yaw, right_gesture_yaw, gesture_yaw_rotates_skeleton);
             if (gesture_yaw_rotates_skeleton) {
               xr_runtime_adapter::emulation::apply_pose_yaw_offset(
                   presentation_frame->hand, presentation_yaw_config,
-                  !left_uses_imu_profile, !right_uses_imu_profile);
+                  left_gesture_yaw, right_gesture_yaw);
             }
           }
           if (optical_skeleton) {
@@ -6695,7 +6741,7 @@ int main(int argc, char** argv) {
           }
           if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                runtime_controller_state, presentation_yaw_config);
+                runtime_controller_state, presentation_yaw_config, left_gesture_yaw, right_gesture_yaw);
           }
           controller_state_for_log = runtime_controller_state;
           controller_state_for_log_available = true;
@@ -6712,7 +6758,7 @@ int main(int argc, char** argv) {
           } else if (frame.hand_valid && emulation_yaw && !gesture_yaw_rotates_skeleton) {
             auto hand = gestures::runtime_hand_v2_from_runtime_v1(output_frame.hand);
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                hand, presentation_yaw_config, !left_uses_imu_profile, !right_uses_imu_profile, false);
+                hand, presentation_yaw_config, left_gesture_yaw, right_gesture_yaw, false);
             runtime_hand = runtime_hand_frame_v2_from_runtime(hand, frame.read_timestamp_ns);
           } else if (frame.hand_valid) {
             runtime_hand = runtime_hand_frame_v2_from_v1(output_frame.hand, frame.read_timestamp_ns);
