@@ -355,12 +355,37 @@ struct ControllerInputV3 {
 };
 #pragma pack(pop)
 
+// A backend supplies the finished pose in the runtime tracking frame.
+// Position is in metres, linear velocity in m/s, angular velocity in rad/s.
+// Both velocities are world-space and default to zero when unavailable.
+struct Controller6DofPoseV1 {
+  float position[3] = {};
+  float orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float linear_velocity[3] = {};
+  float angular_velocity[3] = {};
+};
+
+struct Controller6DofPosesV1 {
+  Controller6DofPoseV1 left;
+  Controller6DofPoseV1 right;
+};
+
+// Use input.sequence/timestamp_ns at the transport level. Each side sets
+// CONTROLLER_DEVICE_POSE_VALID independently of button/axis validity.
+struct Controller6DofInputV1 {
+  ControllerInputV3 input;
+  Controller6DofPosesV1 poses;
+};
+
 static_assert(sizeof(ControllerImuSampleV1) == 48, "ControllerImuSampleV1 must stay ABI-stable at 48 bytes");
 static_assert(sizeof(ControllerImuStateV1) == 288, "ControllerImuStateV1 must stay ABI-stable at 288 bytes");
 static_assert(offsetof(ControllerDeviceStateV3, imu) == 400,
               "ControllerDeviceStateV3 IMU offset must stay ABI-stable at 400 bytes");
 static_assert(sizeof(ControllerDeviceStateV3) == 688, "ControllerDeviceStateV3 must stay ABI-stable at 688 bytes");
 static_assert(sizeof(ControllerInputV3) == 1432, "ControllerInputV3 must stay ABI-stable at 1432 bytes");
+static_assert(sizeof(Controller6DofPoseV1) == 52, "Controller6DofPoseV1 must be 52 bytes");
+static_assert(offsetof(Controller6DofInputV1, poses) == 1432, "Controller6DofInputV1 pose offset");
+static_assert(sizeof(Controller6DofInputV1) == 1536, "Controller6DofInputV1 must be 1536 bytes");
 
 using ControllerDeviceState = ControllerDeviceStateV3;
 using ControllerInput = ControllerInputV3;
@@ -404,34 +429,51 @@ struct ControllerInputTcpHeader {
 
 static_assert(sizeof(ControllerInputTcpHeader) == 32, "controller input TCP header must be 32 bytes");
 
-#ifndef _WIN32
+constexpr const char* CONTROLLER_6DOF_INPUT_V1_FORMAT_NAME = "CONTROLLER_6DOF_INPUT_V1";
+constexpr uint16_t CONTROLLER_6DOF_INPUT_V1_FORMAT_VERSION = 1;
+constexpr uint32_t CONTROLLER_6DOF_INPUT_TCP_MAGIC_V1 = 0x43493631u; // "CI61" marker
+
 class ControllerInputTcpClient {
  public:
   ControllerInputTcpClient(std::string host, int port)
       : host_(std::move(host)), port_(port) {
+#ifdef _WIN32
+    init_winsock_once();
+#endif
     connect_socket();
     try {
       send_profile_hello();
     } catch (...) {
-#ifndef _WIN32
-      close(fd_);
-      fd_ = -1;
-#else
-      closesocket(fd_);
-      fd_ = INVALID_SOCKET;
-#endif
+      close_socket();
       throw;
     }
   }
 
-  ~ControllerInputTcpClient() {
-    if (fd_ >= 0) close(fd_);
-  }
+  ~ControllerInputTcpClient() { close_socket(); }
 
   ControllerInputTcpClient(const ControllerInputTcpClient&) = delete;
   ControllerInputTcpClient& operator=(const ControllerInputTcpClient&) = delete;
 
   ControllerInputV3 read_next() {
+    auto frame = read_payload<ControllerInputV3>(
+        CONTROLLER_INPUT_TCP_MAGIC_V3, CONTROLLER_INPUT_TCP_VERSION_V3, CONTROLLER_INPUT_V3_FORMAT_NAME);
+    if (frame.version != CONTROLLER_INPUT_V3_FORMAT_VERSION || frame.size_bytes != sizeof(frame)) {
+      throw std::runtime_error("invalid controller_input V3 frame header");
+    }
+    return frame;
+  }
+
+  Controller6DofInputV1 read_next_6dof() {
+    return read_payload<Controller6DofInputV1>(
+        CONTROLLER_6DOF_INPUT_TCP_MAGIC_V1, CONTROLLER_6DOF_INPUT_V1_FORMAT_VERSION,
+        CONTROLLER_6DOF_INPUT_V1_FORMAT_NAME);
+  }
+
+  const ControllerRuntimeProfileV1& runtime_profile() const { return profile_; }
+
+ private:
+  template <typename Payload>
+  Payload read_payload(uint32_t magic, uint16_t version, const char* format) {
     for (;;) {
       ControllerInputTcpHeader header{};
       read_exact(&header, sizeof(header));
@@ -442,31 +484,26 @@ class ControllerInputTcpClient {
           throw std::runtime_error("invalid controller runtime profile");
         continue;
       }
-      if (header.magic != CONTROLLER_INPUT_TCP_MAGIC_V3 ||
-          header.version != CONTROLLER_INPUT_TCP_VERSION_V3 ||
-          header.header_size != sizeof(ControllerInputTcpHeader)) {
-        throw std::runtime_error(
-            "unsupported controller_input TCP ABI; expected CIV3/version 3. "
-            "Update override_controller and xr_runtime_adapter from the same XR Gate release");
+      if (header.magic != magic || header.version != version ||
+          header.header_size != sizeof(header) || header.payload_size != sizeof(Payload)) {
+        throw std::runtime_error(std::string("unsupported controller input TCP ABI; expected ") + format);
       }
-      if (header.payload_size != sizeof(ControllerInputV3)) {
-        throw std::runtime_error("unexpected controller_input TCP V3 payload size");
-      }
-      ControllerInputV3 frame{};
-      read_exact(&frame, sizeof(frame));
-      if (frame.version != CONTROLLER_INPUT_V3_FORMAT_VERSION ||
-          frame.size_bytes != sizeof(ControllerInputV3)) {
-        throw std::runtime_error("invalid controller_input V3 frame header");
-      }
+      Payload payload{};
+      read_exact(&payload, sizeof(payload));
       // A capable publisher sends the negotiated snapshot before any usable frame.
       if ((header.reserved0 & CONTROLLER_INPUT_TCP_PROFILE_SUPPORTED) && profile_.revision == 0) continue;
-      return frame;
+      return payload;
     }
   }
 
-  const ControllerRuntimeProfileV1& runtime_profile() const { return profile_; }
+  void close_socket() {
+#ifndef _WIN32
+    if (fd_ >= 0) close(fd_);
+#else
+    if (fd_ != INVALID_SOCKET) closesocket(fd_);
+#endif
+  }
 
- private:
   void send_profile_hello() {
     const uint64_t hello = CONTROLLER_INPUT_TCP_PROFILE_HELLO;
     const auto* data = reinterpret_cast<const char*>(&hello);
@@ -482,7 +519,7 @@ class ControllerInputTcpClient {
       offset += static_cast<size_t>(n);
     }
   }
-  ControllerRuntimeProfileV1 profile_;
+#ifndef _WIN32
   void connect_socket() {
     struct addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
@@ -531,90 +568,8 @@ class ControllerInputTcpClient {
     }
   }
 
-  std::string host_;
-  int port_ = 0;
   int fd_ = -1;
-};
 #else
-class ControllerInputTcpClient {
- public:
-  ControllerInputTcpClient(std::string host, int port)
-      : host_(std::move(host)), port_(port) {
-    init_winsock_once();
-    connect_socket();
-    try {
-      send_profile_hello();
-    } catch (...) {
-#ifndef _WIN32
-      close(fd_);
-      fd_ = -1;
-#else
-      closesocket(fd_);
-      fd_ = INVALID_SOCKET;
-#endif
-      throw;
-    }
-  }
-
-  ~ControllerInputTcpClient() {
-    if (fd_ != INVALID_SOCKET) closesocket(fd_);
-  }
-
-  ControllerInputTcpClient(const ControllerInputTcpClient&) = delete;
-  ControllerInputTcpClient& operator=(const ControllerInputTcpClient&) = delete;
-
-  ControllerInputV3 read_next() {
-    for (;;) {
-      ControllerInputTcpHeader header{};
-      read_exact(&header, sizeof(header));
-      if (header.magic == CONTROLLER_INPUT_TCP_PROFILE_MAGIC && header.version == 1 &&
-          header.header_size == sizeof(header) && header.payload_size == sizeof(profile_)) {
-        read_exact(&profile_, sizeof(profile_));
-        if (profile_.version != 1 || profile_.size_bytes != sizeof(profile_) || profile_.revision == 0)
-          throw std::runtime_error("invalid controller runtime profile");
-        continue;
-      }
-      if (header.magic != CONTROLLER_INPUT_TCP_MAGIC_V3 ||
-          header.version != CONTROLLER_INPUT_TCP_VERSION_V3 ||
-          header.header_size != sizeof(ControllerInputTcpHeader)) {
-        throw std::runtime_error(
-            "unsupported controller_input TCP ABI; expected CIV3/version 3. "
-            "Update override_controller and xr_runtime_adapter from the same XR Gate release");
-      }
-      if (header.payload_size != sizeof(ControllerInputV3)) {
-        throw std::runtime_error("unexpected controller_input TCP V3 payload size");
-      }
-      ControllerInputV3 frame{};
-      read_exact(&frame, sizeof(frame));
-      if (frame.version != CONTROLLER_INPUT_V3_FORMAT_VERSION ||
-          frame.size_bytes != sizeof(ControllerInputV3)) {
-        throw std::runtime_error("invalid controller_input V3 frame header");
-      }
-      // A capable publisher sends the negotiated snapshot before any usable frame.
-      if ((header.reserved0 & CONTROLLER_INPUT_TCP_PROFILE_SUPPORTED) && profile_.revision == 0) continue;
-      return frame;
-    }
-  }
-
-  const ControllerRuntimeProfileV1& runtime_profile() const { return profile_; }
-
- private:
-  void send_profile_hello() {
-    const uint64_t hello = CONTROLLER_INPUT_TCP_PROFILE_HELLO;
-    const auto* data = reinterpret_cast<const char*>(&hello);
-    size_t offset = 0;
-    while (offset < sizeof(hello)) {
-#ifdef _WIN32
-      const int n = send(fd_, data + offset, static_cast<int>(sizeof(hello) - offset), 0);
-#else
-      const auto n = send(fd_, data + offset, sizeof(hello) - offset, MSG_NOSIGNAL);
-      if (n < 0 && errno == EINTR) continue;
-#endif
-      if (n <= 0) throw std::runtime_error("controller profile negotiation send failed");
-      offset += static_cast<size_t>(n);
-    }
-  }
-  ControllerRuntimeProfileV1 profile_;
   static void init_winsock_once() {
     static bool initialized = [] {
       WSADATA wsa{};
@@ -677,10 +632,11 @@ class ControllerInputTcpClient {
     }
   }
 
+  SOCKET fd_ = INVALID_SOCKET;
+#endif
   std::string host_;
   int port_ = 0;
-  SOCKET fd_ = INVALID_SOCKET;
+  ControllerRuntimeProfileV1 profile_;
 };
-#endif
 
 }  // namespace xr_runtime

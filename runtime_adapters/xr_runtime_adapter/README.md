@@ -257,6 +257,78 @@ controller_input -> runtime_controller_state
 
 The resulting runtime controller state can be consumed by the OpenVR driver.
 
+### External 6DoF controllers
+
+A tracking backend can supply a complete controller pose alongside buttons and
+axes. Select the 6DoF input explicitly. The default is `none`. To select it in
+the Linux launcher, disable the `override_controller` input and set the 6DoF
+transport:
+
+```bash
+CONTROLLER_INPUT_TRANSPORT=none CONTROLLER_6DOF_INPUT=shm \
+  runtime_adapters/xr_runtime_adapter/scripts/linux/start_xr_runtime_adapter_shm.sh
+```
+
+The adapter exits with an error at startup if both controller inputs have a
+transport other than `none`. They can be selected with these settings.
+
+| Adapter option | Linux launcher setting | Default |
+| --- | --- | --- |
+| `--controller-6dof-input` | `CONTROLLER_6DOF_INPUT` | `none` |
+| `--controller-6dof-registry` | `CONTROLLER_6DOF_REGISTRY` | Tracking registry, normally `/tmp/tracking_streams.json` |
+| `--controller-6dof-stream` | `CONTROLLER_6DOF_STREAM` | `controller_6dof` |
+| `--controller-6dof-tcp-host` | `CONTROLLER_6DOF_TCP_HOST` | `127.0.0.1` |
+| `--controller-6dof-tcp-port` | `CONTROLLER_6DOF_TCP_PORT` | `45673` |
+
+The adapter connects to the backend for TCP input. On native Windows, run
+`start_xr_runtime_adapter_udp.ps1 -WithController6DofTcp` to use TCP input
+and the existing UDP controller output. Pass `-TrackingTransformConfig` with
+the profile path to load its `controller_override` settings. Enable the usual
+controller output when invoking the adapter directly (`--publish-runtime-controller-state-shm`,
+`--publish-runtime-controller-state-udp`, or `--app-tcp`).
+
+#### Backend input format
+
+See [the shared controller input header](../../shared/include/xr_runtime/contracts/controller_input_contract.hpp)
+for the packed little-endian `Controller6DofInputV1` payload (1536 bytes).
+It contains `ControllerInputV3` (1432 bytes, internal version 3 and size 1432),
+followed by the left and right `Controller6DofPoseV1` records (52 bytes each).
+Use an increasing, nonzero `input.sequence` per producer session. Set each
+side's status to `ACTIVE` or `CONNECTED` for a connected controller, and set
+`CONTROLLER_DEVICE_POSE_VALID`, `CONTROLLER_DEVICE_BUTTONS_VALID` and
+`CONTROLLER_DEVICE_ANALOG_VALID` independently.
+
+- SHM uses the existing `RingHeaderV1` and `RingSlotHeaderV1`. Register the
+  stream with `format_name: "CONTROLLER_6DOF_INPUT_V1"`, `format_version: 1` and
+  `payload_size: 1536`. The slot sequence matches `input.sequence`. Set
+  `input.timestamp_ns` from the adapter host's monotonic clock.
+- TCP uses the existing 32-byte `ControllerInputTcpHeader` with
+  `CONTROLLER_6DOF_INPUT_TCP_MAGIC_V1` and version 1. The adapter sends the
+  existing 8-byte `CONTROLLER_INPUT_TCP_PROFILE_HELLO` on connect. A backend
+  without profile metadata may read and discard it and send frames with
+  `reserved0=0`. The adapter measures TCP freshness from local receipt time.
+
+Supply XYZ in metres and a unit quaternion in XYZW order in the same
+`runtime_frame` as the published HMD pose. Linear and angular velocities
+are optional in m/s and rad/s respectively, with zeros for unavailable data.
+Send a complete two-side snapshot each time. Clear `CONTROLLER_DEVICE_POSE_VALID`
+on tracking loss to keep buttons available for a connected controller. A lost
+device, a disconnected transport, or a frame older than
+`--max-controller-age-ms` clears the corresponding driver state.
+
+The `controller_override` block in `xr_21_joint_hand_viewer_verified.json`
+continues to configure the runtime controller output and per-side orientation
+offsets for both sources. For 6DoF, `CONTROLLER_DEVICE_IMU_PRESENT` selects
+`imu_controller_orientation.*.orientation_offset`. Other controllers use
+`no_imu_controller_orientation`. An explicitly provided runtime profile offset
+takes precedence for its side. The backend supplies the tracking pose, so
+hand/HMD pose synthesis, IMU fusion, pose prediction and gesture emulation
+are bypassed for 6DoF controller output. Drivers receive the same
+`RUNTIME_CONTROLLER_STATE_V1` over SHM or UDP, or the existing
+`controllers` field over application TCP.
+
+### Controller orientation and velocity
+
 Both runtime controller velocities use tracking/world axes. IMU gyro is rotated
 from calibrated controller-body axes with the final presentation orientation
 before publication. See [Alyx controller motion diagnostics](docs/alyx_controller_motion.md)

@@ -1317,12 +1317,10 @@ void apply_runtime_yaw_correction(
   }
 }
 
-void apply_no_imu_controller_orientation(
+void apply_controller_orientation_offset(
     xr_runtime::RuntimeControllerSideStateV1& out,
     const RuntimeControllerOrientationOffsetConfig& cfg) {
-  if (!cfg.enabled ||
-      (out.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION) == 0u ||
-      (out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) == 0u) return;
+  if (!cfg.enabled) return;
   const Qf offset = q_from_xyzw(cfg.rotation_xyzw);
   const Qf orientation = q_from_xyzw(out.orientation_xyzw);
   set_orientation_xyzw(out, cfg.pre_multiply
@@ -2412,19 +2410,32 @@ void apply_dpad_to_thumbstick(uint64_t buttons, float& x, float& y) {
   if ((buttons & xr_runtime::CONTROLLER_BUTTON_DPAD_DOWN) != 0ull) y = -1.0f;
 }
 
-void fill_inputs_from_controller(xr_runtime::RuntimeControllerSideStateV1& out,
-                                 const xr_runtime::ControllerDeviceStateV3& controller,
-                                 const RuntimeControllerSynthesisConfig& cfg) {
-  if (!controller_side_is_present(controller)) return;
-  const uint64_t buttons = normalize_controller_dpad_buttons(controller.buttons);
+void fill_controller_identity(xr_runtime::RuntimeControllerSideStateV1& out,
+                              const xr_runtime::ControllerDeviceStateV3& controller) {
   out.flags |= xr_runtime::RUNTIME_CONTROLLER_CONNECTED;
   out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_INPUT;
   out.source_device_hash = controller.stable_device_hash != 0 ? controller.stable_device_hash
                                                               : controller.physical_device_hash;
-  out.last_input_ns = 0;
-  out.buttons = buttons & xr_runtime::CONTROLLER_BUTTON_KNOWN_MASK;
+}
+
+void copy_controller_buttons(xr_runtime::RuntimeControllerSideStateV1& out,
+                             const xr_runtime::ControllerDeviceStateV3& controller) {
+  out.buttons = controller.buttons;
   out.touches = controller.touches;
   out.changed_buttons = controller.changed_buttons;
+  std::memcpy(out.press_counters, controller.press_counters, sizeof(out.press_counters));
+  std::memcpy(out.release_counters, controller.release_counters, sizeof(out.release_counters));
+}
+
+void fill_inputs_from_controller(xr_runtime::RuntimeControllerSideStateV1& out,
+                                 const xr_runtime::ControllerDeviceStateV3& controller,
+                                 const RuntimeControllerSynthesisConfig& cfg) {
+  if (!controller_side_is_present(controller)) return;
+  fill_controller_identity(out, controller);
+  out.last_input_ns = 0;
+  copy_controller_buttons(out, controller);
+  const uint64_t buttons = normalize_controller_dpad_buttons(controller.buttons);
+  out.buttons = buttons & xr_runtime::CONTROLLER_BUTTON_KNOWN_MASK;
   out.trigger = controller_axis_or_button(controller.trigger, buttons, xr_runtime::CONTROLLER_BUTTON_TRIGGER);
   out.grip = controller_axis_or_button(controller.grip, buttons, xr_runtime::CONTROLLER_BUTTON_GRIP);
   out.thumbstick_x = clamp_axis(controller.thumbstick_x);
@@ -2432,8 +2443,6 @@ void fill_inputs_from_controller(xr_runtime::RuntimeControllerSideStateV1& out,
   if (cfg.dpad_to_thumbstick_axes) {
     apply_dpad_to_thumbstick(buttons, out.thumbstick_x, out.thumbstick_y);
   }
-  std::memcpy(out.press_counters, controller.press_counters, sizeof(out.press_counters));
-  std::memcpy(out.release_counters, controller.release_counters, sizeof(out.release_counters));
   if (controller_side_has_input(controller)) {
     out.flags |= xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID;
   }
@@ -2837,8 +2846,10 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
     }
 
     if (orientation_source == RuntimeControllerOrientationSource::HandTrackingBackend &&
-        controller_side_is_present(*controller_side)) {
-      apply_no_imu_controller_orientation(
+        controller_side_is_present(*controller_side) &&
+        (out.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION) != 0u &&
+        (out.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
+      apply_controller_orientation_offset(
           out, left ? cfg.left_no_imu_orientation : cfg.right_no_imu_orientation);
     }
 
@@ -2871,6 +2882,89 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
 
   apply_hmd_relative_pose_blend(
       out, cfg, timestamp_ns, real_optical_pose_available, runtime_state);
+}
+
+void compose_6dof_side(xr_runtime::RuntimeControllerSideStateV1& out,
+                       bool left,
+                       uint64_t timestamp_ns,
+                       const xr_runtime::ControllerDeviceStateV3* device,
+                       const xr_runtime::Controller6DofPoseV1* pose,
+                       const RuntimeControllerSynthesisConfig& cfg,
+                       const xr_runtime::ControllerRuntimeOrientationOffsetV1& profile_offset) {
+  out.role = left ? xr_runtime::CONTROLLER_SIDE_LEFT : xr_runtime::CONTROLLER_SIDE_RIGHT;
+  copy_debug_source(out, "controller_6dof");
+  if (!device || !controller_side_is_present(*device)) {
+    out.flags = xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID;
+    out.source_mask = xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID;
+    return;
+  }
+
+  fill_controller_identity(out, *device);
+  if ((device->flags & xr_runtime::CONTROLLER_DEVICE_BUTTONS_VALID) != 0u) {
+    copy_controller_buttons(out, *device);
+    out.flags |= xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID;
+  }
+  if ((device->flags & xr_runtime::CONTROLLER_DEVICE_ANALOG_VALID) != 0u) {
+    out.trigger = device->trigger;
+    out.grip = device->grip;
+    out.thumbstick_x = device->thumbstick_x;
+    out.thumbstick_y = device->thumbstick_y;
+    out.flags |= xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID;
+  }
+  if ((out.flags & xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID) != 0u) {
+    out.last_input_ns = timestamp_ns;
+  }
+  if (!pose || (device->flags & xr_runtime::CONTROLLER_DEVICE_POSE_VALID) == 0u ||
+      !finite_v3(pose->position) || !nonzero_q_xyzw(pose->orientation_xyzw)) {
+    mark_pose_invalid(out);
+    return;
+  }
+
+  out.flags |= xr_runtime::RUNTIME_CONTROLLER_POSE_VALID | xr_runtime::RUNTIME_CONTROLLER_TRACKED;
+  out.last_pose_ns = timestamp_ns;
+  std::copy_n(pose->position, 3, out.position);
+  std::copy_n(pose->orientation_xyzw, 4, out.orientation_xyzw);
+  if (finite_v3(pose->linear_velocity)) {
+    std::copy_n(pose->linear_velocity, 3, out.linear_velocity);
+  }
+  if (finite_v3(pose->angular_velocity)) {
+    std::copy_n(pose->angular_velocity, 3, out.angular_velocity);
+  }
+
+  auto offset = left ? cfg.left_no_imu_orientation : cfg.right_no_imu_orientation;
+  if (controller_device_has_imu(*device)) {
+    const auto& imu = left ? cfg.left_imu_orientation : cfg.right_imu_orientation;
+    offset.enabled = imu.offset_enabled;
+    offset.pre_multiply = imu.offset_pre_multiply;
+    std::copy_n(imu.offset_rotation_xyzw, 4, offset.rotation_xyzw);
+  }
+  if ((profile_offset.flags & xr_runtime::CONTROLLER_RUNTIME_OFFSET_PROVIDED) != 0u) {
+    offset.enabled = (profile_offset.flags & xr_runtime::CONTROLLER_RUNTIME_OFFSET_ENABLED) != 0u;
+    offset.pre_multiply = (profile_offset.flags & xr_runtime::CONTROLLER_RUNTIME_OFFSET_PRE_MULTIPLY) != 0u;
+    std::copy_n(profile_offset.rotation_xyzw, 4, offset.rotation_xyzw);
+  }
+  apply_controller_orientation_offset(out, offset);
+}
+
+void set_controller_frame_flags(xr_runtime::RuntimeControllerStateFrameV1& frame) {
+  if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {
+    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_CONNECTED;
+  }
+  if ((frame.right.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {
+    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_RIGHT_CONNECTED;
+  }
+  if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
+    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_POSE_VALID;
+  }
+  if ((frame.right.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
+    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_RIGHT_POSE_VALID;
+  }
+  if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID) != 0u) {
+    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_INPUT_VALID;
+  }
+  if ((frame.right.flags & xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID) != 0u) {
+    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_RIGHT_INPUT_VALID;
+  }
 }
 
 }  // namespace
@@ -3182,25 +3276,26 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
                controller, hmd, timestamp_ns,
                runtime_state != nullptr ? &runtime_state->right : nullptr, imu_history);
 
-  if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {
-    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_CONNECTED;
-  }
-  if ((frame.right.flags & xr_runtime::RUNTIME_CONTROLLER_CONNECTED) != 0u) {
-    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_RIGHT_CONNECTED;
-  }
-  if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
-    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_POSE_VALID;
-  }
-  if ((frame.right.flags & xr_runtime::RUNTIME_CONTROLLER_POSE_VALID) != 0u) {
-    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_RIGHT_POSE_VALID;
-  }
-  if ((frame.left.flags & xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID) != 0u) {
-    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_LEFT_INPUT_VALID;
-  }
-  if ((frame.right.flags & xr_runtime::RUNTIME_CONTROLLER_INPUT_VALID) != 0u) {
-    frame.flags |= xr_runtime::RUNTIME_CONTROLLER_FRAME_RIGHT_INPUT_VALID;
-  }
+  set_controller_frame_flags(frame);
+  return frame;
+}
 
+xr_runtime::RuntimeControllerStateFrameV1 compose_6dof_controller_state(
+    uint64_t sequence,
+    uint64_t timestamp_ns,
+    uint64_t input_timestamp_ns,
+    const RuntimeControllerSynthesisConfig& cfg,
+    const xr_runtime::ControllerInputV3* input,
+    const xr_runtime::Controller6DofPosesV1* poses,
+    const xr_runtime::ControllerRuntimeProfileV1& profile) {
+  xr_runtime::RuntimeControllerStateFrameV1 frame{};
+  frame.sequence = sequence;
+  frame.timestamp_ns = timestamp_ns;
+  compose_6dof_side(frame.left, true, input_timestamp_ns,
+                    input ? &input->left : nullptr, poses ? &poses->left : nullptr, cfg, profile.left);
+  compose_6dof_side(frame.right, false, input_timestamp_ns,
+                    input ? &input->right : nullptr, poses ? &poses->right : nullptr, cfg, profile.right);
+  set_controller_frame_flags(frame);
   return frame;
 }
 
