@@ -56,8 +56,7 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
   template_frame_ = frame;
   has_template_ = true;
 
-  std::array<uint64_t, xr_tracking::BODY_TRACKER_MAX_TRACKERS> observed_keys{};
-  uint32_t observed_key_count = 0;
+  std::array<xr_tracking::BodyTrackerKey, xr_tracking::BODY_TRACKER_MAX_TRACKERS> observed_keys{};
 
   xr_tracking::BodyTrackerSetFrameF32V1 out = frame;
   out.tracker_count = 0;
@@ -65,8 +64,8 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
 
   for (uint32_t i = 0; i < frame.tracker_count; ++i) {
     const auto& tracker = frame.trackers[i];
-    const uint64_t key = tracker_key(tracker, i);
-    if (observed_key_count < observed_keys.size()) observed_keys[observed_key_count++] = key;
+    const auto key = xr_tracking::body_tracker_key(tracker, i);
+    observed_keys[i] = key;
     if (tracker_pose_is_good(tracker)) {
       State* previous_state = find_state(key);
       const double max_jump_m = cfg_.max_jump_m;
@@ -100,16 +99,10 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
     }
   }
 
+  const auto observed_end = observed_keys.begin() + frame.tracker_count;
   for (auto& state : states_) {
     if (!state.active) continue;
-    bool already_observed = false;
-    for (uint32_t i = 0; i < observed_key_count; ++i) {
-      if (observed_keys[i] == state.key) {
-        already_observed = true;
-        break;
-      }
-    }
-    if (already_observed) continue;
+    if (std::find(observed_keys.begin(), observed_end, state.key) != observed_end) continue;
     auto predicted = predicted_tracker(state, now_ns);
     if (predicted) append_tracker(out, *predicted);
   }
@@ -281,18 +274,6 @@ xr_tracking::BodyTrackerF32V1 BodyTrackerStabilityFilter::apply_reacquire_blend(
   return out;
 }
 
-uint64_t BodyTrackerStabilityFilter::tracker_key(const xr_tracking::BodyTrackerF32V1& tracker,
-                                                 uint32_t slot_index) {
-  if (tracker.stable_id_hash != 0) return (1ull << 60) ^ tracker.stable_id_hash;
-  if (tracker.device_serial_hash != 0) return (2ull << 60) ^ tracker.device_serial_hash;
-  if ((tracker.flags & xr_tracking::BODY_TRACKER_FLAG_ROLE_VALID) != 0u &&
-      tracker.role != xr_tracking::BODY_TRACKER_ROLE_UNKNOWN) {
-    return (3ull << 60) ^ static_cast<uint64_t>(tracker.role);
-  }
-  if (tracker.tracker_index != 0) return (4ull << 60) ^ static_cast<uint64_t>(tracker.tracker_index);
-  return (5ull << 60) ^ static_cast<uint64_t>(slot_index);
-}
-
 bool BodyTrackerStabilityFilter::tracker_pose_is_good(const xr_tracking::BodyTrackerF32V1& tracker) {
   const bool pose_flag = (tracker.flags & xr_tracking::BODY_TRACKER_FLAG_POSE_VALID) != 0u;
   const bool position_flag = (tracker.flags & xr_tracking::BODY_TRACKER_FLAG_POSITION_VALID) != 0u;
@@ -324,7 +305,8 @@ BodyTrackerStabilityFilter::Vec3 BodyTrackerStabilityFilter::clamp_acceleration(
   return add(previous, scale(dv, max_dv / n));
 }
 
-BodyTrackerStabilityFilter::State& BodyTrackerStabilityFilter::find_or_create_state(uint64_t key) {
+BodyTrackerStabilityFilter::State& BodyTrackerStabilityFilter::find_or_create_state(
+    const xr_tracking::BodyTrackerKey& key) {
   for (auto& state : states_) {
     if (state.active && state.key == key) return state;
   }
@@ -346,7 +328,7 @@ BodyTrackerStabilityFilter::State& BodyTrackerStabilityFilter::find_or_create_st
   return *oldest;
 }
 
-BodyTrackerStabilityFilter::State* BodyTrackerStabilityFilter::find_state(uint64_t key) {
+BodyTrackerStabilityFilter::State* BodyTrackerStabilityFilter::find_state(const xr_tracking::BodyTrackerKey& key) {
   for (auto& state : states_) {
     if (state.active && state.key == key) return &state;
   }
@@ -354,7 +336,7 @@ BodyTrackerStabilityFilter::State* BodyTrackerStabilityFilter::find_state(uint64
 }
 
 void BodyTrackerStabilityFilter::update_state(const xr_tracking::BodyTrackerF32V1& tracker,
-                                              uint64_t key,
+                                              const xr_tracking::BodyTrackerKey& key,
                                               uint64_t sample_ns) {
   State& state = find_or_create_state(key);
   Vec3 v{};
@@ -407,8 +389,8 @@ void BodyTrackerStabilityFilter::update_state(const xr_tracking::BodyTrackerF32V
   state.prediction_path_last_ns = sample_ns;
 }
 
-std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predicted_tracker_for_key(uint64_t key,
-                                                                                                    uint64_t now_ns) {
+std::optional<xr_tracking::BodyTrackerF32V1> BodyTrackerStabilityFilter::predicted_tracker_for_key(
+    const xr_tracking::BodyTrackerKey& key, uint64_t now_ns) {
   State* state = find_state(key);
   if (!state) return std::nullopt;
   return predicted_tracker(*state, now_ns);

@@ -27,14 +27,16 @@ recenter on the next `xrWaitFrame` by default. Set
 /tmp/runtime_tracking_streams.json : runtime_hmd_pose
 /tmp/runtime_tracking_streams.json : runtime_controller_state
 /tmp/runtime_tracking_streams.json : runtime_hand_tracking        # optional fallback
+/tmp/runtime_tracking_streams.json : runtime_body_trackers        # optional
 ```
 
 ## Restarting the tracking stack
 
-On Linux, the driver automatically reconnects all three SHM streams when
+On Linux, the driver automatically reconnects SHM streams when
 `xr_runtime_adapter` or the full XR Gate tracking stack restarts. The Monado
-service and its OpenXR devices can stay running. The stream names must remain
-the same (`runtime_hmd_pose`, `runtime_controller_state`, `runtime_hand_tracking`).
+service and its OpenXR devices can stay running while the stream names remain
+the same (`runtime_hmd_pose`, `runtime_controller_state`,
+`runtime_hand_tracking` and, when enabled, `runtime_body_trackers`).
 
 An unlinked or resized SHM mapping is reopened before reading it, even while
 the previous sample is fresh. Sequence counters may restart at 1. A stream
@@ -156,6 +158,60 @@ XR_MONADO_DEVICE=xreal_ultra drivers/monado_driver/scripts/linux/install.sh
 It installs the updated builder integration that registers the optional hand roles;
 copying only `xr_monado_driver.cpp` into an old Monado checkout is insufficient.
 Existing output-directory overrides such as `BIN_DIR` remain supported.
+
+## Optional body trackers
+
+Rebuild Monado with the installer above. The XR Gate driver exposes poses
+from `runtime_body_trackers` SHM or application TCP as individual OpenXR devices through
+`XR_MNDX_xdev_space`. Body trackers default to off. Start the tracking stack
+with the tracker backend running, then start Monado after the stream contains
+the trackers:
+
+```bash
+BODY_TRACKERS_INPUT=shm PUBLISH_RUNTIME_BODY_TRACKERS=1 \
+  ./run_xr_client.sh --config xreal_ultra
+```
+
+```bash
+XR_MONADO_BODY_TRACKERS=1 XR_MONADO_DEVICE=xreal_ultra \
+  ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+Use `BODY_TRACKERS_INPUT=udp` if the backend sends trackers over UDP. Monado reads
+the runtime SHM output with the commands above. If the output SHM name is customized
+with `RUNTIME_BODY_TRACKERS_SHM_NAME`, set `XR_MONADO_BODY_TRACKERS_SHM` to the same
+name.
+
+For TCP, enable the optional payload on the runtime adapter and select TCP
+at Monado startup:
+
+```bash
+BODY_TRACKERS_INPUT=shm RUNTIME_APP_TCP=1 RUNTIME_APP_TCP_BODY_TRACKERS=1 \
+  ./run_xr_client.sh --config xreal_ultra
+```
+
+```bash
+XR_MONADO_BODY_TRACKERS=1 XR_MONADO_TRANSPORT=tcp XR_MONADO_DEVICE=xreal_ultra \
+  ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
+```
+
+The body reader shares `XR_MONADO_TCP_HOST` and `XR_MONADO_TCP_PORT` with the
+other tracking readers. Set `XR_MONADO_BODY_TRACKERS_TRANSPORT` to `shm` or `tcp`
+to select just the body transport. Monado uses one connection when all readers
+select the same TCP endpoint. At startup the body reader can wait up to
+`XR_MONADO_TCP_TIMEOUT_MS` (1,000 ms by default) for a nonempty tracker set.
+
+Monado registers the IDs present in a fresh frame at service startup, up to the
+available device slots (29 with the XR Gate HMD and two controllers). Restart the
+service to register new IDs. Each tracker needs a unique, stable identifier.
+The driver prefers `stable_id_hash`, then `tracker_id`, then `device_serial_hash`.
+A registered device keeps its identity across reordering, loss and publisher
+restarts.
+
+An explicit `LOST`, a missing ID in the latest frame, or a stream older than
+250 ms clears the OpenXR pose validity flags. A valid `STALE` pose remains
+locatable with the tracked flags cleared. The adapter can publish a held or
+predicted pose as `TRACKING` during its configured prediction window.
 
 ## Driver regression checks
 

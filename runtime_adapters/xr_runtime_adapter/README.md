@@ -424,7 +424,8 @@ IMU state and up to four IMU samples.
 
 ## Body trackers
 
-Body tracker input can be enabled through SHM or UDP, then republished as runtime body trackers.
+Body tracker input can be enabled through SHM or UDP, then published to SHM,
+[application TCP](docs/application_network_api.md#body-trackers-over-tcp), or both.
 
 Example:
 
@@ -432,6 +433,8 @@ Example:
 BODY_TRACKERS_INPUT=shm
 PUBLISH_RUNTIME_BODY_TRACKERS=1
 ```
+
+For TCP publication set `RUNTIME_APP_TCP=1` and `RUNTIME_APP_TCP_BODY_TRACKERS=1`.
 
 Optional body tracker stability gate:
 

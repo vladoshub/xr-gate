@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import importlib.util
 import json
+from multiprocessing import shared_memory
 from pathlib import Path
 import socket
 import struct
@@ -23,6 +24,9 @@ HMD = struct.Struct("<2I4Q13d2IfI")
 HAND_HEADER = struct.Struct("<2I4Q2IfI")
 HAND_SIDE = struct.Struct("<3If29f4I")
 JOINT = struct.Struct("<2I9f")
+BODY_UDP_HEADER = struct.Struct("<I2H2I2Q")
+BODY_SET = struct.Struct("<2I4Q4I")
+BODY_TRACKER = struct.Struct("<4I2Q2f2I13f64s")
 
 
 def free_port(kind=socket.SOCK_STREAM):
@@ -34,6 +38,18 @@ def free_port(kind=socket.SOCK_STREAM):
 def packet(kind, sequence, timestamp, payload):
     return NET_HEADER.pack(b"XTRK", 1, NET_HEADER.size, kind, 0, len(payload),
                            sequence, sequence, timestamp, timestamp, 0, 0, 0) + payload
+
+
+def body_packet(sequence, timestamp, trackers):
+    payload_size = BODY_SET.size + 32 * BODY_TRACKER.size
+    payload = BODY_SET.pack(1, payload_size, sequence, timestamp, timestamp, 0, 1, 7, bool(trackers), len(trackers))
+    for tracker_id, stable_hash, status, x in trackers:
+        payload += BODY_TRACKER.pack(0, 2, status, 127, stable_hash, 0, 0.75, 0.5, 0, 0,
+                                     x, 1.0, -0.3, 0.5, -0.5, 0.5, -0.5,
+                                     0.125, 0.25, 0.375, -0.125, -0.25, -0.375, tracker_id)
+    payload += bytes((32 - len(trackers)) * BODY_TRACKER.size)
+    return BODY_UDP_HEADER.pack(0x4254524B, 1, BODY_UDP_HEADER.size, len(payload), 0,
+                                sequence, timestamp) + payload
 
 
 def hand_side(side, visible):
@@ -110,7 +126,7 @@ class Client:
 
 
 @contextlib.contextmanager
-def runtime(enabled=True, extra=(), default_mode=False):
+def runtime(enabled=True, extra=(), default_mode=False, tracking_source=True):
     tcp_port, udp_port = free_port(), free_port(socket.SOCK_DGRAM)
     args = [ADAPTER, "--input", "udp", "--udp-bind-host", "127.0.0.1", "--udp-bind-port", str(udp_port),
             "--mode", "tick", "--tick-rate", "240", "--no-prediction", "--consume-stale-as-lost",
@@ -125,7 +141,7 @@ def runtime(enabled=True, extra=(), default_mode=False):
         args += ["--app-tcp", "--app-tcp-max-clients", "2", "--app-tcp-rate", "240"]
     with tempfile.TemporaryFile(mode="w+") as log:
         process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
-        source = Source(udp_port)
+        source = Source(udp_port) if tracking_source else None
         try:
             if enabled:
                 deadline = time.monotonic() + 5
@@ -143,7 +159,8 @@ def runtime(enabled=True, extra=(), default_mode=False):
                 time.sleep(0.03)
             yield process, source, tcp_port
         finally:
-            source.close()
+            if source:
+                source.close()
             process.terminate()
             try:
                 process.wait(timeout=3)
@@ -157,6 +174,105 @@ def runtime(enabled=True, extra=(), default_mode=False):
 
 
 class AppTcpTest(unittest.TestCase):
+    def test_body_trackers_tcp_opt_in(self):
+        tracker = (b"waist", 9007199254740997, 2, 0.25)
+        body_port = free_port(socket.SOCK_DGRAM)
+        extra = ["--body-trackers-input", "udp", "--body-trackers-udp-bind-host", "127.0.0.1",
+                 "--body-trackers-udp-bind-port", str(body_port)]
+        with runtime(extra=extra, default_mode=True) as (_, _, port):
+            client = Client(port)
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.sendto(body_packet(1, time.monotonic_ns(), [tracker]), ("127.0.0.1", body_port))
+                self.assertNotIn("body_trackers", client.frame(lambda f: f["hmd"] is not None))
+            finally:
+                client.close()
+
+    def test_body_only_tcp_with_prediction_and_loss(self):
+        body_port = free_port(socket.SOCK_DGRAM)
+        extra = ["--body-trackers-input", "udp", "--body-trackers-udp-bind-host", "127.0.0.1",
+                 "--body-trackers-udp-bind-port", str(body_port), "--app-tcp-body-trackers",
+                 "--runtime-body-tracker-stability-gate", "--runtime-body-tracker-prediction-publish-hz", "10",
+                 "--runtime-body-tracker-hold-lost-ms", "80",
+                 "--runtime-body-tracker-predict-lost-ms", "300", "--runtime-body-tracker-predicted-status", "stale"]
+        with runtime(extra=extra, default_mode=True, tracking_source=False) as (_, _, port):
+            client = Client(port)
+            try:
+                self.assertEqual(client.read()["protocol"], "xr_gate_app_v1")
+                tracker = (b"waist", 9007199254740997, 2, 0.25)
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    timestamps = set()
+                    for sequence in range(1, 11):
+                        timestamp = time.monotonic_ns()
+                        timestamps.add(timestamp)
+                        sock.sendto(body_packet(sequence, timestamp, [tracker]), ("127.0.0.1", body_port))
+                        time.sleep(0.005)
+                    observed = client.frame(lambda f: f.get("body_trackers") and
+                                            f["body_trackers"]["trackers"][0]["status"] == 2)
+                    self.assertIsNone(observed["hmd"])
+                    self.assertIsNone(observed["hands"])
+                    body = observed["body_trackers"]
+                    self.assertIn(int(body["source_timestamp_ns"]), timestamps)
+                    self.assertEqual(body["space"], 3)
+                    self.assertEqual(body["trackers"][0]["tracker_id"], "waist")
+                    self.assertEqual(body["trackers"][0]["stable_id_hash"], "9007199254740997")
+                    self.assertEqual(body["trackers"][0]["orientation_xyzw"], [-0.5, 0.5, -0.5, 0.5])
+                    held = client.frame(lambda f: f["body_trackers"]["trackers"][0]["status"] == 4)
+                    self.assertGreater(held["body_trackers"]["sequence"], body["sequence"])
+                    self.assertIn(int(held["body_trackers"]["source_timestamp_ns"]), timestamps)
+                    until_expired = max(timestamps) / 1e9 + 0.40 - time.monotonic()
+                    if until_expired > 0:
+                        time.sleep(until_expired)
+                    lost = (tracker[0], tracker[1], 3, tracker[3])
+                    sock.sendto(body_packet(12, time.monotonic_ns(), [lost]), ("127.0.0.1", body_port))
+                    client.frame(lambda f: f["body_trackers"]["trackers"][0]["status"] == 3)
+                    sock.sendto(body_packet(13, time.monotonic_ns(), []), ("127.0.0.1", body_port))
+                    empty = client.frame(lambda f: not f["body_trackers"]["trackers"])
+                    self.assertEqual(empty["body_trackers"]["flags"] & 1, 0)
+                # A new client sees the latest set, including an empty set.
+                second = Client(port)
+                try:
+                    latest = second.frame()["body_trackers"]
+                    self.assertEqual(latest["trackers"], [])
+                    self.assertEqual(latest["timestamp_ns"], empty["body_trackers"]["timestamp_ns"])
+                finally:
+                    second.close()
+            finally:
+                client.close()
+
+    def test_body_shm_reattach_does_not_refresh_stopped_input(self):
+        payload_size = BODY_SET.size + 32 * BODY_TRACKER.size
+        stride = 128 + payload_size
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shm = shared_memory.SharedMemory(create=True, size=4096 + stride)
+            try:
+                registry = Path(tmpdir) / "tracking.json"
+                registry.write_text(json.dumps({"streams": {"body_trackers": {
+                    "shm_name": "/" + shm.name, "format_name": "BODY_TRACKER_SET_F32_V1",
+                    "header_size": 4096, "slot_count": 1, "slot_header_size": 128,
+                    "slot_stride": stride, "payload_size": payload_size,
+                }}}))
+                timestamp = time.monotonic_ns()
+                payload = body_packet(1, timestamp, [(b"waist", 0, 2, 0.25)])[BODY_UDP_HEADER.size:]
+                struct.pack_into("<8s7IQ", shm.buf, 0, b"BTRKRG1", 1, 4096, 1, stride, 128, payload_size, 0, 1)
+                struct.pack_into("<4Q2I", shm.buf, 4096, 2, 2, timestamp, timestamp, payload_size, 0)
+                shm.buf[4096 + 128:] = payload
+                extra = ["--body-trackers-input", "shm", "--body-trackers-registry", str(registry),
+                         "--body-trackers-reattach-on-stale-ms", "400", "--app-tcp-body-trackers"]
+                with runtime(extra=extra, default_mode=True) as (_, _, port):
+                    client = Client(port)
+                    try:
+                        first = client.frame(lambda f: "body_trackers" in f)["body_trackers"]
+                        # The source leaves its SHM object and last pose behind.
+                        later = client.frame(lambda f: int(f["read_timestamp_ns"]) > timestamp + 1_100_000_000)
+                        self.assertEqual(later["body_trackers"]["timestamp_ns"], first["timestamp_ns"])
+                        self.assertEqual(later["body_trackers"]["sequence"], first["sequence"])
+                    finally:
+                        client.close()
+            finally:
+                shm.close()
+                shm.unlink()
+
     def test_simple_cli_and_environment_override_emulation_and_skip_its_profile(self):
         cases=[(["--simple-gestures","--emulation-controller","1"],{}),
                ([],{"SIMPLE_GESTURES":"1"})]

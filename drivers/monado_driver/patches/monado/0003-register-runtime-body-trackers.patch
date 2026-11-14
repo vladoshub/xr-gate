@@ -1,0 +1,16 @@
+diff --git a/src/xrt/targets/common/target_builder_legacy.c b/src/xrt/targets/common/target_builder_legacy.c
+index 6ec6a21..f876305 100644
+--- a/src/xrt/targets/common/target_builder_legacy.c
++++ b/src/xrt/targets/common/target_builder_legacy.c
+@@ -169,6 +169,11 @@ legacy_open_system_impl(struct xrt_builder *xb,
+ 		xsysd->static_xdevs[xsysd->static_xdev_count++] = left;
+ 		xsysd->static_xdevs[xsysd->static_xdev_count++] = right;
+ 
++		uint32_t tracker_count = xr_tracking_runtime_body_trackers_create(
++		    origin, &xsysd->static_xdevs[xsysd->static_xdev_count],
++		    ARRAY_SIZE(xsysd->static_xdevs) - xsysd->static_xdev_count);
++		xsysd->static_xdev_count += tracker_count;
++
+ 		tbrh->head = head;
+ 		tbrh->left = left;
+ 		tbrh->right = right;

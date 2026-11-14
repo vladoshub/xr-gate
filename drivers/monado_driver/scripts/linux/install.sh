@@ -318,6 +318,9 @@ if marker not in s:
     )
     p.write_text(s.replace(needle, replacement, 1))
 PY_ROLES
+  apply_git_patch_once "$MONADO_DIR" "$PATCH_DIR/monado/0003-register-runtime-body-trackers.patch" \
+    "src/xrt/targets/common/target_builder_legacy.c" \
+    "xr_tracking_runtime_body_trackers_create" "XR Gate body tracker registration"
 }
 
 patch_xreal_air_builder_guard() {

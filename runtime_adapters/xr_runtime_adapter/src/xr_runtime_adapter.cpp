@@ -2404,6 +2404,7 @@ struct BodyTrackerInputConfig {
   double reattach_on_stale_ms = 1000.0;
 
   bool publish_runtime_shm = false;
+  xr_runtime_adapter::AppTcpServer* runtime_tcp = nullptr;
   std::string runtime_registry = xr_runtime::default_runtime_tracking_registry_path();
   std::string runtime_stream = "runtime_body_trackers";
   std::string runtime_shm_name = "runtime_body_trackers";
@@ -2450,7 +2451,7 @@ class BodyTrackerInputThread {
       std::lock_guard<std::mutex> lock(mu_);
       snapshot_ = {};
       snapshot_.enabled = true;
-      snapshot_.runtime_output_enabled = cfg_.publish_runtime_shm;
+      snapshot_.runtime_output_enabled = output_enabled();
     }
     thread_ = std::thread([this] { run(); });
   }
@@ -2476,6 +2477,8 @@ class BodyTrackerInputThread {
   }
 
  private:
+  bool output_enabled() const { return cfg_.publish_runtime_shm || cfg_.runtime_tcp != nullptr; }
+
   void run() {
     while (!stop_) {
       try {
@@ -2508,17 +2511,25 @@ class BodyTrackerInputThread {
       auto frame = reader.latest();
       if (frame && frame->sequence > last_seq) {
         last_seq = frame->sequence;
-        last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        observe(std::move(*frame));
-      } else {
         const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        maybe_publish_synthetic(now_ns);
-        if (cfg_.reattach_on_stale_ms > 0.0 &&
-            xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - last_frame_ns)) >= cfg_.reattach_on_stale_ms) {
-          throw std::runtime_error("body_trackers SHM stream stale; reattaching");
+        // A remapped ring can still contain the old last frame after its
+        // source stopped. Do not give that frame a fresh publication time.
+        const bool stale = cfg_.reattach_on_stale_ms > 0.0 && frame->timestamp_ns != 0 &&
+            now_ns >= frame->timestamp_ns &&
+            xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - frame->timestamp_ns)) >= cfg_.reattach_on_stale_ms;
+        if (!stale) {
+          last_frame_ns = now_ns;
+          observe(std::move(*frame));
+          continue;
         }
-        sleep_ms(1);
       }
+      const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
+      maybe_publish_synthetic(now_ns);
+      if (cfg_.reattach_on_stale_ms > 0.0 &&
+          xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - last_frame_ns)) >= cfg_.reattach_on_stale_ms) {
+        throw std::runtime_error("body_trackers SHM stream stale; reattaching");
+      }
+      sleep_ms(1);
     }
   }
 
@@ -2576,14 +2587,14 @@ class BodyTrackerInputThread {
     runtime_jitter_filter_.configure(cfg_.jitter_filter);
     runtime_jitter_filter_.filter_body_trackers(frame);
 
-    if (cfg_.publish_runtime_shm) {
+    if (output_enabled()) {
       publish_runtime(frame, now_ns);
     }
 
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
     snapshot_.connected = true;
-    snapshot_.runtime_output_enabled = cfg_.publish_runtime_shm;
+    snapshot_.runtime_output_enabled = output_enabled();
     snapshot_.last_error.clear();
     if (snapshot_.last_sequence != 0 && frame.sequence > snapshot_.last_sequence + 1) {
       ++snapshot_.sequence_gaps;
@@ -2599,7 +2610,7 @@ class BodyTrackerInputThread {
 
 
   void maybe_publish_synthetic(uint64_t now_ns) {
-    if (!cfg_.publish_runtime_shm || !cfg_.stability_gate.enabled) return;
+    if (!output_enabled() || !cfg_.stability_gate.enabled) return;
     RuntimeHmdPoseSnapshot runtime_hmd;
     {
       std::lock_guard<std::mutex> lock(mu_);
@@ -2622,7 +2633,7 @@ class BodyTrackerInputThread {
   }
 
   void publish_runtime(xr_tracking::BodyTrackerSetFrameF32V1 frame, uint64_t now_ns) {
-    if (!runtime_publisher_) {
+    if (cfg_.publish_runtime_shm && !runtime_publisher_) {
       xr_tracking::BodyTrackerSetShmPublisherConfig cfg;
       cfg.registry_path = cfg_.runtime_registry;
       cfg.stream_id = cfg_.runtime_stream;
@@ -2641,17 +2652,21 @@ class BodyTrackerInputThread {
 
     frame.timestamp_ns = now_ns;
     if (frame.source_timestamp_ns == 0) frame.source_timestamp_ns = now_ns;
-    runtime_publisher_->publish(std::move(frame));
     {
       std::lock_guard<std::mutex> lock(mu_);
-      ++snapshot_.runtime_published;
+      frame.sequence = ++snapshot_.runtime_published;
     }
+    frame.space = xr_tracking::BODY_TRACKER_SPACE_RUNTIME_HMD;
+    frame.flags &= ~xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
+    if (frame.tracker_count != 0) frame.flags |= xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
+    if (runtime_publisher_) runtime_publisher_->publish(frame);
+    if (cfg_.runtime_tcp) cfg_.runtime_tcp->publish_body_trackers(frame);
   }
 
   void set_connected(bool connected, const std::string& error) {
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
-    snapshot_.runtime_output_enabled = cfg_.publish_runtime_shm;
+    snapshot_.runtime_output_enabled = output_enabled();
     snapshot_.connected = connected;
     snapshot_.last_error = error;
   }
@@ -2917,6 +2932,7 @@ int main(int argc, char** argv) {
   xr_runtime::ControllerInputRuntimeConfig controller_input_config;
 
   bool app_tcp_enabled = false;
+  bool app_tcp_body_trackers = false;
   xr_runtime_adapter::AppTcpServerConfig app_tcp_config;
 
   bool publish_runtime_pose_shm = false;
@@ -3194,6 +3210,8 @@ int main(int argc, char** argv) {
   app.add_flag("--app-tcp", app_tcp_enabled,
                "Enable read-only JSON Lines TCP server for applications (off by default)");
   app.add_flag("--app-tcp-spatial", app_tcp_config.spatial_mesh, "Send optional spatial mesh messages to application TCP clients");
+  app.add_flag("--app-tcp-body-trackers", app_tcp_body_trackers,
+               "Include body trackers in application TCP frames (requires --app-tcp)");
   app.add_option("--app-tcp-host", app_tcp_config.host, "Application TCP bind host (default 127.0.0.1)");
   app.add_option("--app-tcp-port", app_tcp_config.port, "Application TCP port (default 45810)");
   app.add_option("--app-tcp-rate", app_tcp_config.rate_hz, "Maximum application frame rate, 1..240 Hz (default 60)");
@@ -4243,9 +4261,14 @@ int main(int argc, char** argv) {
                                                              "--publish-runtime-spatial-proxy-mesh-shm");
     xr_runtime_adapter::platform::require_shm_flag_available(publish_runtime_body_trackers_shm,
                                                              "--publish-runtime-body-trackers-shm");
-    if (runtime_body_tracker_stability_gate && !publish_runtime_body_trackers_shm) {
+    const bool publish_runtime_body_trackers_tcp = app_tcp_enabled && app_tcp_body_trackers;
+    if (app_tcp_body_trackers && !app_tcp_enabled) {
+      throw std::runtime_error("--app-tcp-body-trackers requires --app-tcp");
+    }
+    if (runtime_body_tracker_stability_gate && !publish_runtime_body_trackers_shm &&
+        !publish_runtime_body_trackers_tcp) {
       std::cout << "[xr_runtime_adapter] warning: runtime body tracker stability gate is enabled but "
-                << "--publish-runtime-body-trackers-shm is disabled; gate has no runtime output to publish\n";
+                << "body tracker SHM and TCP output are disabled\n";
     }
     if (runtime_body_tracker_reacquire_blend_ms < 0.0) {
       throw std::runtime_error("--runtime-body-tracker-reacquire-blend-ms must be >= 0");
@@ -4373,11 +4396,14 @@ int main(int argc, char** argv) {
                 << " body_trackers_stream: " << body_trackers_stream << "\n";
     }
     std::cout << "publish_runtime_body_trackers_shm: " << (publish_runtime_body_trackers_shm ? "true" : "false") << "\n";
+    std::cout << "publish_runtime_body_trackers_tcp: " << (publish_runtime_body_trackers_tcp ? "true" : "false") << "\n";
     if (publish_runtime_body_trackers_shm) {
       std::cout << "runtime_body_trackers_registry: " << runtime_body_trackers_registry << "\n";
       std::cout << "runtime_body_trackers_stream: " << runtime_body_trackers_stream << "\n";
       std::cout << "runtime_body_trackers_shm_name: " << runtime_body_trackers_shm_name << "\n";
       std::cout << "runtime_body_trackers_slots: " << runtime_body_trackers_slots << "\n";
+    }
+    if (publish_runtime_body_trackers_shm || publish_runtime_body_trackers_tcp) {
       std::cout << "runtime_body_tracker_stability_gate: " << (runtime_body_tracker_stability_gate ? "true" : "false") << "\n";
       if (runtime_body_tracker_stability_gate) {
         std::cout << "runtime_body_tracker_hold_lost_ms: " << runtime_body_tracker_hold_lost_ms << "\n";
@@ -4944,8 +4970,17 @@ int main(int argc, char** argv) {
       std::cout << "[xr_runtime_adapter] video input health thread started: " << video_input << "\n";
     }
 
+    // Declare the server before the input workers that can publish to it.
+    std::unique_ptr<xr_runtime_adapter::AppTcpServer> app_tcp_server;
     std::unique_ptr<BodyTrackerInputThread> body_tracker_thread;
     std::unique_ptr<SpatialProxyMeshInputThread> spatial_proxy_mesh_thread;
+    if (app_tcp_enabled) {
+      app_tcp_config.runtime_frame = runtime_frame;
+      app_tcp_server = std::make_unique<xr_runtime_adapter::AppTcpServer>(app_tcp_config);
+      std::cout << "[xr_runtime_adapter] application TCP listening on "
+                << app_tcp_config.host << ":" << app_tcp_config.port
+                << " rate=" << app_tcp_config.rate_hz << " Hz\n";
+    }
     if (spatial_proxy_mesh_input != "none") {
       SpatialProxyMeshInputConfig cfg;
       cfg.input = spatial_proxy_mesh_input;
@@ -4989,6 +5024,7 @@ int main(int argc, char** argv) {
       cfg.udp_bind_port = body_trackers_udp_bind_port;
       cfg.reattach_on_stale_ms = body_trackers_reattach_on_stale_ms;
       cfg.publish_runtime_shm = publish_runtime_body_trackers_shm;
+      cfg.runtime_tcp = publish_runtime_body_trackers_tcp ? app_tcp_server.get() : nullptr;
       cfg.runtime_registry = runtime_body_trackers_registry;
       cfg.runtime_stream = runtime_body_trackers_stream;
       cfg.runtime_shm_name = runtime_body_trackers_shm_name;
@@ -5061,15 +5097,6 @@ int main(int argc, char** argv) {
       controller_input_thread->start();
       std::cout << "[xr_runtime_adapter] controller input thread started: "
                 << controller_input_config.transport << "\n";
-    }
-
-    std::unique_ptr<xr_runtime_adapter::AppTcpServer> app_tcp_server;
-    if (app_tcp_enabled) {
-      app_tcp_config.runtime_frame = runtime_frame;
-      app_tcp_server = std::make_unique<xr_runtime_adapter::AppTcpServer>(app_tcp_config);
-      std::cout << "[xr_runtime_adapter] application TCP listening on "
-                << app_tcp_config.host << ":" << app_tcp_config.port
-                << " rate=" << app_tcp_config.rate_hz << " Hz\n";
     }
 
     std::unique_ptr<xr_runtime::RuntimePoseShmPublisher> runtime_pose_publisher;

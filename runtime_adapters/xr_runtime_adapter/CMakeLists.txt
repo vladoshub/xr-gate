@@ -120,6 +120,18 @@ if(XR_RUNTIME_ADAPTER_BUILD_TESTS AND UNIX AND NOT APPLE)
     target_include_directories(hmd_pose_stability_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
   endif()
   add_test(NAME hmd_pose_stability_test COMMAND hmd_pose_stability_test)
+  add_executable(body_tracker_filters_test
+    tests/body_tracker_filters_test.cpp
+    src/body_tracker_stability_filter.cpp
+    src/jitter_filter.cpp)
+  target_compile_features(body_tracker_filters_test PRIVATE cxx_std_17)
+  target_include_directories(body_tracker_filters_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${XR_SHARED_INCLUDE_DIR}")
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(body_tracker_filters_test PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(body_tracker_filters_test PRIVATE "${NLOHMANN_JSON_INCLUDE_DIR}")
+  endif()
+  add_test(NAME body_tracker_filters_test COMMAND body_tracker_filters_test)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(NAME emulation_integration_test

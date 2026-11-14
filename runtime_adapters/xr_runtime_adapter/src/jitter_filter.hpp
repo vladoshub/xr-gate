@@ -122,10 +122,15 @@ class BodyTrackerJitterFilter {
   void filter(xr_tracking::BodyTrackerSetFrameF32V1& frame, const RuntimeJitterFilterConfig& cfg);
 
  private:
-  std::array<PositionDeadbandFilter, xr_tracking::BODY_TRACKER_MAX_TRACKERS> tracker_positions_{};
-  std::array<OrientationDeadbandFilter, xr_tracking::BODY_TRACKER_MAX_TRACKERS> tracker_orientations_{};
-  std::array<VectorDeadbandSmoothingFilter, xr_tracking::BODY_TRACKER_MAX_TRACKERS> tracker_linear_velocities_{};
-  std::array<VectorDeadbandSmoothingFilter, xr_tracking::BODY_TRACKER_MAX_TRACKERS> tracker_angular_velocities_{};
+  struct TrackerFilters {
+    xr_tracking::BodyTrackerKey key{};
+    PositionDeadbandFilter position;
+    OrientationDeadbandFilter orientation;
+    VectorDeadbandSmoothingFilter linear_velocity;
+    VectorDeadbandSmoothingFilter angular_velocity;
+  };
+  std::array<TrackerFilters, xr_tracking::BODY_TRACKER_MAX_TRACKERS> trackers_{};
+  uint64_t reset_counter_ = 0;
 };
 
 class RuntimeControllerStateJitterFilter {

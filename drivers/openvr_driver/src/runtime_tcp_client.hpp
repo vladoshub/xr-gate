@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <xr_spatial/contracts/runtime_spatial_proxy_mesh_contract.hpp>
+#include <xr_tracking/contracts/body_tracker_set_contract.hpp>
 #include <optional>
 #include <string>
 
@@ -24,6 +25,8 @@ struct RuntimeTcpSnapshot {
   std::optional<xr_runtime::RuntimeHmdPoseF64V1> pose;
   std::optional<xr_tracking::HandTrackingFrameF32V2> hands;
   std::optional<xr_runtime::RuntimeControllerStateFrameV1> controllers;
+  std::shared_ptr<const xr_tracking::BodyTrackerSetFrameF32V1> body_trackers;
+  int64_t body_tracker_age_ns = 0;
 };
 
 // All readers for one endpoint share one connection and worker. Reading only

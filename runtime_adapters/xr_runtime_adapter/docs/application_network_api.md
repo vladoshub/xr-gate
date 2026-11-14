@@ -6,7 +6,7 @@ is **off by default**; the usual Linux video launcher also defaults to SHM outpu
 
 | Data | Transport | Default endpoint when enabled | Format |
 | --- | --- | --- | --- |
-| HMD, hands, controller poses and input | Application TCP server | `127.0.0.1:45810` | UTF-8 JSON Lines, `xr_gate_app_v1` |
+| HMD, hands, controller poses and input, optional body trackers | Application TCP server | `127.0.0.1:45810` | UTF-8 JSON Lines, `xr_gate_app_v1` |
 | HMD pose | Existing runtime UDP output | destination `127.0.0.1:45800` | `XRRO` header + `RuntimeHmdPoseF64V1` |
 | 21-joint hands | Existing runtime UDP output | destination `127.0.0.1:45801` | `XRRO` header + `HandTrackingFrameF32V2` |
 | Controller poses and input | Existing runtime UDP output | destination `127.0.0.1:45802` | `XRRO` header + `RuntimeControllerStateFrameV1` |
@@ -14,7 +14,6 @@ is **off by default**; the usual Linux video launcher also defaults to SHM outpu
 
 These endpoints provide read-only data access. They do not stream an application's
 rendered display, provide an OpenXR compositor, or accept controller commands.
-Body trackers and spatial meshes are not included in `xr_gate_app_v1`.
 
 ## Enable application TCP
 
@@ -91,6 +90,7 @@ Each subsequent `type == "frame"` object contains:
 | `hmd` | Runtime pose, velocities, source/target timestamps, reset counter, flags, confidence, and `pose_valid`; `null` before any HMD source is available |
 | `hands` | Runtime 21-joint hand frame, source timestamp/reset counter, hand count, status/flags/confidence, and `left`/`right` hand data |
 | `controllers` | Composed runtime controller frame and `left`/`right` states: poses, validity, source mask, velocities, buttons, trigger, grip, thumbstick, and button counters |
+| `body_trackers` | Optional latest body-tracker set after transforms and prediction. Omitted until a set is available. |
 
 Positions and linear velocities use metres and metres/second; angular velocities
 use radians/second. Data already has the configured runtime transforms, origin,
@@ -115,6 +115,38 @@ JavaScript. Use `int(value)` in Python, `BigInt(value)` in JavaScript, or
 timestamps are not wall-clock time and cannot be compared directly with another
 machine's monotonic clock. Non-finite source floating-point values serialize as
 JSON `null`; consumers should check numeric values and validity flags.
+
+### Body trackers over TCP
+
+Start the runtime with a body tracker input and the optional TCP output enabled:
+
+```bash
+BODY_TRACKERS_INPUT=shm RUNTIME_APP_TCP=1 RUNTIME_APP_TCP_BODY_TRACKERS=1 \
+  ./run_xr_client.sh --config xreal_ultra
+```
+
+Use `BODY_TRACKERS_INPUT=udp` for a UDP backend. The executable flags are
+`--app-tcp --app-tcp-body-trackers`. `PUBLISH_RUNTIME_BODY_TRACKERS=1` additionally
+publishes the same updates to local SHM. TCP works by itself and uses the same
+stability gate, hold and prediction settings.
+
+The optional `body_trackers` object contains `sequence`, `timestamp_ns`,
+`source_timestamp_ns`, `reset_counter`, `space`, `source`, `flags` and a
+`trackers` array of up to 32 entries. Each entry contains the ID, role, status,
+flags, pose, velocities, confidence and battery level from the
+[body tracker contract](../../../shared/include/xr_tracking/contracts/body_tracker_set_contract.hpp).
+`stable_id_hash` and `device_serial_hash` are decimal strings. The `tracker_id`
+is text. Its bytes should form a valid UTF-8 string.
+
+An empty list is a fresh set with every tracker absent. Repeated sets keep
+their original per-stream sequence and timestamp. Compare that timestamp
+with the enclosing `read_timestamp_ns` and account for elapsed time since
+receiving the message. A missing ID, `LOST` status or an expired sample can
+invalidate a pose. When body data is present, `read_timestamp_ns` also accounts
+for time spent waiting to serialize the snapshot. Body tracker updates can
+produce TCP frames while HMD and hands are idle.
+
+### Controller buttons
 
 Button bits use the [controller input contract](../../../shared/include/xr_runtime/contracts/controller_input_contract.hpp):
 
