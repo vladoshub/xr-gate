@@ -8,6 +8,7 @@
 
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
 #include <xr_runtime/contracts/runtime_pose_stream.hpp>
+#include <xr_tracking/contracts/body_tracker_set_contract.hpp>
 #include <xr_tracking/publishers/hand_tracking_shm_publisher.hpp>
 
 namespace xr_runtime_adapter {
@@ -44,6 +45,7 @@ class AppTcpServer {
 
   bool has_clients() const;
   void publish(const AppTcpFrame& frame);
+  void publish_body_trackers(const xr_tracking::BodyTrackerSetFrameF32V1& frame);
 
  private:
   class Impl;

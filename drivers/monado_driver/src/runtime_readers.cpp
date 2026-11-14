@@ -5,6 +5,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -17,6 +18,10 @@ create_posix_runtime_controller_state_reader(
     const RuntimeControllerStateReaderConfig &cfg);
 std::unique_ptr<IRuntimeHandReader>
 create_posix_runtime_hand_reader(const RuntimeHandReaderConfig &cfg);
+#ifndef _WIN32
+std::unique_ptr<IRuntimeBodyTrackerReader>
+create_posix_body_tracker_reader(const std::string& shm_name);
+#endif
 
 std::unique_ptr<IRuntimePoseReader>
 create_windows_runtime_pose_reader(const RuntimePoseReaderConfig &cfg);
@@ -151,6 +156,34 @@ bool runtime_hand_side_is_valid(
 }
 
 namespace {
+class TcpBodyTrackerReader final : public IRuntimeBodyTrackerReader {
+ public:
+  explicit TcpBodyTrackerReader(const xr::openvr_driver::RuntimeTcpConfig& cfg)
+      : client_(xr::openvr_driver::RuntimeTcpClient::acquire(cfg)) {}
+
+  bool read_latest(RuntimeBodyTrackerSample& out, std::string* error) override {
+    out = {};
+    xr::openvr_driver::RuntimeTcpSnapshot snapshot;
+    if (!client_->read_latest(snapshot, error)) return false;
+    if (!snapshot.body_trackers || snapshot.body_trackers->timestamp_ns == 0) {
+      if (error) *error = "TCP body tracker stream unavailable";
+      return false;
+    }
+    // The sender measured the initial age on its own monotonic clock.
+    const int64_t since_receive = std::max(int64_t{0}, monotonic_now_ns() - snapshot.received_ns);
+    const int64_t max_age = std::numeric_limits<int64_t>::max();
+    out.age_ns = snapshot.body_tracker_age_ns > max_age - since_receive
+        ? max_age : snapshot.body_tracker_age_ns + since_receive;
+    out.frame = *snapshot.body_trackers;
+    return true;
+  }
+
+  const char* transport_name() const override { return "app_tcp"; }
+
+ private:
+  std::shared_ptr<xr::openvr_driver::RuntimeTcpClient> client_;
+};
+
 template <class LocalBase, class LocalSample, class RemoteBase,
           class RemoteSample>
 class TcpReaderAdapter final : public LocalBase {
@@ -304,6 +337,20 @@ create_runtime_hand_reader(const RuntimeHandReaderConfig &cfg) {
 #else
   if (transport == "auto" || transport == "posix_shm" || transport == "shm") {
     return create_posix_runtime_hand_reader(cfg);
+  }
+#endif
+  return nullptr;
+}
+
+std::unique_ptr<IRuntimeBodyTrackerReader>
+create_runtime_body_tracker_reader(const RuntimeBodyTrackerReaderConfig& cfg) {
+  const std::string transport = lower_ascii(cfg.transport.empty() ? "auto" : cfg.transport);
+  if (transport == "tcp" || transport == "app_tcp") {
+    return std::make_unique<TcpBodyTrackerReader>(cfg.tcp);
+  }
+#ifndef _WIN32
+  if (transport == "auto" || transport == "posix_shm" || transport == "shm") {
+    return create_posix_body_tracker_reader(cfg.shm_name);
   }
 #endif
   return nullptr;

@@ -7,6 +7,7 @@
 
 #include <xr_runtime/contracts/runtime_pose_stream.hpp>
 #include <xr_runtime/contracts/runtime_controller_state_contract.hpp>
+#include <xr_tracking/contracts/body_tracker_set_contract.hpp>
 #include <xr_tracking/publishers/hand_tracking_shm_publisher.hpp>
 
 namespace xr::monado_driver {
@@ -77,6 +78,24 @@ class IRuntimeHandReader {
   virtual const char* transport_name() const = 0;
 };
 
+struct RuntimeBodyTrackerReaderConfig {
+  std::string transport = "shm";
+  std::string shm_name = "runtime_body_trackers";
+  xr::openvr_driver::RuntimeTcpConfig tcp;
+};
+
+struct RuntimeBodyTrackerSample {
+  xr_tracking::BodyTrackerSetFrameF32V1 frame{};
+  int64_t age_ns = 0;
+};
+
+class IRuntimeBodyTrackerReader {
+ public:
+  virtual ~IRuntimeBodyTrackerReader() = default;
+  virtual bool read_latest(RuntimeBodyTrackerSample& out, std::string* error) = 0;
+  virtual const char* transport_name() const = 0;
+};
+
 int64_t monotonic_now_ns();
 
 bool runtime_pose_is_valid(const xr_runtime::RuntimeHmdPoseF64V1& pose);
@@ -96,5 +115,6 @@ std::unique_ptr<IRuntimePoseReader> create_runtime_pose_reader(const RuntimePose
 std::unique_ptr<IRuntimeControllerStateReader> create_runtime_controller_state_reader(
     const RuntimeControllerStateReaderConfig& cfg);
 std::unique_ptr<IRuntimeHandReader> create_runtime_hand_reader(const RuntimeHandReaderConfig& cfg);
+std::unique_ptr<IRuntimeBodyTrackerReader> create_runtime_body_tracker_reader(const RuntimeBodyTrackerReaderConfig& cfg);
 
 }  // namespace xr::monado_driver

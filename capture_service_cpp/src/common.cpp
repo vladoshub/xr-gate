@@ -96,9 +96,40 @@ std::string expand_user_path(const std::string& value) {
   return value;
 }
 
+bool same_path(const std::string& first, const std::string& second) {
+  if (first == second) return true;
+  std::error_code error;
+  if (std::filesystem::equivalent(first, second, error)) return true;
+  const auto first_absolute = std::filesystem::absolute(first, error);
+  if (error) return false;
+  const auto a = std::filesystem::weakly_canonical(first_absolute, error);
+  if (error) return false;
+  const auto second_absolute = std::filesystem::absolute(second, error);
+  if (error) return false;
+  const auto b = std::filesystem::weakly_canonical(second_absolute, error);
+  return !error && a == b;
+}
+
+std::vector<std::string> configured_camera_devices(const CameraSourceConfig& cfg) {
+  if (!cfg.enabled) return {};
+  auto device_name = [](const CameraDeviceConfig& device) {
+    if (!device.device_path.empty()) return device.device_path;
+#ifdef _WIN32
+    return std::string("camera-index:") + std::to_string(device.index);
+#else
+    return std::string("/dev/video") + std::to_string(device.index);
+#endif
+  };
+  if (cfg.driver == "opencv" && cfg.layout == "dual") {
+    return {device_name(cfg.primary), device_name(cfg.secondary)};
+  }
+  return {device_name(cfg.primary)};
+}
+
 void usage(const char* argv0) {
   std::cerr << "Usage: " << argv0
             << " [--config PATH | --config-path PATH | --config-dir DIR --config-name NAME]"
+            << " [--extra-config PATH]"
             << " [--registry PATH] [--namespace NAME] [--profile NAME] [--publish shm|tcp|shm,tcp]"
             << " [--tcp-bind HOST] [--tcp-port PORT]"
             << " [--backend-control-file PATH] [--backend-control-poll-ms MS]"
@@ -133,6 +164,7 @@ RuntimeConfig parse_args(int argc, char** argv) {
   // Environment variables override YAML while preserving the original runtime
   // environment contract used by the XREAL launch scripts.
   cfg.registry_path = env_or("REGISTRY_PATH", cfg.registry_path);
+  cfg.extra_config_path = env_or("XR_CAPTURE_CPP_EXTRA_CONFIG", "");
   cfg.namespace_name = env_or("NAMESPACE", cfg.namespace_name);
   cfg.profile_name = env_or("CAPTURE_PROFILE", env_or("CPP_CAPTURE_PROFILE", cfg.profile_name));
   const std::string publish_env = env_or("PUBLISH", "");
@@ -212,6 +244,7 @@ RuntimeConfig parse_args(int argc, char** argv) {
     };
     if (a == "--help" || a == "-h") { usage(argv[0]); std::exit(0); }
     else if (a == "--config" || a == "--config-path" || a == "--config-dir" || a == "--config-directory" || a == "--config-name") { (void)need(a.c_str()); }
+    else if (a == "--extra-config") cfg.extra_config_path = need("--extra-config");
     else if (a == "--registry") cfg.registry_path = need("--registry");
     else if (a == "--namespace") cfg.namespace_name = need("--namespace");
     else if (a == "--profile") cfg.profile_name = need("--profile");
@@ -264,6 +297,7 @@ RuntimeConfig parse_args(int argc, char** argv) {
 
   finalize_platform_runtime_config(cfg);
   validate_runtime_config(cfg);
+  cfg.extra_config_path = expand_user_path(cfg.extra_config_path);
   return cfg;
 }
 

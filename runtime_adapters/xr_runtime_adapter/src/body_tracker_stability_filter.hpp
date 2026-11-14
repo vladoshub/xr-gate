@@ -55,7 +55,7 @@ class BodyTrackerStabilityFilter {
 
   struct State {
     bool active = false;
-    uint64_t key = 0;
+    xr_tracking::BodyTrackerKey key{};
     xr_tracking::BodyTrackerF32V1 last_good{};
     uint64_t last_good_ns = 0;
     Vec3 velocity_mps{};
@@ -95,7 +95,6 @@ class BodyTrackerStabilityFilter {
       const xr_tracking::BodyTrackerF32V1& from,
       const xr_tracking::BodyTrackerF32V1& to,
       double t);
-  static uint64_t tracker_key(const xr_tracking::BodyTrackerF32V1& tracker, uint32_t slot_index);
   static bool tracker_pose_is_good(const xr_tracking::BodyTrackerF32V1& tracker);
   static void append_tracker(xr_tracking::BodyTrackerSetFrameF32V1& frame,
                              const xr_tracking::BodyTrackerF32V1& tracker);
@@ -109,10 +108,13 @@ class BodyTrackerStabilityFilter {
       uint64_t now_ns);
   Vec3 clamp_velocity(Vec3 v) const;
   Vec3 clamp_acceleration(Vec3 desired, Vec3 previous, double dt_s) const;
-  State& find_or_create_state(uint64_t key);
-  State* find_state(uint64_t key);
-  void update_state(const xr_tracking::BodyTrackerF32V1& tracker, uint64_t key, uint64_t sample_ns);
-  std::optional<xr_tracking::BodyTrackerF32V1> predicted_tracker_for_key(uint64_t key, uint64_t now_ns);
+  State& find_or_create_state(const xr_tracking::BodyTrackerKey& key);
+  State* find_state(const xr_tracking::BodyTrackerKey& key);
+  void update_state(const xr_tracking::BodyTrackerF32V1& tracker,
+                    const xr_tracking::BodyTrackerKey& key,
+                    uint64_t sample_ns);
+  std::optional<xr_tracking::BodyTrackerF32V1> predicted_tracker_for_key(
+      const xr_tracking::BodyTrackerKey& key, uint64_t now_ns);
   std::optional<xr_tracking::BodyTrackerF32V1> predicted_tracker(State& state, uint64_t now_ns);
   int64_t synthetic_interval_ns() const;
 

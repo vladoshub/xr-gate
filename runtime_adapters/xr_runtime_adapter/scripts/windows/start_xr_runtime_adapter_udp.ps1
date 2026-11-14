@@ -9,7 +9,11 @@ param(
   [switch]$WithControllerInputTcp,
   [int]$ControllerInputTcpPort = 45672,
   [bool]$HandOrientationOffsetOnlyRuntime = $true,
-  [switch]$SimpleGestures
+  [switch]$SimpleGestures,
+  [switch]$WithController6DofTcp,
+  [string]$Controller6DofTcpHost = "127.0.0.1",
+  [int]$Controller6DofTcpPort = 45673,
+  [string]$TrackingTransformConfig = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,17 +37,24 @@ $args = @(
   "--runtime-pose-udp-port", "45800",
   "--hand-orientation-offset-only-runtime", "$($HandOrientationOffsetOnlyRuntime.ToString().ToLowerInvariant())"
 )
+if ($TrackingTransformConfig) {
+  $args += @("--tracking-transform-config", $TrackingTransformConfig, "--publish-runtime-controller-state-shm=false")
+}
 if ($SimpleGestures -or $env:SIMPLE_GESTURES -eq '1') {
   $args += @('--simple-gestures', '--emulation-controller', '0')
 }
 if ($WithRuntimeHandUdp) {
   $args += @("--publish-runtime-hand-udp", "--runtime-hand-udp-host", "127.0.0.1", "--runtime-hand-udp-port", "45801")
 }
-if ($WithRuntimeControllerStateUdp) {
+if ($WithRuntimeControllerStateUdp -or $WithControllerInputTcp -or $WithController6DofTcp) {
   $args += @("--publish-runtime-controller-state-udp", "--runtime-controller-state-udp-host", "127.0.0.1", "--runtime-controller-state-udp-port", "45802")
 }
 if ($WithControllerInputTcp) {
-  $args += @("--controller-input-transport", "tcp", "--controller-input-host", "127.0.0.1", "--controller-input-port", "$ControllerInputTcpPort", "--publish-runtime-controller-state-udp", "--runtime-controller-state-udp-host", "127.0.0.1", "--runtime-controller-state-udp-port", "45802")
+  $args += @("--controller-input-transport", "tcp", "--controller-input-host", "127.0.0.1", "--controller-input-port", "$ControllerInputTcpPort")
+}
+if ($WithController6DofTcp) {
+  $args += @("--controller-6dof-input", "tcp", "--controller-6dof-tcp-host", $Controller6DofTcpHost,
+             "--controller-6dof-tcp-port", "$Controller6DofTcpPort")
 }
 
 & $Exe @args

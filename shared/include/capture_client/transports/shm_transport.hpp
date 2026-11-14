@@ -158,7 +158,8 @@ class ShmStreamReader final : public IStreamReader {
     const uint32_t height = detail::load_u32(h + 40);
     const uint32_t format_code = detail::load_u32(h + 44);
     const uint32_t flags = detail::load_u32(h + 48);
-    const char* frame_id_raw = reinterpret_cast<const char*>(h + 60);
+    // Six uint32 fields follow the four 64-bit fields in SLOT_HEADER.
+    const char* frame_id_raw = reinterpret_cast<const char*>(h + 56);
 
     if (seq_begin != seq_end || (seq_begin % 2) != 0 || seq_begin == 0) return false;
     const uint64_t actual_sequence = seq_end / 2;

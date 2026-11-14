@@ -196,6 +196,70 @@ xr_tracking::HandSideF32V2 hand(const Json& value, uint32_t handedness) {
   return out;
 }
 
+xr_tracking::BodyTrackerF32V1 body_tracker(const Json& value) {
+  using namespace xr_tracking;
+  BodyTrackerF32V1 out;
+  const auto& id = value.at("tracker_id").get_ref<const std::string&>();
+  if (id.size() > sizeof(out.tracker_id) || id.find('\0') != std::string::npos) {
+    throw std::runtime_error("TCP protocol: invalid body tracker ID");
+  }
+  std::copy(id.begin(), id.end(), out.tracker_id);
+  out.stable_id_hash = integer(value.at("stable_id_hash"));
+  out.device_serial_hash = integer(value.at("device_serial_hash"));
+  out.tracker_index = integer32(value.at("tracker_index"));
+  out.role = integer32(value.at("role"));
+  out.status = integer32(value.at("status"));
+  out.flags = integer32(value.at("flags"));
+  real(value.at("confidence"), out.confidence);
+  if (!real(value.at("battery"), out.battery)) out.battery = -1.0f;
+
+  auto& p = out.pose;
+  if (!velocity(value.at("linear_velocity"), p.vx, p.vy, p.vz)) {
+    out.flags &= ~BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+  }
+  if (!velocity(value.at("angular_velocity"), p.wx, p.wy, p.wz)) {
+    out.flags &= ~BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID;
+  }
+  const bool position_valid = velocity(value.at("position"), p.px, p.py, p.pz);
+  std::array<float, 4> q{};
+  const bool vector_valid = vector(value.at("orientation_xyzw"), q);
+  const float norm_squared = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
+  const bool orientation_valid = vector_valid && std::isfinite(norm_squared) && norm_squared > 1e-8f;
+  if (orientation_valid) {
+    p.qx = q[0]; p.qy = q[1]; p.qz = q[2]; p.qw = q[3];
+  }
+  if (!position_valid || !orientation_valid) {
+    // Preserve whichever component of an otherwise invalid full pose is usable.
+    if ((out.flags & BODY_TRACKER_FLAG_POSE_VALID) != 0u) {
+      out.flags |= BODY_TRACKER_FLAG_POSITION_VALID | BODY_TRACKER_FLAG_ORIENTATION_VALID;
+    }
+    out.flags &= ~BODY_TRACKER_FLAG_POSE_VALID;
+    if (!position_valid) out.flags &= ~BODY_TRACKER_FLAG_POSITION_VALID;
+    if (!orientation_valid) out.flags &= ~BODY_TRACKER_FLAG_ORIENTATION_VALID;
+  }
+  return out;
+}
+
+xr_tracking::BodyTrackerSetFrameF32V1 body_tracker_frame(const Json& value) {
+  using namespace xr_tracking;
+  BodyTrackerSetFrameF32V1 out;
+  out.sequence = integer(value.at("sequence"));
+  out.timestamp_ns = integer(value.at("timestamp_ns"));
+  out.source_timestamp_ns = integer(value.at("source_timestamp_ns"));
+  out.reset_counter = integer(value.at("reset_counter"));
+  out.space = integer32(value.at("space"));
+  out.source = integer32(value.at("source"));
+  out.flags = integer32(value.at("flags"));
+  const auto& trackers = value.at("trackers");
+  if (!trackers.is_array() || trackers.size() > BODY_TRACKER_MAX_TRACKERS) {
+    throw std::runtime_error("TCP protocol: invalid body tracker count");
+  }
+  for (const auto& tracker : trackers) {
+    out.trackers[out.tracker_count++] = body_tracker(tracker);
+  }
+  return out;
+}
+
 RuntimeTcpSnapshot decode_frame(const Json& value) {
   if (value.at("type") != "frame") throw std::runtime_error("TCP protocol: expected frame");
   RuntimeTcpSnapshot out;
@@ -220,6 +284,11 @@ RuntimeTcpSnapshot decode_frame(const Json& value) {
     c.left = controller(src.at("left"), xr_runtime::CONTROLLER_SIDE_LEFT);
     c.right = controller(src.at("right"), xr_runtime::CONTROLLER_SIDE_RIGHT);
     out.controllers = c; out.controller_age_ns = server_age(tick, c.timestamp_ns);
+  }
+  if (const auto body = value.find("body_trackers"); body != value.end() && !body->is_null()) {
+    auto decoded = body_tracker_frame(*body);
+    out.body_tracker_age_ns = server_age(tick, decoded.timestamp_ns);
+    out.body_trackers = std::make_shared<const xr_tracking::BodyTrackerSetFrameF32V1>(std::move(decoded));
   }
   out.received_ns = now_ns();
   return out;

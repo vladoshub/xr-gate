@@ -431,4 +431,13 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     RuntimeControllerSynthesisState* runtime_state = nullptr,
     const std::vector<xr_runtime::ControllerInputV3>* imu_history = nullptr);
 
+xr_runtime::RuntimeControllerStateFrameV1 compose_6dof_controller_state(
+    uint64_t sequence,
+    uint64_t timestamp_ns,
+    uint64_t input_timestamp_ns,
+    const RuntimeControllerSynthesisConfig& cfg,
+    const xr_runtime::ControllerInputV3* input,
+    const xr_runtime::Controller6DofPosesV1* poses,
+    const xr_runtime::ControllerRuntimeProfileV1& profile);
+
 }  // namespace xr_runtime_adapter::override_controller

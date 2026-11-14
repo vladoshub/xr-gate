@@ -1,11 +1,14 @@
 // Exercise the real driver callbacks against the pinned Monado headers. Only
 // allocation/debug/display helpers and incoming samples are replaced here.
 #include "../src/xr_monado_driver.cpp"
+#include "../../../runtime_adapters/xr_runtime_adapter/src/app_tcp_server.hpp"
 
 #include <cassert>
 #include <iostream>
 #include <limits>
 #include <thread>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 
 extern "C" {
 void* u_device_allocate(u_device_alloc_flags flags, size_t size, size_t inputs, size_t outputs) {
@@ -689,6 +692,212 @@ void test_parallel_callbacks() {
   right.join();
 }
 
+void test_body_tracker_devices() {
+  using namespace xr_tracking;
+  const auto prefix = "xr_monado_body_test_" + std::to_string(getpid());
+  const auto shm = "/" + prefix;
+  const auto registry = std::filesystem::temp_directory_path() / (prefix + ".json");
+  struct Cleanup {
+    std::string shm;
+    std::filesystem::path registry;
+    ~Cleanup() {
+      shm_unlink(shm.c_str());
+      std::filesystem::remove(registry);
+      std::filesystem::remove(registry.string() + ".lock");
+    }
+  } cleanup{shm, registry};
+
+  BodyTrackerSetShmPublisherConfig cfg;
+  cfg.shm_name = shm;
+  cfg.registry_path = registry.string();
+  cfg.slot_count = 4;
+  BodyTrackerSetShmPublisher publisher(cfg);
+  BodyTrackerSetFrameF32V1 frame;
+  frame.tracker_count = 2;
+  for (uint32_t i = 0; i < frame.tracker_count; ++i) {
+    auto& tracker = frame.trackers[i];
+    std::snprintf(tracker.tracker_id, sizeof(tracker.tracker_id), "test-%u", i);
+    tracker.status = BODY_TRACKER_STATUS_TRACKING;
+    tracker.flags = BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_CONNECTED |
+                    BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID | BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID;
+    tracker.pose.px = i == 0 ? -0.5f : 0.5f;
+    tracker.pose.qw = 2.0f;
+    tracker.pose.vx = 1.25f;
+    tracker.pose.wy = 0.25f;
+  }
+  frame.trackers[1].stable_id_hash = 0x1234;
+  publisher.publish(frame);
+
+  xrt_tracking_origin origin{};
+  xrt_device* devices[2]{};
+  ScopedEnv transport("XR_MONADO_BODY_TRACKERS_TRANSPORT", "shm");
+  ScopedEnv name("XR_MONADO_BODY_TRACKERS_SHM", shm.c_str());
+  {
+    ScopedEnv feature("XR_MONADO_BODY_TRACKERS", nullptr);
+    assert(xr_tracking_runtime_body_trackers_create(&origin, devices, 2) == 0);
+  }
+  {
+    ScopedEnv feature("XR_MONADO_BODY_TRACKERS", "0");
+    assert(xr_tracking_runtime_body_trackers_create(&origin, devices, 2) == 0);
+  }
+  ScopedEnv feature("XR_MONADO_BODY_TRACKERS", "1");
+  assert(xr_tracking_runtime_body_trackers_create(&origin, devices, 2) == 2);
+  assert(std::strcmp(devices[0]->serial, "xr-gate-body/id/test-0") == 0);
+  assert(std::strcmp(devices[1]->serial, "xr-gate-body/stable/0000000000001234") == 0);
+  for (auto* device : devices) {
+    assert(device->device_type == XRT_DEVICE_TYPE_GENERIC_TRACKER);
+    assert(device->tracking_origin == &origin);
+    assert(device->inputs[0].active);
+  }
+  auto pose_of = [](xrt_device* device) {
+    xrt_space_relation relation{};
+    assert(device->get_tracked_pose(device, XRT_INPUT_GENERIC_TRACKER_POSE, 0, &relation) == XRT_SUCCESS);
+    return relation;
+  };
+  auto first = pose_of(devices[0]);
+  assert(first.relation_flags == XRT_SPACE_RELATION_BITMASK_ALL);
+  assert(first.pose.position.x == -0.5f && first.pose.orientation.w == 1.0f);
+  assert(first.linear_velocity.x == 1.25f && first.angular_velocity.y == 0.25f);
+
+  std::swap(frame.trackers[0], frame.trackers[1]);
+  frame.trackers[1].status = BODY_TRACKER_STATUS_LOST;
+  publisher.publish(frame);
+  assert(pose_of(devices[0]).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE);
+  assert(pose_of(devices[1]).pose.position.x == 0.5f);
+
+  frame.trackers[1].status = BODY_TRACKER_STATUS_STALE;
+  frame.trackers[1].flags = BODY_TRACKER_FLAG_POSITION_VALID;
+  publisher.publish(frame);
+  assert(pose_of(devices[0]).relation_flags == XRT_SPACE_RELATION_POSITION_VALID_BIT);
+
+  frame.tracker_count = 1;
+  publisher.publish(frame);
+  assert(pose_of(devices[0]).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE);
+  assert(pose_of(devices[1]).relation_flags == XRT_SPACE_RELATION_BITMASK_ALL);
+
+  frame.timestamp_ns = static_cast<uint64_t>(monotonic_now_ns()) - 300'000'000;
+  publisher.publish(frame);
+  assert(pose_of(devices[1]).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE);
+
+  BodyTrackerSetShmPublisher replacement(cfg);
+  frame.timestamp_ns = 0;
+  frame.tracker_count = 2;
+  frame.trackers[1].status = BODY_TRACKER_STATUS_TRACKING;
+  frame.trackers[1].flags = BODY_TRACKER_FLAG_POSE_VALID;
+  frame.trackers[1].pose.px = -0.75f;
+  replacement.publish(frame);
+  first = pose_of(devices[0]);
+  assert(first.pose.position.x == -0.75f);
+  assert((first.relation_flags & XRT_SPACE_RELATION_POSITION_TRACKED_BIT) != 0u);
+  for (auto* device : devices) device->destroy(device);
+}
+
+void test_tcp_body_tracker_devices() {
+  using namespace std::chrono_literals;
+  using namespace xr_tracking;
+  const int listener = socket(AF_INET, SOCK_STREAM, 0);
+  assert(listener >= 0);
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  assert(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+  socklen_t length = sizeof(address);
+  assert(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0);
+  close(listener);
+
+  xr_runtime_adapter::AppTcpServerConfig server_config;
+  server_config.port = ntohs(address.sin_port);
+  server_config.rate_hz = 120;
+  auto server = std::make_unique<xr_runtime_adapter::AppTcpServer>(server_config);
+  const auto port = std::to_string(server_config.port);
+  ScopedEnv feature("XR_MONADO_BODY_TRACKERS", "1");
+  ScopedEnv main_transport("XR_MONADO_TRANSPORT", "tcp");
+  ScopedEnv body_transport("XR_MONADO_BODY_TRACKERS_TRANSPORT", nullptr);
+  ScopedEnv tcp_host("XR_MONADO_TCP_HOST", "127.0.0.1");
+  ScopedEnv tcp_port("XR_MONADO_TCP_PORT", port.c_str());
+  ScopedEnv timeout("XR_MONADO_TCP_TIMEOUT_MS", "800");
+  ScopedEnv reconnect("XR_MONADO_TCP_RECONNECT_MS", "30");
+  ScopedEnv shm("XR_MONADO_BODY_TRACKERS_SHM", "/xr-monado-test-no-body-shm");
+
+  BodyTrackerSetFrameF32V1 frame;
+  frame.tracker_count = 2;
+  frame.trackers[0].stable_id_hash = 9007199254740997ull;
+  std::snprintf(frame.trackers[1].tracker_id, sizeof(frame.trackers[1].tracker_id), "second");
+  for (uint32_t i = 0; i < frame.tracker_count; ++i) {
+    auto& tracker = frame.trackers[i];
+    tracker.status = BODY_TRACKER_STATUS_TRACKING;
+    tracker.flags = BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+    tracker.pose.px = float(i + 1);
+    tracker.pose.vx = 0.25f;
+  }
+  frame.trackers[1].pose.qw = std::numeric_limits<float>::quiet_NaN();
+  auto send = [&](uint64_t age_ns = 0) {
+    // The TCP reader must compare two server timestamps, then add local elapsed time.
+    frame.timestamp_ns = static_cast<uint64_t>(monotonic_now_ns()) - age_ns;
+    frame.source_timestamp_ns = frame.timestamp_ns - 10'000'000;
+    ++frame.sequence;
+    server->publish_body_trackers(frame);
+  };
+  send();
+
+  xrt_tracking_origin origin{};
+  xrt_device* devices[2]{};
+  assert(xr_tracking_runtime_body_trackers_create(&origin, devices, 2) == 2);
+  assert(std::strcmp(devices[0]->serial, "xr-gate-body/stable/0020000000000005") == 0);
+  assert(std::strcmp(devices[1]->serial, "xr-gate-body/id/second") == 0);
+  auto get_pose = [&](size_t index) {
+    auto* device = devices[index];
+    xrt_space_relation relation{};
+    assert(device->get_tracked_pose(device, XRT_INPUT_GENERIC_TRACKER_POSE, 0, &relation) == XRT_SUCCESS);
+    return relation;
+  };
+  auto eventually = [](auto predicate) {
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (!predicate()) {
+      assert(std::chrono::steady_clock::now() < deadline);
+      std::this_thread::sleep_for(5ms);
+    }
+  };
+  const auto valid_pose = kJointPoseValid | kJointPoseTracked | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT;
+  const auto partial_pose = XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
+                            XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT;
+  assert(get_pose(0).relation_flags == valid_pose && get_pose(0).pose.position.x == 1.0f);
+  assert(get_pose(1).relation_flags == partial_pose && get_pose(1).pose.position.x == 2.0f);
+
+  std::swap(frame.trackers[0], frame.trackers[1]);
+  frame.trackers[1].status = BODY_TRACKER_STATUS_LOST;
+  send();
+  eventually([&] { return get_pose(0).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE; });
+  assert(get_pose(1).pose.position.x == 2.0f);
+
+  frame.trackers[1].status = BODY_TRACKER_STATUS_STALE;
+  send();
+  eventually([&] { return get_pose(0).relation_flags ==
+                          (kJointPoseValid | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT); });
+
+  frame.tracker_count = 1;
+  send();
+  eventually([&] { return get_pose(0).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE; });
+  assert(get_pose(1).relation_flags == partial_pose);
+  send(300'000'000);
+  eventually([&] { return get_pose(1).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE; });
+
+  server.reset();
+  server = std::make_unique<xr_runtime_adapter::AppTcpServer>(server_config);
+  frame.tracker_count = 2;
+  frame.sequence = 0;
+  frame.trackers[1].status = BODY_TRACKER_STATUS_TRACKING;
+  frame.trackers[1].pose.px = 3.0f;
+  eventually([&] {
+    send();
+    return get_pose(0).pose.position.x == 3.0f;
+  });
+  assert(get_pose(0).relation_flags == valid_pose);
+  server.reset();
+  eventually([&] { return get_pose(0).relation_flags == XRT_SPACE_RELATION_BITMASK_NONE; });
+  for (auto* device : devices) device->destroy(device);
+}
+
 int main() {
   ScopedEnv alias("XR_MONADO_CONTROLLER_LEFT_AB_XY_ALIAS", nullptr);
   ScopedEnv legacy("XR_MONADO_CONTROLLER_TRACKPAD_CLICK_FROM_TOUCH", nullptr);
@@ -710,5 +919,7 @@ int main() {
   test_invalid_joints();
   test_stream_loss_and_resume();
   test_parallel_callbacks();
-  std::cout << "Monado driver: 14 test groups passed\n";
+  test_body_tracker_devices();
+  test_tcp_body_tracker_devices();
+  std::cout << "Monado driver: 16 test groups passed\n";
 }

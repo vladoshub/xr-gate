@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -185,6 +186,39 @@ struct BodyTrackerSetRingSlotHeaderV1 {
 
 static_assert(sizeof(BodyTrackerSetUdpHeaderV1) == 32, "body tracker UDP header must be 32 bytes");
 static_assert(sizeof(BodyTrackerSetRingSlotHeaderV1) == 128, "body tracker ring slot header must be 128 bytes");
+
+struct BodyTrackerKey {
+  enum class Kind { None, StableHash, SerialHash, Text, Role, Index, Slot };
+
+  Kind kind = Kind::None;
+  uint64_t value = 0;
+  char text[sizeof(BodyTrackerF32V1::tracker_id)] = {};
+
+  bool operator==(const BodyTrackerKey& other) const {
+    return kind == other.kind && value == other.value &&
+           (kind != Kind::Text || std::strncmp(text, other.text, sizeof(text)) == 0);
+  }
+};
+
+// Filters may use the legacy role/index fallbacks. Device registration requires
+// a persistent identity and leaves slot_index unset.
+inline BodyTrackerKey body_tracker_key(const BodyTrackerF32V1& tracker,
+                                       std::optional<uint32_t> slot_index = std::nullopt) {
+  using Kind = BodyTrackerKey::Kind;
+  if (tracker.stable_id_hash != 0) return {Kind::StableHash, tracker.stable_id_hash};
+  if (tracker.tracker_id[0] != '\0') {
+    BodyTrackerKey key{Kind::Text};
+    std::memcpy(key.text, tracker.tracker_id, sizeof(key.text));
+    return key;
+  }
+  if (tracker.device_serial_hash != 0) return {Kind::SerialHash, tracker.device_serial_hash};
+  if (!slot_index) return {};
+  if ((tracker.flags & BODY_TRACKER_FLAG_ROLE_VALID) != 0u && tracker.role != BODY_TRACKER_ROLE_UNKNOWN) {
+    return {Kind::Role, tracker.role};
+  }
+  if (tracker.tracker_index != 0) return {Kind::Index, tracker.tracker_index};
+  return {Kind::Slot, *slot_index};
+}
 
 inline std::string normalize_body_tracker_posix_shm_name(std::string name) {
   if (name.empty()) throw std::runtime_error("empty SHM name");

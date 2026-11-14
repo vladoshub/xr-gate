@@ -554,10 +554,8 @@ void HandJitterFilter::filter(xr_runtime::HandTrackingFrameF64V1& hand, const Ru
 }
 
 void BodyTrackerJitterFilter::reset() {
-  for (auto& f : tracker_positions_) f.reset();
-  for (auto& f : tracker_orientations_) f.reset();
-  for (auto& f : tracker_linear_velocities_) f.reset();
-  for (auto& f : tracker_angular_velocities_) f.reset();
+  trackers_ = {};
+  reset_counter_ = 0;
 }
 
 void BodyTrackerJitterFilter::filter(xr_tracking::BodyTrackerSetFrameF32V1& frame, const RuntimeJitterFilterConfig& cfg) {
@@ -566,29 +564,39 @@ void BodyTrackerJitterFilter::filter(xr_tracking::BodyTrackerSetFrameF32V1& fram
     return;
   }
 
+  if (frame.reset_counter != reset_counter_) {
+    reset();
+    reset_counter_ = frame.reset_counter;
+  }
+
   frame.tracker_count = std::min<uint32_t>(frame.tracker_count, xr_tracking::BODY_TRACKER_MAX_TRACKERS);
+  decltype(trackers_) current{};
   for (uint32_t i = 0; i < frame.tracker_count; ++i) {
     auto& tracker = frame.trackers[i];
+    if (tracker.status == xr_tracking::BODY_TRACKER_STATUS_LOST ||
+        tracker.status == xr_tracking::BODY_TRACKER_STATUS_UNAVAILABLE) continue;
+
+    // Prediction can append a missing tracker after the observed entries.
+    auto& filters = current[i];
+    filters.key = xr_tracking::body_tracker_key(tracker, i);
+    const auto previous = std::find_if(trackers_.begin(), trackers_.end(), [&](const TrackerFilters& candidate) {
+      return candidate.key == filters.key;
+    });
+    if (previous != trackers_.end()) filters = *previous;
+
     auto& pose = tracker.pose;
-    tracker_positions_[i].filter(pose.px, pose.py, pose.pz, cfg.tracker_threshold_m, cfg.tracker_position_smooth_alpha);
-    tracker_orientations_[i].filter(pose.qw, pose.qx, pose.qy, pose.qz, cfg.tracker_angle_threshold_rad, cfg.tracker_orientation_smooth_alpha);
+    filters.position.filter(pose.px, pose.py, pose.pz, cfg.tracker_threshold_m, cfg.tracker_position_smooth_alpha);
+    filters.orientation.filter(pose.qw, pose.qx, pose.qy, pose.qz, cfg.tracker_angle_threshold_rad, cfg.tracker_orientation_smooth_alpha);
     if ((tracker.flags & xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) != 0u) {
-      tracker_linear_velocities_[i].filter(pose.vx, pose.vy, pose.vz,
-                                           cfg.tracker_velocity_threshold_mps,
-                                           cfg.tracker_velocity_smooth_alpha);
+      filters.linear_velocity.filter(pose.vx, pose.vy, pose.vz, cfg.tracker_velocity_threshold_mps,
+                                     cfg.tracker_velocity_smooth_alpha);
     } else {
-      tracker_linear_velocities_[i].reset();
+      filters.linear_velocity.reset();
     }
-    tracker_angular_velocities_[i].filter(pose.wx, pose.wy, pose.wz,
-                                          cfg.tracker_angular_velocity_threshold_radps,
-                                          cfg.tracker_angular_velocity_smooth_alpha);
+    filters.angular_velocity.filter(pose.wx, pose.wy, pose.wz, cfg.tracker_angular_velocity_threshold_radps,
+                                      cfg.tracker_angular_velocity_smooth_alpha);
   }
-  for (uint32_t i = frame.tracker_count; i < xr_tracking::BODY_TRACKER_MAX_TRACKERS; ++i) {
-    tracker_positions_[i].reset();
-    tracker_orientations_[i].reset();
-    tracker_linear_velocities_[i].reset();
-    tracker_angular_velocities_[i].reset();
-  }
+  trackers_ = current;
 }
 
 void RuntimeJitterFilter::configure(RuntimeJitterFilterConfig cfg) {

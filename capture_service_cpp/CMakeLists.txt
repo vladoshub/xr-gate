@@ -27,6 +27,8 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/stream_publishers.cpp
   src/tcp_fanout.cpp
   src/camera_pipeline.cpp
+  src/additional_camera_streams.cpp
+  src/extra_capture.cpp
   src/imu_pipeline.cpp
   src/imu_transform.cpp
   src/config/capture_config.cpp

@@ -1,10 +1,13 @@
 #include "capture_service_cpp/config/capture_config.hpp"
+#include "capture_service_cpp/platform/runtime_defaults.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -16,6 +19,7 @@ namespace {
 struct FlatYaml {
   std::unordered_map<std::string, std::string> scalars;
   std::unordered_map<std::string, std::vector<std::string>> sequences;
+  std::vector<std::string> mappings;
 };
 
 enum class PendingYamlValueKind {
@@ -200,6 +204,7 @@ FlatYaml parse_yaml_subset(const std::string& path) {
     if (key.empty()) throw std::runtime_error("empty key in config " + path + ":" + std::to_string(line_number));
     const std::string full_key = join_path(stack, key);
     if (value.empty()) {
+      out.mappings.push_back(full_key);
       stack.emplace_back(indent, key);
       continue;
     }
@@ -238,6 +243,11 @@ FlatYaml parse_yaml_subset(const std::string& path) {
   }
   for (auto& [key, value] : scalar_aliases) out.scalars.emplace(std::move(key), std::move(value));
   for (auto& [key, value] : sequence_aliases) out.sequences.emplace(std::move(key), std::move(value));
+  const size_t mappings = out.mappings.size();
+  for (size_t i = 0; i < mappings; ++i) {
+    const auto& key = out.mappings[i];
+    if (key.rfind(kWrapper, 0) == 0) out.mappings.push_back(key.substr(wrapper_size));
+  }
   return out;
 }
 
@@ -526,7 +536,7 @@ void apply_camera_device(const FlatYaml& y, const std::string& prefix, CameraDev
   apply_camera_control_values(y, prefix, device.controls);
 }
 
-void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
+void apply_service_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_string(y, {platform_key("service.registry_path"), "service.registry_path", platform_key("registry_path"), "registry_path"}, cfg.registry_path);
   set_string(y, {platform_key("service.namespace"), "service.namespace", platform_key("namespace"), "namespace"}, cfg.namespace_name);
   set_string(y, {platform_key("service.profile"), "service.profile", "service.capture_profile",
@@ -549,7 +559,9 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
     if (legacy_tcp_enabled && tcp_it == cfg.publish_modes.end()) cfg.publish_modes.push_back("tcp");
     if (!legacy_tcp_enabled && tcp_it != cfg.publish_modes.end()) cfg.publish_modes.erase(tcp_it);
   }
+}
 
+void apply_camera_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   const bool legacy_xreal_camera = has_prefix(y, "xreal_linux.camera.");
   if (legacy_xreal_camera && !has(y, "camera.driver")) {
     cfg.camera.driver = "xreal_ultra";
@@ -593,7 +605,66 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_string(y, {"camera.transform.right.rotate", "camera.right.rotate", "xreal_linux.camera.post_rotate_right"}, cfg.camera.right_transform.rotate);
   set_string(y, {"camera.transform.right.flip", "camera.right.flip"}, cfg.camera.right_transform.flip);
   set_int(y, {"camera.stall_exit_ms"}, cfg.camera.stall_exit_ms);
+}
 
+void apply_additional_camera_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
+  const std::string output = "camera.output.additional_cameras.";
+  const std::string transform = "camera.transform.additional_cameras.";
+  std::set<std::string> names;
+  for (const auto& key : y.mappings) {
+    if (key.compare(0, output.size(), output) == 0 && key.find('.', output.size()) == std::string::npos) {
+      names.insert(key.substr(output.size()));
+    }
+  }
+  for (const auto& [key, value] : y.scalars) {
+    (void)value;
+    if (key.compare(0, output.size(), output) != 0) continue;
+    const auto separator = key.find('.', output.size());
+    names.insert(key.substr(output.size(), separator == std::string::npos
+        ? std::string::npos : separator - output.size()));
+  }
+  if (names.empty()) return;
+  std::map<std::string, AdditionalCameraConfig> cameras;
+  for (const auto& name : names) {
+    try {
+      const auto key = output + name;
+      AdditionalCameraConfig camera;
+      camera.source = camera.stream_id = name;
+      set_string(y, {key}, camera.source);
+      if (camera.source.empty() || camera.source == "{}" || camera.source == "null" || camera.source == "~") {
+        camera.source = name;
+      }
+      set_string(y, {key + ".source"}, camera.source);
+      set_string(y, {key + ".stream"}, camera.stream_id);
+      camera.frame_id = camera.stream_id;
+      set_string(y, {key + ".frame"}, camera.frame_id);
+      set_int(y, {key + ".width"}, camera.width);
+      set_int(y, {key + ".height"}, camera.height);
+      set_int(y, {key + ".slot_count"}, camera.slot_count);
+      set_string(y, {transform + name + ".rotate"}, camera.transform.rotate);
+      set_string(y, {transform + name + ".flip"}, camera.transform.flip);
+      cameras.emplace(name, std::move(camera));
+    } catch (const std::exception& e) {
+      std::cerr << "[capture_service_cpp][additional_cameras][" << name << "] " << e.what() << std::endl;
+    }
+  }
+  set_bool(y, {"camera.output.stereo_enabled"}, cfg.camera.stereo_enabled);
+  auto& publish = cfg.additional_camera_publish;
+  const std::string service = "service.additional_cameras";
+  set_string(y, {platform_key(service + ".registry_path"), service + ".registry_path"}, publish.registry_path);
+  set_string(y, {platform_key(service + ".namespace"), service + ".namespace"}, publish.namespace_name);
+  if (has(y, service + ".publish")) {
+    publish.publish_modes = sequence_or_csv(y, {service + ".publish"}, {});
+  }
+  set_string(y, {service + ".tcp.bind_host"}, publish.tcp_bind_host);
+  set_int(y, {service + ".tcp.port"}, publish.tcp_port);
+  set_int(y, {service + ".tcp.client_queue_size"}, publish.tcp_client_queue_size);
+  cfg.camera.additional_cameras = std::move(cameras);
+}
+
+void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
+  apply_service_yaml(y, cfg);
+  apply_camera_yaml(y, cfg);
   const bool has_imu_config = has_prefix(y, "imu.") || has_prefix(y, "xreal_linux.imu.");
   if (!has_imu_config) {
     // An explicit config may be camera-only simply by omitting the entire IMU
@@ -693,6 +764,8 @@ ConfigSelection resolve_config_selection(int argc, char** argv) {
     } else if (arg == "--config-name") {
       out.name = need("--config-name");
       out.explicit_selection = true;
+    } else if (arg == "--extra-config") {
+      (void)need("--extra-config");
     }
   }
   return out;
@@ -709,11 +782,21 @@ bool load_runtime_config_file(const std::string& path, RuntimeConfig& cfg) {
   if (!std::filesystem::exists(path)) return false;
   const FlatYaml yaml = parse_yaml_subset(path);
   apply_yaml(yaml, cfg);
+  const bool stereo_enabled = cfg.camera.stereo_enabled;
+  try {
+    apply_additional_camera_yaml(yaml, cfg);
+  } catch (const std::exception& e) {
+    std::cerr << "[capture_service_cpp][additional_cameras][ERROR] " << e.what() << std::endl;
+    cfg.camera.additional_cameras.clear();
+    cfg.camera.stereo_enabled = stereo_enabled;
+  }
   cfg.config_path = path;
   return true;
 }
 
-void validate_runtime_config(RuntimeConfig& cfg) {
+namespace {
+
+void validate_runtime_config(RuntimeConfig& cfg, bool allow_mono) {
   cfg.camera.driver = lowercase(trim(cfg.camera.driver));
   cfg.camera.timestamp_mode = lowercase(trim(cfg.camera.timestamp_mode));
   cfg.camera.layout = lowercase(trim(cfg.camera.layout));
@@ -765,14 +848,21 @@ void validate_runtime_config(RuntimeConfig& cfg) {
     if (cfg.camera.output_width <= 0 || cfg.camera.output_height <= 0) {
       throw std::runtime_error("camera.output width and height must be positive");
     }
-    if (cfg.camera.driver == "opencv" && cfg.camera.layout != "side_by_side_horizontal" &&
+    const bool mono = allow_mono && cfg.camera.layout == "mono";
+    if (mono && cfg.camera.driver != "opencv") {
+      throw std::runtime_error("camera.layout=mono requires camera.driver=opencv");
+    }
+    if (cfg.camera.driver == "opencv" && !mono &&
+        cfg.camera.layout != "side_by_side_horizontal" &&
         cfg.camera.layout != "side_by_side_vertical" && cfg.camera.layout != "interleaved_columns" &&
         cfg.camera.layout != "dual") {
-      throw std::runtime_error(
-          "opencv camera.layout must be side_by_side_horizontal, side_by_side_vertical, interleaved_columns, or dual");
+      const std::string supported = "opencv camera.layout must be side_by_side_horizontal, "
+                                    "side_by_side_vertical, interleaved_columns, or dual";
+      throw std::runtime_error(allow_mono ? supported + " for stereo, or mono for one camera" : supported);
     }
   }
-  if (cfg.camera.enabled && cfg.camera.left_stream_id == cfg.camera.right_stream_id) {
+  if (cfg.camera.enabled && !(allow_mono && cfg.camera.layout == "mono") &&
+      cfg.camera.left_stream_id == cfg.camera.right_stream_id) {
     throw std::runtime_error("camera left and right stream ids must be different");
   }
   if (cfg.imu.enabled) {
@@ -847,6 +937,106 @@ void validate_runtime_config(RuntimeConfig& cfg) {
     }
   }
   if (cfg.publish_modes.empty()) throw std::runtime_error("at least one publish mode is required");
+}
+
+ExtraCameraConfig extra_camera_config(const FlatYaml& yaml, const RuntimeConfig& service,
+                                     const std::string& name) {
+  RuntimeConfig cfg = service;
+  std::string driver = cfg.camera.driver;
+  set_string(yaml, {"camera.driver"}, driver);
+  if (driver == "opencv") {
+    cfg.camera.primary.device_path.clear();
+    cfg.camera.primary.api = cfg.camera.secondary.api = "auto";
+    cfg.camera.secondary.index = 1;
+  }
+  if (!name.empty()) {
+    cfg.camera.left_stream_id = cfg.camera.left_frame_id = name + "_left";
+    cfg.camera.right_stream_id = cfg.camera.right_frame_id = name + "_right";
+  }
+  apply_camera_yaml(yaml, cfg);
+  validate_runtime_config(cfg, true);
+
+  ExtraCameraConfig camera;
+  camera.name = name.empty() ? "camera" : name;
+  camera.camera = std::move(cfg.camera);
+  if (!camera.camera.enabled) return camera;
+  if (camera.camera.layout == "mono") {
+    camera.stream_id = name.empty() ? "webcam" : name;
+    set_string(yaml, {"camera.output.stream"}, camera.stream_id);
+    camera.frame_id = camera.stream_id;
+    set_string(yaml, {"camera.output.frame"}, camera.frame_id);
+    set_string(yaml, {"camera.output.format"}, camera.format);
+    camera.format = lowercase(trim(camera.format));
+    if (camera.format != "gray8" && camera.format != "bgr8") {
+      throw std::runtime_error("camera.output.format must be gray8 or bgr8");
+    }
+    if (camera.camera.primary.raw_format) {
+      throw std::runtime_error("camera.layout=mono requires decoded frames (raw_format: false)");
+    }
+    set_string(yaml, {"camera.transform.rotate"}, camera.camera.left_transform.rotate);
+    set_string(yaml, {"camera.transform.flip"}, camera.camera.left_transform.flip);
+  }
+  return camera;
+}
+
+}  // namespace
+
+void validate_runtime_config(RuntimeConfig& cfg) {
+  validate_runtime_config(cfg, false);
+}
+
+ExtraCaptureConfig load_extra_capture_config(const std::string& path) {
+  const FlatYaml yaml = parse_yaml_subset(path);
+  ExtraCaptureConfig result;
+  RuntimeConfig& service = result.service;
+  apply_platform_runtime_defaults(service);
+  service.config_path = path;
+  service.imu.enabled = false;
+  service.namespace_name = "capture_extra";
+  service.registry_path = std::filesystem::path(service.registry_path)
+                              .replace_filename("capture_service_extra_streams.json").string();
+  service.slot_count = 8;
+  service.tcp_bind_host = "127.0.0.1";
+  service.tcp_port = 45661;
+  service.tcp_client_queue_size = 8;
+  apply_service_yaml(yaml, service);
+  for (const auto& mode : service.publish_modes) {
+    if (mode != "shm" && mode != "tcp") throw std::runtime_error("unknown extra publish mode: " + mode);
+  }
+  finalize_platform_runtime_config(service);
+  service.registry_path = expand_user_path(service.registry_path);
+  if (service.registry_path.empty()) throw std::runtime_error("extra service.registry_path must not be empty");
+  if (service.tcp_client_queue_size <= 0) throw std::runtime_error("extra service.tcp.client_queue_size must be positive");
+
+  const bool single_camera = has_prefix(yaml, "camera.") || has_prefix(yaml, "xreal_linux.camera.");
+  const bool named_cameras = has_prefix(yaml, "cameras.");
+  if (has(yaml, "cameras") || has(yaml, "camera") || single_camera == named_cameras) {
+    throw std::runtime_error("extra config requires camera or a cameras mapping");
+  }
+  if (single_camera) {
+    result.cameras.push_back(extra_camera_config(yaml, service, ""));
+  } else {
+    std::map<std::string, FlatYaml> sources;
+    auto collect = [&](const auto& values, auto member) {
+      for (const auto& [key, value] : values) {
+        if (key.rfind("cameras.", 0) != 0) continue;
+        const auto name_end = key.find('.', sizeof("cameras.") - 1);
+        if (name_end == std::string::npos) throw std::runtime_error("expected camera mapping at " + key);
+        const std::string name = key.substr(sizeof("cameras.") - 1, name_end - (sizeof("cameras.") - 1));
+        (sources[name].*member).emplace("camera" + key.substr(name_end), value);
+      }
+    };
+    collect(yaml.scalars, &FlatYaml::scalars);
+    collect(yaml.sequences, &FlatYaml::sequences);
+    for (const auto& [name, camera] : sources) {
+      try {
+        result.cameras.push_back(extra_camera_config(camera, service, name));
+      } catch (const std::exception& e) {
+        throw std::runtime_error("cameras." + name + ": " + e.what());
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace xr_capture_cpp

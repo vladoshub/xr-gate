@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 
 namespace xr_capture_cpp {
 namespace {
@@ -30,7 +31,10 @@ uint8_t g_reverse_chunk_map[128] = {};
 }  // namespace
 
 void init_xreal_camera_tables() {
-  for (size_t i = 0; i < kChunkAmount; ++i) g_reverse_chunk_map[kChunkMap[i]] = static_cast<uint8_t>(i);
+  static std::once_flag initialized;
+  std::call_once(initialized, [] {
+    for (size_t i = 0; i < kChunkAmount; ++i) g_reverse_chunk_map[kChunkMap[i]] = static_cast<uint8_t>(i);
+  });
 }
 
 bool decode_xreal_eye(const cv::Mat& frame, cv::Mat& eye, bool& is_right,

@@ -24,5 +24,6 @@ fi
   "$ROOT/drivers/monado_driver/src/posix_runtime_readers.cpp" \
   "$ROOT/drivers/openvr_driver/src/runtime_tcp_client.cpp" \
   "$ROOT/drivers/openvr_driver/src/runtime_tcp_readers.cpp" \
+  "$ROOT/runtime_adapters/xr_runtime_adapter/src/app_tcp_server.cpp" \
   -lrt -o "$TEST_BUILD_DIR/monado_driver_test"
 "$TEST_BUILD_DIR/monado_driver_test"

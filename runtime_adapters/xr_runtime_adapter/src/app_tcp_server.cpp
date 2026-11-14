@@ -182,9 +182,40 @@ Json hands_json(const xr_tracking::HandTrackingFrameF32V2& h) {
           {"hand_count", uint32_t(h.hand_count)}, {"left", hand_json(h.left)}, {"right", hand_json(h.right)}};
 }
 
-std::string frame_json(const AppTcpFrame& frame, uint64_t sequence) {
+Json body_trackers_json(const xr_tracking::BodyTrackerSetFrameF32V1& frame) {
+  Json trackers = Json::array();
+  const auto count = std::min(uint32_t(frame.tracker_count), xr_tracking::BODY_TRACKER_MAX_TRACKERS);
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto& tracker = frame.trackers[i];
+    const auto& p = tracker.pose;
+    const auto* id_end = std::find(tracker.tracker_id, tracker.tracker_id + sizeof(tracker.tracker_id), '\0');
+    auto entry = pose(p.px, p.py, p.pz, p.qx, p.qy, p.qz, p.qw);
+    entry.update({{"tracker_id", std::string(tracker.tracker_id, id_end)},
+                  {"stable_id_hash", std::to_string(tracker.stable_id_hash)},
+                  {"device_serial_hash", std::to_string(tracker.device_serial_hash)},
+                  {"tracker_index", uint32_t(tracker.tracker_index)}, {"role", uint32_t(tracker.role)},
+                  {"status", uint32_t(tracker.status)}, {"flags", uint32_t(tracker.flags)},
+                  {"confidence", tracker.confidence}, {"battery", tracker.battery},
+                  {"linear_velocity", vector3(p.vx, p.vy, p.vz)},
+                  {"angular_velocity", vector3(p.wx, p.wy, p.wz)}});
+    trackers.push_back(std::move(entry));
+  }
+  return {{"sequence", uint64_t(frame.sequence)}, {"timestamp_ns", std::to_string(frame.timestamp_ns)},
+          {"source_timestamp_ns", std::to_string(frame.source_timestamp_ns)},
+          {"reset_counter", uint64_t(frame.reset_counter)}, {"space", uint32_t(frame.space)},
+          {"source", uint32_t(frame.source)}, {"flags", uint32_t(frame.flags)}, {"trackers", std::move(trackers)}};
+}
+
+std::string frame_json(const AppTcpFrame& frame,
+                       const std::optional<xr_tracking::BodyTrackerSetFrameF32V1>& body_trackers,
+                       uint64_t sequence) {
+  // Body updates can reuse an older HMD/hand snapshot. Measure the age of
+  // each stream at this send, leaving the individual timestamps intact.
+  const auto read_timestamp_ns = body_trackers
+      ? std::max(frame.read_timestamp_ns, xr_tracking::body_tracker_now_ns())
+      : frame.read_timestamp_ns;
   Json out{{"type", "frame"}, {"sequence", sequence},
-           {"read_timestamp_ns", std::to_string(frame.read_timestamp_ns)},
+           {"read_timestamp_ns", std::to_string(read_timestamp_ns)},
            {"hmd", nullptr}, {"hands", nullptr}, {"controllers", nullptr}};
   if (frame.hmd) out["hmd"] = hmd_json(*frame.hmd);
   if (frame.hands) out["hands"] = hands_json(*frame.hands);
@@ -193,6 +224,10 @@ std::string frame_json(const AppTcpFrame& frame, uint64_t sequence) {
     const auto& c = *frame.controllers;
     out["controllers"] = {{"sequence", uint64_t(c.sequence)}, {"timestamp_ns", std::to_string(c.timestamp_ns)},
                           {"flags", uint32_t(c.flags)}, {"left", controller_json(c.left)}, {"right", controller_json(c.right)}};
+  }
+  if (body_trackers) {
+    out["body_trackers"] = body_trackers_json(*body_trackers);
+    return out.dump(-1, ' ', false, Json::error_handler_t::ignore) + '\n';
   }
   return out.dump() + '\n';
 }
@@ -249,6 +284,15 @@ class AppTcpServer::Impl {
     wake_.notify_one();
   }
 
+  void publish_body_trackers(const xr_tracking::BodyTrackerSetFrameF32V1& frame) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      latest_body_trackers_ = frame;
+      ++generation_;
+    }
+    wake_.notify_one();
+  }
+
  private:
   void accept_clients() {
     // Bound accept work even if other processes repeatedly connect.
@@ -269,6 +313,9 @@ class AppTcpServer::Impl {
 #endif
 #endif
       clients_.push_back(Client{fd, hello_, nullptr, spatial_packet_});
+      // Send the latest body frame even if its source is now idle.
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (latest_body_trackers_) ++generation_;
     }
     client_count_.store(clients_.size(), std::memory_order_relaxed);
   }
@@ -317,14 +364,18 @@ class AppTcpServer::Impl {
         const auto now = Clock::now();
         if (!clients_.empty() && now >= next_frame) {
           std::optional<AppTcpFrame> snapshot;
+          std::optional<xr_tracking::BodyTrackerSetFrameF32V1> body_trackers;
           uint64_t generation;
           {
             std::lock_guard<std::mutex> lock(mutex_);
             generation = generation_;
-            if (generation != serialized_generation) snapshot = latest_;
+            if (generation != serialized_generation) {
+              snapshot = latest_;
+              body_trackers = latest_body_trackers_;
+            }
           }
           if (snapshot) {
-            auto packet = std::make_shared<const std::string>(frame_json(*snapshot, generation));
+            auto packet = std::make_shared<const std::string>(frame_json(*snapshot, body_trackers, generation));
             if (config_.spatial_mesh && (snapshot->spatial != last_mesh_ || !spatial_packet_)) {
               Json message{{"type", "spatial_mesh"}, {"read_timestamp_ns", std::to_string(snapshot->read_timestamp_ns)},
                            {"mesh_hex", nullptr}, {"byte_order", "little_endian"},
@@ -365,6 +416,7 @@ class AppTcpServer::Impl {
   std::mutex mutex_;
   std::condition_variable wake_;
   AppTcpFrame latest_;
+  std::optional<xr_tracking::BodyTrackerSetFrameF32V1> latest_body_trackers_;
   uint64_t generation_ = 0;
   std::vector<Client> clients_;  // Worker-owned until joined.
   std::thread worker_;
@@ -374,5 +426,8 @@ AppTcpServer::AppTcpServer(AppTcpServerConfig config) : impl_(std::make_unique<I
 AppTcpServer::~AppTcpServer() = default;
 bool AppTcpServer::has_clients() const { return impl_->has_clients(); }
 void AppTcpServer::publish(const AppTcpFrame& frame) { impl_->publish(frame); }
+void AppTcpServer::publish_body_trackers(const xr_tracking::BodyTrackerSetFrameF32V1& frame) {
+  impl_->publish_body_trackers(frame);
+}
 
 }  // namespace xr_runtime_adapter

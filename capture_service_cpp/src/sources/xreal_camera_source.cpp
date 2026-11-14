@@ -7,6 +7,7 @@
 
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace xr_capture_cpp {
@@ -18,6 +19,11 @@ class XrealCameraSource final : public ICameraSource {
       : cfg_(std::move(cfg)), clock_(std::move(clock)) {}
 
   std::string name() const override { return "xreal_ultra"; }
+
+  std::vector<CameraViewSpec> views() const override {
+    return {{kLeftCameraView, kXrealEyeWidth, kXrealEyeHeight},
+            {kRightCameraView, kXrealEyeWidth, kXrealEyeHeight}};
+  }
 
   std::vector<StreamSpec> stream_specs(uint32_t slot_count) const override {
     const auto& c = cfg_.camera;
@@ -44,7 +50,7 @@ class XrealCameraSource final : public ICameraSource {
     transforms_ = resolve_xreal_eye_transforms(cfg_);
   }
 
-  SourceReadStatus read(StereoFrame& output) override {
+  SourceReadStatus read(StereoFrame& output, CameraViewSink* views) override {
     output = {};
     if (!capture_.read(capture_frame_) || capture_frame_.empty()) return SourceReadStatus::Timeout;
     const uint64_t receive_ns = steady_ns();
@@ -57,6 +63,15 @@ class XrealCameraSource final : public ICameraSource {
       return SourceReadStatus::TransportActivity;
     }
     ++decoded_;
+    if (views) {
+      const auto& view = is_right ? kRightCameraView : kLeftCameraView;
+      if (views->wants(view)) {
+        const std::optional<uint64_t> timestamp = device_time
+            ? clock_->map_camera_ns(metadata.t62_ns, receive_ns) : std::optional<uint64_t>{receive_ns};
+        if (timestamp) views->submit(view, raw_eye_, *timestamp);
+      }
+    }
+    if (!cfg_.camera.stereo_enabled) return SourceReadStatus::Data;
     auto pair_status = XrealStereoTimestampPairer::Result::Pending;
     if (device_time) {
       pair_status = pairer_.push(metadata);

@@ -14,14 +14,20 @@ std::string normalize(std::string value) {
   return value;
 }
 
-cv::Mat rotate_image(const cv::Mat& in, const std::string& configured_mode) {
+int rotation_code(const std::string& configured_mode) {
   const std::string mode = normalize(configured_mode);
+  if (mode == "cw90" || mode == "90" || mode == "clockwise") return cv::ROTATE_90_CLOCKWISE;
+  if (mode == "ccw90" || mode == "270" || mode == "counterclockwise") return cv::ROTATE_90_COUNTERCLOCKWISE;
+  if (mode == "rotate180" || mode == "180") return cv::ROTATE_180;
+  if (mode == "none" || mode == "0" || mode.empty()) return -1;
+  throw std::runtime_error("unsupported image rotation: " + configured_mode);
+}
+
+cv::Mat rotate_image(const cv::Mat& in, const std::string& configured_mode) {
+  const int code = rotation_code(configured_mode);
+  if (code < 0) return in.clone();
   cv::Mat out;
-  if (mode == "cw90" || mode == "90" || mode == "clockwise") cv::rotate(in, out, cv::ROTATE_90_CLOCKWISE);
-  else if (mode == "ccw90" || mode == "270" || mode == "counterclockwise") cv::rotate(in, out, cv::ROTATE_90_COUNTERCLOCKWISE);
-  else if (mode == "rotate180" || mode == "180") cv::rotate(in, out, cv::ROTATE_180);
-  else if (mode == "none" || mode == "0" || mode.empty()) out = in.clone();
-  else throw std::runtime_error("unsupported image rotation: " + configured_mode);
+  cv::rotate(in, out, code);
   return out;
 }
 
@@ -38,6 +44,11 @@ cv::Mat flip_image(const cv::Mat& in, const std::string& configured_mode) {
 
 }  // namespace
 
+bool image_rotation_swaps_dimensions(const std::string& rotate_mode) {
+  const int code = rotation_code(rotate_mode);
+  return code == cv::ROTATE_90_CLOCKWISE || code == cv::ROTATE_90_COUNTERCLOCKWISE;
+}
+
 cv::Mat to_gray8(const cv::Mat& input) {
   if (input.empty()) return {};
   cv::Mat gray;
@@ -50,7 +61,7 @@ cv::Mat to_gray8(const cv::Mat& input) {
   return gray;
 }
 
-cv::Mat transform_gray_image(const cv::Mat& input, const std::string& rotate_mode, const std::string& flip_mode) {
+cv::Mat transform_image(const cv::Mat& input, const std::string& rotate_mode, const std::string& flip_mode) {
   const std::string rotation = normalize(rotate_mode);
   const std::string flip = normalize(flip_mode);
   // Each returned image must own its pixels: XREAL reuses the decoded eye
@@ -71,6 +82,10 @@ cv::Mat transform_gray_image(const cv::Mat& input, const std::string& rotate_mod
     if (rotation == "rotate180" || rotation == "180") return input.clone();
   }
   return flip_image(rotate_image(input, rotate_mode), flip_mode);
+}
+
+cv::Mat transform_gray_image(const cv::Mat& input, const std::string& rotate_mode, const std::string& flip_mode) {
+  return transform_image(input, rotate_mode, flip_mode);
 }
 
 }  // namespace xr_capture_cpp

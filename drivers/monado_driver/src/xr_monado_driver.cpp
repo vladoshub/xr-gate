@@ -1,14 +1,16 @@
 // XR Tracking Monado runtime driver.
 //
 // This device layer consumes the runtime-ready streams produced by
-// xr_runtime_adapter and exposes one HMD plus two controller devices to Monado.
+// xr_runtime_adapter and exposes a HMD, controllers and optional body trackers.
 
+#include "xr_monado_driver_interface.h"
 #include "xr_monado_driver/runtime_readers.hpp"
 #include <xr_runtime/input/controller_input_mapping.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +19,9 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
+#include <thread>
 
 extern "C" {
 #include "xrt/xrt_device.h"
@@ -695,6 +699,85 @@ bool finite_position(const struct xrt_vec3& position) {
   return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
 }
 
+struct BodyTrackerIo {
+  std::mutex mutex;
+  std::unique_ptr<IRuntimeBodyTrackerReader> reader;
+};
+
+struct BodyTrackerDevice : xrt_device {
+  std::shared_ptr<BodyTrackerIo> io;
+  xr_tracking::BodyTrackerKey key;
+  xrt_input pose_input{};
+};
+
+bool read_body_trackers(BodyTrackerIo& io, xr_tracking::BodyTrackerSetFrameF32V1& frame) {
+  constexpr int64_t kMaxAgeNs = 250'000'000;
+  std::lock_guard<std::mutex> lock(io.mutex);
+  RuntimeBodyTrackerSample sample;
+  // Use publication time so the adapter's hold/prediction window stays usable.
+  if (!io.reader->read_latest(sample, nullptr) || sample.age_ns > kMaxAgeNs) return false;
+  frame = sample.frame;
+  return true;
+}
+
+void relation_from_body_tracker(const xr_tracking::BodyTrackerF32V1& tracker,
+                               xrt_space_relation& relation) {
+  using namespace xr_tracking;
+  if (tracker.status != BODY_TRACKER_STATUS_TRACKING && tracker.status != BODY_TRACKER_STATUS_STALE) return;
+
+  const bool tracked = tracker.status == BODY_TRACKER_STATUS_TRACKING;
+  const auto& pose = tracker.pose;
+  const auto position = vec3(pose.px, pose.py, pose.pz);
+  const auto orientation = quatf(pose.qw, pose.qx, pose.qy, pose.qz);
+  uint32_t flags = 0;
+  if ((tracker.flags & (BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_POSITION_VALID)) != 0u &&
+      finite_position(position)) {
+    relation.pose.position = position;
+    flags |= XRT_SPACE_RELATION_POSITION_VALID_BIT;
+    if (tracked) flags |= XRT_SPACE_RELATION_POSITION_TRACKED_BIT;
+  }
+  if ((tracker.flags & (BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_ORIENTATION_VALID)) != 0u &&
+      quat_is_valid(orientation)) {
+    relation.pose.orientation = quat_normalize(orientation);
+    flags |= XRT_SPACE_RELATION_ORIENTATION_VALID_BIT;
+    if (tracked) flags |= XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT;
+  }
+  const auto linear = vec3(pose.vx, pose.vy, pose.vz);
+  if ((flags & XRT_SPACE_RELATION_POSITION_VALID_BIT) != 0u &&
+      (tracker.flags & BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) != 0u && finite_position(linear)) {
+    relation.linear_velocity = linear;
+    flags |= XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT;
+  }
+  const auto angular = vec3(pose.wx, pose.wy, pose.wz);
+  if ((flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0u &&
+      (tracker.flags & BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID) != 0u && finite_position(angular)) {
+    relation.angular_velocity = angular;
+    flags |= XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT;
+  }
+  relation.relation_flags = static_cast<xrt_space_relation_flags>(flags);
+}
+
+xrt_result_t body_tracker_get_pose(xrt_device* xdev, xrt_input_name name, int64_t /*at_timestamp_ns*/,
+                                   xrt_space_relation* out_relation) {
+  relation_zero(out_relation);
+  if (name != XRT_INPUT_GENERIC_TRACKER_POSE) return XRT_ERROR_INPUT_UNSUPPORTED;
+
+  auto* device = static_cast<BodyTrackerDevice*>(xdev);
+  xr_tracking::BodyTrackerSetFrameF32V1 frame{};
+  if (!read_body_trackers(*device->io, frame)) return XRT_SUCCESS;
+
+  const auto end = frame.trackers + frame.tracker_count;
+  const auto tracker = std::find_if(frame.trackers, end, [&](const auto& candidate) {
+    return xr_tracking::body_tracker_key(candidate) == device->key;
+  });
+  if (tracker != end) relation_from_body_tracker(*tracker, *out_relation);
+  return XRT_SUCCESS;
+}
+
+void body_tracker_destroy(xrt_device* xdev) {
+  delete static_cast<BodyTrackerDevice*>(xdev);
+}
+
 constexpr uint32_t kJointPoseValid = XRT_SPACE_RELATION_POSITION_VALID_BIT |
                                       XRT_SPACE_RELATION_ORIENTATION_VALID_BIT;
 constexpr uint32_t kJointPoseTracked = XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
@@ -1245,14 +1328,19 @@ void setup_hmd_display(struct xrt_device* xdev) {
   }
 }
 
-XrRuntimeIo* create_runtime_io() {
-  auto* io = new XrRuntimeIo();
-  const auto transport = env_string("XR_MONADO_TRANSPORT", "shm");
+xr::openvr_driver::RuntimeTcpConfig runtime_tcp_config() {
   xr::openvr_driver::RuntimeTcpConfig tcp;
   tcp.host = env_string("XR_MONADO_TCP_HOST", "127.0.0.1");
   tcp.port = static_cast<uint16_t>(env_u32("XR_MONADO_TCP_PORT", 45810, 1, 65535));
   tcp.reconnect_ms = env_u32("XR_MONADO_TCP_RECONNECT_MS", 500, 10, 60000);
   tcp.timeout_ms = env_u32("XR_MONADO_TCP_TIMEOUT_MS", 1000, 50, 60000);
+  return tcp;
+}
+
+XrRuntimeIo* create_runtime_io() {
+  auto* io = new XrRuntimeIo();
+  const auto transport = env_string("XR_MONADO_TRANSPORT", "shm");
+  const auto tcp = runtime_tcp_config();
   io->hmd_cfg.transport = io->controller_cfg.transport = io->hand_cfg.transport = transport;
   io->hmd_cfg.tcp = io->controller_cfg.tcp = io->hand_cfg.tcp = tcp;
   io->hmd_cfg.shm_name = env_string("XR_MONADO_HMD_SHM", "runtime_hmd_pose");
@@ -1370,4 +1458,85 @@ extern "C" struct xrt_device* xr_tracking_runtime_controller_create(struct xrt_d
                dev->input_cfg.axis_activity_threshold, dev->input_cfg.analog_click_threshold);
   u_var_add_root(dev, left ? "XR Tracking Runtime Left Controller" : "XR Tracking Runtime Right Controller", true);
   return xdev;
+}
+
+extern "C" uint32_t xr_tracking_runtime_body_trackers_create(struct xrt_tracking_origin* origin,
+                                                            struct xrt_device** out_devices,
+                                                            uint32_t capacity) {
+  using namespace xr::monado_driver;
+  using namespace xr_tracking;
+  if (!env_truthy("XR_MONADO_BODY_TRACKERS") || capacity == 0) return 0;
+
+  auto io = std::make_shared<BodyTrackerIo>();
+  RuntimeBodyTrackerReaderConfig config;
+  const auto tracking_transport = env_string("XR_MONADO_TRANSPORT", "shm");
+  config.transport = env_string("XR_MONADO_BODY_TRACKERS_TRANSPORT", tracking_transport.c_str());
+  config.shm_name = env_string("XR_MONADO_BODY_TRACKERS_SHM", "runtime_body_trackers");
+  config.tcp = runtime_tcp_config();
+  io->reader = create_runtime_body_tracker_reader(config);
+  if (!io->reader) {
+    std::fprintf(stderr, "[xr_tracking_monado] unsupported body tracker transport: %s\n",
+                 config.transport.c_str());
+    return 0;
+  }
+
+  // Monado's device list is static. Allow the asynchronous TCP connection and
+  // first nonempty snapshot to arrive before the builder finalizes the list.
+  const bool tcp = std::strcmp(io->reader->transport_name(), "app_tcp") == 0;
+  const auto wait = std::chrono::milliseconds(tcp ? config.tcp.timeout_ms : 0);
+  const auto deadline = std::chrono::steady_clock::now() + wait;
+  BodyTrackerSetFrameF32V1 frame{};
+  while (!read_body_trackers(*io, frame) || frame.tracker_count == 0) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      std::fprintf(stderr, "[xr_tracking_monado] no fresh body trackers at startup (%s)\n",
+                   config.transport.c_str());
+      return 0;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < frame.tracker_count && count < capacity; ++i) {
+    const auto& tracker = frame.trackers[i];
+    const auto key = body_tracker_key(tracker);
+    if (key.kind == BodyTrackerKey::Kind::None) continue;
+    if (std::any_of(out_devices, out_devices + count, [&](xrt_device* device) {
+          return static_cast<BodyTrackerDevice*>(device)->key == key;
+        })) continue;
+
+    auto* device = new (std::nothrow) BodyTrackerDevice{};
+    if (device == nullptr) break;
+    device->io = io;
+    device->key = key;
+    device->name = XRT_DEVICE_VIVE_TRACKER;
+    device->device_type = XRT_DEVICE_TYPE_GENERIC_TRACKER;
+    device->tracking_origin = origin;
+    device->supported.position_tracking = true;
+    device->supported.orientation_tracking = true;
+    device->pose_input.name = XRT_INPUT_GENERIC_TRACKER_POSE;
+    // Keep the pose input available during loss. The relation flags report validity.
+    device->pose_input.active = true;
+    device->inputs = &device->pose_input;
+    device->input_count = 1;
+    if (key.kind == BodyTrackerKey::Kind::Text) {
+      std::snprintf(device->serial, sizeof(device->serial), "xr-gate-body/id/%.*s",
+                    static_cast<int>(sizeof(key.text)), key.text);
+    } else {
+      const char* kind = key.kind == BodyTrackerKey::Kind::StableHash ? "stable" : "serial";
+      std::snprintf(device->serial, sizeof(device->serial), "xr-gate-body/%s/%016llx",
+                    kind, static_cast<unsigned long long>(key.value));
+    }
+    const int id_size = static_cast<int>(sizeof(tracker.tracker_id));
+    if (tracker.tracker_id[0] != '\0') {
+      std::snprintf(device->str, sizeof(device->str), "XR Gate body tracker %.*s", id_size, tracker.tracker_id);
+    } else {
+      std::snprintf(device->str, sizeof(device->str), "XR Gate body tracker %016llx",
+                    static_cast<unsigned long long>(key.value));
+    }
+    u_device_populate_function_pointers(device, body_tracker_get_pose, body_tracker_destroy);
+    out_devices[count++] = device;
+  }
+  std::fprintf(stderr, "[xr_tracking_monado] registered %u body trackers from %u input records\n",
+               count, frame.tracker_count);
+  return count;
 }

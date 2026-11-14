@@ -33,6 +33,7 @@ RUNTIME_APP_TCP_HOST="${RUNTIME_APP_TCP_HOST:-127.0.0.1}"
 RUNTIME_APP_TCP_PORT="${RUNTIME_APP_TCP_PORT:-45810}"
 RUNTIME_APP_TCP_RATE="${RUNTIME_APP_TCP_RATE:-60}"
 RUNTIME_APP_TCP_MAX_CLIENTS="${RUNTIME_APP_TCP_MAX_CLIENTS:-8}"
+RUNTIME_APP_TCP_BODY_TRACKERS="${RUNTIME_APP_TCP_BODY_TRACKERS:-0}"
 EMULATION_CONTROLLER="${EMULATION_CONTROLLER:-1}" # used when SIMPLE_GESTURES=0
 SIMPLE_GESTURES="${SIMPLE_GESTURES:-1}" # 1 selects pinch Trigger and open-palm Grip
 SIMPLE_GESTURES_TOUCHPAD="${SIMPLE_GESTURES_TOUCHPAD:-${XR_SIMPLE_GESTURES_TOUCHPAD:-1}}" # simple mode only
@@ -281,6 +282,11 @@ CONTROLLER_INPUT_REGISTRY="${CONTROLLER_INPUT_REGISTRY:-$TRACKING_REGISTRY}" # c
 CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}" # controller input source stream name
 CONTROLLER_INPUT_HOST="${CONTROLLER_INPUT_HOST:-127.0.0.1}" # TCP host for controller input
 CONTROLLER_INPUT_PORT="${CONTROLLER_INPUT_PORT:-45672}" # TCP port for controller input
+CONTROLLER_6DOF_INPUT="${CONTROLLER_6DOF_INPUT:-none}" # none, shm, tcp
+CONTROLLER_6DOF_REGISTRY="${CONTROLLER_6DOF_REGISTRY:-$TRACKING_REGISTRY}"
+CONTROLLER_6DOF_STREAM="${CONTROLLER_6DOF_STREAM:-controller_6dof}"
+CONTROLLER_6DOF_TCP_HOST="${CONTROLLER_6DOF_TCP_HOST:-127.0.0.1}"
+CONTROLLER_6DOF_TCP_PORT="${CONTROLLER_6DOF_TCP_PORT:-45673}"
 CONTROLLER_INPUT_CONFLICT_POLICY="${CONTROLLER_INPUT_CONFLICT_POLICY:-controller_override}" # policy when controller input conflicts with hand gestures
 CONTROLLER_INPUT_STALE_POLICY="${CONTROLLER_INPUT_STALE_POLICY:-hold_last}" # keep last controller state through brief no-hands/controller-source stalls
 OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT="${OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT:-1}" # in controller_buttons_runtime_only, block hand gesture input while override_controller stream is fresh/recently seen
@@ -348,6 +354,7 @@ if [[ "${XR_CONTROLLER_MODE:-}" == "no" ]]; then
   RUNTIME_CONTROLLER_MODE="controller_only_pose_invalid"
   CONTROLLER_INPUT_MODE="hand_tracking_only"
   CONTROLLER_INPUT_TRANSPORT="none"
+  CONTROLLER_6DOF_INPUT="none"
   HAND_SKELETON26_INPUT="none"
   HAND_SKELETON26_DERIVE_GESTURES="0"
   RUNTIME_DERIVE_HAND_GESTURES="0"
@@ -489,6 +496,11 @@ args=(
   --controller-input-stream "$CONTROLLER_INPUT_STREAM"
   --controller-input-host "$CONTROLLER_INPUT_HOST"
   --controller-input-port "$CONTROLLER_INPUT_PORT"
+  --controller-6dof-input "$CONTROLLER_6DOF_INPUT"
+  --controller-6dof-registry "$CONTROLLER_6DOF_REGISTRY"
+  --controller-6dof-stream "$CONTROLLER_6DOF_STREAM"
+  --controller-6dof-tcp-host "$CONTROLLER_6DOF_TCP_HOST"
+  --controller-6dof-tcp-port "$CONTROLLER_6DOF_TCP_PORT"
   --controller-input-conflict-policy "$CONTROLLER_INPUT_CONFLICT_POLICY" \
   --controller-input-stale-policy "$CONTROLLER_INPUT_STALE_POLICY"
   --override-controller-block-gestures-while-stream-present "$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT"
@@ -602,6 +614,7 @@ if [[ "$RUNTIME_APP_TCP" == "1" ]]; then
     --app-tcp-rate "$RUNTIME_APP_TCP_RATE"
     --app-tcp-max-clients "$RUNTIME_APP_TCP_MAX_CLIENTS")
   if [[ "$RUNTIME_APP_TCP_SPATIAL" == "1" ]]; then args+=(--app-tcp-spatial); fi
+  if [[ "$RUNTIME_APP_TCP_BODY_TRACKERS" == "1" ]]; then args+=(--app-tcp-body-trackers); fi
 fi
 if [[ -n "$RUNTIME_CONTROLLER_MODE" ]]; then
   args+=(--runtime-controller-mode "$RUNTIME_CONTROLLER_MODE")
@@ -803,6 +816,7 @@ RUNTIME_JITTER_FILTER_BODY_TRACKER_ROT_SMOOTH_ALPHA=$RUNTIME_JITTER_FILTER_BODY_
 CONTROLLER_INPUT_MODE=$CONTROLLER_INPUT_MODE # controller/hand gesture merge mode
 RUNTIME_CONTROLLER_MODE=$RUNTIME_CONTROLLER_MODE # empty keeps the configured controller synthesis mode
 CONTROLLER_INPUT_TRANSPORT=$CONTROLLER_INPUT_TRANSPORT # controller input transport
+CONTROLLER_6DOF_INPUT=$CONTROLLER_6DOF_INPUT # 6DoF controller input transport
 OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT=$OVERRIDE_CONTROLLER_BLOCK_GESTURES_WHILE_STREAM_PRESENT # runtime-only gesture block gate
 OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS=$OVERRIDE_CONTROLLER_GESTURE_BLOCK_LATCH_MS # runtime-only gesture block latch
 MAX_CONTROLLER_AGE_MS=$MAX_CONTROLLER_AGE_MS # max age before controller_input is considered stale

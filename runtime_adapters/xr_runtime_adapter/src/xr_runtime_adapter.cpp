@@ -2194,6 +2194,7 @@ class HandSkeleton26InputThread {
 
 struct ControllerInputThreadConfig {
   xr_runtime::ControllerInputRuntimeConfig input;
+  bool pose_6dof = false;
 };
 
 struct ControllerInputThreadSnapshot {
@@ -2211,6 +2212,7 @@ struct ControllerInputThreadSnapshot {
   uint64_t reattach_failures = 0;
   std::string last_error;
   std::optional<xr_runtime::ControllerInputV3> latest;
+  std::optional<xr_runtime::Controller6DofPosesV1> poses;
 };
 
 class ControllerInputThread {
@@ -2261,7 +2263,11 @@ class ControllerInputThread {
         if (transport == xr_runtime::ControllerInputTransport::TCP) {
           run_tcp_once();
         } else if (transport == xr_runtime::ControllerInputTransport::SHM) {
-          run_shm_once();
+          if (cfg_.pose_6dof) {
+            run_shm_once<xr_runtime::Controller6DofInputV1>(xr_runtime::CONTROLLER_6DOF_INPUT_V1_FORMAT_NAME);
+          } else {
+            run_shm_once<xr_runtime::ControllerInputV3>(xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME);
+          }
         } else {
           set_error("controller input transport not implemented in this build: " + cfg_.input.transport);
           return;
@@ -2280,22 +2286,25 @@ class ControllerInputThread {
     note_reattach_success();
     set_connected(true, "");
     while (!stop_) {
-      auto frame = client.read_next();
-      observe(std::move(frame), client.runtime_profile());
+      if (cfg_.pose_6dof) {
+        auto frame = client.read_next_6dof();
+        observe(frame, client.runtime_profile());
+      } else {
+        auto frame = client.read_next();
+        observe(frame, client.runtime_profile());
+      }
     }
   }
 
-  void run_shm_once() {
+  template <typename Payload>
+  void run_shm_once(const char* format) {
     auto info = xr_runtime::stream_info_from_registry(cfg_.input.registry, cfg_.input.stream);
-    if (info.format_name != xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME) {
-      throw std::runtime_error(
-          "unsupported controller input SHM ABI '" + info.format_name +
-          "'; expected CONTROLLER_INPUT_V3. Update override_controller and "
-          "xr_runtime_adapter from the same XR Gate release");
+    if (info.format_name != format) {
+      throw std::runtime_error("unsupported controller input SHM ABI '" + info.format_name +
+                               "'; expected " + format);
     }
 
-    xr_runtime::TrackingRingReader<xr_runtime::ControllerInputV3> reader(
-        std::move(info), xr_runtime::CONTROLLER_INPUT_V3_FORMAT_NAME);
+    xr_runtime::TrackingRingReader<Payload> reader(std::move(info), format);
     note_reattach_success();
     set_connected(true, "");
     uint64_t last_seq = 0;
@@ -2306,13 +2315,12 @@ class ControllerInputThread {
     while (!stop_) {
       auto frame = reader.next(last_seq);
       if (frame) {
-        if (frame->sequence != last_seq) throw std::runtime_error("SHM payload/slot sequence mismatch");
         last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
         if (extension) {
           const auto* metadata = reinterpret_cast<const xr_runtime::ControllerRuntimeProfileShmV1*>(extension);
           xr_runtime::read_controller_runtime_profile(*metadata, profile);
         }
-        observe(*frame, profile);
+        observe(*frame, profile, last_seq);
       } else {
         const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
         if (cfg_.input.max_age_ms > 0 &&
@@ -2324,11 +2332,22 @@ class ControllerInputThread {
     }
   }
 
+  void observe(const xr_runtime::Controller6DofInputV1& frame,
+               const xr_runtime::ControllerRuntimeProfileV1& profile,
+               uint64_t slot_sequence = 0) {
+    observe(frame.input, profile, slot_sequence, &frame.poses);
+  }
+
   void observe(xr_runtime::ControllerInputV3 frame,
-               const xr_runtime::ControllerRuntimeProfileV1& profile) {
+               const xr_runtime::ControllerRuntimeProfileV1& profile,
+               uint64_t slot_sequence = 0,
+               const xr_runtime::Controller6DofPosesV1* poses = nullptr) {
     if (frame.version != xr_runtime::CONTROLLER_INPUT_V3_FORMAT_VERSION ||
         frame.size_bytes != sizeof(xr_runtime::ControllerInputV3)) {
       throw std::runtime_error("invalid controller_input V3 frame header");
+    }
+    if (slot_sequence != 0 && frame.sequence != slot_sequence) {
+      throw std::runtime_error("SHM payload/slot sequence mismatch");
     }
     frame.left.imu.sample_count =
         std::min(frame.left.imu.sample_count, xr_runtime::CONTROLLER_IMU_MAX_SAMPLES);
@@ -2341,15 +2360,20 @@ class ControllerInputThread {
     snapshot_.last_error.clear();
     snapshot_.last_sequence = frame.sequence;
     snapshot_.latest_receive_timestamp_ns = now_ns;
-    snapshot_.age_ms = xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - frame.timestamp_ns));
+    snapshot_.age_ms = poses && cfg_.input.transport == "tcp"
+        ? 0.0 : xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - frame.timestamp_ns));
     snapshot_.latest = frame;
     snapshot_.runtime_profile = profile;
-    if (pending_frames_.size() == kMaxPendingFrames) {
-      pending_frames_.clear();
-      ++snapshot_.discontinuities;
-      std::cerr << "[xr_runtime_adapter][WARN] controller IMU history overflow; resetting integration\n";
+    if (poses) {
+      snapshot_.poses = *poses;
+    } else {
+      if (pending_frames_.size() == kMaxPendingFrames) {
+        pending_frames_.clear();
+        ++snapshot_.discontinuities;
+        std::cerr << "[xr_runtime_adapter][WARN] controller IMU history overflow; resetting integration\n";
+      }
+      pending_frames_.push_back(frame);
     }
-    pending_frames_.push_back(frame);
     ++snapshot_.frames;
   }
 
@@ -2361,6 +2385,7 @@ class ControllerInputThread {
     if (!connected) {
       pending_frames_.clear();
       snapshot_.latest.reset();
+      snapshot_.poses.reset();
       snapshot_.runtime_profile = {};
       ++snapshot_.discontinuities;
       ++snapshot_.transport_discontinuities;
@@ -2404,6 +2429,7 @@ struct BodyTrackerInputConfig {
   double reattach_on_stale_ms = 1000.0;
 
   bool publish_runtime_shm = false;
+  xr_runtime_adapter::AppTcpServer* runtime_tcp = nullptr;
   std::string runtime_registry = xr_runtime::default_runtime_tracking_registry_path();
   std::string runtime_stream = "runtime_body_trackers";
   std::string runtime_shm_name = "runtime_body_trackers";
@@ -2450,7 +2476,7 @@ class BodyTrackerInputThread {
       std::lock_guard<std::mutex> lock(mu_);
       snapshot_ = {};
       snapshot_.enabled = true;
-      snapshot_.runtime_output_enabled = cfg_.publish_runtime_shm;
+      snapshot_.runtime_output_enabled = output_enabled();
     }
     thread_ = std::thread([this] { run(); });
   }
@@ -2476,6 +2502,8 @@ class BodyTrackerInputThread {
   }
 
  private:
+  bool output_enabled() const { return cfg_.publish_runtime_shm || cfg_.runtime_tcp != nullptr; }
+
   void run() {
     while (!stop_) {
       try {
@@ -2508,17 +2536,25 @@ class BodyTrackerInputThread {
       auto frame = reader.latest();
       if (frame && frame->sequence > last_seq) {
         last_seq = frame->sequence;
-        last_frame_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        observe(std::move(*frame));
-      } else {
         const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
-        maybe_publish_synthetic(now_ns);
-        if (cfg_.reattach_on_stale_ms > 0.0 &&
-            xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - last_frame_ns)) >= cfg_.reattach_on_stale_ms) {
-          throw std::runtime_error("body_trackers SHM stream stale; reattaching");
+        // A remapped ring can still contain the old last frame after its
+        // source stopped. Do not give that frame a fresh publication time.
+        const bool stale = cfg_.reattach_on_stale_ms > 0.0 && frame->timestamp_ns != 0 &&
+            now_ns >= frame->timestamp_ns &&
+            xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - frame->timestamp_ns)) >= cfg_.reattach_on_stale_ms;
+        if (!stale) {
+          last_frame_ns = now_ns;
+          observe(std::move(*frame));
+          continue;
         }
-        sleep_ms(1);
       }
+      const uint64_t now_ns = static_cast<uint64_t>(xr_runtime::now_ns());
+      maybe_publish_synthetic(now_ns);
+      if (cfg_.reattach_on_stale_ms > 0.0 &&
+          xr_runtime::ns_to_ms(static_cast<int64_t>(now_ns - last_frame_ns)) >= cfg_.reattach_on_stale_ms) {
+        throw std::runtime_error("body_trackers SHM stream stale; reattaching");
+      }
+      sleep_ms(1);
     }
   }
 
@@ -2576,14 +2612,14 @@ class BodyTrackerInputThread {
     runtime_jitter_filter_.configure(cfg_.jitter_filter);
     runtime_jitter_filter_.filter_body_trackers(frame);
 
-    if (cfg_.publish_runtime_shm) {
+    if (output_enabled()) {
       publish_runtime(frame, now_ns);
     }
 
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
     snapshot_.connected = true;
-    snapshot_.runtime_output_enabled = cfg_.publish_runtime_shm;
+    snapshot_.runtime_output_enabled = output_enabled();
     snapshot_.last_error.clear();
     if (snapshot_.last_sequence != 0 && frame.sequence > snapshot_.last_sequence + 1) {
       ++snapshot_.sequence_gaps;
@@ -2599,7 +2635,7 @@ class BodyTrackerInputThread {
 
 
   void maybe_publish_synthetic(uint64_t now_ns) {
-    if (!cfg_.publish_runtime_shm || !cfg_.stability_gate.enabled) return;
+    if (!output_enabled() || !cfg_.stability_gate.enabled) return;
     RuntimeHmdPoseSnapshot runtime_hmd;
     {
       std::lock_guard<std::mutex> lock(mu_);
@@ -2622,7 +2658,7 @@ class BodyTrackerInputThread {
   }
 
   void publish_runtime(xr_tracking::BodyTrackerSetFrameF32V1 frame, uint64_t now_ns) {
-    if (!runtime_publisher_) {
+    if (cfg_.publish_runtime_shm && !runtime_publisher_) {
       xr_tracking::BodyTrackerSetShmPublisherConfig cfg;
       cfg.registry_path = cfg_.runtime_registry;
       cfg.stream_id = cfg_.runtime_stream;
@@ -2641,17 +2677,21 @@ class BodyTrackerInputThread {
 
     frame.timestamp_ns = now_ns;
     if (frame.source_timestamp_ns == 0) frame.source_timestamp_ns = now_ns;
-    runtime_publisher_->publish(std::move(frame));
     {
       std::lock_guard<std::mutex> lock(mu_);
-      ++snapshot_.runtime_published;
+      frame.sequence = ++snapshot_.runtime_published;
     }
+    frame.space = xr_tracking::BODY_TRACKER_SPACE_RUNTIME_HMD;
+    frame.flags &= ~xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
+    if (frame.tracker_count != 0) frame.flags |= xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
+    if (runtime_publisher_) runtime_publisher_->publish(frame);
+    if (cfg_.runtime_tcp) cfg_.runtime_tcp->publish_body_trackers(frame);
   }
 
   void set_connected(bool connected, const std::string& error) {
     std::lock_guard<std::mutex> lock(mu_);
     snapshot_.enabled = true;
-    snapshot_.runtime_output_enabled = cfg_.publish_runtime_shm;
+    snapshot_.runtime_output_enabled = output_enabled();
     snapshot_.connected = connected;
     snapshot_.last_error = error;
   }
@@ -2912,11 +2952,16 @@ int main(int argc, char** argv) {
 
   std::string right_controller_id = "auto";
 
+  xr_runtime::ControllerInputRuntimeConfig controller_6dof_config;
+  controller_6dof_config.stream = "controller_6dof";
+  controller_6dof_config.port = 45673;
+
   int max_controller_age_ms = 250;
 
   xr_runtime::ControllerInputRuntimeConfig controller_input_config;
 
   bool app_tcp_enabled = false;
+  bool app_tcp_body_trackers = false;
   xr_runtime_adapter::AppTcpServerConfig app_tcp_config;
 
   bool publish_runtime_pose_shm = false;
@@ -3194,6 +3239,8 @@ int main(int argc, char** argv) {
   app.add_flag("--app-tcp", app_tcp_enabled,
                "Enable read-only JSON Lines TCP server for applications (off by default)");
   app.add_flag("--app-tcp-spatial", app_tcp_config.spatial_mesh, "Send optional spatial mesh messages to application TCP clients");
+  app.add_flag("--app-tcp-body-trackers", app_tcp_body_trackers,
+               "Include body trackers in application TCP frames (requires --app-tcp)");
   app.add_option("--app-tcp-host", app_tcp_config.host, "Application TCP bind host (default 127.0.0.1)");
   app.add_option("--app-tcp-port", app_tcp_config.port, "Application TCP port (default 45810)");
   app.add_option("--app-tcp-rate", app_tcp_config.rate_hz, "Maximum application frame rate, 1..240 Hz (default 60)");
@@ -3270,6 +3317,18 @@ int main(int argc, char** argv) {
 
                  "External controller input transport: none, shm, udp, tcp, named_pipe");
 
+  app.add_option("--controller-6dof-input", controller_6dof_config.transport,
+                 "6DoF controller input transport: none, shm, tcp (default none)")
+      ->check(CLI::IsMember({"none", "shm", "tcp"}));
+  app.add_option("--controller-6dof-registry", controller_6dof_config.registry,
+                 "Tracking registry path for 6DoF controller SHM");
+  app.add_option("--controller-6dof-stream", controller_6dof_config.stream,
+                 "6DoF controller stream in the SHM registry (default controller_6dof)");
+  app.add_option("--controller-6dof-tcp-host", controller_6dof_config.host,
+                 "6DoF controller input TCP host (default 127.0.0.1)");
+  app.add_option("--controller-6dof-tcp-port", controller_6dof_config.port,
+                 "6DoF controller input TCP port (default 45673)")
+      ->check(CLI::Range(1, 65535));
 
   app.add_option("--left-controller-id", left_controller_id,
 
@@ -3902,6 +3961,13 @@ int main(int argc, char** argv) {
     return app.exit(e);
   }
 
+  const bool controller_6dof_enabled = controller_6dof_config.transport != "none";
+  if (controller_6dof_enabled && controller_input_transport != "none") {
+    std::cerr << "ERROR: --controller-6dof-input and --controller-input-transport are mutually "
+                 "exclusive; set one to none\n";
+    return 1;
+  }
+
   if (no_recenter_on_reset_counter) recenter_on_reset_counter = false;
 
   // Preserve the pre-split behavior for direct CLI users: when a dedicated
@@ -4078,9 +4144,11 @@ int main(int argc, char** argv) {
           runtime_controller_right_orientation_source,
           "--runtime-controller-right-orientation-source");
   const bool runtime_controller_left_imu_source_configured =
+      !controller_6dof_enabled &&
       runtime_controller_left_orientation_source_value ==
       override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
   const bool runtime_controller_right_imu_source_configured =
+      !controller_6dof_enabled &&
       runtime_controller_right_orientation_source_value ==
       override_controller::RuntimeControllerOrientationSource::ImuOverrideControllerRuntime;
   const bool runtime_controller_imu_acceleration_configured =
@@ -4175,6 +4243,22 @@ int main(int argc, char** argv) {
       throw std::runtime_error("--input must be shm or udp");
     }
     xr_runtime_adapter::platform::require_transport_available(input, "--input");
+    xr_runtime_adapter::platform::require_transport_available(
+        controller_6dof_config.transport, "--controller-6dof-input");
+    if (controller_6dof_config.transport == "shm" &&
+        (controller_6dof_config.registry.empty() || controller_6dof_config.stream.empty())) {
+      throw std::runtime_error("--controller-6dof-registry and --controller-6dof-stream must be nonempty for SHM");
+    }
+    if (controller_6dof_config.transport == "tcp" && controller_6dof_config.host.empty()) {
+      throw std::runtime_error("--controller-6dof-tcp-host must be nonempty for TCP");
+    }
+    if (controller_6dof_enabled) {
+      controller_input_config.transport = controller_6dof_config.transport;
+      controller_input_config.registry = controller_6dof_config.registry;
+      controller_input_config.stream = controller_6dof_config.stream;
+      controller_input_config.host = controller_6dof_config.host;
+      controller_input_config.port = controller_6dof_config.port;
+    }
     if (tick_rate_hz <= 0.0) {
       throw std::runtime_error("--tick-rate must be > 0");
     }
@@ -4243,9 +4327,14 @@ int main(int argc, char** argv) {
                                                              "--publish-runtime-spatial-proxy-mesh-shm");
     xr_runtime_adapter::platform::require_shm_flag_available(publish_runtime_body_trackers_shm,
                                                              "--publish-runtime-body-trackers-shm");
-    if (runtime_body_tracker_stability_gate && !publish_runtime_body_trackers_shm) {
+    const bool publish_runtime_body_trackers_tcp = app_tcp_enabled && app_tcp_body_trackers;
+    if (app_tcp_body_trackers && !app_tcp_enabled) {
+      throw std::runtime_error("--app-tcp-body-trackers requires --app-tcp");
+    }
+    if (runtime_body_tracker_stability_gate && !publish_runtime_body_trackers_shm &&
+        !publish_runtime_body_trackers_tcp) {
       std::cout << "[xr_runtime_adapter] warning: runtime body tracker stability gate is enabled but "
-                << "--publish-runtime-body-trackers-shm is disabled; gate has no runtime output to publish\n";
+                << "body tracker SHM and TCP output are disabled\n";
     }
     if (runtime_body_tracker_reacquire_blend_ms < 0.0) {
       throw std::runtime_error("--runtime-body-tracker-reacquire-blend-ms must be >= 0");
@@ -4373,11 +4462,14 @@ int main(int argc, char** argv) {
                 << " body_trackers_stream: " << body_trackers_stream << "\n";
     }
     std::cout << "publish_runtime_body_trackers_shm: " << (publish_runtime_body_trackers_shm ? "true" : "false") << "\n";
+    std::cout << "publish_runtime_body_trackers_tcp: " << (publish_runtime_body_trackers_tcp ? "true" : "false") << "\n";
     if (publish_runtime_body_trackers_shm) {
       std::cout << "runtime_body_trackers_registry: " << runtime_body_trackers_registry << "\n";
       std::cout << "runtime_body_trackers_stream: " << runtime_body_trackers_stream << "\n";
       std::cout << "runtime_body_trackers_shm_name: " << runtime_body_trackers_shm_name << "\n";
       std::cout << "runtime_body_trackers_slots: " << runtime_body_trackers_slots << "\n";
+    }
+    if (publish_runtime_body_trackers_shm || publish_runtime_body_trackers_tcp) {
       std::cout << "runtime_body_tracker_stability_gate: " << (runtime_body_tracker_stability_gate ? "true" : "false") << "\n";
       if (runtime_body_tracker_stability_gate) {
         std::cout << "runtime_body_tracker_hold_lost_ms: " << runtime_body_tracker_hold_lost_ms << "\n";
@@ -4740,6 +4832,7 @@ int main(int argc, char** argv) {
   std::cout << "controller_buttons_runtime_only_mode: "
             << (controller_buttons_runtime_only_mode ? "true" : "false") << "\n";
   std::cout << "controller_input_transport: " << controller_input_transport << "\n";
+  std::cout << "controller_6dof_input: " << controller_6dof_config.transport << "\n";
   std::cout << "left_controller_id: " << left_controller_id << "\n";
   std::cout << "right_controller_id: " << right_controller_id << "\n";
   std::cout << "max_controller_age_ms: " << max_controller_age_ms << "\n";
@@ -4944,8 +5037,17 @@ int main(int argc, char** argv) {
       std::cout << "[xr_runtime_adapter] video input health thread started: " << video_input << "\n";
     }
 
+    // Declare the server before the input workers that can publish to it.
+    std::unique_ptr<xr_runtime_adapter::AppTcpServer> app_tcp_server;
     std::unique_ptr<BodyTrackerInputThread> body_tracker_thread;
     std::unique_ptr<SpatialProxyMeshInputThread> spatial_proxy_mesh_thread;
+    if (app_tcp_enabled) {
+      app_tcp_config.runtime_frame = runtime_frame;
+      app_tcp_server = std::make_unique<xr_runtime_adapter::AppTcpServer>(app_tcp_config);
+      std::cout << "[xr_runtime_adapter] application TCP listening on "
+                << app_tcp_config.host << ":" << app_tcp_config.port
+                << " rate=" << app_tcp_config.rate_hz << " Hz\n";
+    }
     if (spatial_proxy_mesh_input != "none") {
       SpatialProxyMeshInputConfig cfg;
       cfg.input = spatial_proxy_mesh_input;
@@ -4989,6 +5091,7 @@ int main(int argc, char** argv) {
       cfg.udp_bind_port = body_trackers_udp_bind_port;
       cfg.reattach_on_stale_ms = body_trackers_reattach_on_stale_ms;
       cfg.publish_runtime_shm = publish_runtime_body_trackers_shm;
+      cfg.runtime_tcp = publish_runtime_body_trackers_tcp ? app_tcp_server.get() : nullptr;
       cfg.runtime_registry = runtime_body_trackers_registry;
       cfg.runtime_stream = runtime_body_trackers_stream;
       cfg.runtime_shm_name = runtime_body_trackers_shm_name;
@@ -5057,19 +5160,11 @@ int main(int argc, char** argv) {
     if (controller_input_config.transport != "none") {
       ControllerInputThreadConfig cfg;
       cfg.input = controller_input_config;
+      cfg.pose_6dof = controller_6dof_enabled;
       controller_input_thread = std::make_unique<ControllerInputThread>(std::move(cfg));
       controller_input_thread->start();
       std::cout << "[xr_runtime_adapter] controller input thread started: "
                 << controller_input_config.transport << "\n";
-    }
-
-    std::unique_ptr<xr_runtime_adapter::AppTcpServer> app_tcp_server;
-    if (app_tcp_enabled) {
-      app_tcp_config.runtime_frame = runtime_frame;
-      app_tcp_server = std::make_unique<xr_runtime_adapter::AppTcpServer>(app_tcp_config);
-      std::cout << "[xr_runtime_adapter] application TCP listening on "
-                << app_tcp_config.host << ":" << app_tcp_config.port
-                << " rate=" << app_tcp_config.rate_hz << " Hz\n";
     }
 
     std::unique_ptr<xr_runtime::RuntimePoseShmPublisher> runtime_pose_publisher;
@@ -5447,6 +5542,7 @@ int main(int argc, char** argv) {
     std::string last_consumed_hmd_source;
     uint64_t last_consumed_hand_seq = 0;
     uint64_t last_consumed_controller_seq = 0;
+    uint64_t last_consumed_controller_6dof_frame = 0;
     uint64_t new_hmd_frames = 0;
     uint64_t new_hand_frames = 0;
     uint64_t stale_hmd_frames = 0;
@@ -5981,7 +6077,7 @@ int main(int argc, char** argv) {
       }
 
       std::optional<xr_runtime::ControllerInputV3> controller_input_for_tracking_profiles;
-      if (controller_input_thread &&
+      if (!controller_6dof_enabled && controller_input_thread &&
           (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp || app_tcp_enabled)) {
         const auto profile_snapshot = controller_input_thread->snapshot();
         if (profile_snapshot.latest) {
@@ -6107,9 +6203,23 @@ int main(int argc, char** argv) {
       std::optional<xr_runtime::ControllerInputV3> fresh_controller_input;
       std::vector<xr_runtime::ControllerInputV3> controller_imu_history;
       std::optional<ControllerInputThreadSnapshot> controller_snapshot_for_frame;
+      uint64_t controller_6dof_frame = 0;
+      uint64_t controller_6dof_timestamp_ns = 0;
+      const xr_runtime::Controller6DofPosesV1* controller_6dof_poses = nullptr;
       if (controller_input_thread) {
         controller_snapshot_for_frame = controller_input_thread->snapshot_and_take_pending(controller_imu_history);
-        if (controller_snapshot_for_frame->transport_discontinuities != controller_input_transport_discontinuities) {
+        if (controller_6dof_enabled) {
+          const auto& snapshot = *controller_snapshot_for_frame;
+          if (snapshot.latest && snapshot.poses && snapshot.latest->sequence != 0) {
+            // TCP producer and runtime may use different monotonic clocks.
+            controller_6dof_timestamp_ns = controller_input_config.transport == "shm"
+                ? snapshot.latest->timestamp_ns : snapshot.latest_receive_timestamp_ns;
+            if (!is_age_stale(frame.read_timestamp_ns, controller_6dof_timestamp_ns, max_controller_age_ms)) {
+              controller_6dof_frame = snapshot.frames;
+              controller_6dof_poses = &*snapshot.poses;
+            }
+          }
+        } else if (controller_snapshot_for_frame->transport_discontinuities != controller_input_transport_discontinuities) {
           std::cerr << "[xr_runtime_adapter][WARN] controller IMU state reset: "
                     << "reason=transport_discontinuity; yaw=reset\n";
           runtime_controller_synthesis_state = {};
@@ -6124,7 +6234,7 @@ int main(int argc, char** argv) {
         }
         controller_input_discontinuities = controller_snapshot_for_frame->discontinuities;
       }
-      if (controller_input_thread &&
+      if (!controller_6dof_enabled && controller_input_thread &&
           (controller_input_config.mode != "hand_tracking_only" || publish_runtime_controller_state_shm || publish_runtime_controller_state_udp || app_tcp_enabled)) {
         const auto& controller_snapshot = *controller_snapshot_for_frame;
         if (controller_snapshot.latest) {
@@ -6258,11 +6368,13 @@ int main(int argc, char** argv) {
              (frame.hmd.sequence != last_consumed_hmd_seq || frame_hmd_source_key != last_consumed_hmd_source)) ||
             (frame_any_hand_valid && frame_hand_sequence != 0 && frame_hand_sequence != last_consumed_hand_seq) ||
             (controller_override_active && frame_controller_sequence != 0 &&
-             frame_controller_sequence != last_consumed_controller_seq);
+             frame_controller_sequence != last_consumed_controller_seq) ||
+            (controller_6dof_frame != last_consumed_controller_6dof_frame);
       } else {
         const auto now_for_tick = std::chrono::steady_clock::now();
         if (now_for_tick >= next_tick) {
           should_consume = frame.hmd_valid || frame_any_hand_valid || controller_override_active ||
+                           controller_6dof_poses || last_consumed_controller_6dof_frame != 0 ||
                            (consume_stale_as_lost && (frame_hmd_stale_lost || frame_hand_stale_lost));
 
           frame.tick_frame = true;
@@ -6692,7 +6804,21 @@ int main(int argc, char** argv) {
         xr_runtime::RuntimeControllerStateFrameV1 controller_state_for_log{};
         bool controller_state_for_log_available = false;
         std::optional<xr_runtime::HandTrackingFrameF32V2> controller_hand_for_log;
-        if (runtime_controller_state_publisher || runtime_controller_state_udp_publisher || app_tcp_frame) {
+        const bool publish_controller_state =
+            runtime_controller_state_publisher || runtime_controller_state_udp_publisher || app_tcp_frame;
+        if (publish_controller_state && controller_6dof_enabled) {
+          const auto& snapshot = *controller_snapshot_for_frame;
+          controller_state_for_log = override_controller::compose_6dof_controller_state(
+              runtime_controller_state_publisher ? runtime_controller_state_publisher->next_sequence()
+                                                 : (runtime_controller_state_published + 1),
+              static_cast<uint64_t>(frame.read_timestamp_ns),
+              controller_6dof_timestamp_ns,
+              runtime_controller_synthesis_cfg,
+              controller_6dof_poses ? &*snapshot.latest : nullptr,
+              controller_6dof_poses,
+              snapshot.runtime_profile);
+          controller_state_for_log_available = true;
+        } else if (publish_controller_state) {
           poll_runtime_controller_imu_control(std::chrono::steady_clock::now());
 
           std::optional<xr_runtime::HandTrackingFrameF32V2> runtime_controller_hand;
@@ -6780,9 +6906,15 @@ int main(int argc, char** argv) {
           controller_state_for_log = runtime_controller_state;
           controller_state_for_log_available = true;
           controller_hand_for_log = runtime_controller_hand;
-          if (runtime_controller_state_publisher) runtime_controller_state_publisher->publish(runtime_controller_state);
-          if (runtime_controller_state_udp_publisher) runtime_controller_state_udp_publisher->send_controller_state(runtime_controller_state);
-          if (app_tcp_frame) app_tcp_frame->controllers = runtime_controller_state;
+        }
+        if (controller_state_for_log_available) {
+          if (runtime_controller_state_publisher) {
+            runtime_controller_state_publisher->publish(controller_state_for_log);
+          }
+          if (runtime_controller_state_udp_publisher) {
+            runtime_controller_state_udp_publisher->send_controller_state(controller_state_for_log);
+          }
+          if (app_tcp_frame) app_tcp_frame->controllers = controller_state_for_log;
           ++runtime_controller_state_published;
         }
         if (runtime_hand_publisher || runtime_hand_udp_publisher || app_tcp_frame) {
@@ -6841,6 +6973,7 @@ int main(int argc, char** argv) {
         if (controller_override_active && frame_controller_sequence != 0) {
           last_consumed_controller_seq = frame_controller_sequence;
         }
+        last_consumed_controller_6dof_frame = controller_6dof_frame;
 
         if (print_every > 0 && consumed % static_cast<uint64_t>(print_every) == 0) {
           const double rate = double(consumed) / std::max(1e-9, elapsed_s);
@@ -7388,6 +7521,7 @@ int main(int argc, char** argv) {
     std::cout << "runtime_frame: " << origin_state.output_frame() << "\n";
     std::cout << "controller_input_mode: " << controller_input_config.mode << "\n";
     std::cout << "controller_input_transport: " << controller_input_config.transport << "\n";
+    std::cout << "controller_6dof_input: " << controller_6dof_config.transport << "\n";
     std::cout << "controller_input_connected: " << (final_controller_health.connected ? "true" : "false") << "\n";
     std::cout << "controller_input_frames: " << final_controller_health.frames << "\n";
     std::cout << "controller_input_last_seq: " << final_controller_health.last_sequence << "\n";

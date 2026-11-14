@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -87,6 +88,25 @@ struct ImageTransformConfig {
   std::string flip = "none";
 };
 
+struct AdditionalCameraConfig {
+  std::string source;
+  std::string stream_id;
+  std::string frame_id;
+  int width = 0;   // 0 means use the decoded dimensions after the transform.
+  int height = 0;
+  int slot_count = 0;  // 0 means use up to eight slots from camera.slot_count.
+  ImageTransformConfig transform;
+};
+
+struct AdditionalCameraPublishConfig {
+  std::string registry_path;
+  std::string namespace_name;
+  std::optional<std::vector<std::string>> publish_modes;
+  std::string tcp_bind_host = "127.0.0.1";
+  int tcp_port = 45662;
+  int tcp_client_queue_size = 8;
+};
+
 struct CameraSourceConfig {
   bool enabled = true;
   std::string driver = "xreal_ultra";
@@ -107,11 +127,13 @@ struct CameraSourceConfig {
   std::string right_stream_id = "camera1";
   std::string left_frame_id = "camera0";
   std::string right_frame_id = "camera1";
+  bool stereo_enabled = true;
   int output_width = 480;
   int output_height = 640;
   int slot_count = 0;  // 0 means inherit service.slot_count
   ImageTransformConfig left_transform{"ccw90", "none"};
   ImageTransformConfig right_transform{"ccw90", "xy"};
+  std::map<std::string, AdditionalCameraConfig> additional_cameras;
   int stall_exit_ms = 2000;
 };
 
@@ -189,6 +211,7 @@ struct RuntimeConfig {
   std::string config_dir;
   std::string config_name = "config.yaml";
   bool config_explicit = false;
+  std::string extra_config_path;
 
   int slot_count = 256;
   int duration_sec = 0;
@@ -201,6 +224,7 @@ struct RuntimeConfig {
   int backend_control_poll_ms = 500;
 
   CameraSourceConfig camera;
+  AdditionalCameraPublishConfig additional_camera_publish;
   ImuSourceConfig imu;
 };
 
@@ -213,6 +237,8 @@ std::string json_escape(const std::string& s);
 std::string sanitize_shm_name(const std::string& value);
 std::vector<std::string> split_publish_modes(const std::string& value);
 std::string expand_user_path(const std::string& value);
+bool same_path(const std::string& first, const std::string& second);
+std::vector<std::string> configured_camera_devices(const CameraSourceConfig& cfg);
 RuntimeConfig parse_args(int argc, char** argv);
 void usage(const char* argv0);
 

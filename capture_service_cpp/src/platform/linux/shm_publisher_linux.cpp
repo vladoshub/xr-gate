@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 
 #include <cerrno>
@@ -45,21 +46,39 @@ static std::string shm_posix_name(const std::string& name) {
   return (!name.empty() && name[0] == '/') ? name : "/" + name;
 }
 
-ShmPublisher::ShmPublisher(const StreamSpec& spec, const std::string& namespace_name)
+ShmPublisher::ShmPublisher(const StreamSpec& spec, const std::string& namespace_name, bool reserve_storage)
     : spec_(spec), shm_name_(sanitize_shm_name(namespace_name + "_" + spec.stream_id)) {
-  slot_stride_ = kSlotHeaderSize + spec.payload_size;
+  slot_stride_ = kSlotHeaderSize + static_cast<size_t>(spec.payload_size);
+  if (spec.slot_count > (std::numeric_limits<size_t>::max() - kHeaderSize) / slot_stride_) {
+    throw std::runtime_error("SHM ring size overflows for " + spec.stream_id);
+  }
   size_ = kHeaderSize + spec.slot_count * slot_stride_;
+  if (size_ > static_cast<uintmax_t>(std::numeric_limits<off_t>::max())) {
+    throw std::runtime_error("SHM ring is too large for " + spec.stream_id);
+  }
   const std::string posix = shm_posix_name(shm_name_);
   ::shm_unlink(posix.c_str());
   fd_ = ::shm_open(posix.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
   if (fd_ < 0) throw std::runtime_error("shm_open failed for " + posix + ": " + std::strerror(errno));
-  if (::ftruncate(fd_, static_cast<off_t>(size_)) != 0) {
-    throw std::runtime_error("ftruncate failed for " + posix + ": " + std::strerror(errno));
+  try {
+    // An optional image ring can reserve storage up front to catch an
+    // oversized configuration before touching the mapped pages.
+    const auto size = static_cast<off_t>(size_);
+    const int error = reserve_storage ? ::posix_fallocate(fd_, 0, size)
+                                      : (::ftruncate(fd_, size) == 0 ? 0 : errno);
+    if (error != 0) {
+      throw std::runtime_error("cannot allocate SHM ring " + posix + ": " + std::strerror(error));
+    }
+    data_ = static_cast<uint8_t*>(::mmap(nullptr, size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+    if (data_ == MAP_FAILED) throw std::runtime_error("mmap failed for " + posix + ": " + std::strerror(errno));
+    write_global_header(0);
+    write_metadata();
+  } catch (...) {
+    if (data_ && data_ != MAP_FAILED) ::munmap(data_, size_);
+    ::close(fd_);
+    ::shm_unlink(posix.c_str());
+    throw;
   }
-  data_ = static_cast<uint8_t*>(::mmap(nullptr, size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
-  if (data_ == MAP_FAILED) throw std::runtime_error("mmap failed for " + posix + ": " + std::strerror(errno));
-  write_global_header(0);
-  write_metadata();
 }
 
 ShmPublisher::~ShmPublisher() {
