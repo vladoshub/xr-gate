@@ -1,0 +1,53 @@
+version: 1
+
+service:
+  namespace: capture_extra
+  profile: ir_cameras
+  registry_path:
+    linux: /tmp/capture_service_extra_streams.json
+    windows: capture_service_extra_streams.json
+  publish: [shm, tcp]  # Native Windows uses TCP.
+  slot_count: 8
+  tcp:
+    bind_host: 127.0.0.1
+    port: 45661
+    client_queue_size: 8
+
+cameras:
+  ir_front:
+    driver: opencv
+    layout: mono
+    primary:
+      device:
+        linux: /dev/video4
+      index: 1
+      api:
+        linux: v4l2
+        windows: msmf
+      width: 640
+      height: 480
+      fps: 60
+      convert_rgb: false
+    output:
+      width: 640
+      height: 480
+      format: gray8
+
+  ir_side:
+    driver: opencv
+    layout: mono
+    primary:
+      device:
+        linux: /dev/video6
+      index: 2
+      api:
+        linux: v4l2
+        windows: msmf
+      width: 640
+      height: 480
+      fps: 60
+      convert_rgb: false
+    output:
+      width: 640
+      height: 480
+      format: gray8

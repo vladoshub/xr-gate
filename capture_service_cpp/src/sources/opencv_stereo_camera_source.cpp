@@ -8,6 +8,7 @@
 #include <sstream>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace xr_capture_cpp {
 namespace {
@@ -64,6 +65,23 @@ class OpenCvStereoCameraSource final : public ICameraSource {
 
   std::string name() const override { return "opencv:" + cfg_.camera.layout; }
 
+  std::vector<CameraViewSpec> views() const override {
+    const auto& cfg = cfg_.camera;
+    if (cfg.layout == "interleaved_columns") {
+      // This layout decodes using the configured eye dimensions.
+      return {{kLeftCameraView, cfg.output_width, cfg.output_height},
+              {kRightCameraView, cfg.output_width, cfg.output_height}};
+    }
+    auto size_before_rotation = [&](const ImageTransformConfig& main_transform) {
+      const bool swaps = image_rotation_swaps_dimensions(main_transform.rotate);
+      return swaps ? std::make_pair(cfg.output_height, cfg.output_width)
+                   : std::make_pair(cfg.output_width, cfg.output_height);
+    };
+    const auto left = size_before_rotation(cfg.left_transform);
+    const auto right = size_before_rotation(cfg.right_transform);
+    return {{kLeftCameraView, left.first, left.second}, {kRightCameraView, right.first, right.second}};
+  }
+
   std::vector<StreamSpec> stream_specs(uint32_t slot_count) const override {
     const auto& c = cfg_.camera;
     return {
@@ -87,7 +105,7 @@ class OpenCvStereoCameraSource final : public ICameraSource {
     }
   }
 
-  SourceReadStatus read(StereoFrame& output) override {
+  SourceReadStatus read(StereoFrame& output, CameraViewSink* views) override {
     output = {};
     cv::Mat first;
 
@@ -97,21 +115,35 @@ class OpenCvStereoCameraSource final : public ICameraSource {
       // Grab both devices before decoding either image. This does not provide
       // hardware synchronization, but avoids adding the first frame's decode
       // time to the delay before requesting the second camera frame.
-      if (!primary_.grab()) return SourceReadStatus::Timeout;
-      if (!secondary_.grab()) return SourceReadStatus::Timeout;
+      const bool first_grabbed = primary_.grab();
+      if (!first_grabbed && !views) return SourceReadStatus::Timeout;
+      const uint64_t first_ns = views ? steady_ns() : 0;
+      const bool second_grabbed = secondary_.grab();
+      if (!second_grabbed && !views) return SourceReadStatus::Timeout;
+      const uint64_t second_ns = views ? steady_ns() : 0;
 
+      const bool swapped = cfg_.camera.stereo_order == "right_left";
+      cv::Mat& first_raw = swapped ? right_raw : left_raw;
+      cv::Mat& second_raw = swapped ? left_raw : right_raw;
       cv::Mat second;
-      if (!primary_.retrieve(first) || first.empty()) return SourceReadStatus::Timeout;
-      if (!secondary_.retrieve(second) || second.empty()) return SourceReadStatus::Timeout;
-      if (cfg_.camera.stereo_order == "right_left") {
-        right_raw = to_gray8(first);
-        left_raw = to_gray8(second);
+      if (!views) {
+        if (!primary_.retrieve(first) || first.empty()) return SourceReadStatus::Timeout;
+        if (!secondary_.retrieve(second) || second.empty()) return SourceReadStatus::Timeout;
+        first_raw = to_gray8(first);
+        second_raw = to_gray8(second);
       } else {
-        left_raw = to_gray8(first);
-        right_raw = to_gray8(second);
+        if (first_grabbed && primary_.retrieve(first) && !first.empty()) {
+          first_raw = to_gray8(first);
+          views->submit(swapped ? kRightCameraView : kLeftCameraView, first_raw, first_ns);
+        }
+        if (second_grabbed && secondary_.retrieve(second) && !second.empty()) {
+          second_raw = to_gray8(second);
+          views->submit(swapped ? kLeftCameraView : kRightCameraView, second_raw, second_ns);
+        }
       }
     } else {
       if (!primary_.read(first) || first.empty()) return SourceReadStatus::Timeout;
+      const uint64_t receive_ns = views ? steady_ns() : 0;
 
       if (cfg_.camera.layout == "interleaved_columns") {
         cv::Mat a;
@@ -156,8 +188,16 @@ class OpenCvStereoCameraSource final : public ICameraSource {
           }
         }
       }
+      if (views) {
+        views->submit(kLeftCameraView, left_raw, receive_ns);
+        views->submit(kRightCameraView, right_raw, receive_ns);
+      }
     }
 
+    if (!cfg_.camera.stereo_enabled) {
+      return left_raw.empty() && right_raw.empty() ? SourceReadStatus::Timeout : SourceReadStatus::Data;
+    }
+    if (left_raw.empty() || right_raw.empty()) return SourceReadStatus::Timeout;
     output.left = transform_gray_image(left_raw, cfg_.camera.left_transform.rotate, cfg_.camera.left_transform.flip);
     output.right = transform_gray_image(right_raw, cfg_.camera.right_transform.rotate, cfg_.camera.right_transform.flip);
     validate_dimensions(output.left, "left");

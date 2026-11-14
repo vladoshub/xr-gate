@@ -17,9 +17,11 @@ class StreamPublishers {
   ~StreamPublishers();
 
   const RuntimeConfig& config() const { return cfg_; }
-  void add_stream(const StreamSpec& spec);
+  void add_stream(const StreamSpec& spec, bool reserve_shm_storage = false);
   void start();
   void write_registry();
+  std::vector<std::string> shm_names() const;
+  bool tcp_enabled() const { return static_cast<bool>(tcp_); }
   uint64_t publish(const std::string& stream_id,
                    const uint8_t* payload,
                    size_t payload_len,

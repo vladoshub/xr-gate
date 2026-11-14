@@ -52,9 +52,14 @@ struct SocketRuntime {
 };
 
 void send_all(socket_t sock, const char* data, size_t len) {
+#ifdef _WIN32
+  constexpr int flags = 0;
+#else
+  constexpr int flags = MSG_NOSIGNAL;
+#endif
   size_t off = 0;
   while (off < len) {
-    const int n = ::send(sock, data + off, static_cast<int>(len - off), 0);
+    const int n = ::send(sock, data + off, static_cast<int>(len - off), flags);
     if (n <= 0) throw std::runtime_error("socket send failed");
     off += static_cast<size_t>(n);
   }
@@ -210,17 +215,23 @@ Client::~Client() { stop(); }
 void Client::start() { thread_ = std::thread(&Client::run, this); }
 
 void Client::stop() {
-  bool expected = true;
-  if (alive_.compare_exchange_strong(expected, false)) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    alive_.store(false);
+  }
+  if (sock_ != kInvalidSocket) {
 #ifdef _WIN32
     shutdown(sock_, SD_BOTH);
 #else
     shutdown(sock_, SHUT_RDWR);
 #endif
-    close_socket(sock_);
     cv_.notify_all();
   }
   if (thread_.joinable()) thread_.join();
+  if (sock_ != kInvalidSocket) {
+    close_socket(sock_);
+    sock_ = kInvalidSocket;
+  }
 }
 
 bool Client::wants(const std::string& stream_id) const {

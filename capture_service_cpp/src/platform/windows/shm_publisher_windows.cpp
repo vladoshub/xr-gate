@@ -4,7 +4,7 @@
 
 namespace xr_capture_cpp {
 
-ShmPublisher::ShmPublisher(const StreamSpec& spec, const std::string& namespace_name) : spec_(spec) {
+ShmPublisher::ShmPublisher(const StreamSpec& spec, const std::string& namespace_name, bool) : spec_(spec) {
   (void)namespace_name;
   throw std::runtime_error("POSIX SHM publisher is not supported on native Windows; use --publish tcp");
 }

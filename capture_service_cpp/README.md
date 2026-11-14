@@ -97,6 +97,113 @@ The parser intentionally supports the subset needed by these profiles: nested ma
 
 Existing device profiles wrapped in a top-level `capture_service:` mapping remain supported. The legacy XREAL keys under `xreal_linux.camera` and `xreal_linux.imu` are translated to the runtime-independent camera/IMU configuration, so current XREAL launch scripts and profiles do not need to be rewritten immediately.
 
+## Camera views from the main source
+
+Publish decoded views from the device opened by the main camera driver.
+Add the following fields to its profile, for example to `configs/xreal_ultra.yaml`.
+Keep the existing `camera.primary` settings for the device.
+
+```yaml
+service:
+  additional_cameras:
+    publish: [shm, tcp]
+    tcp:
+      port: 45662
+
+camera:
+  output:
+    additional_cameras:
+      camera_1:
+        source: left
+        stream: view_left
+        frame: left_unrotated
+      camera_2:
+        source: camera1  # Existing right stream ID in this profile.
+        stream: view_right
+  transform:
+    additional_cameras:
+      camera_2:
+        rotate: cw90
+        flip: none
+```
+
+The driver opens the device once. The existing XREAL and OpenCV stereo drivers
+expose `left` and `right`, and their current stereo stream IDs are accepted as
+aliases. A multi-camera driver can expose more view IDs and decoded dimensions.
+By default the entry name supplies the source and the published stream ID.
+The stream ID supplies the default frame ID. `source` selects a different
+view, and `stream` and `frame` override the output names.
+
+The additional streams publish decoded `GRAY8` images, with their own
+transform applied before publication. `width` and `height` under an output
+entry can assert the dimensions after rotation. Omit them to use the driver's
+decoded dimensions and the selected rotation. `slot_count` defaults to
+`camera.slot_count` capped at eight. Fields such as `camera.primary.width`, `height`, `fps`,
+`raw_format`, `convert_rgb` and `buffer_size` configure the shared device or
+packed input, including XREAL's 640×241 capture mode.
+
+The publisher has its own SHM namespace, registry and TCP listener. On Linux
+with the default main registry, use `/tmp/capture_service_streams_additional.json`.
+TCP defaults to `127.0.0.1:45662` when enabled. Set `registry_path`, `namespace`
+and `tcp.bind_host` under `service.additional_cameras` to override them.
+Transport modes default to the main profile's modes. The output is buffered
+per view and can drop pending frames if the publisher falls behind. The sink
+gets each view as the driver decodes it. Views split from the same packed
+frame share a timestamp. Independently acquired views retain their own timestamps.
+If stereo pairs stall while the driver still delivers one of the configured
+views, capture keeps running. Loss of the shared device stops its outputs.
+
+Omit `camera.output.additional_cameras` to disable this publisher. Set
+`camera.output.stereo_enabled` to `false` for views-only video output.
+The camera must stay enabled to supply the views. The `--extra-config` camera
+group can run alongside either configuration. With stereo disabled, losing
+the main camera leaves the extra camera process running.
+If a transport resource conflicts with the main or extra publisher, the
+additional publisher logs the conflict. Choose a separate port, registry path
+or SHM namespace under `service.additional_cameras`.
+
+## Additional cameras from separate devices
+
+Pass an additional YAML file to enable its video streams. Omit the option to
+run only the existing capture profile.
+
+```bash
+capture_service_cpp --config /path/to/main.yaml \
+  --extra-config capture_service_cpp/configs/extra_ir_cameras.yaml
+```
+
+Set `XR_CAPTURE_CPP_EXTRA_CONFIG=/path/to/extra.yaml` to use the existing
+launchers on Linux or Windows. The CLI option takes precedence.
+
+The extra file uses the same `service` and camera settings as the main profile.
+Use `camera` for a single source or `cameras` for a mapping of named sources.
+You can mix `xreal_packed` and the existing OpenCV stereo layouts with
+`driver: opencv`, `layout: mono` for a single view. For `mono`, the mapping
+key is the default stream and frame ID. Override these with `output.stream`
+and `output.frame`. Set `output.width` and `output.height` to the dimensions
+after the optional `transform.rotate` and `transform.flip`.
+Named stereo sources default to `<name>_left` and `<name>_right`. A single
+top-level stereo source uses the existing `camera0` and `camera1` defaults.
+
+The [example YAML](configs/extra_ir_cameras.yaml) publishes two IR cameras as
+`ir_front` and `ir_side`. Use `output.format: gray8` (the default) for 8-bit
+grayscale. For a color webcam use `output.format: bgr8` and
+`primary.convert_rgb: true`. For native 8-bit grayscale from an IR camera,
+use `primary.convert_rgb: false` if the backend can return decoded grayscale.
+
+Extra capture runs in a child process, with a separate camera thread for each
+source. If a source returns no frames for `stall_exit_ms`, the worker releases
+it and retries after two seconds. A failed open is also retried. Extra frames
+use host-monotonic timestamps and per-stream sequence numbers. An additional
+stereo pair shares one timestamp across its two views. For XREAL in the extra
+process, use `camera.timestamp_mode: host_receive`.
+
+Consumers open the extra registry (`/tmp/capture_service_extra_streams.json`
+on Linux by default) or subscribe by stream ID on the extra TCP listener
+(`127.0.0.1:45661` when TCP is enabled). The Python `CaptureClient` can read
+these IDs on either transport. The extra file selects `service.publish`
+independently (SHM by default on Linux, TCP on native Windows).
+
 ## Independent source selection
 
 Example: normal side-by-side UVC camera plus nRF54L15 over USB CDC/UART:

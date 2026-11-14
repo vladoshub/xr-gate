@@ -10,7 +10,7 @@ namespace xr_capture_cpp {
 
 class ShmPublisher {
  public:
-  ShmPublisher(const StreamSpec& spec, const std::string& namespace_name);
+  ShmPublisher(const StreamSpec& spec, const std::string& namespace_name, bool reserve_storage = false);
   ~ShmPublisher();
 
   ShmPublisher(const ShmPublisher&) = delete;

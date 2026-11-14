@@ -4,11 +4,10 @@
 #include "capture_service_cpp/platform/process.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
-
-#include <cstdio>
 
 namespace xr_capture_cpp {
 
@@ -24,10 +23,12 @@ StreamPublishers::StreamPublishers(RuntimeConfig cfg) : cfg_(std::move(cfg)) {
 
 StreamPublishers::~StreamPublishers() = default;
 
-void StreamPublishers::add_stream(const StreamSpec& spec) {
+void StreamPublishers::add_stream(const StreamSpec& spec, bool reserve_shm_storage) {
+  if (enable_shm_) {
+    shm_publishers_[spec.stream_id] = std::make_unique<ShmPublisher>(spec, cfg_.namespace_name, reserve_shm_storage);
+  }
   specs_[spec.stream_id] = spec;
   sequences_.emplace(spec.stream_id, 0);
-  if (enable_shm_) shm_publishers_[spec.stream_id] = std::make_unique<ShmPublisher>(spec, cfg_.namespace_name);
 }
 
 void StreamPublishers::start() {
@@ -40,6 +41,13 @@ void StreamPublishers::start() {
                                                         cfg_.tcp_client_queue_size);
     tcp_->start();
   }
+}
+
+std::vector<std::string> StreamPublishers::shm_names() const {
+  std::vector<std::string> names;
+  names.reserve(shm_publishers_.size());
+  for (const auto& entry : shm_publishers_) names.push_back(entry.second->shm_name());
+  return names;
 }
 
 void StreamPublishers::write_registry() {
@@ -96,8 +104,11 @@ void StreamPublishers::write_registry() {
   if (!f) throw std::runtime_error("failed to write registry tmp: " + tmp);
   f << os.str();
   f.close();
-  if (std::rename(tmp.c_str(), cfg_.registry_path.c_str()) != 0) {
-    throw std::runtime_error("failed to replace registry: " + cfg_.registry_path);
+  if (!f) throw std::runtime_error("failed to write registry tmp: " + tmp);
+  std::error_code error;
+  std::filesystem::rename(tmp, cfg_.registry_path, error);
+  if (error) {
+    throw std::runtime_error("failed to replace registry: " + cfg_.registry_path + ": " + error.message());
   }
   std::cerr << "[capture_service_cpp] registry: " << cfg_.registry_path << std::endl;
   for (const auto& kv : specs_) {
@@ -120,12 +131,13 @@ uint64_t StreamPublishers::publish(const std::string& stream_id,
   auto spec_it = specs_.find(stream_id);
   if (spec_it == specs_.end()) return 0;
   uint64_t seq = 0;
+  auto& sequence = sequences_.at(stream_id);
   auto shm_it = shm_publishers_.find(stream_id);
   if (shm_it != shm_publishers_.end()) {
     seq = shm_it->second->publish(payload, payload_len, timestamp_ns, width, height);
-    sequences_[stream_id] = seq;
+    sequence = seq;
   } else {
-    seq = ++sequences_[stream_id];
+    seq = ++sequence;
   }
   if (tcp_) tcp_->publish(stream_id, payload, payload_len, seq, timestamp_ns, width, height, format_code, flags, frame_id);
   return seq;
