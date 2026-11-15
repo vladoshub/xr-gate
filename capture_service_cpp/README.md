@@ -347,7 +347,7 @@ camera:
     fps: 90
     raw_format: false
     convert_rgb: false
-    buffer_size: 1
+    buffer_size: 3
   output:
     width: 640
     height: 480

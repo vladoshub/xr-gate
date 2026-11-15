@@ -27,7 +27,7 @@ camera:
     fps: 0
     raw_format: false
     convert_rgb: false
-    buffer_size: 1
+    buffer_size: 3
 
     controls_policy: strict
     controls:

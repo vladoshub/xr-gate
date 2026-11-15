@@ -31,7 +31,7 @@ camera:
     fps: 90
     raw_format: false
     convert_rgb: false
-    buffer_size: 1
+    buffer_size: 3
 
     # Optional platform-neutral camera controls. These values are applied by
     # the Linux V4L2 backend after mode negotiation.
