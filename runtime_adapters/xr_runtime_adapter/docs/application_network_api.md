@@ -138,6 +138,10 @@ flags, pose, velocities, confidence and battery level from the
 `stable_id_hash` and `device_serial_hash` are decimal strings. The `tracker_id`
 is text. Its bytes should form a valid UTF-8 string.
 
+The individual linear and angular velocity flags indicate valid velocity vectors
+in m/s and rad/s. Set `RUNTIME_BODY_TRACKER_VELOCITIES=0` to clear both flags
+and publish zero vectors.
+
 An empty list is a fresh set with every tracker absent. Repeated sets keep
 their original per-stream sequence and timestamp. Compare that timestamp
 with the enclosing `read_timestamp_ns` and account for elapsed time since

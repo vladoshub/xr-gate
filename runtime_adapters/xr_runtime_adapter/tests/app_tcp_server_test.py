@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import importlib.util
 import json
+import math
 from multiprocessing import shared_memory
 from pathlib import Path
 import socket
@@ -40,13 +41,13 @@ def packet(kind, sequence, timestamp, payload):
                            sequence, sequence, timestamp, timestamp, 0, 0, 0) + payload
 
 
-def body_packet(sequence, timestamp, trackers):
+def body_packet(sequence, timestamp, trackers, orientation=(0.5, -0.5, 0.5, -0.5)):
     payload_size = BODY_SET.size + 32 * BODY_TRACKER.size
     payload = BODY_SET.pack(1, payload_size, sequence, timestamp, timestamp, 0, 1, 7, bool(trackers), len(trackers))
     for tracker_id, stable_hash, status, x, *attributes in trackers:
         role, flags, confidence = attributes or (2, 127, 0.75)
         payload += BODY_TRACKER.pack(0, role, status, flags, stable_hash, 0, confidence, 0.5, 0, 0,
-                                     x, 1.0, -0.3, 0.5, -0.5, 0.5, -0.5,
+                                     x, 1.0, -0.3, *orientation,
                                      0.125, 0.25, 0.375, -0.125, -0.25, -0.375, tracker_id)
     payload += bytes((32 - len(trackers)) * BODY_TRACKER.size)
     return BODY_UDP_HEADER.pack(0x4254524B, 1, BODY_UDP_HEADER.size, len(payload), 0,
@@ -240,6 +241,47 @@ class AppTcpTest(unittest.TestCase):
                 self.assertNotIn("body_trackers", client.frame(lambda f: f["hmd"] is not None))
             finally:
                 client.close()
+
+    def test_observed_body_tracker_velocities(self):
+        linear_valid, angular_valid = 1 << 3, 1 << 4
+        connected_pose, connected_position = (1 << 6) | 1, (1 << 6) | 2
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                body_port = free_port(socket.SOCK_DGRAM)
+                extra = ["--body-trackers-input", "udp", "--body-trackers-udp-bind-host", "127.0.0.1",
+                         "--body-trackers-udp-bind-port", str(body_port), "--app-tcp-body-trackers"]
+                if not enabled:
+                    extra += ["--runtime-body-tracker-velocities", "0"]
+                with runtime(extra=extra, default_mode=True, tracking_source=False) as (_, _, port):
+                    client = Client(port)
+                    try:
+                        first_ns = time.monotonic_ns() - 50_000_000
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as body:
+                            for i, angle in enumerate((0.0, 0.2)):
+                                timestamp = first_ns + i * 50_000_000
+                                trackers = [(b"oriented", 1, 2, i * 0.1, 2, connected_pose, 0.9),
+                                            (b"position-only", 2, 2, i * 0.1, 1, connected_position, 0.9)]
+                                orientation = (math.cos(angle / 2), 0, 0, math.sin(angle / 2))
+                                body.sendto(body_packet(i + 1, timestamp, trackers, orientation),
+                                            ("127.0.0.1", body_port))
+                                frame = client.frame(lambda f:
+                                    (f.get("body_trackers") or {}).get("source_timestamp_ns") == str(timestamp))
+
+                        oriented, position_only = frame["body_trackers"]["trackers"]
+                        self.assertEqual(bool(oriented["flags"] & linear_valid), enabled)
+                        self.assertEqual(bool(oriented["flags"] & angular_valid), enabled)
+                        self.assertEqual(bool(position_only["flags"] & linear_valid), enabled)
+                        self.assertFalse(position_only["flags"] & angular_valid)
+                        if enabled:
+                            self.assertAlmostEqual(oriented["linear_velocity"][0], 2.0, places=5)
+                            self.assertAlmostEqual(position_only["linear_velocity"][0], 2.0, places=5)
+                            self.assertAlmostEqual(oriented["angular_velocity"][2], 4.0, places=5)
+                        else:
+                            for tracker in (oriented, position_only):
+                                self.assertEqual(tracker["linear_velocity"], [0, 0, 0])
+                                self.assertEqual(tracker["angular_velocity"], [0, 0, 0])
+                    finally:
+                        client.close()
 
     def test_body_only_tcp_with_prediction_and_loss(self):
         body_port = free_port(socket.SOCK_DGRAM)

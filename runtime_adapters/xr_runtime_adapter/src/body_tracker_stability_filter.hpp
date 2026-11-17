@@ -4,9 +4,11 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <xr_tracking/contracts/body_tracker_set_contract.hpp>
 
+#include "body_tracker_velocity_estimator.hpp"
 #include "prediction_distance_limit.hpp"
 #include "prediction_window_estimator.hpp"
 
@@ -28,6 +30,7 @@ struct BodyTrackerStabilityGateConfig {
   bool prediction_window_mode = false;
   double prediction_window_ms = 500.0;
   bool publish_predicted_velocity = false;
+  bool estimate_observed_velocities = false;
   double reacquire_blend_ms = 0.0;
   double synthetic_publish_hz = 90.0;
   uint32_t predicted_status = xr_tracking::BODY_TRACKER_STATUS_TRACKING;
@@ -42,7 +45,8 @@ class BodyTrackerStabilityFilter {
   void set_runtime_hmd_position(std::optional<std::array<double, 3>> position);
 
   xr_tracking::BodyTrackerSetFrameF32V1 filter_observed(xr_tracking::BodyTrackerSetFrameF32V1 frame,
-                                                        uint64_t now_ns);
+                                                        uint64_t now_ns,
+                                                        uint64_t origin_epoch = 0);
 
   std::optional<xr_tracking::BodyTrackerSetFrameF32V1> predicted_frame(uint64_t now_ns);
 
@@ -118,7 +122,20 @@ class BodyTrackerStabilityFilter {
   std::optional<xr_tracking::BodyTrackerF32V1> predicted_tracker(State& state, uint64_t now_ns);
   int64_t synthetic_interval_ns() const;
 
+  struct JointMotion {
+    xr_tracking::BodyTrackerKey key{};
+    BodyTrackerVelocityEstimator estimator;
+    bool seen = false;
+  };
+  void begin_joint_observations(const xr_tracking::BodyTrackerSetFrameF32V1& frame, uint64_t origin_epoch);
+  void finish_joint_observations();
+  void observe_joint_motion(xr_tracking::BodyTrackerF32V1& output,
+                           const xr_tracking::BodyTrackerF32V1& observed,
+                           const xr_tracking::BodyTrackerKey& key, uint64_t sample_ns, bool publish);
+
   BodyTrackerStabilityGateConfig cfg_{};
+  std::vector<JointMotion> joint_motion_;
+  std::array<uint64_t, 3> joint_epoch_{};
   std::array<State, xr_tracking::BODY_TRACKER_MAX_TRACKERS> states_{};
   bool has_template_ = false;
   xr_tracking::BodyTrackerSetFrameF32V1 template_frame_{};

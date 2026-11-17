@@ -16,6 +16,7 @@ uint32_t parse_body_tracker_predicted_status(const std::string& value) {
 }
 
 void BodyTrackerStabilityFilter::configure(BodyTrackerStabilityGateConfig cfg) {
+    const bool was_enabled = cfg_.enabled;
     cfg_ = cfg;
     if (const char* value = std::getenv("RUNTIME_BODY_TRACKER_MAX_JUMP_M")) {
         char* end = nullptr;
@@ -24,10 +25,12 @@ void BodyTrackerStabilityFilter::configure(BodyTrackerStabilityGateConfig cfg) {
             cfg_.max_jump_m = parsed;
         }
     }
-    if (!cfg_.enabled) reset();
+    if (was_enabled && !cfg_.enabled) reset();
+    if (!cfg_.estimate_observed_velocities) joint_motion_.clear();
 }
 
 void BodyTrackerStabilityFilter::reset() {
+  joint_motion_.clear();
   for (auto& state : states_) state = {};
   has_template_ = false;
   template_frame_ = {};
@@ -41,14 +44,22 @@ void BodyTrackerStabilityFilter::set_runtime_hmd_position(
 
 xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observed(
     xr_tracking::BodyTrackerSetFrameF32V1 frame,
-    uint64_t now_ns) {
-  if (!cfg_.enabled) return frame;
-
+    uint64_t now_ns, uint64_t origin_epoch) {
+  if (!cfg_.enabled && !cfg_.estimate_observed_velocities) return frame;
   const uint64_t sample_ns = frame.source_timestamp_ns != 0
       ? frame.source_timestamp_ns
       : (frame.timestamp_ns != 0 ? frame.timestamp_ns : now_ns);
 
   frame.tracker_count = std::min<uint32_t>(frame.tracker_count, xr_tracking::BODY_TRACKER_MAX_TRACKERS);
+  begin_joint_observations(frame, origin_epoch);
+  if (!cfg_.enabled) {
+    for (uint32_t i = 0; i < frame.tracker_count; ++i) {
+      auto& tracker = frame.trackers[i];
+      observe_joint_motion(tracker, tracker, xr_tracking::body_tracker_key(tracker, i), sample_ns, true);
+    }
+    finish_joint_observations();
+    return frame;
+  }
   if (has_template_ && frame.reset_counter != template_frame_.reset_counter) {
     for (auto& state : states_) state = {};
     last_synthetic_publish_ns_ = 0;
@@ -87,6 +98,8 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
       if (previous_state != nullptr) {
         output_tracker = apply_reacquire_blend(*previous_state, tracker, now_ns);
       }
+      observe_joint_motion(output_tracker, tracker, key, sample_ns,
+                          previous_state == nullptr || !previous_state->blend_active);
       update_state(tracker, key, sample_ns);
       append_tracker(out, output_tracker);
     } else {
@@ -108,7 +121,60 @@ xr_tracking::BodyTrackerSetFrameF32V1 BodyTrackerStabilityFilter::filter_observe
   }
 
   if (out.tracker_count > 0) out.flags |= xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
+  finish_joint_observations();
   return out;
+}
+
+void BodyTrackerStabilityFilter::begin_joint_observations(
+    const xr_tracking::BodyTrackerSetFrameF32V1& frame, uint64_t origin_epoch) {
+  if (!cfg_.estimate_observed_velocities) return;
+  const std::array<uint64_t, 3> epoch{frame.reset_counter, frame.source, origin_epoch};
+  if (epoch != joint_epoch_) {
+    joint_motion_.clear();
+    joint_epoch_ = epoch;
+  }
+  for (auto& state : joint_motion_) state.seen = false;
+}
+
+void BodyTrackerStabilityFilter::finish_joint_observations() {
+  joint_motion_.erase(std::remove_if(joint_motion_.begin(), joint_motion_.end(),
+      [](const JointMotion& state) { return !state.seen; }), joint_motion_.end());
+}
+
+void BodyTrackerStabilityFilter::observe_joint_motion(
+    xr_tracking::BodyTrackerF32V1& output, const xr_tracking::BodyTrackerF32V1& observed,
+    const xr_tracking::BodyTrackerKey& key, uint64_t sample_ns, bool publish) {
+  using namespace xr_tracking;
+  if (!cfg_.estimate_observed_velocities || observed.status != BODY_TRACKER_STATUS_TRACKING) return;
+  auto it = std::find_if(joint_motion_.begin(), joint_motion_.end(),
+                         [&](const JointMotion& state) { return state.key == key; });
+  if (it == joint_motion_.end()) {
+    joint_motion_.push_back({key, {}, false});
+    it = joint_motion_.end() - 1;
+  }
+  if (it->seen) return;
+  it->seen = true;
+
+  const auto& p = observed.pose;
+  const auto flags = observed.flags;
+  const auto velocity = it->estimator.observe(sample_ns, {p.px, p.py, p.pz},
+      (flags & (BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_POSITION_VALID)) != 0u,
+      {p.qw, p.qx, p.qy, p.qz},
+      (flags & (BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_ORIENTATION_VALID)) != 0u,
+      cfg_.prediction_window_ms);
+  if (!publish) return;
+  if ((output.flags & BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) == 0u && velocity.linear) {
+    output.pose.vx = (*velocity.linear)[0];
+    output.pose.vy = (*velocity.linear)[1];
+    output.pose.vz = (*velocity.linear)[2];
+    output.flags |= BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID;
+  }
+  if ((output.flags & BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID) == 0u && velocity.angular) {
+    output.pose.wx = (*velocity.angular)[0];
+    output.pose.wy = (*velocity.angular)[1];
+    output.pose.wz = (*velocity.angular)[2];
+    output.flags |= BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID;
+  }
 }
 
 std::optional<xr_tracking::BodyTrackerSetFrameF32V1> BodyTrackerStabilityFilter::predicted_frame(uint64_t now_ns) {

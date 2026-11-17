@@ -2564,6 +2564,7 @@ struct BodyTrackerInputConfig {
   bool use_controller_wrists = false;
   float wrist_min_confidence = 0.60f;
   bool filter_output_wrists = true;
+  bool publish_velocities = true;
 
   bool publish_runtime_shm = false;
   xr_runtime_adapter::AppTcpServer* runtime_tcp = nullptr;
@@ -2784,7 +2785,8 @@ class BodyTrackerInputThread {
                       runtime_hmd.p.y,
                       runtime_hmd.p.z}}
             : std::nullopt);
-    frame = stability_filter_.filter_observed(std::move(frame), now_ns);
+    const uint64_t origin_epoch = origin.ready ? origin.origin_reset_counter + 1 : 0;
+    frame = stability_filter_.filter_observed(std::move(frame), now_ns, origin_epoch);
     runtime_jitter_filter_.configure(cfg_.jitter_filter);
     runtime_jitter_filter_.filter_body_trackers(frame);
 
@@ -2843,6 +2845,15 @@ class BodyTrackerInputThread {
   }
 
   void publish_runtime(xr_tracking::BodyTrackerSetFrameF32V1 frame, uint64_t now_ns) {
+    if (!cfg_.publish_velocities) {
+      for (uint32_t i = 0; i < frame.tracker_count; ++i) {
+        auto& tracker = frame.trackers[i];
+        tracker.flags &= ~(xr_tracking::BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID |
+                           xr_tracking::BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID);
+        auto& p = tracker.pose;
+        p.vx = p.vy = p.vz = p.wx = p.wy = p.wz = 0.0f;
+      }
+    }
     if (cfg_.publish_runtime_shm && !runtime_publisher_) {
       xr_tracking::BodyTrackerSetShmPublisherConfig cfg;
       cfg.registry_path = cfg_.runtime_registry;
@@ -3303,6 +3314,7 @@ int main(int argc, char** argv) {
 
   bool publish_runtime_body_trackers_shm = false;
   bool runtime_body_tracker_filter_wrists = true;
+  bool runtime_body_tracker_velocities = true;
   bool no_runtime_body_trackers_unlink = false;
   std::string runtime_body_trackers_registry = xr_runtime::default_runtime_tracking_registry_path();
   std::string runtime_body_trackers_stream = "runtime_body_trackers";
@@ -3861,6 +3873,9 @@ int main(int argc, char** argv) {
   app.add_option("--runtime-controller-body-wrist-neutral-skeleton", runtime_controller_body_wrist_neutral_skeleton,
                  "Publish neutral hand joints while the body wrist fallback is active")
       ->envname("RUNTIME_CONTROLLER_BODY_WRIST_NEUTRAL_SKELETON");
+  app.add_option("--runtime-body-tracker-velocities", runtime_body_tracker_velocities,
+                 "Publish individual body tracker linear and angular velocities")
+      ->envname("RUNTIME_BODY_TRACKER_VELOCITIES");
   app.add_option("--runtime-body-tracker-filter-wrists", runtime_body_tracker_filter_wrists,
                  "Remove wrist roles from the runtime body tracker outputs")
       ->envname("RUNTIME_BODY_TRACKER_FILTER_WRISTS");
@@ -5308,6 +5323,7 @@ int main(int argc, char** argv) {
       cfg.use_controller_wrists = runtime_controller_body_wrist_fallback && !controller_6dof_enabled;
       cfg.wrist_min_confidence = static_cast<float>(runtime_controller_body_wrist_min_confidence);
       cfg.filter_output_wrists = runtime_body_tracker_filter_wrists;
+      cfg.publish_velocities = runtime_body_tracker_velocities;
       cfg.publish_runtime_shm = publish_runtime_body_trackers_shm;
       cfg.runtime_tcp = publish_runtime_body_trackers_tcp ? app_tcp_server.get() : nullptr;
       cfg.runtime_registry = runtime_body_trackers_registry;
@@ -5345,6 +5361,8 @@ int main(int argc, char** argv) {
       cfg.jitter_filter.tracker_orientation_smooth_alpha =
           runtime_jitter_filter_body_tracker_rot_smooth_alpha;
       cfg.stability_gate.enabled = runtime_body_tracker_stability_gate;
+      cfg.stability_gate.estimate_observed_velocities =
+          runtime_body_tracker_velocities && (cfg.publish_runtime_shm || cfg.runtime_tcp);
       cfg.stability_gate.hold_lost_ms = runtime_body_tracker_hold_lost_ms;
       cfg.stability_gate.predict_lost_ms = runtime_body_tracker_predict_lost_ms;
       cfg.stability_gate.max_prediction_velocity_mps = runtime_body_tracker_max_prediction_velocity_mps;

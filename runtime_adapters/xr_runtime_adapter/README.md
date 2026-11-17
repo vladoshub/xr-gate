@@ -508,6 +508,12 @@ PUBLISH_RUNTIME_BODY_TRACKERS=1
 
 For TCP publication set `RUNTIME_APP_TCP=1` and `RUNTIME_APP_TCP_BODY_TRACKERS=1`.
 
+The runtime publishes body tracker velocities by default. It estimates missing
+velocities from successive tracked samples. FRAME supplies position, so its
+trackers receive linear velocity in m/s. Angular velocity in rad/s requires
+a valid tracker orientation. Set `RUNTIME_BODY_TRACKER_VELOCITIES=0` to disable
+velocity publication and keep the configured lost-tracking pose prediction.
+
 Set `streams.body_trackers.coordinate_transform.offset_m` in the device tracking
 transform profile to translate body tracker positions in meters. FRAME uses the
 HMD coordinate basis for Basalt world poses and adds this translation to it.
