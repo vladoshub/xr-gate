@@ -47,6 +47,8 @@ The viewer requests the 15 FRAME joints and the waist tracker through the Monado
 
 Bones appear when both endpoint positions are valid. Cyan marks the left side, orange the right, and yellow a valid position that Monado reports as untracked. `FRAME LOST` means there are no valid joint positions for the current frame.
 
+In World view, `IN VIEW L .. R ..` counts joint centers inside each eye's frustum. The stereo cameras can track joints outside the headset's display view. Press `P` to print the current joint positions in meters, OpenXR head-relative angles, and the distance between the ankles when both are valid. To compare frames, keep your feet still and take snapshots with the headset pointed down at different angles.
+
 If the wrist fallback patch is installed, start XR Gate with `RUNTIME_BODY_TRACKER_FILTER_WRISTS=0` to include the FRAME wrists in the body stream and render the forearms.
 
 ## Controls
@@ -57,6 +59,7 @@ If the wrist fallback patch is installed, start XR Gate with `RUNTIME_BODY_TRACK
 | `A` | Show joint orientation axes |
 | `R` | Toggle between OpenXR joint radii and fixed markers |
 | `V` | Switch between the headset preview and world positions in body mode |
+| `P` | Print one frame of live body positions and distances |
 | `G` | Toggle the reference grid in world and hand views |
 | `Esc` | Exit |
 

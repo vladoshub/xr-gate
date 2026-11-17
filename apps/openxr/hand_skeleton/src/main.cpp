@@ -18,6 +18,7 @@
 #include <iostream>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -87,6 +88,17 @@ static M operator*(const M &a, const M &b) {
       for (int k = 0; k < 4; k++)
         c.v[j * 4 + i] += a.v[k * 4 + i] * b.v[j * 4 + k];
   return c;
+}
+static V transformPoint(const M &m, V p) {
+  return {m.v[0] * p.x + m.v[4] * p.y + m.v[8] * p.z + m.v[12],
+          m.v[1] * p.x + m.v[5] * p.y + m.v[9] * p.z + m.v[13],
+          m.v[2] * p.x + m.v[6] * p.y + m.v[10] * p.z + m.v[14]};
+}
+static bool inView(const M &vp, V p) {
+  const float w = vp.v[3] * p.x + vp.v[7] * p.y + vp.v[11] * p.z + vp.v[15];
+  const V clip = transformPoint(vp, p);
+  return std::isfinite(w) && w > 0 && std::abs(clip.x) <= w &&
+         std::abs(clip.y) <= w && std::abs(clip.z) <= w;
 }
 static M viewMatrix(XrPosef pose) {
   auto q = pose.orientation;
@@ -295,6 +307,23 @@ static bool trackedPosition(const XrSpaceLocation &joint) {
          (joint.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT);
 }
 
+static bool validHeadPose(const XrSpaceLocation &head) {
+  constexpr auto flags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+  return (head.locationFlags & flags) == flags;
+}
+
+static std::string bodyInView(const Body &body, const std::array<M, 2> &eyes) {
+  std::array<unsigned, 2> counts{};
+  for (const auto &joint : body) {
+    if (!validPosition(joint))
+      continue;
+    for (size_t i = 0; i < eyes.size(); i++)
+      counts[i] += inView(eyes[i], vec(joint.pose.position));
+  }
+  return "IN VIEW L " + std::to_string(counts[0]) + " R " + std::to_string(counts[1]);
+}
+
 static Body previewBody(Body body) {
   const auto first = std::find_if(body.begin(), body.end(),
                                   [](const auto &joint) { return validPosition(joint); });
@@ -389,6 +418,7 @@ static std::array<uint8_t, 7> glyph(char c) {
     F('T', 31, 4, 4, 4, 4, 4, 4);
     F('U', 17, 17, 17, 17, 17, 17, 14);
     F('V', 17, 17, 17, 17, 17, 10, 4);
+    F('W', 17, 17, 17, 21, 21, 21, 10);
     F('X', 17, 17, 10, 4, 10, 17, 17);
     F('Y', 17, 17, 10, 4, 4, 4, 4);
     F('0', 14, 17, 19, 21, 25, 17, 14);
@@ -525,6 +555,7 @@ class App {
   bool running = false, quit = false, axes = false, radii = false, grid = true,
        source21 = true;
   bool bodyPreview;
+  bool bodyReportRequested = false;
   uint64_t frameCount = 0;
   std::chrono::steady_clock::time_point lastStatus{};
   template <class T> void proc(const char *name, T &p) {
@@ -823,6 +854,9 @@ class App {
           if (options.body)
             bodyPreview = !bodyPreview;
           break;
+        case SDLK_p:
+          bodyReportRequested = options.body && !options.demo;
+          break;
         default:
           break;
         }
@@ -908,7 +942,50 @@ class App {
     return "FRAME VALID " + std::to_string(valid) + "/" +
            std::to_string(body.size()) + " TRACK " + std::to_string(tracked);
   }
-  Mesh panel() {
+  void reportBody(const XrSpaceLocation &head, const std::array<M, 2> *views = nullptr) {
+    if (!bodyReportRequested)
+      return;
+    bodyReportRequested = false;
+    const bool headValid = validHeadPose(head);
+    const M headFromWorld = headValid ? viewMatrix(head.pose) : identity();
+    constexpr float toDegrees = 57.295779513f;
+    std::ostringstream out;
+    out.setf(std::ios::fixed, std::ios::floatfield);
+    out.precision(3);
+    const auto printPosition = [&out](V p) {
+      out << '(' << p.x << ',' << p.y << ',' << p.z << ')';
+    };
+    out << "[frame-view] " << bodyStatus();
+    if (views)
+      out << " | " << bodyInView(body, *views);
+    out << '\n';
+    for (size_t i = 0; i < body.size(); i++) {
+      const auto &joint = body[i];
+      if (!validPosition(joint))
+        continue;
+      const V p = vec(joint.pose.position);
+      out << "[frame-view] " << bodyParts[i].id
+          << (trackedPosition(joint) ? " tracked" : " estimated") << " local_m=";
+      printPosition(p);
+      if (headValid) {
+        const V relative = transformPoint(headFromWorld, p);
+        out << " head_m=";
+        printPosition(relative);
+        out << " yaw_deg=" << std::atan2(relative.x, -relative.z) * toDegrees
+            << " pitch_deg="
+            << std::atan2(relative.y, std::hypot(relative.x, relative.z)) * toDegrees;
+      }
+      if (views)
+        out << " L=" << inView((*views)[0], p) << " R=" << inView((*views)[1], p);
+      out << '\n';
+    }
+    if (validPosition(body[LeftFoot]) && validPosition(body[RightFoot]))
+      out << "[frame-view] ankle_distance_m="
+          << length(vec(body[LeftFoot].pose.position) - vec(body[RightFoot].pose.position))
+          << '\n';
+    std::cout << out.str() << std::flush;
+  }
+  Mesh panel(const std::string &visibility = {}) {
     Mesh m;
     float y = options.body ? .155f : -.16f;
     if (options.demo) {
@@ -924,6 +1001,8 @@ class App {
                  lost ? estimatedColor : torsoColor);
       } else {
         textMesh(m, label, -.19f, y, .0018f, torsoColor);
+        if (!visibility.empty())
+          textMesh(m, visibility, -.19f, y - .026f, .0018f, torsoColor);
       }
       return m;
     }
@@ -959,7 +1038,7 @@ class App {
     renderer.draw(hud, panelTransform);
     glEnable(GL_DEPTH_TEST);
   }
-  void status() {
+  void status(const std::string &visibility = {}) {
     auto now = std::chrono::steady_clock::now();
     if (now - lastStatus < std::chrono::seconds(1))
       return;
@@ -968,6 +1047,8 @@ class App {
       auto s = std::string(options.demo ? "XR Gate Body [DEMO] | " : "XR Gate Body | ") +
                (bodyPreview ? "Preview | " : "World | ") +
                bodyStatus();
+      if (!visibility.empty())
+        s += " | " + visibility;
       SDL_SetWindowTitle(window, s.c_str());
       std::cout << s << std::endl;
       return;
@@ -1021,6 +1102,11 @@ class App {
   }
   void renderPreview(XrFrameEndInfo end) {
     locate(end.displayTime);
+    if (bodyReportRequested) {
+      XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
+      XR(xrLocateSpace(headSpace, space, end.displayTime, &head));
+      reportBody(head);
+    }
     const M camera = previewProjection();
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     layer.space = headSpace;
@@ -1035,6 +1121,7 @@ class App {
     end.layerCount = 1;
     end.layers = &header;
     XR(xrEndFrame(session, &end));
+    status();
   }
   bool renderWorld(XrFrameEndInfo end) {
     std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
@@ -1052,13 +1139,17 @@ class App {
       return false;
     }
     locate(end.displayTime);
-    Mesh mesh = scene(), hud = panel();
+    const std::array<M, 2> eyeVp{{
+        projection(views[0].fov) * viewMatrix(views[0].pose),
+        projection(views[1].fov) * viewMatrix(views[1].pose),
+    }};
+    const std::string visibility = options.body ? bodyInView(body, eyeVp) : std::string{};
+    Mesh mesh = scene(), hud = panel(visibility);
     XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
     XR(xrLocateSpace(headSpace, space, end.displayTime, &head));
-    const auto headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
-                           XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    reportBody(head, &eyeVp);
     M headToRender = identity();
-    if ((head.locationFlags & headFlags) == headFlags) {
+    if (validHeadPose(head)) {
       // Place the head-relative HUD into the LOCAL projection layer.
       V cols[] = {rotate(head.pose.orientation, {1, 0, 0}),
                   rotate(head.pose.orientation, {0, 1, 0}),
@@ -1081,7 +1172,7 @@ class App {
       auto &pv = projectionViews[i];
       pv.pose = views[i].pose;
       pv.fov = views[i].fov;
-      const M vp = projection(pv.fov) * viewMatrix(pv.pose);
+      const M &vp = eyeVp[i];
       pv.subImage = renderEye(eyes[i], i == 0 && options.mirror, vp, mesh,
                              vp * headToRender, hud);
     }
@@ -1093,6 +1184,7 @@ class App {
     end.layerCount = 1;
     end.layers = &header;
     XR(xrEndFrame(session, &end));
+    status(visibility);
     return true;
   }
   void xrFrame() {
@@ -1112,7 +1204,6 @@ class App {
       renderPreview(end);
     else if (!renderWorld(end))
       return;
-    status();
     frameCount++;
   }
   void demoHands() {
@@ -1223,7 +1314,7 @@ public:
       initSession();
     std::cout << "Left cyan; right orange; valid untracked joints yellow. ";
     if (options.body)
-      std::cout << "V preview/world. ";
+      std::cout << "V preview/world, P print live FRAME positions. ";
     else
       std::cout << "J 21/26 joints, A axes, R radii. ";
     std::cout << "G grid, Esc exit.\n";
@@ -1271,6 +1362,7 @@ int main(int argc, char **argv) {
                      "--no-mirror  Hide desktop mirror\n--demo       "
                      "Synthetic rendering only, no OpenXR runtime\n--frames N  "
                      " Exit after N rendered frames\nV switches body preview/world. "
+                     "P prints live FRAME positions. "
                      "J 21/26 joints, A joint axes, R runtime radii for hands. "
                      "G grid, Esc exit.\n";
         return 0;

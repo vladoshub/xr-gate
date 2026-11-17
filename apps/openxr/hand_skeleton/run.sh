@@ -9,6 +9,7 @@ Builds the example and starts it. Start XR Gate tracking and Monado separately.
 Uses XR_RUNTIME_JSON unchanged unless --runtime is supplied.
 App options: --body, --joints 21|26, --no-mirror, --demo, --frames N, --help
 Use --body for FRAME body trackers. V switches the body preview and world view.
+P prints one frame of live body positions.
 G toggles the grid in world and hand views. Esc exits.
 HELP
   exit 0
