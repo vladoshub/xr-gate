@@ -80,6 +80,22 @@ static XrQuaternionf operator*(XrQuaternionf a, XrQuaternionf b) {
   const V v = y * a.w + x * b.w + cross(x, y);
   return {v.x, v.y, v.z, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
 }
+static bool normalizePose(XrPosef &pose) {
+  auto &q = pose.orientation;
+  const float normSquared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!finite(vec(pose.position)) || !std::isfinite(normSquared) || normSquared < 1e-8f)
+    return false;
+  const float scale = 1.f / std::sqrt(normSquared);
+  q = {q.x * scale, q.y * scale, q.z * scale, q.w * scale};
+  return true;
+}
+static bool prepareView(XrView &view) {
+  constexpr float halfPi = 1.57079632679f;
+  const auto &f = view.fov;
+  return f.angleLeft > -halfPi && f.angleLeft < f.angleRight &&
+         f.angleRight < halfPi && f.angleDown > -halfPi &&
+         f.angleDown < f.angleUp && f.angleUp < halfPi && normalizePose(view.pose);
+}
 struct M {
   float v[16]{};
 };
@@ -1129,13 +1145,15 @@ class App {
     image.imageRect.extent = {eye.width, eye.height};
     return image;
   }
-  void renderPreview(XrFrameEndInfo end) {
-    locate(end.displayTime);
-    if (bodyReportRequested) {
-      XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
-      XR(xrLocateSpace(headSpace, space, end.displayTime, &head));
-      reportBody(head);
-    }
+  XrSpaceLocation locateHead(XrTime time) {
+    XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
+    XR(xrLocateSpace(headSpace, space, time, &head));
+    // Check the payload too. A zero orientation can arrive with VALID flags.
+    if (!normalizePose(head.pose))
+      head.locationFlags = 0;
+    return head;
+  }
+  void renderBodyPanel(XrFrameEndInfo end, const Mesh &mesh, const Mesh &hud) {
     const M camera = previewProjection();
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     layer.space = headSpace;
@@ -1145,24 +1163,24 @@ class App {
     layer.size = previewSize;
     // Render a single image in the panel's own camera. Its contents and size
     // are independent of the eye poses and FOV returned by xrLocateViews.
-    layer.subImage = renderEye(eyes[0], options.mirror, camera, scene(), camera, panel());
+    layer.subImage = renderEye(eyes[0], options.mirror, camera, mesh, camera, hud);
     const auto *header = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
     end.layerCount = 1;
     end.layers = &header;
     XR(xrEndFrame(session, &end));
+  }
+  void renderPreview(XrFrameEndInfo end) {
+    locate(end.displayTime);
+    if (bodyReportRequested)
+      reportBody(locateHead(end.displayTime));
+    renderBodyPanel(end, scene(), panel());
     status();
   }
-  void submitStereoPanel(XrFrameEndInfo end, const XrSpaceLocation &head,
+  void submitStereoPanel(XrFrameEndInfo end, XrPosef head,
                          const std::array<XrCompositionLayerProjectionView, 2> &views) {
-    XrPosef headPose = head.pose;
-    if (!validHeadPose(head)) {
-      // The caller has valid LOCAL eye poses even if the VIEW location failed.
-      const V center = (vec(views[0].pose.position) + vec(views[1].pose.position)) * .5f;
-      headPose = {views[0].pose.orientation, {center.x, center.y, center.z}};
-    }
     const std::array<XrCompositionLayerQuad, 2> panels{{
-        stereoPanel(headSpace, headPose, XR_EYE_VISIBILITY_LEFT, views[0]),
-        stereoPanel(headSpace, headPose, XR_EYE_VISIBILITY_RIGHT, views[1]),
+        stereoPanel(headSpace, head, XR_EYE_VISIBILITY_LEFT, views[0]),
+        stereoPanel(headSpace, head, XR_EYE_VISIBILITY_RIGHT, views[1]),
     }};
     const XrCompositionLayerBaseHeader *headers[] = {
         reinterpret_cast<const XrCompositionLayerBaseHeader *>(&panels[0]),
@@ -1183,7 +1201,16 @@ class App {
     XR(xrLocateViews(session, &li, &state, 2, &n, views.data()));
     const auto valid =
         XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
-    if (n != 2 || (state.viewStateFlags & valid) != valid) {
+    if (n != 2 || (state.viewStateFlags & valid) != valid ||
+        !prepareView(views[0]) || !prepareView(views[1])) {
+      if (options.body) {
+        locate(end.displayTime);
+        Mesh hud;
+        textMesh(hud, "STEREO POSE LOST", -.1344f, .010f, .0028f, estimatedColor);
+        renderBodyPanel(end, {}, hud);
+        status("STEREO POSE LOST");
+        return true;
+      }
       XR(xrEndFrame(session, &end));
       return false;
     }
@@ -1194,23 +1221,31 @@ class App {
     }};
     const std::string visibility = options.body ? bodyInView(body, eyeVp) : std::string{};
     Mesh mesh = scene(), hud = panel(visibility);
-    XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
-    XR(xrLocateSpace(headSpace, space, end.displayTime, &head));
+    const XrSpaceLocation head = locateHead(end.displayTime);
     reportBody(head, &eyeVp);
+    const bool headValid = validHeadPose(head);
+    XrPosef panelHead = head.pose;
+    if (options.body && !headValid) {
+      // The caller still has two valid LOCAL eye poses. Use their center and
+      // the left eye's orientation for the stereo panel and its HUD.
+      const V center = vec(views[0].pose.position) * .5f +
+                       vec(views[1].pose.position) * .5f;
+      panelHead = {views[0].pose.orientation, {center.x, center.y, center.z}};
+    }
     M headToRender = identity();
-    if (validHeadPose(head)) {
-      // Place the head-relative HUD into the LOCAL projection layer.
-      V cols[] = {rotate(head.pose.orientation, {1, 0, 0}),
-                  rotate(head.pose.orientation, {0, 1, 0}),
-                  rotate(head.pose.orientation, {0, 0, 1})};
+    if (headValid || options.body) {
+      // Place the head-relative HUD into the LOCAL eye images.
+      V cols[] = {rotate(panelHead.orientation, {1, 0, 0}),
+                  rotate(panelHead.orientation, {0, 1, 0}),
+                  rotate(panelHead.orientation, {0, 0, 1})};
       for (int c = 0; c < 3; c++) {
         headToRender.v[c * 4] = cols[c].x;
         headToRender.v[c * 4 + 1] = cols[c].y;
         headToRender.v[c * 4 + 2] = cols[c].z;
       }
-      headToRender.v[12] = head.pose.position.x;
-      headToRender.v[13] = head.pose.position.y;
-      headToRender.v[14] = head.pose.position.z;
+      headToRender.v[12] = panelHead.position.x;
+      headToRender.v[13] = panelHead.position.y;
+      headToRender.v[14] = panelHead.position.z;
     } else {
       hud.clear();
     }
@@ -1228,7 +1263,7 @@ class App {
     if (options.body) {
       // Render the world from LOCAL eye poses, then attach the resulting
       // stereo frame to the headset through Monado's VIEW quad path.
-      submitStereoPanel(end, head, projectionViews);
+      submitStereoPanel(end, panelHead, projectionViews);
     } else {
       XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
       layer.space = space;

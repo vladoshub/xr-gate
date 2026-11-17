@@ -49,6 +49,8 @@ Bones appear when both endpoint positions are valid. Cyan marks the left side, o
 
 In World view, `IN VIEW L .. R ..` counts joint centers inside each eye's frustum. The stereo cameras can track joints outside the headset's display view. Press `P` to print the current joint positions in meters, OpenXR head-relative angles, and the distance between the ankles when both are valid. To compare frames, keep your feet still and take snapshots with the headset pointed down at different angles.
 
+World view uses the eye poses when the runtime supplies an invalid head orientation. If the eye poses are also unavailable, the headset panel shows `STEREO POSE LOST` until valid eye poses return.
+
 If the wrist fallback patch is installed, start XR Gate with `RUNTIME_BODY_TRACKER_FILTER_WRISTS=0` to include the FRAME wrists in the body stream and render the forearms.
 
 ## Controls
