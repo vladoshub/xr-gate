@@ -35,6 +35,8 @@ struct JointTracker {
 // including when it is installed separately from this backend.
 constexpr uint32_t kLeftWristRole = 14;
 constexpr uint32_t kRightWristRole = 15;
+constexpr size_t kLeftHip = 7;
+constexpr size_t kRightHip = 11;
 
 constexpr std::array<JointTracker, frame_body::kJointCount + 1> kTrackers{{
     {"frame_neck", BODY_TRACKER_ROLE_GENERIC},
@@ -222,7 +224,8 @@ int main(int argc, char** argv) {
   std::string output_stream = "body_trackers";
   std::string output_shm = "track_frame_body_trackers";
   int ort_threads = 4;
-  double pitch_down = 20.0;
+  double pitch_down = 0.0;
+  double max_camera_pitch = 0.0;
   double max_disagreement_m = 0.24;
   double max_fps = 20.0;
   double pose_wait_ms = 80.0;
@@ -231,8 +234,8 @@ int main(int argc, char** argv) {
   double duration_s = 0.0;
 
   CLI::App app{"FRAME stereo body joint backend (ONNX Runtime CPU)"};
-  app.add_option("--model", model_path, "Exported FRAME backbone ONNX model")->required();
-  app.add_option("--calib", calibration_path, "Basalt calibration used by the same capture profile")->required();
+  app.add_option("--model", model_path, "Exported FRAME backbone ONNX model")->required()->take_last();
+  app.add_option("--calib", calibration_path, "Basalt calibration used by the same capture profile")->required()->take_last();
   app.add_option("--capture-registry", capture_registry, "Capture service SHM registry");
   app.add_option("--tracking-registry", tracking_registry, "Basalt input and body tracker output SHM registry");
   app.add_option("--cam0-stream", camera0, "Left GRAY8 stream");
@@ -242,6 +245,9 @@ int main(int argc, char** argv) {
   app.add_option("--output-shm", output_shm, "Body tracker SHM name");
   app.add_option("--ort-threads", ort_threads, "Number of ONNX Runtime CPU threads")->check(CLI::Range(1, 256));
   app.add_option("--pitch-down-deg", pitch_down, "Downward pitch of virtual fisheye camera")
+      ->check(CLI::Range(-90.0, 90.0));
+  app.add_option("--max-camera-pitch-deg", max_camera_pitch,
+                 "Highest physical camera pitch for legs and waist tracking (0=horizontal)")
       ->check(CLI::Range(-90.0, 90.0));
   app.add_option("--max-stereo-disagreement-m", max_disagreement_m, "Maximum distance between the two 3D estimates")
       ->check(CLI::Range(0.001, 1.0));
@@ -262,6 +268,7 @@ int main(int argc, char** argv) {
   try {
     const auto calibration = frame_body::read_calibration(calibration_path);
     const auto offset = offset_option->count() ? clock_offset_ns : calibration.camera_time_offset_ns;
+    const double max_forward_z = std::sin(max_camera_pitch * std::acos(-1.0) / 180.0);
     frame_body::FrameModel model(model_path, calibration, pitch_down, ort_threads, max_disagreement_m);
     capture_client::RecoveringStereoReader capture(
         [&] {
@@ -281,9 +288,11 @@ int main(int argc, char** argv) {
     BodyTrackerSetShmPublisher publisher(std::move(output));
     publisher.publish(lost_frame(0, 0));
     std::cout << "[frame_body_tracking] ONNX Runtime CPU " << Ort::GetVersionString()
-              << ", model=" << model_path << ", capture=" << capture_registry
+              << ", model=" << model_path << ", calib=" << calibration_path
+              << ", capture=" << capture_registry
               << ", pose=" << pose_stream << ", output=" << output_stream
-              << ", camera_time_offset_ns=" << offset << std::endl;
+              << ", camera_time_offset_ns=" << offset << ", pitch_down_deg=" << pitch_down
+              << ", max_camera_pitch_deg=" << max_camera_pitch << std::endl;
 
     auto next_inference = Clock::time_point{};
     const auto period = max_fps >= 0.01
@@ -293,6 +302,7 @@ int main(int argc, char** argv) {
     uint64_t last_camera_timestamp_ns = 0;
     uint64_t processed = 0;
     uint64_t missing_poses = 0;
+    uint64_t lower_body_gated = 0;
     while (!stopping && (duration_s <= 0 || Clock::now() - started < std::chrono::duration<double>(duration_s))) {
       const auto pair = capture.read_next(0.10);
       if (!pair) {
@@ -317,24 +327,32 @@ int main(int argc, char** argv) {
       auto frame = lost_frame(timestamp, poses.reset_counter());
       unsigned tracked = 0;
       if (pose && !stopping) {
-        for (size_t i = 0; i < joints.size(); ++i) {
+        // Camera +Z is the physical optical axis and Basalt world +Z is up.
+        // Express the pitch limit as the vertical component of the unit ray.
+        const bool allow_lower_body = std::all_of(
+            calibration.cameras.begin(), calibration.cameras.end(), [&](const auto& camera) {
+              const Eigen::Vector3d forward = pose->linear() * camera.imu_from_camera.linear().col(2);
+              return forward.z() <= max_forward_z + 1e-9;
+            });
+        lower_body_gated += !allow_lower_body;
+        const size_t end = allow_lower_body ? joints.size() : kLeftHip;
+        for (size_t i = 0; i < end; ++i) {
           if (!joints[i]) continue;
           set_position(frame.trackers[i], *joints[i], *pose);
           tracked += frame.trackers[i].status == BODY_TRACKER_STATUS_TRACKING;
         }
-        constexpr size_t left_hip = 7;
-        constexpr size_t right_hip = 11;
-        if (joints[left_hip] && joints[right_hip]) {
+        if (allow_lower_body && joints[kLeftHip] && joints[kRightHip]) {
           const frame_body::JointObservation waist{
-              (joints[left_hip]->position_imu + joints[right_hip]->position_imu) * 0.5,
-              std::min(joints[left_hip]->confidence, joints[right_hip]->confidence)};
+              (joints[kLeftHip]->position_imu + joints[kRightHip]->position_imu) * 0.5,
+              std::min(joints[kLeftHip]->confidence, joints[kRightHip]->confidence)};
           set_position(frame.trackers[kTrackers.size() - 1], waist, *pose);
         }
       }
       publisher.publish(frame);
       if (++processed == 1 || processed % 60 == 0) {
         std::cout << "[frame_body_tracking] frames=" << processed << " tracked_joints=" << tracked
-                  << " missing_poses=" << missing_poses << " inference_ms="
+                  << " missing_poses=" << missing_poses << " lower_body_gated=" << lower_body_gated
+                  << " inference_ms="
                   << std::chrono::duration<double, std::milli>(inference_end - inference_start).count()
                   << std::endl;
       }

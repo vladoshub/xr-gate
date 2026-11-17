@@ -180,7 +180,11 @@ def parse_wait_streams(items: Iterable[Dict[str, Any]], default_timeout_s: float
 def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: float) -> ServiceSpec:
     name = str(item["name"])
     default_enabled = bool(item.get("enabled", True))
-    enabled = env_truthy(str(item.get("enable_env", service_env_name(name))), default_enabled)
+    enable_env = item.get("enable_env", service_env_name(name))
+    enabled = env_truthy(str(enable_env), default_enabled) if enable_env else default_enabled
+    start_on_launch = bool(item.get("start_on_launch", True))
+    if start_env := item.get("start_on_launch_env"):
+        start_on_launch = env_truthy(str(start_env), start_on_launch)
     raw_command = item.get("command") or []
     if isinstance(raw_command, str):
         raw_command = [raw_command]
@@ -192,7 +196,7 @@ def parse_service(item: Dict[str, Any], root_project: str, default_timeout_s: fl
         name=name,
         command=command,
         enabled=enabled,
-        start_on_launch=bool(item.get("start_on_launch", True)),
+        start_on_launch=start_on_launch,
         optional=bool(item.get("optional", False)),
         no_imu=bool(item.get("no_imu", False)),
         cwd=cwd,
@@ -495,6 +499,40 @@ def apply_default_runtime_control_actions(config: Dict[str, Any], tracking_regis
         "manual-toggle-xr-spatial": toggle_xr_spatial,
         "manual-toggle-shake-controls": toggle_shake_controls,
     }
+
+
+def apply_default_frame_tracking(config: Dict[str, Any], tracking_registry: str) -> None:
+    post_gate = config.get("post_gate_services", [])
+    services = {item["name"]: item for item in post_gate}
+    adapter = services.get("xr_runtime_adapter")
+    if not adapter or "basalt_vio" not in services:
+        return
+
+    stream = os.environ.get("BODY_TRACKERS_STREAM", "body_trackers")
+    if "frame_body_tracking" not in services:
+        post_gate.insert(post_gate.index(adapter), {
+            "name": "frame_body_tracking",
+            "enable_env": None,
+            "start_on_launch": False,
+            "start_on_launch_env": "RUN_FRAME_BODY_TRACKING",
+            "optional": True,
+            "command": ["{common_scripts}/frame_body_tracking/start_frame_body_tracking.sh"],
+            "wait_streams": [{"registry": tracking_registry, "stream": stream, "timeout_s": 8}],
+            "restart_on_exit": True,
+            "restart_backoff_s": 2.0,
+        })
+
+    adapter.setdefault("env", {}).setdefault("XR_FRAME_BODY_TRACKING_CONTROL", "1")
+    clean = [{"registry": tracking_registry, "streams": [stream]}]
+    config.setdefault("imu_tap_controls", {}).setdefault("actions", {}).setdefault(
+        "manual-toggle-body-tracking", {
+            "type": "toggle_service",
+            "description": "Start or stop the FRAME body tracking backend.",
+            "service": "frame_body_tracking",
+            "clean_streams_on_start": clean,
+            "clean_streams_on_stop": clean,
+        },
+    )
 
 
 def _load_key_value_env_file(
@@ -875,6 +913,7 @@ def default_linux_config_dict() -> Dict[str, Any]:
     }
 
     apply_default_runtime_control_actions(config, tracking_registry, runtime_registry)
+    apply_default_frame_tracking(config, tracking_registry)
     return config
 
 
@@ -1277,6 +1316,8 @@ def load_config(path: Optional[str]) -> ClientConfig:
 
     initial_root_project = expand_path(str(os.environ.get("XR_ROOT_PROJECT") or data.get("root_project", "~/src/xr_tracking")))
     root_project = _load_config_device_env(data, initial_root_project)
+    if sys.platform.startswith("linux"):
+        apply_default_frame_tracking(data, os.environ.get("TRACKING_REGISTRY", "/tmp/tracking_streams.json"))
     log_dir = expand_path(str(data.get("log_dir", "/tmp/xr_backend_client_logs")), root_project)
     wait_timeout_s = float(data.get("wait_timeout_s", 30.0))
     rules_config = data.get("service_startup_rules", {})

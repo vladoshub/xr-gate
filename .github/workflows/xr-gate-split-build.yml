@@ -87,6 +87,7 @@ env:
   XR_BUILD_CPU: ${{ github.event_name == 'workflow_dispatch' && inputs.cpu_profile || 'avx2' }}
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
+  XR_DOWNLOAD_BODY_TRACKING_MODELS: "0"
   XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ubuntu_release && inputs.include_xrizer && '1' || '0' }}
   XR_BUILD_VENDOR_COMPONENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.include_vendor_components == false && '0' || '1' }}
   XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
@@ -686,6 +687,58 @@ jobs:
           path: hand-tracking-models-mercury.tar.gz
           retention-days: 7
 
+  body-tracking-models-frame:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ubuntu_release }}
+    name: body-tracking model FRAME
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download and export the FRAME backbone
+        env:
+          XR_BIN_ROOT: ${{ github.workspace }}/model_artifact
+        run: bash backends/frame_body_tracking/scripts/linux/download_frame_models.sh
+
+      - name: Check ONNX Runtime compatibility and archive the model
+        run: |
+          set -euo pipefail
+          MODEL_DIR=model_artifact/body-tracking-models/frame
+          (cd "$MODEL_DIR" && sha256sum -c SHA256SUMS.txt)
+          python3 -m venv "$RUNNER_TEMP/frame-onnx-check"
+          "$RUNNER_TEMP/frame-onnx-check/bin/python" -m pip install 'numpy<2' onnxruntime==1.18.1
+          "$RUNNER_TEMP/frame-onnx-check/bin/python" - "$MODEL_DIR/frame_backbone.onnx" <<'PY'
+          import sys
+          import numpy as np
+          import onnxruntime as ort
+
+          size = 256
+          focal, center = 82 / size, (size - 1) * 0.5 / size
+          K = np.array([[focal, 0, center], [0, focal, center], [0, 0, 1]], dtype=np.float32)
+          session = ort.InferenceSession(sys.argv[1], providers=["CPUExecutionProvider"])
+          uv, xyz = session.run(["uv", "xyz"], {
+              "images": np.zeros((1, 1, 2, 3, size, size), dtype=np.float32),
+              "K": np.tile(K, (1, 2, 1, 1)),
+              "d": np.zeros((1, 2, 4), dtype=np.float32),
+          })
+          assert uv.shape == (1, 1, 2, 15, 2) and np.isfinite(uv).all()
+          assert xyz.shape == (1, 1, 2, 15, 3) and np.isfinite(xyz).all()
+          PY
+          tar -C model_artifact -czf body-tracking-models-frame.tar.gz body-tracking-models
+
+      - name: Upload FRAME body-tracking model
+        uses: actions/upload-artifact@v4
+        with:
+          name: body-tracking-models-frame
+          path: body-tracking-models-frame.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   merge-package:
     name: merge runtime / Ubuntu ${{ matrix.ubuntu }}
     runs-on: ubuntu-24.04
@@ -976,6 +1029,7 @@ jobs:
     needs:
       - release-unpack-helper
       - hand-tracking-models-mercury
+      - body-tracking-models-frame
       - merge-package
       - check-24-on-26
       - build-steamvr-windows
@@ -991,6 +1045,7 @@ jobs:
         (!inputs.build_ubuntu_release || (
           needs.release-unpack-helper.result == 'success' &&
           needs.hand-tracking-models-mercury.result == 'success' &&
+          needs.body-tracking-models-frame.result == 'success' &&
           needs.merge-package.result == 'success' &&
           needs.check-24-on-26.result == 'success'
         ))
@@ -1026,6 +1081,13 @@ jobs:
           name: xr-gate-windows-wsl2-usbip
           path: release-assets/windows
 
+      - name: Download FRAME body-tracking model
+        if: ${{ env.XR_BUILD_UBUNTU_RELEASE == '1' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: body-tracking-models-frame
+          path: release-assets/models
+
       - name: Download unpack helper
         if: ${{ env.XR_BUILD_UBUNTU_RELEASE == '1' }}
         uses: actions/download-artifact@v4
@@ -1049,6 +1111,7 @@ jobs:
 
           if [[ "$XR_BUILD_UBUNTU_RELEASE" == "1" ]]; then
             test -f release-assets/models/hand-tracking-models-mercury.tar.gz
+            test -f release-assets/models/body-tracking-models-frame.tar.gz
             test -f release-assets/unpack-helper/unpack_xr_gate.sh
           fi
           if [[ "$XR_RELEASE_WINDOWS_DRIVER" == "1" ]]; then
@@ -1136,6 +1199,7 @@ jobs:
               release-assets/runtime/xr-gate-ubuntu-24.04-linux-x64.tar.gz
               release-assets/runtime/xr-gate-ubuntu-26.04-linux-x64.tar.gz
               release-assets/models/hand-tracking-models-mercury.tar.gz
+              release-assets/models/body-tracking-models-frame.tar.gz
               release-assets/unpack-helper/unpack_xr_gate.sh
             )
           fi

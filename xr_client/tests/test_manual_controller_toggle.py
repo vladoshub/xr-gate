@@ -33,11 +33,16 @@ class ManualControllerToggleTest(unittest.TestCase):
 
     def test_single_key_and_following_enter_only_toggle_once(self):
         master, source, controls, state = self.terminal()
-        os.write(master, b"5")
-        events = controls.poll_events()
-        self.assertEqual([e.name for e in events], ["manual-toggle-override-controller"])
-        os.write(master, b"\n")
-        self.assertEqual(controls.poll_events(), [])
+        commands = [(b"5", "manual-toggle-override-controller")]
+        if sys.platform.startswith("linux"):
+            commands.append((b"0", "manual-toggle-body-tracking"))
+        for key, action in commands:
+            with self.subTest(key=key):
+                os.write(master, key)
+                events = controls.poll_events()
+                self.assertEqual([event.name for event in events], [action])
+                os.write(master, b"\n")
+                self.assertEqual(controls.poll_events(), [])
         controls.close()
         import termios
         self.assertEqual(termios.tcgetattr(source.fileno()), state)

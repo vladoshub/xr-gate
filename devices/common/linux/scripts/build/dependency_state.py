@@ -14,6 +14,7 @@ def key(root, command):
     names = {
         "XR_BUILD_ONLY", "XR_BUILD_XRIZER", "XR_DOWNLOAD_HAND_TRACKING_MODELS",
         "XR_DOWNLOAD_MERCURY_MODELS", "XR_BUILD_VENDOR_COMPONENTS", "XR_VENDOR_COMPONENTS",
+        "XR_DOWNLOAD_BODY_TRACKING_MODELS", "XR_FRAME_CHECKPOINT", "XR_FRAME_EXPORT_PYTHON",
         "XR_TARGET_DEVICE", "XR_DEVICE_TARGET", "XR_DEVICE_OUT_ENV", "XR_DEVICE_BUILD_HOOK",
         "XR_USE_BUNDLED_OPENCV", "XR_CPU_CACHE_TAG", "CC", "CXX", "CFLAGS", "CXXFLAGS",
         "CXXFLAGS_EXTRA", "CMAKE_BIN", "CMAKE_PRESET", "CARGO_HOME", "RUSTUP_HOME",
@@ -29,7 +30,12 @@ def key(root, command):
     for directory in ("devices/common/linux/scripts/build", "backends", "drivers", "capture_service_cpp",
                       "apps", "bridges", "tools", "runtime_adapters", "override_controller", "shared"):
         for path in sorted((root / directory).rglob("*")):
-            if path.is_file() and (path.suffix in (".sh", ".cmake", ".toml") or path.name in ("CMakeLists.txt", "vcpkg.json", "Cargo.lock")):
+            if path.is_file() and (
+                path.suffix in (".sh", ".cmake", ".toml") or path.name in (
+                    "CMakeLists.txt", "vcpkg.json", "Cargo.lock",
+                    "export_frame_backbone.py", "requirements-frame-export.txt",
+                )
+            ):
                 digest.update(str(path.relative_to(root)).encode())
                 digest.update(path.read_bytes())
     return digest.hexdigest()

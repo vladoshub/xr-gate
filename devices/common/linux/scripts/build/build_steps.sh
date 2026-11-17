@@ -79,6 +79,11 @@ should_download_hand_tracking_models() {
   return 1
 }
 
+should_download_body_tracking_models() {
+  [[ " ${XR_BUILD_ONLY:-} " == *" body_tracking_models "* ]] ||
+    { [[ "${XR_DOWNLOAD_BODY_TRACKING_MODELS:-1}" == "1" ]] && should_run_step frame_body_tracking; }
+}
+
 
 vendor_components_enabled() {
   case "${XR_BUILD_VENDOR_COMPONENTS:-1}" in

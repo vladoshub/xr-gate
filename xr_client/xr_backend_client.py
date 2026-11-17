@@ -550,6 +550,13 @@ class Launcher:
 
         env = os.environ.copy()
         env.update(spec.env)
+        if spec.name == "frame_body_tracking":
+            basalt = self.service_spec_by_name("basalt_vio")
+            if basalt is not None:
+                default_mode = basalt.env.get("BASALT_MODE", env.get("BASALT_MODE", "vio"))
+                env["BASALT_MODE"] = basalt_mode_from_command(basalt.command, default_mode)
+                if "BASALT_CALIB" in basalt.env and "BASALT_CALIB" not in spec.env:
+                    env["BASALT_CALIB"] = basalt.env["BASALT_CALIB"]
         # The limiter truncates the same inode while the child keeps its fd.
         # Append mode makes subsequent child writes follow the new EOF instead
         # of creating a sparse NUL-filled gap at the old file offset.

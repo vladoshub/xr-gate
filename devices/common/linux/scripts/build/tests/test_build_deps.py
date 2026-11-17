@@ -137,6 +137,7 @@ PY
             "backends/mercury_hand_tracking/scripts/linux/install_mercury.sh",
             "backends/mercury_hand_tracking/scripts/linux/download_mercury_models.sh",
             "backends/frame_body_tracking/scripts/linux/install_frame_body_tracking.sh",
+            "backends/frame_body_tracking/scripts/linux/download_frame_models.sh",
             "runtime_adapters/xr_runtime_adapter/scripts/linux/install_xr_runtime_adapter.sh",
             "override_controller/scripts/linux/install_override_controller.sh",
             "backends/xr_video/scripts/linux/install_xr_video.sh",
@@ -161,12 +162,13 @@ PY
                                  INSTALL_LFS_DEPS="1", XRIZER_INSTALL_SYSTEM_DEPS="1", ADD_INPUT_GROUP="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(commands), 19)
+        self.assertEqual(len(commands), 20)
         for command in commands:
             self.assertNotIn('forbidden', command)
             self.assertEqual(set(command['flags'].values()), {'0'}, command)
         self.assertTrue(any(command['step'].endswith('download_mercury_models.sh') for command in commands))
         self.assertTrue(any(command['step'].endswith('install_frame_body_tracking.sh') for command in commands))
+        self.assertTrue(any(command['step'].endswith('download_frame_models.sh') for command in commands))
         self.assertTrue(any(command['step'].endswith('install_xrizer.sh') for command in commands))
 
     def test_missing_dependencies_stop_build_before_any_compilation(self):
@@ -193,7 +195,7 @@ PY
                     result = self.run_script(BUILD / entrypoint, **overrides)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     commands = [json.loads(line) for line in self.log.read_text().splitlines()]
-                    self.assertEqual(len(commands), 19)
+                    self.assertEqual(len(commands), 20)
                     self.assertTrue(all("step" in command for command in commands))
 
     def test_standalone_xreal_helpers_never_install_packages(self):

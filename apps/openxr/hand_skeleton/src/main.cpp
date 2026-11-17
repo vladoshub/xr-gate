@@ -369,33 +369,45 @@ static std::string bodyInView(const Body &body, const std::array<M, 2> &eyes) {
   return "IN VIEW L " + std::to_string(counts[0]) + " R " + std::to_string(counts[1]);
 }
 
-static Body previewBody(Body body) {
-  const auto first = std::find_if(body.begin(), body.end(),
-                                  [](const auto &joint) { return validPosition(joint); });
-  if (first == body.end())
-    return body;
-
-  V low = vec(first->pose.position), high = low;
-  for (auto joint = first + 1; joint != body.end(); ++joint) {
-    if (!validPosition(*joint))
-      continue;
-    const V p = vec(joint->pose.position);
-    low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-    high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
-  }
+static void fitPreview(Body &body, std::array<Hand, 2> &hands, bool source21) {
+  const auto forEachPosition = [&](const auto &visit) {
+    for (auto &joint : body)
+      if (validPosition(joint))
+        visit(joint.pose.position);
+    for (auto &hand : hands) {
+      if (!hand.active)
+        continue;
+      for (int i = 0; i < XR_HAND_JOINT_COUNT_EXT; i++) {
+        auto &joint = hand.joints[i];
+        if ((!source21 || sourceJoint(i)) && validPosition(joint))
+          visit(joint.pose.position);
+      }
+    }
+  };
+  V low{}, high{};
+  bool hasPosition = false;
+  forEachPosition([&](const XrVector3f &position) {
+    const V p = vec(position);
+    if (!hasPosition) {
+      low = high = p;
+      hasPosition = true;
+    } else {
+      low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+      high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+    }
+  });
+  if (!hasPosition)
+    return;
 
   const V center = low * .5f + high * .5f;
   const V halfExtent = high * .5f - low * .5f;
   constexpr V previewCenter{0, -.025f, -previewDistance};
   const float maxExtent = std::max({halfExtent.x, halfExtent.y, halfExtent.z, .001f});
   const float scale = std::min(.32f, .23f / maxExtent);
-  for (auto &joint : body) {
-    if (!validPosition(joint))
-      continue;
-    const V p = (vec(joint.pose.position) - center) * scale + previewCenter;
-    joint.pose.position = {p.x, p.y, p.z};
-  }
-  return body;
+  forEachPosition([&](XrVector3f &position) {
+    const V p = (vec(position) - center) * scale + previewCenter;
+    position = {p.x, p.y, p.z};
+  });
 }
 
 static void bodySkeleton(Mesh &mesh, const Body &body) {
@@ -614,23 +626,26 @@ class App {
     XR(xrEnumerateInstanceExtensionProperties(nullptr, 0, &n, nullptr));
     std::vector<XrExtensionProperties> props(n, {XR_TYPE_EXTENSION_PROPERTIES});
     XR(xrEnumerateInstanceExtensionProperties(nullptr, n, &n, props.data()));
-    const char *extensions[] = {
-        XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
-        options.body ? XR_MNDX_XDEV_SPACE_EXTENSION_NAME
-                     : XR_EXT_HAND_TRACKING_EXTENSION_NAME};
+    const auto hasExtension = [&](const char *name) {
+      return std::any_of(props.begin(), props.end(), [&](const auto &p) {
+        return std::strcmp(name, p.extensionName) == 0;
+      });
+    };
+    std::vector<const char *> extensions{XR_KHR_OPENGL_ENABLE_EXTENSION_NAME};
+    const bool requestHands = !options.body || hasExtension(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+    if (options.body)
+      extensions.push_back(XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
+    if (requestHands)
+      extensions.push_back(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
     for (auto name : extensions)
-      require(
-          std::any_of(
-              props.begin(), props.end(),
-              [&](auto &p) { return std::strcmp(name, p.extensionName) == 0; }),
-          std::string("Runtime lacks ") + name);
+      require(hasExtension(name), std::string("Runtime lacks ") + name);
     XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     std::snprintf(ci.applicationInfo.applicationName,
                   XR_MAX_APPLICATION_NAME_SIZE, "XR Gate Skeleton");
     ci.applicationInfo.applicationVersion = 1;
     ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-    ci.enabledExtensionCount = 2;
-    ci.enabledExtensionNames = extensions;
+    ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    ci.enabledExtensionNames = extensions.data();
     XR(xrCreateInstance(&ci, &instance));
     resultInstance = instance;
     XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
@@ -642,6 +657,8 @@ class App {
     XrSystemHandTrackingPropertiesEXT hp{
         XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT};
     XrSystemXDevSpacePropertiesMNDX bp{XR_TYPE_SYSTEM_XDEV_SPACE_PROPERTIES_MNDX};
+    if (options.body && requestHands)
+      bp.next = &hp;
     XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
     sp.next = options.body ? static_cast<void *>(&bp) : static_cast<void *>(&hp);
     XR(xrGetSystemProperties(instance, system, &sp));
@@ -659,7 +676,7 @@ class App {
     require(req.minApiVersionSupported <= XR_MAKE_VERSION(3, 3, 0) &&
                 req.maxApiVersionSupported >= XR_MAKE_VERSION(3, 3, 0),
             "This example needs OpenGL 3.3 support in the runtime.");
-    if (!options.body) {
+    if (hp.supportsHandTracking) {
       proc("xrCreateHandTrackerEXT", createHand);
       proc("xrDestroyHandTrackerEXT", destroyHand);
       proc("xrLocateHandJointsEXT", locateHand);
@@ -803,9 +820,9 @@ class App {
                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE) != modes.end()
                 ? XR_ENVIRONMENT_BLEND_MODE_OPAQUE
                 : modes[0];
-    if (options.body) {
+    if (options.body)
       initBodySpaces();
-    } else {
+    if (createHand) {
       for (int i = 0; i < 2; i++) {
         XrHandTrackerCreateInfoEXT h{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
         h.hand = i == 0 ? XR_HAND_LEFT_EXT : XR_HAND_RIGHT_EXT;
@@ -944,8 +961,9 @@ class App {
         if (bodySpaces[i])
           XR(xrLocateSpace(bodySpaces[i], space, time, &body[i]));
       }
-      return;
     }
+    if (!locateHand)
+      return;
     for (int i = 0; i < 2; i++) {
       Hand &h = hands[i];
       h = Hand{};
@@ -970,12 +988,14 @@ class App {
         rod(mesh, {d, -1.5f, -2}, {d, -1.5f, 2}, .001f, c);
         rod(mesh, {-2, -1.5f, d}, {2, -1.5f, d}, .001f, c);
       }
+    auto displayBody = body;
+    auto displayHands = hands;
+    if (bodyPreview)
+      fitPreview(displayBody, displayHands, source21);
     if (options.body)
-      bodySkeleton(mesh, bodyPreview ? previewBody(body) : body);
-    else {
-      skeleton(mesh, hands[0], leftColor, axes, radii, source21);
-      skeleton(mesh, hands[1], rightColor, axes, radii, source21);
-    }
+      bodySkeleton(mesh, displayBody);
+    skeleton(mesh, displayHands[0], leftColor, axes, radii, source21);
+    skeleton(mesh, displayHands[1], rightColor, axes, radii, source21);
     return mesh;
   }
   std::string bodyStatus() const {
@@ -1042,7 +1062,8 @@ class App {
       if (bodyPreview) {
         constexpr float size = .0028f;
         const bool lost = label == "FRAME LOST";
-        textMesh(m, label, -3 * size * label.size(), lost ? .010f : y, size,
+        const bool empty = lost && hands[0].valid == 0 && hands[1].valid == 0;
+        textMesh(m, label, -3 * size * label.size(), empty ? .010f : y, size,
                  lost ? estimatedColor : torsoColor);
       } else {
         textMesh(m, label, -.19f, y, .0018f, torsoColor);
@@ -1302,8 +1323,12 @@ class App {
       h = Hand{};
       h.active = true;
       float x = side == 0 ? -.16f : .16f;
+      const V handOffset = options.body
+          ? vec(body[side == 0 ? LeftWrist : RightWrist].pose.position) - V{x, -.04f, -.55f}
+          : V{};
       auto set = [&](int j, V p) {
         auto &a = h.joints[j];
+        p = p + handOffset;
         a.pose.position = {p.x, p.y, p.z};
         a.pose.orientation.w = 1;
         a.radius = .005f;
@@ -1336,8 +1361,7 @@ class App {
   void demoFrame() {
     if (options.body)
       body = demoBody();
-    else
-      demoHands();
+    demoHands();
     int w = 0, h = 0;
     SDL_GL_GetDrawableSize(window, &w, &h);
     if (w > 0 && h > 0) {

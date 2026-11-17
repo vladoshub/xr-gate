@@ -34,6 +34,7 @@ fi
 #   XR_BUILD_ONLY="drivers"              # openvr_driver + monado_driver; xrizer is GPL/optional
 #   XR_BUILD_ONLY="xrizer"               # only optional OpenVR->OpenXR compatibility layer
 #   XR_BUILD_ONLY="hand_tracking_models" # only download Mercury ONNX hand models
+#   XR_BUILD_ONLY="body_tracking_models" # only download and export the FRAME backbone
 #   XR_BUILD_XRIZER=1 XR_BUILD_ONLY="drivers"  # drivers plus optional xrizer
 #   XR_DOWNLOAD_HAND_TRACKING_MODELS=1    # opt-in model download during a normal build
 #   XR_BUILD_ONLY="capture_service_cpp drivers"
@@ -124,6 +125,11 @@ run_step frame_body_tracking env \
   ORT_ROOT="$XR_OUT_BIN_ROOT/onnxruntime/onnxruntime-linux-x64-1.18.1" \
   ORT_ARCHIVE="$XR_DEPENDENCY_CACHE_ROOT/downloads/onnxruntime-linux-x64-1.18.1.tgz" \
   bash "$XR_ROOT_PROJECT/backends/frame_body_tracking/scripts/linux/install_frame_body_tracking.sh"
+
+if should_download_body_tracking_models; then
+  log "== body_tracking_models =="
+  bash "$XR_ROOT_PROJECT/backends/frame_body_tracking/scripts/linux/download_frame_models.sh"
+fi
 
 if should_download_hand_tracking_models; then
   log "== hand_tracking_models =="

@@ -28,10 +28,10 @@ Replace `generic` with your device package if needed. If `XR_RUNTIME_JSON` is al
 
 ## FRAME body skeleton
 
-Start XR Gate with `RUN_FRAME_BODY_TRACKING=1` and wait for the `runtime_body_trackers` stream. Launch Monado from `out/xr-gate` after the stream appears so the driver can register the FRAME devices.
+Press `0` in `xr_client` to start FRAME, or set `RUN_FRAME_BODY_TRACKING=1` when starting XR Gate. Launch Monado from the runtime package after `runtime_body_trackers` appears so the driver can register the FRAME devices.
 
 ```bash
-XR_MONADO_BODY_TRACKERS=1 XR_MONADO_DEVICE=xreal_ultra \
+XR_MONADO_BODY_TRACKERS=1 XR_MONADO_HAND_TRACKING=1 XR_MONADO_DEVICE=xreal_ultra \
   ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
@@ -44,6 +44,8 @@ bash apps/openxr/hand_skeleton/run.sh \
 ```
 
 The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. The default preview displays a 3D model in a flat panel attached to the headset. Press `V` to switch to World view and press it again to return to the preview. World view renders the joints at their OpenXR LOCAL positions and presents both eye images in a stereo panel that follows the glasses.
+
+When Monado exposes `XR_EXT_hand_tracking`, both views display the hand skeletons alongside FRAME. The `J`, `A` and `R` controls also apply to those hands.
 
 Bones appear when both endpoint positions are valid. Cyan marks the left side, orange the right, and yellow a valid position that Monado reports as untracked. `FRAME LOST` means there are no valid joint positions for the current frame.
 
@@ -67,4 +69,4 @@ If the wrist fallback patch is installed, start XR Gate with `RUNTIME_BODY_TRACK
 
 The left hand is cyan and the right hand is orange. Yellow marks a valid joint position that OpenXR reports as untracked. Invalid joints are hidden, and inactive hands show `LOST`.
 
-Use `--demo` to render synthetic hands and `--body --demo` to render a synthetic body in the desktop window.
+Use `--demo` to render synthetic hands and `--body --demo` to render a synthetic body with hands in the desktop window.

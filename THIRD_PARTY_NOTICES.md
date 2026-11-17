@@ -65,7 +65,7 @@ checkouts used for the build into `LICENSES/components/`.
 
 - Upstream: https://github.com/microsoft/onnxruntime
 - Pinned default release: `1.18.1`.
-- Use: runtime dependency for Mercury inference.
+- Runtime dependency for Mercury and FRAME inference.
 - License: MIT, with additional third-party notices.
 - Baseline text: `LICENSES/ONNXRuntime-MIT.txt`.
 - Build packaging requires and redistributes the exact upstream `LICENSE` and
@@ -129,6 +129,24 @@ metadata rather than assigning a single guessed license to the whole package.
   model weights. The models are not covered by the XR Gate MIT license; when
   publishing model assets, preserve the upstream bundle and verify that the
   selected upstream revision authorizes redistribution of those exact weights.
+
+### FRAME body-tracking ONNX model
+
+- FRAME (*Floor-aligned Representation for Avatar Motion from Egocentric
+  Video*) is by Andrea Boscolo Camiletto et al. (CVPR 2025).
+  https://vcai.mpi-inf.mpg.de/projects/FRAME/
+- The export uses the FRAME Python sources at commit
+  `e769c2f9068806101f6897e0b62b03e8c5280abd` during build.
+  https://github.com/abcamiletto/frame
+- The export converts the published `backbone.ckpt` (Edmond file `311764`)
+  to `frame_backbone.onnx` for the XR Gate backend.
+  https://doi.org/10.17617/3.XARMQA
+- The FRAME sources and published checkpoint use CC BY-NC 4.0.
+  https://creativecommons.org/licenses/by-nc/4.0/
+- The separate `body-tracking-models-frame.tar.gz` archive includes
+  `FRAME-LICENSE.txt`, the author credits and export details in `SOURCE.txt`,
+  and the checksum in `SHA256SUMS.txt`. The unpack helper installs these
+  alongside the ONNX model under `bin/body-tracking-models/frame/`.
 
 ### xrizer
 

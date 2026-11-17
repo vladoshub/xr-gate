@@ -234,27 +234,6 @@
       "restart_run_gate": false
     },
     {
-      "name": "frame_body_tracking",
-      "enable_env": "RUN_FRAME_BODY_TRACKING",
-      "enabled": false,
-      "optional": true,
-      "command": [
-        "{common_scripts}/frame_body_tracking/start_frame_body_tracking.sh"
-      ],
-      "wait_streams": [
-        {
-          "registry": "/tmp/tracking_streams.json",
-          "stream": "body_trackers",
-          "timeout_s": 8
-        }
-      ],
-      "restart_on_exit": true,
-      "restart_on_error_only": true,
-      "restart_max_attempts": 3,
-      "restart_window_s": 60,
-      "restart_backoff_s": 2.0
-    },
-    {
       "name": "xr_runtime_adapter",
       "enable_env": "RUN_XR_RUNTIME_ADAPTER",
       "enabled": true,
