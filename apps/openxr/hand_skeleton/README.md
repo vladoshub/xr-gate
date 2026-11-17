@@ -43,7 +43,7 @@ bash apps/openxr/hand_skeleton/run.sh \
   --body
 ```
 
-The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. The default preview centers a small 3D skeleton in the headset view. You can tilt the glasses down to bring the legs into camera view while the preview stays in front of you. Press `V` in the viewer window to inspect the joints at their OpenXR LOCAL positions and press it again to return to the preview.
+The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. It displays the default preview in a stereo panel attached to the headset. The panel follows the glasses as you tilt them down to bring the legs into camera view. Press `V` in the viewer window to inspect the joints at their OpenXR LOCAL positions and press it again to return to the preview.
 
 Bones appear when both endpoint positions are valid. Cyan marks the left side, orange the right, and yellow a valid position that Monado reports as untracked. `FRAME LOST` means there are no valid joint positions for the current frame.
 

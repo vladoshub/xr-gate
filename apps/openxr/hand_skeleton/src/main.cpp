@@ -120,6 +120,27 @@ static M projection(XrFovf f) {
   m.v[14] = -2 * z * n / (z - n);
   return m;
 }
+static constexpr float previewDistance = 1.45f;
+
+static XrCompositionLayerQuad previewQuad(
+    XrSpace space, XrEyeVisibility eye, const XrCompositionLayerProjectionView &view) {
+  const float left = previewDistance * std::tan(view.fov.angleLeft);
+  const float right = previewDistance * std::tan(view.fov.angleRight);
+  const float down = previewDistance * std::tan(view.fov.angleDown);
+  const float up = previewDistance * std::tan(view.fov.angleUp);
+  // Place the rendered eye image on the plane cut out by its frustum.
+  const V center = vec(view.pose.position) +
+                   rotate(view.pose.orientation,
+                          {(left + right) * .5f, (down + up) * .5f, -previewDistance});
+  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  quad.space = space;
+  quad.eyeVisibility = eye;
+  quad.subImage = view.subImage;
+  quad.pose = {view.pose.orientation, {center.x, center.y, center.z}};
+  quad.size = {right - left, up - down};
+  return quad;
+}
+
 struct Color {
   float r, g, b;
 };
@@ -302,7 +323,7 @@ static Body previewBody(Body body) {
   }
 
   const V center = (low + high) * .5f;
-  constexpr V previewCenter{0, -.025f, -1.45f};
+  constexpr V previewCenter{0, -.025f, -previewDistance};
   constexpr float previewScale = .25f;
   for (auto &joint : body) {
     if (!validPosition(joint))
@@ -1054,12 +1075,22 @@ class App {
       pv.subImage.imageRect.extent = {e.width, e.height};
     }
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    layer.space = renderSpace;
+    layer.space = space;
     layer.viewCount = 2;
     layer.views = projectionViews.data();
-    const XrCompositionLayerBaseHeader *layers[] = {
+    const XrCompositionLayerBaseHeader *layers[2] = {
         reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer)};
+    std::array<XrCompositionLayerQuad, 2> quads{};
     end.layerCount = 1;
+    if (bodyPreview) {
+      // VIEW quads follow the headset in Monado's compositor. Its projection
+      // fast path can apply world-space timewarp even to a VIEW projection.
+      quads[0] = previewQuad(headSpace, XR_EYE_VISIBILITY_LEFT, projectionViews[0]);
+      quads[1] = previewQuad(headSpace, XR_EYE_VISIBILITY_RIGHT, projectionViews[1]);
+      layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quads[0]);
+      layers[1] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quads[1]);
+      end.layerCount = 2;
+    }
     end.layers = layers;
     XR(xrEndFrame(session, &end));
     status();
