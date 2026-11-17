@@ -72,6 +72,14 @@ static V rotate(XrQuaternionf q, V v) {
   V u{q.x, q.y, q.z};
   return v + cross(u, v) * (2 * q.w) + cross(u, cross(u, v)) * 2;
 }
+static XrQuaternionf conjugate(XrQuaternionf q) {
+  return {-q.x, -q.y, -q.z, q.w};
+}
+static XrQuaternionf operator*(XrQuaternionf a, XrQuaternionf b) {
+  const V x{a.x, a.y, a.z}, y{b.x, b.y, b.z};
+  const V v = y * a.w + x * b.w + cross(x, y);
+  return {v.x, v.y, v.z, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
 struct M {
   float v[16]{};
 };
@@ -101,10 +109,7 @@ static bool inView(const M &vp, V p) {
          std::abs(clip.y) <= w && std::abs(clip.z) <= w;
 }
 static M viewMatrix(XrPosef pose) {
-  auto q = pose.orientation;
-  q.x = -q.x;
-  q.y = -q.y;
-  q.z = -q.z;
+  const auto q = conjugate(pose.orientation);
   M m = identity();
   V cols[] = {rotate(q, {1, 0, 0}), rotate(q, {0, 1, 0}), rotate(q, {0, 0, 1})};
   for (int i = 0; i < 3; i++) {
@@ -139,6 +144,30 @@ static M previewProjection() {
   const float horizontal = std::atan(previewSize.width / (2 * previewDistance));
   const float vertical = std::atan(previewSize.height / (2 * previewDistance));
   return projection({-horizontal, horizontal, vertical, -vertical});
+}
+
+static XrCompositionLayerQuad stereoPanel(
+    XrSpace headSpace, XrPosef head, XrEyeVisibility eye,
+    const XrCompositionLayerProjectionView &rendered) {
+  // Map the rendered eye frustum onto a plane in that eye's coordinates.
+  // Each texel then keeps the same viewing ray when submitted as a VIEW quad.
+  const float left = previewDistance * std::tan(rendered.fov.angleLeft);
+  const float right = previewDistance * std::tan(rendered.fov.angleRight);
+  const float down = previewDistance * std::tan(rendered.fov.angleDown);
+  const float up = previewDistance * std::tan(rendered.fov.angleUp);
+  const XrQuaternionf headFromLocal = conjugate(head.orientation);
+  const XrQuaternionf eyeInHead = headFromLocal * rendered.pose.orientation;
+  const V eyePosition = rotate(headFromLocal, vec(rendered.pose.position) - vec(head.position));
+  const V center = eyePosition +
+                   rotate(eyeInHead, {(left + right) * .5f, (down + up) * .5f,
+                                      -previewDistance});
+  XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  layer.space = headSpace;
+  layer.eyeVisibility = eye;
+  layer.subImage = rendered.subImage;
+  layer.pose = {eyeInHead, {center.x, center.y, center.z}};
+  layer.size = {right - left, up - down};
+  return layer;
 }
 
 struct Color {
@@ -1123,6 +1152,26 @@ class App {
     XR(xrEndFrame(session, &end));
     status();
   }
+  void submitStereoPanel(XrFrameEndInfo end, const XrSpaceLocation &head,
+                         const std::array<XrCompositionLayerProjectionView, 2> &views) {
+    XrPosef headPose = head.pose;
+    if (!validHeadPose(head)) {
+      // The caller has valid LOCAL eye poses even if the VIEW location failed.
+      const V center = (vec(views[0].pose.position) + vec(views[1].pose.position)) * .5f;
+      headPose = {views[0].pose.orientation, {center.x, center.y, center.z}};
+    }
+    const std::array<XrCompositionLayerQuad, 2> panels{{
+        stereoPanel(headSpace, headPose, XR_EYE_VISIBILITY_LEFT, views[0]),
+        stereoPanel(headSpace, headPose, XR_EYE_VISIBILITY_RIGHT, views[1]),
+    }};
+    const XrCompositionLayerBaseHeader *headers[] = {
+        reinterpret_cast<const XrCompositionLayerBaseHeader *>(&panels[0]),
+        reinterpret_cast<const XrCompositionLayerBaseHeader *>(&panels[1]),
+    };
+    end.layerCount = 2;
+    end.layers = headers;
+    XR(xrEndFrame(session, &end));
+  }
   bool renderWorld(XrFrameEndInfo end) {
     std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
     XrViewState state{XR_TYPE_VIEW_STATE};
@@ -1176,14 +1225,20 @@ class App {
       pv.subImage = renderEye(eyes[i], i == 0 && options.mirror, vp, mesh,
                              vp * headToRender, hud);
     }
-    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    layer.space = space;
-    layer.viewCount = 2;
-    layer.views = projectionViews.data();
-    const auto *header = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
-    end.layerCount = 1;
-    end.layers = &header;
-    XR(xrEndFrame(session, &end));
+    if (options.body) {
+      // Render the world from LOCAL eye poses, then attach the resulting
+      // stereo frame to the headset through Monado's VIEW quad path.
+      submitStereoPanel(end, head, projectionViews);
+    } else {
+      XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+      layer.space = space;
+      layer.viewCount = 2;
+      layer.views = projectionViews.data();
+      const auto *header = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
+      end.layerCount = 1;
+      end.layers = &header;
+      XR(xrEndFrame(session, &end));
+    }
     status(visibility);
     return true;
   }
