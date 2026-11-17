@@ -121,24 +121,12 @@ static M projection(XrFovf f) {
   return m;
 }
 static constexpr float previewDistance = 1.45f;
+static constexpr XrExtent2Df previewSize{1.20f, .675f};
 
-static XrCompositionLayerQuad previewQuad(
-    XrSpace space, XrEyeVisibility eye, const XrCompositionLayerProjectionView &view) {
-  const float left = previewDistance * std::tan(view.fov.angleLeft);
-  const float right = previewDistance * std::tan(view.fov.angleRight);
-  const float down = previewDistance * std::tan(view.fov.angleDown);
-  const float up = previewDistance * std::tan(view.fov.angleUp);
-  // Place the rendered eye image on the plane cut out by its frustum.
-  const V center = vec(view.pose.position) +
-                   rotate(view.pose.orientation,
-                          {(left + right) * .5f, (down + up) * .5f, -previewDistance});
-  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-  quad.space = space;
-  quad.eyeVisibility = eye;
-  quad.subImage = view.subImage;
-  quad.pose = {view.pose.orientation, {center.x, center.y, center.z}};
-  quad.size = {right - left, up - down};
-  return quad;
+static M previewProjection() {
+  const float horizontal = std::atan(previewSize.width / (2 * previewDistance));
+  const float vertical = std::atan(previewSize.height / (2 * previewDistance));
+  return projection({-horizontal, horizontal, vertical, -vertical});
 }
 
 struct Color {
@@ -322,13 +310,15 @@ static Body previewBody(Body body) {
     high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
   }
 
-  const V center = (low + high) * .5f;
+  const V center = low * .5f + high * .5f;
+  const V halfExtent = high * .5f - low * .5f;
   constexpr V previewCenter{0, -.025f, -previewDistance};
-  constexpr float previewScale = .25f;
+  const float maxExtent = std::max({halfExtent.x, halfExtent.y, halfExtent.z, .001f});
+  const float scale = std::min(.32f, .23f / maxExtent);
   for (auto &joint : body) {
     if (!validPosition(joint))
       continue;
-    const V p = (vec(joint.pose.position) - center) * previewScale + previewCenter;
+    const V p = (vec(joint.pose.position) - center) * scale + previewCenter;
     joint.pose.position = {p.x, p.y, p.z};
   }
   return body;
@@ -926,7 +916,15 @@ class App {
       y -= .025f;
     }
     if (options.body) {
-      textMesh(m, bodyStatus(), -.19f, y, .0018f, torsoColor);
+      const std::string label = bodyStatus();
+      if (bodyPreview) {
+        constexpr float size = .0028f;
+        const bool lost = label == "FRAME LOST";
+        textMesh(m, label, -3 * size * label.size(), lost ? .010f : y, size,
+                 lost ? estimatedColor : torsoColor);
+      } else {
+        textMesh(m, label, -.19f, y, .0018f, torsoColor);
+      }
       return m;
     }
     for (int i = 0; i < 2; i++) {
@@ -987,6 +985,116 @@ class App {
     SDL_SetWindowTitle(window, s.c_str());
     std::cout << s << std::endl;
   }
+  XrSwapchainSubImage renderEye(Eye &eye, bool mirror, const M &vp,
+                                const Mesh &mesh, const M &hudTransform,
+                                const Mesh &hud) {
+    uint32_t index = 0;
+    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    XR(xrAcquireSwapchainImage(eye.swapchain, &acquire, &index));
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait.timeout = XR_INFINITE_DURATION;
+    XR(xrWaitSwapchainImage(eye.swapchain, &wait));
+    draw(eye.fbos[index], eye.width, eye.height, vp, mesh, hudTransform, hud);
+    if (mirror) {
+      int w = 0, h = 0;
+      SDL_GL_GetDrawableSize(window, &w, &h);
+      if (w > 0 && h > 0) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, eye.fbos[index]);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        float scale = std::min(float(w) / eye.width, float(h) / eye.height);
+        int mw = int(eye.width * scale), mh = int(eye.height * scale),
+            x = (w - mw) / 2, y = (h - mh) / 2;
+        glBlitFramebuffer(0, 0, eye.width, eye.height, x, y, x + mw, y + mh,
+                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        SDL_GL_SwapWindow(window);
+      }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glFlush();
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    XR(xrReleaseSwapchainImage(eye.swapchain, &release));
+    XrSwapchainSubImage image{};
+    image.swapchain = eye.swapchain;
+    image.imageRect.extent = {eye.width, eye.height};
+    return image;
+  }
+  void renderPreview(XrFrameEndInfo end) {
+    locate(end.displayTime);
+    const M camera = previewProjection();
+    XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    layer.space = headSpace;
+    layer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    layer.pose.orientation.w = 1;
+    layer.pose.position.z = -previewDistance;
+    layer.size = previewSize;
+    // Render a single image in the panel's own camera. Its contents and size
+    // are independent of the eye poses and FOV returned by xrLocateViews.
+    layer.subImage = renderEye(eyes[0], options.mirror, camera, scene(), camera, panel());
+    const auto *header = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
+    end.layerCount = 1;
+    end.layers = &header;
+    XR(xrEndFrame(session, &end));
+  }
+  bool renderWorld(XrFrameEndInfo end) {
+    std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
+    XrViewState state{XR_TYPE_VIEW_STATE};
+    uint32_t n = 0;
+    XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
+    li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    li.displayTime = end.displayTime;
+    li.space = space;
+    XR(xrLocateViews(session, &li, &state, 2, &n, views.data()));
+    const auto valid =
+        XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
+    if (n != 2 || (state.viewStateFlags & valid) != valid) {
+      XR(xrEndFrame(session, &end));
+      return false;
+    }
+    locate(end.displayTime);
+    Mesh mesh = scene(), hud = panel();
+    XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
+    XR(xrLocateSpace(headSpace, space, end.displayTime, &head));
+    const auto headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                           XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    M headToRender = identity();
+    if ((head.locationFlags & headFlags) == headFlags) {
+      // Place the head-relative HUD into the LOCAL projection layer.
+      V cols[] = {rotate(head.pose.orientation, {1, 0, 0}),
+                  rotate(head.pose.orientation, {0, 1, 0}),
+                  rotate(head.pose.orientation, {0, 0, 1})};
+      for (int c = 0; c < 3; c++) {
+        headToRender.v[c * 4] = cols[c].x;
+        headToRender.v[c * 4 + 1] = cols[c].y;
+        headToRender.v[c * 4 + 2] = cols[c].z;
+      }
+      headToRender.v[12] = head.pose.position.x;
+      headToRender.v[13] = head.pose.position.y;
+      headToRender.v[14] = head.pose.position.z;
+    } else {
+      hud.clear();
+    }
+    std::array<XrCompositionLayerProjectionView, 2> projectionViews{
+        {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+         {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}}};
+    for (int i = 0; i < 2; i++) {
+      auto &pv = projectionViews[i];
+      pv.pose = views[i].pose;
+      pv.fov = views[i].fov;
+      const M vp = projection(pv.fov) * viewMatrix(pv.pose);
+      pv.subImage = renderEye(eyes[i], i == 0 && options.mirror, vp, mesh,
+                             vp * headToRender, hud);
+    }
+    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    layer.space = space;
+    layer.viewCount = 2;
+    layer.views = projectionViews.data();
+    const auto *header = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer);
+    end.layerCount = 1;
+    end.layers = &header;
+    XR(xrEndFrame(session, &end));
+    return true;
+  }
   void xrFrame() {
     XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState fs{XR_TYPE_FRAME_STATE};
@@ -996,103 +1104,14 @@ class App {
     XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
     end.displayTime = fs.predictedDisplayTime;
     end.environmentBlendMode = blend;
-    std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
-    XrViewState state{XR_TYPE_VIEW_STATE};
-    uint32_t n = 0;
-    XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
-    li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    li.displayTime = fs.predictedDisplayTime;
-    const XrSpace renderSpace = bodyPreview ? headSpace : space;
-    li.space = renderSpace;
-    XR(xrLocateViews(session, &li, &state, 2, &n, views.data()));
-    const auto valid =
-        XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
-    if (!fs.shouldRender || n != 2 || (state.viewStateFlags & valid) != valid) {
+    if (!fs.shouldRender) {
       XR(xrEndFrame(session, &end));
       return;
     }
-    locate(fs.predictedDisplayTime);
-    Mesh mesh = scene(), hud = panel();
-    M headToRender = identity();
-    if (renderSpace != headSpace) {
-      XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
-      XR(xrLocateSpace(headSpace, renderSpace, fs.predictedDisplayTime, &head));
-      const auto headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
-                             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-      if ((head.locationFlags & headFlags) == headFlags) {
-        // Place the head-relative HUD into the LOCAL projection layer.
-        V cols[] = {rotate(head.pose.orientation, {1, 0, 0}),
-                    rotate(head.pose.orientation, {0, 1, 0}),
-                    rotate(head.pose.orientation, {0, 0, 1})};
-        for (int c = 0; c < 3; c++) {
-          headToRender.v[c * 4] = cols[c].x;
-          headToRender.v[c * 4 + 1] = cols[c].y;
-          headToRender.v[c * 4 + 2] = cols[c].z;
-        }
-        headToRender.v[12] = head.pose.position.x;
-        headToRender.v[13] = head.pose.position.y;
-        headToRender.v[14] = head.pose.position.z;
-      } else {
-        hud.clear();
-      }
-    }
-    std::array<XrCompositionLayerProjectionView, 2> projectionViews{
-        {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
-         {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}}};
-    for (int i = 0; i < 2; i++) {
-      auto &e = eyes[i];
-      uint32_t index = 0;
-      XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-      XR(xrAcquireSwapchainImage(e.swapchain, &ai, &index));
-      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-      wait.timeout = XR_INFINITE_DURATION;
-      XR(xrWaitSwapchainImage(e.swapchain, &wait));
-      M vp = projection(views[i].fov) * viewMatrix(views[i].pose);
-      draw(e.fbos[index], e.width, e.height, vp, mesh, vp * headToRender, hud);
-      if (i == 0 && options.mirror) {
-        int w = 0, h = 0;
-        SDL_GL_GetDrawableSize(window, &w, &h);
-        if (w > 0 && h > 0) {
-          glBindFramebuffer(GL_READ_FRAMEBUFFER, e.fbos[index]);
-          glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-          glClear(GL_COLOR_BUFFER_BIT);
-          float scale = std::min(float(w) / e.width, float(h) / e.height);
-          int mw = int(e.width * scale), mh = int(e.height * scale),
-              x = (w - mw) / 2, y = (h - mh) / 2;
-          glBlitFramebuffer(0, 0, e.width, e.height, x, y, x + mw, y + mh,
-                            GL_COLOR_BUFFER_BIT, GL_LINEAR);
-          SDL_GL_SwapWindow(window);
-        }
-      }
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
-      glFlush();
-      XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-      XR(xrReleaseSwapchainImage(e.swapchain, &release));
-      auto &pv = projectionViews[i];
-      pv.pose = views[i].pose;
-      pv.fov = views[i].fov;
-      pv.subImage.swapchain = e.swapchain;
-      pv.subImage.imageRect.extent = {e.width, e.height};
-    }
-    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    layer.space = space;
-    layer.viewCount = 2;
-    layer.views = projectionViews.data();
-    const XrCompositionLayerBaseHeader *layers[2] = {
-        reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer)};
-    std::array<XrCompositionLayerQuad, 2> quads{};
-    end.layerCount = 1;
-    if (bodyPreview) {
-      // VIEW quads follow the headset in Monado's compositor. Its projection
-      // fast path can apply world-space timewarp even to a VIEW projection.
-      quads[0] = previewQuad(headSpace, XR_EYE_VISIBILITY_LEFT, projectionViews[0]);
-      quads[1] = previewQuad(headSpace, XR_EYE_VISIBILITY_RIGHT, projectionViews[1]);
-      layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quads[0]);
-      layers[1] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quads[1]);
-      end.layerCount = 2;
-    }
-    end.layers = layers;
-    XR(xrEndFrame(session, &end));
+    if (bodyPreview)
+      renderPreview(end);
+    else if (!renderWorld(end))
+      return;
     status();
     frameCount++;
   }
@@ -1142,8 +1161,10 @@ class App {
     SDL_GL_GetDrawableSize(window, &w, &h);
     if (w > 0 && h > 0) {
       float t = .7f, aspect = float(w) / h;
-      M p = projection({std::atan(-t * aspect), std::atan(t * aspect),
-                        std::atan(t), std::atan(-t)});
+      const M p = bodyPreview
+                      ? previewProjection()
+                      : projection({std::atan(-t * aspect), std::atan(t * aspect),
+                                    std::atan(t), std::atan(-t)});
       draw(0, w, h, p, scene(), p, panel());
       SDL_GL_SwapWindow(window);
     }

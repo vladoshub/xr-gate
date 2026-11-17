@@ -1,6 +1,6 @@
 # XR Gate Skeleton Viewer — Monado / OpenXR
 
-A small C++17 app for inspecting hand joints and FRAME body trackers in Monado. It renders in stereo in the headset and mirrors the left eye in a desktop window. Requires Linux, OpenGL 3.3, and X11 or XWayland.
+A small C++17 app for inspecting hand joints and FRAME body trackers in Monado. The desktop window mirrors the headset preview or the left eye of a stereo view. Requires Linux, OpenGL 3.3, and X11 or XWayland.
 
 By default, the app shows the **21 joints from XR Gate/Mercury** as exposed by Monado. Press `J` to show all **26 OpenXR joints**, including the palm and four estimated metacarpals. Both views use the poses returned by OpenXR without app-side offsets or smoothing.
 
@@ -43,7 +43,7 @@ bash apps/openxr/hand_skeleton/run.sh \
   --body
 ```
 
-The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. It displays the default preview in a stereo panel attached to the headset. The panel follows the glasses as you tilt them down to bring the legs into camera view. Press `V` in the viewer window to inspect the joints at their OpenXR LOCAL positions and press it again to return to the preview.
+The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. The default preview displays a 3D model in a flat panel attached to the headset. The panel follows the glasses as you tilt them down to bring the legs into camera view. Press `V` in the viewer window to inspect the joints in stereo at their OpenXR LOCAL positions and press it again to return to the preview.
 
 Bones appear when both endpoint positions are valid. Cyan marks the left side, orange the right, and yellow a valid position that Monado reports as untracked. `FRAME LOST` means there are no valid joint positions for the current frame.
 
