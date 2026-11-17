@@ -2574,6 +2574,7 @@ struct BodyTrackerInputConfig {
   uint32_t runtime_slots = 1024;
   bool runtime_unlink_existing = true;
   StreamTransformConfig transform{};
+  StreamTransformConfig basalt_world_transform{};
   jitter_filter::RuntimeJitterFilterConfig jitter_filter{};
   BodyTrackerStabilityGateConfig stability_gate{};
 };
@@ -2738,7 +2739,9 @@ class BodyTrackerInputThread {
     // Body trackers are expected to be in a world/source frame, not HMD-local.
     // First apply their configured basis transform, then apply the same runtime
     // origin/recenter as HMD so FBT and HMD share one runtime coordinate frame.
-    apply_body_tracker_frame_transform(frame, cfg_.transform, nullptr);
+    const auto& transform = frame.source == xr_tracking::BODY_TRACKER_SOURCE_FRAME
+        ? cfg_.basalt_world_transform : cfg_.transform;
+    apply_body_tracker_frame_transform(frame, transform, nullptr);
     RuntimeOriginSnapshot origin;
     RuntimeHmdPoseSnapshot runtime_hmd;
     {
@@ -5314,6 +5317,7 @@ int main(int argc, char** argv) {
       cfg.runtime_slots = runtime_body_trackers_slots;
       cfg.runtime_unlink_existing = !no_runtime_body_trackers_unlink;
       cfg.transform = tracking_transform_config.body_trackers;
+      cfg.basalt_world_transform = tracking_transform_config.hmd;
       cfg.jitter_filter.enabled = runtime_jitter_filter_body_tracker_enabled;
       cfg.jitter_filter.tracker_threshold_m = runtime_jitter_filter_body_tracker_cm / 100.0;
       cfg.jitter_filter.tracker_angle_threshold_rad =

@@ -56,7 +56,7 @@ add_packages() {
 # Source/download/package helpers used even by partial builds.
 add_packages bash coreutils findutils git ca-certificates curl wget tar gzip unzip rsync jq file binutils python3 python3-venv libseccomp2
 
-for step in capture_service_cpp basalt_vio imu_3dof mercury_hand_tracking xr_runtime_adapter \
+for step in capture_service_cpp basalt_vio imu_3dof mercury_hand_tracking frame_body_tracking xr_runtime_adapter \
   override_controller xr_video xr_spatial bridges openvr_driver monado_driver \
   steamvr_video_overlay steamvr_spatial_overlay steamvr_spatial_scene; do
   if should_run_step "$step"; then
@@ -64,6 +64,10 @@ for step in capture_service_cpp basalt_vio imu_3dof mercury_hand_tracking xr_run
     break
   fi
 done
+
+if should_run_step frame_body_tracking; then
+  add_packages libeigen3-dev
+fi
 
 for step in capture_service_cpp xr_spatial mercury_hand_tracking monado_driver; do
   if should_run_step "$step"; then

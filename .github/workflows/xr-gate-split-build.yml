@@ -221,7 +221,7 @@ jobs:
           - name: basalt
             build_only: "basalt_vio"
           - name: mercury
-            build_only: "mercury_hand_tracking"
+            build_only: "mercury_hand_tracking frame_body_tracking"
           - name: monado
             build_only: "monado_driver"
 
@@ -330,6 +330,17 @@ jobs:
           ./devices/common/linux/scripts/build/install_xr_gate_out.sh
           du -sh out/xr-gate || true
           find out/xr-gate -maxdepth 4 -type f | sort | sed -n '1,200p'
+
+      - name: Validate packaged FRAME backend
+        if: ${{ matrix.component.name == 'mercury' }}
+        run: |
+          set -euo pipefail
+          test -x out/xr-gate/bin/backends/frame_body_tracking/frame_body_tracking_backend
+          test -x out/xr-gate/devices/common/linux/scripts/frame_body_tracking/start_frame_body_tracking.sh
+          test -x out/xr-gate/bin/scripts/backends/frame_body_tracking/start_frame_body_tracking.sh
+          bash -n out/xr-gate/devices/common/linux/scripts/frame_body_tracking/start_frame_body_tracking.sh
+          bash -n out/xr-gate/bin/scripts/backends/frame_body_tracking/start_frame_body_tracking.sh
+          env -u LD_LIBRARY_PATH out/xr-gate/bin/backends/frame_body_tracking/frame_body_tracking_backend --help
 
       - name: Validate device-specific driver outputs
         if: ${{ matrix.component.name == 'steamvr' || matrix.component.name == 'monado' }}
@@ -737,6 +748,7 @@ jobs:
           test -f merged/xr-gate/BUILD_CPU_PROFILE.json
           test "$(cat merged/xr-gate/BUILD_OPENCV_LINKAGE)" = static-4.10.0
           test -f merged/xr-gate/bin/opencv/licenses/OpenCV-LICENSE.txt
+          test -x merged/xr-gate/bin/backends/frame_body_tracking/frame_body_tracking_backend
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             test -d merged/xr-gate/bin/drivers/xrizer/runtime
             test -f merged/xr-gate/LICENSES/GPL-3.0-or-later.txt

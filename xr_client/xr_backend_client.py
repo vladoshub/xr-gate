@@ -2191,6 +2191,10 @@ def apply_basalt_mode(
         else:
             spec.env.pop("STARTUP_GATE_IMU", None)
 
+    for spec in cfg.post_gate_services:
+        if spec.name == "frame_body_tracking":
+            spec.env["BASALT_MODE"] = normalized
+
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)

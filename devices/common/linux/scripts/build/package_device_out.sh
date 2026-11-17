@@ -508,6 +508,9 @@ copy_runtime_scripts() {
     "$XR_ROOT_PROJECT/backends/mercury_hand_tracking/scripts/linux/start_hand_tracking.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/mercury_hand_tracking/start_hand_tracking.sh"
   copy_runtime_file \
+    "$XR_ROOT_PROJECT/backends/frame_body_tracking/scripts/linux/start_frame_body_tracking.sh" \
+    "$XR_OUT_BIN_ROOT/scripts/backends/frame_body_tracking/start_frame_body_tracking.sh"
+  copy_runtime_file \
     "$XR_ROOT_PROJECT/backends/mercury_hand_tracking/scripts/linux/download_mercury_models.sh" \
     "$XR_OUT_BIN_ROOT/scripts/backends/mercury_hand_tracking/download_mercury_models.sh"
   copy_runtime_file \

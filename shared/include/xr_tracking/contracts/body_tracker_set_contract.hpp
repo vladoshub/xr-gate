@@ -55,6 +55,7 @@ enum BodyTrackerSource : uint32_t {
   BODY_TRACKER_SOURCE_TUNDRA_TRACKER = 5,
   BODY_TRACKER_SOURCE_APRILTAG = 6,
   BODY_TRACKER_SOURCE_IMU = 7,
+  BODY_TRACKER_SOURCE_FRAME = 8,
 };
 
 enum BodyTrackerRole : uint32_t {
