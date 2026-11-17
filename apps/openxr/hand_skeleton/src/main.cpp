@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Standalone OpenXR hand diagnostics. No XR Gate SHM or controller poses are
-// read here.
+// OpenXR diagnostics for hand joints and FRAME body tracker devices.
 #define GLEW_NO_GLU
 #include <GL/glew.h>
 #include <GL/glx.h>
@@ -21,8 +20,11 @@
 #include <openxr/openxr_platform.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
+
+#include "monado_xdev_space.hpp"
 
 static volatile std::sig_atomic_t interrupted = 0;
 static void signalHandler(int) { interrupted = 1; }
@@ -239,6 +241,90 @@ static void skeleton(Mesh &mesh, const Hand &h, Color color, bool axes,
     }
   }
 }
+
+enum BodyJoint {
+  Neck, LeftShoulder, LeftElbow, LeftWrist, RightShoulder, RightElbow, RightWrist,
+  LeftHip, LeftKnee, LeftFoot, LeftToe, RightHip, RightKnee, RightFoot, RightToe,
+  Waist, BodyJointCount,
+};
+
+struct BodyPart {
+  std::string_view id;
+  int parent;
+  Color color;
+};
+
+static constexpr Color torsoColor{.86f, .91f, .96f};
+static constexpr std::array<BodyPart, BodyJointCount> bodyParts{{
+    {"frame_neck", Waist, torsoColor},
+    {"frame_left_shoulder", Neck, leftColor},
+    {"frame_left_elbow", LeftShoulder, leftColor},
+    {"frame_left_wrist", LeftElbow, leftColor},
+    {"frame_right_shoulder", Neck, rightColor},
+    {"frame_right_elbow", RightShoulder, rightColor},
+    {"frame_right_wrist", RightElbow, rightColor},
+    {"frame_left_hip", Waist, leftColor},
+    {"frame_left_knee", LeftHip, leftColor},
+    {"frame_left_foot", LeftKnee, leftColor},
+    {"frame_left_toe", LeftFoot, leftColor},
+    {"frame_right_hip", Waist, rightColor},
+    {"frame_right_knee", RightHip, rightColor},
+    {"frame_right_foot", RightKnee, rightColor},
+    {"frame_right_toe", RightFoot, rightColor},
+    {"frame_waist", -1, torsoColor},
+}};
+
+using Body = std::array<XrSpaceLocation, BodyJointCount>;
+
+static bool validPosition(const XrSpaceLocation &joint) {
+  return (joint.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
+         finite(vec(joint.pose.position));
+}
+
+static bool trackedPosition(const XrSpaceLocation &joint) {
+  return validPosition(joint) &&
+         (joint.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT);
+}
+
+static void bodySkeleton(Mesh &mesh, const Body &body) {
+  for (size_t i = 0; i < body.size(); i++) {
+    const auto &joint = body[i];
+    if (!validPosition(joint))
+      continue;
+    const auto &part = bodyParts[i];
+    const bool tracked = trackedPosition(joint);
+    const V p = vec(joint.pose.position);
+    ball(mesh, p, .016f, tracked ? part.color : estimatedColor);
+    if (part.parent >= 0 && validPosition(body[part.parent])) {
+      const auto &parent = body[part.parent];
+      rod(mesh, p, vec(parent.pose.position), .008f,
+          tracked && trackedPosition(parent) ? part.color : estimatedColor);
+    }
+  }
+}
+
+static Body demoBody() {
+  static constexpr std::array<V, BodyJointCount> positions{{
+      {0, .65f, -1.6f},
+      {-.22f, .51f, -1.6f}, {-.38f, .25f, -1.58f}, {-.40f, .02f, -1.44f},
+      {.22f, .51f, -1.6f}, {.38f, .25f, -1.58f}, {.42f, .02f, -1.44f},
+      {-.13f, .02f, -1.6f}, {-.17f, -.38f, -1.50f},
+      {-.19f, -.80f, -1.56f}, {-.19f, -.82f, -1.70f},
+      {.13f, .02f, -1.6f}, {.17f, -.38f, -1.50f},
+      {.19f, -.80f, -1.56f}, {.19f, -.82f, -1.70f},
+      {0, .02f, -1.6f},
+  }};
+  Body body{};
+  for (size_t i = 0; i < body.size(); i++) {
+    body[i].type = XR_TYPE_SPACE_LOCATION;
+    body[i].locationFlags =
+        XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    const auto p = positions[i];
+    body[i].pose.position = {p.x, p.y, p.z};
+  }
+  return body;
+}
+
 // Minimal built-in 5x7 font: the diagnostic panel has no external assets.
 static std::array<uint8_t, 7> glyph(char c) {
   switch (c) {
@@ -375,7 +461,7 @@ struct Eye {
   std::vector<GLuint> fbos, depth;
 };
 struct Options {
-  bool demo = false, mirror = true;
+  bool body = false, demo = false, mirror = true;
   int frames = 0, joints = 21;
 };
 class App {
@@ -390,6 +476,10 @@ class App {
   PFN_xrDestroyHandTrackerEXT destroyHand = nullptr;
   PFN_xrLocateHandJointsEXT locateHand = nullptr;
   std::array<Hand, 2> hands{};
+  XrXDevListMNDX bodyDevices = XR_NULL_HANDLE;
+  PFN_xrDestroyXDevListMNDX destroyBodyDevices = nullptr;
+  std::array<XrSpace, BodyJointCount> bodySpaces{};
+  Body body{};
   std::array<Eye, 2> eyes{};
   SDL_Window *window = nullptr;
   SDL_GLContext context = nullptr;
@@ -399,26 +489,29 @@ class App {
   uint64_t frameCount = 0;
   std::chrono::steady_clock::time_point lastStatus{};
   template <class T> void proc(const char *name, T &p) {
-    XR(xrGetInstanceProcAddr(instance, name,
-                             reinterpret_cast<PFN_xrVoidFunction *>(&p)));
+    PFN_xrVoidFunction function = nullptr;
+    XR(xrGetInstanceProcAddr(instance, name, &function));
+    require(function, std::string("Missing OpenXR function ") + name);
+    p = reinterpret_cast<T>(function);
   }
   void initXR() {
     uint32_t n = 0;
     XR(xrEnumerateInstanceExtensionProperties(nullptr, 0, &n, nullptr));
     std::vector<XrExtensionProperties> props(n, {XR_TYPE_EXTENSION_PROPERTIES});
     XR(xrEnumerateInstanceExtensionProperties(nullptr, n, &n, props.data()));
-    const char *extensions[] = {XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
-                                XR_EXT_HAND_TRACKING_EXTENSION_NAME};
+    const char *extensions[] = {
+        XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
+        options.body ? XR_MNDX_XDEV_SPACE_EXTENSION_NAME
+                     : XR_EXT_HAND_TRACKING_EXTENSION_NAME};
     for (auto name : extensions)
       require(
           std::any_of(
               props.begin(), props.end(),
               [&](auto &p) { return std::strcmp(name, p.extensionName) == 0; }),
-          std::string("Runtime lacks ") + name +
-              ". For XR Gate restart Monado with XR_MONADO_HAND_TRACKING=1.");
+          std::string("Runtime lacks ") + name);
     XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     std::snprintf(ci.applicationInfo.applicationName,
-                  XR_MAX_APPLICATION_NAME_SIZE, "XR Gate Hand Skeleton");
+                  XR_MAX_APPLICATION_NAME_SIZE, "XR Gate Skeleton");
     ci.applicationInfo.applicationVersion = 1;
     ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
     ci.enabledExtensionCount = 2;
@@ -433,12 +526,16 @@ class App {
     XR(xrGetSystem(instance, &si, &system));
     XrSystemHandTrackingPropertiesEXT hp{
         XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT};
+    XrSystemXDevSpacePropertiesMNDX bp{XR_TYPE_SYSTEM_XDEV_SPACE_PROPERTIES_MNDX};
     XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
-    sp.next = &hp;
+    sp.next = options.body ? static_cast<void *>(&bp) : static_cast<void *>(&hp);
     XR(xrGetSystemProperties(instance, system, &sp));
-    require(hp.supportsHandTracking,
-            "Hand tracking is disabled on this system. Restart XR Gate Monado "
-            "with XR_MONADO_HAND_TRACKING=1.");
+    if (options.body)
+      require(bp.supportsXDevSpace, "This OpenXR system lacks Monado device spaces");
+    else
+      require(hp.supportsHandTracking,
+              "Hand tracking is disabled on this system. Restart XR Gate Monado "
+              "with XR_MONADO_HAND_TRACKING=1.");
     PFN_xrGetOpenGLGraphicsRequirementsKHR reqFunc = nullptr;
     proc("xrGetOpenGLGraphicsRequirementsKHR", reqFunc);
     XrGraphicsRequirementsOpenGLKHR req{
@@ -447,14 +544,65 @@ class App {
     require(req.minApiVersionSupported <= XR_MAKE_VERSION(3, 3, 0) &&
                 req.maxApiVersionSupported >= XR_MAKE_VERSION(3, 3, 0),
             "This example needs OpenGL 3.3 support in the runtime.");
-    proc("xrCreateHandTrackerEXT", createHand);
-    proc("xrDestroyHandTrackerEXT", destroyHand);
-    proc("xrLocateHandJointsEXT", locateHand);
+    if (!options.body) {
+      proc("xrCreateHandTrackerEXT", createHand);
+      proc("xrDestroyHandTrackerEXT", destroyHand);
+      proc("xrLocateHandJointsEXT", locateHand);
+    }
+  }
+  void initBodySpaces() {
+    PFN_xrCreateXDevListMNDX createList = nullptr;
+    PFN_xrEnumerateXDevsMNDX enumerateDevices = nullptr;
+    PFN_xrGetXDevPropertiesMNDX getProperties = nullptr;
+    PFN_xrCreateXDevSpaceMNDX createSpace = nullptr;
+    proc("xrCreateXDevListMNDX", createList);
+    proc("xrDestroyXDevListMNDX", destroyBodyDevices);
+    proc("xrEnumerateXDevsMNDX", enumerateDevices);
+    proc("xrGetXDevPropertiesMNDX", getProperties);
+    proc("xrCreateXDevSpaceMNDX", createSpace);
+
+    const XrCreateXDevListInfoMNDX info{XR_TYPE_CREATE_XDEV_LIST_INFO_MNDX};
+    XR(createList(session, &info, &bodyDevices));
+    uint32_t count = 0;
+    XR(enumerateDevices(bodyDevices, 0, &count, nullptr));
+    std::vector<XrXDevIdMNDX> ids(count);
+    XR(enumerateDevices(bodyDevices, count, &count, ids.data()));
+    constexpr std::string_view prefix = "xr-gate-body/id/";
+    size_t registered = 0;
+    for (uint32_t i = 0; i < count; i++) {
+      XrGetXDevInfoMNDX query{XR_TYPE_GET_XDEV_INFO_MNDX};
+      query.id = ids[i];
+      XrXDevPropertiesMNDX properties{XR_TYPE_XDEV_PROPERTIES_MNDX};
+      XR(getProperties(bodyDevices, &query, &properties));
+      const std::string_view serial(properties.serial,
+                                    strnlen(properties.serial, sizeof(properties.serial)));
+      if (!properties.canCreateSpace || serial.substr(0, prefix.size()) != prefix)
+        continue;
+      const auto id = serial.substr(prefix.size());
+      const auto part = std::find_if(bodyParts.begin(), bodyParts.end(),
+                                     [&](const BodyPart &p) { return p.id == id; });
+      if (part == bodyParts.end())
+        continue;
+      auto &jointSpace = bodySpaces[part - bodyParts.begin()];
+      if (jointSpace)
+        continue;
+      XrCreateXDevSpaceInfoMNDX create{XR_TYPE_CREATE_XDEV_SPACE_INFO_MNDX};
+      create.xdevList = bodyDevices;
+      create.id = ids[i];
+      create.offset.orientation.w = 1.f;
+      XR(createSpace(session, &create, &jointSpace));
+      registered++;
+    }
+    require(registered > 0, "No FRAME joints registered by Monado");
+    std::cout << "FRAME joints registered by Monado: " << registered << "/"
+              << bodySpaces.size() << '\n';
   }
   void initGL() {
-    // Explicit X11 because this example uses XrGraphicsBindingOpenGLXlibKHR.
-    require(SDL_setenv("SDL_VIDEODRIVER", "x11", 1) == 0,
-            "Cannot select X11 SDL backend");
+    // Live OpenXR uses a GLX graphics binding. The demo also supports SDL's
+    // offscreen driver for a software-rendering smoke test.
+    if (!options.demo)
+      require(SDL_setenv("SDL_VIDEODRIVER", "x11", 1) == 0,
+              "Cannot select X11 SDL backend");
     sdlCheck(SDL_Init(SDL_INIT_VIDEO) == 0, "SDL_Init");
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -463,7 +611,8 @@ class App {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     window = SDL_CreateWindow(
-        "XR Gate Hand Skeleton", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        options.body ? "XR Gate Body Skeleton" : "XR Gate Hand Skeleton",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         1000, 700,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
             (options.mirror ? SDL_WINDOW_SHOWN : SDL_WINDOW_HIDDEN));
@@ -472,7 +621,16 @@ class App {
     sdlCheck(context, "SDL_GL_CreateContext");
     SDL_GL_SetSwapInterval(0);
     glewExperimental = GL_TRUE;
-    require(glewInit() == GLEW_OK, "GLEW initialization failed");
+    const GLenum glewStatus = glewInit();
+    // GLEW loads the core GL functions before querying the GLX display.
+    // An SDL offscreen EGL context can use the core functions without GLX.
+    const bool offscreenDemo = options.demo &&
+        std::strcmp(SDL_GetCurrentVideoDriver(), "offscreen") == 0;
+    require(glewStatus == GLEW_OK ||
+                (offscreenDemo && glewStatus == GLEW_ERROR_NO_GLX_DISPLAY &&
+                 GLEW_VERSION_3_3),
+            "GLEW error: " +
+                std::string(reinterpret_cast<const char *>(glewGetErrorString(glewStatus))));
     while (glGetError() != GL_NO_ERROR) {
     }
     std::cout << "OpenGL: " << glGetString(GL_VERSION) << '\n';
@@ -530,11 +688,15 @@ class App {
                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE) != modes.end()
                 ? XR_ENVIRONMENT_BLEND_MODE_OPAQUE
                 : modes[0];
-    for (int i = 0; i < 2; i++) {
-      XrHandTrackerCreateInfoEXT h{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
-      h.hand = i == 0 ? XR_HAND_LEFT_EXT : XR_HAND_RIGHT_EXT;
-      h.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
-      XR(createHand(session, &h, &trackers[i]));
+    if (options.body) {
+      initBodySpaces();
+    } else {
+      for (int i = 0; i < 2; i++) {
+        XrHandTrackerCreateInfoEXT h{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
+        h.hand = i == 0 ? XR_HAND_LEFT_EXT : XR_HAND_RIGHT_EXT;
+        h.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
+        XR(createHand(session, &h, &trackers[i]));
+      }
     }
     XR(xrEnumerateViewConfigurationViews(
         instance, system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &n,
@@ -654,6 +816,14 @@ class App {
     }
   }
   void locate(XrTime time) {
+    if (options.body) {
+      for (size_t i = 0; i < bodySpaces.size(); i++) {
+        body[i] = {XR_TYPE_SPACE_LOCATION};
+        if (bodySpaces[i])
+          XR(xrLocateSpace(bodySpaces[i], space, time, &body[i]));
+      }
+      return;
+    }
     for (int i = 0; i < 2; i++) {
       Hand &h = hands[i];
       h = Hand{};
@@ -678,9 +848,22 @@ class App {
         rod(mesh, {d, -1.5f, -2}, {d, -1.5f, 2}, .001f, c);
         rod(mesh, {-2, -1.5f, d}, {2, -1.5f, d}, .001f, c);
       }
-    skeleton(mesh, hands[0], leftColor, axes, radii, source21);
-    skeleton(mesh, hands[1], rightColor, axes, radii, source21);
+    if (options.body)
+      bodySkeleton(mesh, body);
+    else {
+      skeleton(mesh, hands[0], leftColor, axes, radii, source21);
+      skeleton(mesh, hands[1], rightColor, axes, radii, source21);
+    }
     return mesh;
+  }
+  std::string bodyStatus() const {
+    const auto valid = std::count_if(body.begin(), body.end(),
+                                     [](const auto &joint) { return validPosition(joint); });
+    if (!valid)
+      return "FRAME LOST";
+    const auto tracked = std::count_if(body.begin(), body.end(), trackedPosition);
+    return "FRAME VALID " + std::to_string(valid) + "/" +
+           std::to_string(body.size()) + " TRACK " + std::to_string(tracked);
   }
   Mesh panel() {
     Mesh m;
@@ -688,6 +871,10 @@ class App {
     if (options.demo) {
       textMesh(m, "DEMO - SYNTHETIC", -.19f, y, .002f, estimatedColor);
       y -= .025f;
+    }
+    if (options.body) {
+      textMesh(m, bodyStatus(), -.19f, y, .0018f, torsoColor);
+      return m;
     }
     for (int i = 0; i < 2; i++) {
       const auto h = displayedHand(hands[i], source21);
@@ -726,6 +913,13 @@ class App {
     if (now - lastStatus < std::chrono::seconds(1))
       return;
     lastStatus = now;
+    if (options.body) {
+      auto s = std::string(options.demo ? "XR Gate Body [DEMO] | " : "XR Gate Body | ") +
+               bodyStatus();
+      SDL_SetWindowTitle(window, s.c_str());
+      std::cout << s << std::endl;
+      return;
+    }
     std::string s = options.demo ? "XR Gate Hands [DEMO]" : "XR Gate Hands";
     s += source21 ? " [21 joints]" : " [26 joints]";
     for (int i = 0; i < 2; i++) {
@@ -835,7 +1029,7 @@ class App {
     status();
     frameCount++;
   }
-  void demoFrame() {
+  void demoHands() {
     for (int side = 0; side < 2; side++) {
       Hand &h = hands[side];
       h = Hand{};
@@ -871,6 +1065,12 @@ class App {
         h.joints[j].locationFlags &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
       countHand(h);
     }
+  }
+  void demoFrame() {
+    if (options.body)
+      body = demoBody();
+    else
+      demoHands();
     int w = 0, h = 0;
     SDL_GL_GetDrawableSize(window, &w, &h);
     if (w > 0 && h > 0) {
@@ -906,6 +1106,11 @@ public:
     for (auto h : trackers)
       if (h && destroyHand)
         destroyHand(h);
+    for (auto jointSpace : bodySpaces)
+      if (jointSpace)
+        xrDestroySpace(jointSpace);
+    if (bodyDevices && destroyBodyDevices)
+      destroyBodyDevices(bodyDevices);
     if (headSpace)
       xrDestroySpace(headSpace);
     if (space)
@@ -927,8 +1132,10 @@ public:
     initGL();
     if (!options.demo)
       initSession();
-    std::cout << "Left cyan; right orange; valid untracked joints yellow. J "
-                 "21/26 joints, A axes, R radii, G grid, Esc exit.\n";
+    std::cout << "Left cyan; right orange; valid untracked joints yellow. ";
+    if (!options.body)
+      std::cout << "J 21/26 joints, A axes, R radii. ";
+    std::cout << "G grid, Esc exit.\n";
     while (!quit && !interrupted) {
       events();
       if (quit)
@@ -946,12 +1153,14 @@ public:
   }
 };
 int main(int argc, char **argv) {
+  Options options;
   try {
-    Options options;
     for (int i = 1; i < argc; i++) {
       std::string s = argv[i];
       if (s == "--demo")
         options.demo = true;
+      else if (s == "--body")
+        options.body = true;
       else if (s == "--no-mirror")
         options.mirror = false;
       else if (s == "--joints" && i + 1 < argc) {
@@ -965,12 +1174,13 @@ int main(int argc, char **argv) {
         require(parsed == value.size() && options.frames > 0,
                 "--frames must be a positive integer");
       } else if (s == "--help") {
-        std::cout << "XR Gate Hand Skeleton (Linux X11/OpenGL "
-                     "3.3)\n--joints 21|26  Select displayed skeleton (default "
-                     "21)\n--no-mirror  Hide desktop mirror\n--demo       "
+        std::cout << "XR Gate Skeleton (Linux X11/OpenGL 3.3)\n"
+                     "--body        Show Monado FRAME body trackers\n"
+                     "--joints 21|26  Select hand skeleton (default 21)\n"
+                     "--no-mirror  Hide desktop mirror\n--demo       "
                      "Synthetic rendering only, no OpenXR runtime\n--frames N  "
-                     " Exit after N rendered frames\nJ: 21/26 joints, A: joint "
-                     "axes (RGB=XYZ), R: runtime radii, G: grid, Esc: exit\n";
+                     " Exit after N rendered frames\nHands: J 21/26 joints, A joint axes, "
+                     "R runtime radii. G grid, Esc exit.\n";
         return 0;
       } else
         throw std::runtime_error("Unknown or incomplete option: " + s);
@@ -981,9 +1191,13 @@ int main(int argc, char **argv) {
     app.run();
     return 0;
   } catch (const std::exception &e) {
-    std::cerr << "[hands] " << e.what()
-              << "\nCheck XR_RUNTIME_JSON, the running Monado service, "
-                 "XR_MONADO_HAND_TRACKING=1, and DISPLAY/X11.\n";
+    std::cerr << "[skeleton] " << e.what()
+              << "\nCheck XR_RUNTIME_JSON and DISPLAY/X11.\n";
+    if (options.body)
+      std::cerr << "Start XR Gate with FRAME first, then start Monado with "
+                   "XR_MONADO_BODY_TRACKERS=1.\n";
+    else
+      std::cerr << "Start Monado with XR_MONADO_HAND_TRACKING=1.\n";
     return 1;
   }
 }

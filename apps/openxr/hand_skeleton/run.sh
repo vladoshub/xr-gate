@@ -7,8 +7,8 @@ if [[ "${1:-}" == --help ]]; then
 Usage: bash run.sh [--runtime /absolute/openxr_monado_xrgate.json] [app options]
 Builds the example and starts it. Start XR Gate tracking and Monado separately.
 Uses XR_RUNTIME_JSON unchanged unless --runtime is supplied.
-App options: --joints 21|26, --no-mirror, --demo, --frames N, --help
-Keys: J 21/26 joints, A joint axes, R runtime radii, G reference grid, Esc exit.
+App options: --body, --joints 21|26, --no-mirror, --demo, --frames N, --help
+Use --body for FRAME body trackers. G toggles the grid and Esc exits.
 HELP
   exit 0
 fi
@@ -20,5 +20,5 @@ fi
 command -v cmake >/dev/null || { echo 'Install build dependencies listed in README.md (cmake is missing).' >&2; exit 1; }
 cmake -S "$app_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$build_dir" --parallel "${XR_HAND_BUILD_JOBS:-2}"
-echo "[hands] XR_RUNTIME_JSON=${XR_RUNTIME_JSON:-<OpenXR loader default>}"
+echo "[skeleton] XR_RUNTIME_JSON=${XR_RUNTIME_JSON:-<OpenXR loader default>}"
 exec "$build_dir/xr_gate_hand_skeleton" "$@"

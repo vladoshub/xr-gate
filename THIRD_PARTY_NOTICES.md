@@ -155,3 +155,11 @@ upstream notice and be added to this inventory before release.
   `drivers/monado_driver/openxr/spatial_compat.h` for the pinned Monado SDK.
 - License: MIT (selected from Apache-2.0 OR MIT).
 - Baseline text: `LICENSES/OpenXR-MIT.txt`. Copyright 2017-2026 The Khronos Group Inc.
+
+### Monado device-space declarations
+
+- Project: Monado.
+- Source: `src/external/openxr_includes/openxr/XR_MNDX_xdev_space.h` in the pinned Monado checkout.
+- Use: device-space declarations in
+  `apps/openxr/hand_skeleton/src/monado_xdev_space.hpp`.
+- License: BSL-1.0. See `LICENSES/BSL-1.0.txt`.
