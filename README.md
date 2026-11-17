@@ -84,6 +84,7 @@ Current focus areas:
 - 6DoF VIO through Basalt.
 - IMU-only 3DoF fallback and recentering.
 - Mercury/ONNX hand-tracking runtime integration.
+- Experimental FRAME body tracking, tested with the built-in stereo cameras of the XREAL Air 2 Ultra.
 - Physical controller override input for SteamVR-style interactions.
 - Stereo video streaming and optional SteamVR video overlay experiments.
 - Live depth grid / spatial proxy mesh / primitive scan output.
@@ -895,6 +896,7 @@ The project uses or can build against these third-party components:
 - OpenVR-xrealAirGlassesHMD — reference for OpenVR/XREAL driver behavior and configuration ideas.
 - gearVRC — reference for GearVR provider behavior and configuration ideas in override_controller.
 - mercury_steamvr_driver — optional source for Mercury hand-tracking ONNX models; not included in the core repository/release.
+- FRAME — source of the backbone model used for stereo-camera body tracking.
 - xrizer — optional GPL-3.0-or-later OpenVR-to-OpenXR compatibility tool; not built by default.
 
 Driver builds and device-specific paths: [DEVICE_PACKAGES.md](drivers/DEVICE_PACKAGES.md).
