@@ -1,4 +1,5 @@
 #include "runtime_tcp_client.hpp"
+#include "runtime_body_tracker_reader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +48,27 @@ class TcpHandReader final : public IRuntimeHandReader {
     return true;
   }
   const char* transport_name() const override { return "app_tcp"; }
+ private:
+  std::shared_ptr<RuntimeTcpClient> client_;
+};
+
+class TcpBodyTrackerReader final : public IRuntimeBodyTrackerReader {
+ public:
+  explicit TcpBodyTrackerReader(const RuntimeTcpConfig& config)
+      : client_(RuntimeTcpClient::acquire(config)) {}
+
+  bool read_latest(RuntimeBodyTrackerSample& out, std::string* error) override {
+    RuntimeTcpSnapshot snapshot;
+    if (!client_->read_latest(snapshot, error)) return false;
+    if (!snapshot.body_trackers || snapshot.body_trackers->timestamp_ns == 0) {
+      if (error) *error = "TCP body tracker stream unavailable";
+      return false;
+    }
+    out.frame = *snapshot.body_trackers;
+    out.age_ns = age(snapshot.received_ns, snapshot.body_tracker_age_ns, local_now_ns());
+    return true;
+  }
+
  private:
   std::shared_ptr<RuntimeTcpClient> client_;
 };
@@ -111,6 +133,11 @@ class TcpControllerReader final : public IRuntimeControllerStateReader {
   ButtonBaseline left_, right_;
 };
 }  // namespace
+
+std::unique_ptr<IRuntimeBodyTrackerReader> create_tcp_runtime_body_tracker_reader(
+    const RuntimeTcpConfig& cfg) {
+  return std::make_unique<TcpBodyTrackerReader>(cfg);
+}
 
 std::unique_ptr<IRuntimePoseReader> create_tcp_runtime_pose_reader(const RuntimePoseReaderConfig& config) {
   return std::make_unique<TcpPoseReader>(config.tcp);

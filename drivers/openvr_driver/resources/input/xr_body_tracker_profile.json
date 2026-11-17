@@ -1,0 +1,11 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "xr_body_tracker",
+  "input_bindingui_mode": "single_device",
+  "input_source": {
+    "/pose/raw": {
+      "type": "pose"
+    }
+  },
+  "default_bindings": []
+}

@@ -738,6 +738,9 @@ void test_body_tracker_devices() {
     tracker.pose.vx = 1.25f;
     tracker.pose.wy = 0.25f;
   }
+  std::strcpy(frame.trackers[0].tracker_id, "frame_neck");
+  frame.trackers[0].role = BODY_TRACKER_ROLE_GENERIC;
+  frame.trackers[0].flags |= BODY_TRACKER_FLAG_ROLE_VALID;
   frame.trackers[1].stable_id_hash = 0x1234;
   publisher.publish(frame);
 
@@ -755,7 +758,7 @@ void test_body_tracker_devices() {
   }
   ScopedEnv feature("XR_MONADO_BODY_TRACKERS", "1");
   assert(xr_tracking_runtime_body_trackers_create(&origin, devices, 2) == 2);
-  assert(std::strcmp(devices[0]->serial, "xr-gate-body/id/test-0") == 0);
+  assert(std::strcmp(devices[0]->serial, "xr-gate-body/id/frame_neck") == 0);
   assert(std::strcmp(devices[1]->serial, "xr-gate-body/stable/0000000000001234") == 0);
   for (auto* device : devices) {
     assert(device->device_type == XRT_DEVICE_TYPE_GENERIC_TRACKER);

@@ -25,13 +25,18 @@ def frame(sequence=1):
     hand = dict(velocity, status=1, flags=63, pose_valid=True, confidence=1, controller=pose, palm=pose, wrist=pose,
                 pinch_strength=0.7, grab_strength=0.8, pinch_active=True, grab_active=True,
                 joints=[dict(pose, position=[i, 0, 0], joint_id=i, flags=1, radius_m=0.01, confidence=1) for i in range(21)])
+    body_tracker = dict(pose, **velocity, tracker_id='frame_neck', tracker_index=0, role=1,
+                        status=2, flags=98, stable_id_hash='0', device_serial_hash='0',
+                        confidence=0.9, battery=0)
     return {'type': 'frame', 'sequence': sequence, 'read_timestamp_ns': stamp,
             'hmd': dict(pose, **velocity, sequence=sequence, timestamp_ns=stamp, source_timestamp_ns=stamp,
                         target_timestamp_ns=stamp, source_sequence=123, reset_counter=2,
                         tracking_status=2, flags=7, pose_valid=True, confidence=0.9),
             'hands': {'sequence': sequence, 'timestamp_ns': stamp, 'source_timestamp_ns': stamp, 'reset_counter': 2,
                       'tracking_status': 1, 'flags': 15, 'confidence': 1, 'hand_count': 2, 'left': hand, 'right': hand},
-            'controllers': {'sequence': sequence, 'timestamp_ns': stamp, 'flags': 63, 'left': controller, 'right': controller}}
+            'controllers': {'sequence': sequence, 'timestamp_ns': stamp, 'flags': 63, 'left': controller, 'right': controller},
+            'body_trackers': {'sequence': sequence, 'timestamp_ns': stamp, 'source_timestamp_ns': stamp,
+                              'reset_counter': 2, 'space': 3, 'source': 8, 'flags': 1, 'trackers': [body_tracker]}}
 
 
 def wire(value):
@@ -97,9 +102,10 @@ class TcpTest(unittest.TestCase):
             time.sleep(0.25)
         session = Session(handler, 700)
         rows = session.run()
-        valid = [r for r in rows if r['pose'] and r['hands'] and r['hands2'] and r['controllers'] and r['controllers2'] and r['fresh']]
+        valid = [r for r in rows if r['pose'] and r['hands'] and r['hands2'] and r['controllers']
+                 and r['controllers2'] and r['fresh'] and r['body_fresh']]
         self.assertTrue(valid)
-        self.assertEqual(session.accepts, 1, 'All five readers must share one TCP connection')
+        self.assertEqual(session.accepts, 1, 'All readers must share one TCP connection')
         row = valid[-1]
         self.assertTrue(row['fresh'])
         self.assertEqual(row['position'], [1, 2, 3])
@@ -110,6 +116,7 @@ class TcpTest(unittest.TestCase):
         self.assertEqual(row['press_counter'], 4294967295)
         self.assertEqual(row['roles'], [1, 2])
         self.assertEqual((row['joints'], row['right_joints'], row['last_joint_x']), (21, 21, 20))
+        self.assertEqual((row['body_count'], row['body_id'], row['body_y']), (1, 'frame_neck', 2))
 
     def test_quiet_connection_and_replayed_frames_go_stale(self):
         def handler(sock, _):
@@ -119,6 +126,7 @@ class TcpTest(unittest.TestCase):
         rows = Session(handler, 400).run()
         self.assertTrue(any(r['fresh'] for r in rows))
         self.assertTrue(any(r['pose'] and not r['fresh'] and r['ms'] > 200 for r in rows))
+        self.assertTrue(any(r['body'] and not r['body_fresh'] and r['ms'] > 200 for r in rows))
 
     def test_disconnect_clears_all_streams_and_reconnect_resets_sequence(self):
         def handler(sock, index):
@@ -132,7 +140,8 @@ class TcpTest(unittest.TestCase):
         self.assertTrue(any(r['sequence'] == 1 and r['fresh'] for r in rows))
         empty = [r for r in rows if 150 < r['ms'] < 220]
         self.assertTrue(empty)
-        self.assertTrue(all(not r['pose'] and not r['hands'] and not r['controllers'] and r['left_buttons'] == '0' for r in empty))
+        self.assertTrue(all(not r['pose'] and not r['hands'] and not r['controllers']
+                            and not r['body'] and r['left_buttons'] == '0' for r in empty))
         self.assertEqual(session.accepts, 2)
 
     def test_wrong_protocol_and_oversized_line_are_rejected_then_recovered(self):

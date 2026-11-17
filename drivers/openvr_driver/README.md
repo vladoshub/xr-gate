@@ -2,7 +2,7 @@
 
 SteamVR/OpenVR driver for the XR runtime streams produced by `xr_runtime_adapter`.
 
-The driver is intentionally thin. It does not read cameras, IMU, Basalt, Mercury, or raw device data. It only consumes runtime-normalized HMD/controller streams.
+The driver consumes runtime-normalized HMD, controller, hand and body tracker streams from XR Gate.
 
 ## Windows TCP driver
 
@@ -14,7 +14,7 @@ available. See the Windows setup, CI, BAT installer, and Direct Mode instruction
 
 TCP settings in the `xr_tracking` section are `runtimeTcpHost`, `runtimeTcpPort`,
 `runtimeTcpReconnectMs`, and `runtimeTcpTimeoutMs`. Only IPv4 literals and
-`localhost` are accepted. All head/hand/controller readers share the connection.
+`localhost` are accepted. The HMD, controller, hand and body tracker readers share the connection.
 Frames are decoded on a background thread, cached without a queue, and aged
 using local receive time plus age calculated entirely in the server clock
 domain. Disconnect clears the cache immediately; reconnect requires a fresh
@@ -71,14 +71,51 @@ contract. To additionally check exported application bindings, run
 from this directory. This checks destination capabilities, not SteamVR's actual
 rebinding engine or in-game behavior. Games requiring controls absent from the
 physical device still need a backend mapping; skeletal fingers and real pressure
-sensing are not provided by these compatibility layouts.
+sensing are separate from these compatibility layouts.
+
+## Optional hand skeletons and body trackers
+
+Hand skeletal input and body tracker registration default to off. To enable
+them, edit the `xr_tracking` section of SteamVR's `steamvr.vrsettings` and
+restart SteamVR.
+
+```json
+{
+  "xr_tracking": {
+    "handControllerMode": "skeleton",
+    "bodyTrackersEnabled": true
+  }
+}
+```
+
+`handControllerMode` defaults to `"sticks"`. The `"skeleton"` mode adds a
+skeletal input component to each existing controller. It converts fresh
+21-joint runtime hands to the 31 parent-relative OpenVR bones and submits both
+motion ranges. Four metacarpals are reconstructed. Apps can bind
+`/input/skeleton/left` and `/input/skeleton/right`.
+
+With `bodyTrackersEnabled`, trackers are registered by persistent ID as they
+appear in `runtime_body_trackers`. This includes FRAME points such as
+`frame_neck`, hips and toe tips. Assign the roles SteamVR offers in **Manage
+Trackers**. A pose with valid position only, as provided by FRAME, uses an
+identity orientation. A tracker reported lost has an invalid pose.
+
+Linux reads the SHM body stream named by `runtimeBodyTrackersShmName`, which
+defaults to `runtime_body_trackers`. Windows reads body trackers on the shared
+application TCP connection. `runtimeBodyTrackersMaxAgeMs` defaults to 250 ms.
+Start FRAME or another body backend and publish the runtime body stream
+using `PUBLISH_RUNTIME_BODY_TRACKERS=1` for SHM or `RUNTIME_APP_TCP_BODY_TRACKERS=1`
+with application TCP. The FRAME launcher configures these automatically. Set
+`RUNTIME_BODY_TRACKER_FILTER_WRISTS=0` on the runtime adapter to expose both
+FRAME wrists with the other body trackers.
 
 ## Expected runtime streams
 
 ```text
 /tmp/runtime_tracking_streams.json : runtime_hmd_pose
 /tmp/runtime_tracking_streams.json : runtime_controller_state
-/tmp/runtime_tracking_streams.json : runtime_hand_tracking        # optional fallback
+/tmp/runtime_tracking_streams.json : runtime_hand_tracking        # controller fallback and optional skeletal input
+/tmp/runtime_tracking_streams.json : runtime_body_trackers        # optional generic trackers
 ```
 
 ## Linux SHM restart recovery

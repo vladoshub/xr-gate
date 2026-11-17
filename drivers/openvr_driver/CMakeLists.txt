@@ -94,11 +94,23 @@ endif()
 set(XR_PACKAGE_DIR "${CMAKE_BINARY_DIR}/${DRIVER_BASENAME}")
 set(XR_PACKAGE_BIN_DIR "${XR_PACKAGE_DIR}/bin/${OPENVR_ARCH_TARGET}")
 
+set(XR_HAND_PROFILE "${CMAKE_CURRENT_SOURCE_DIR}/resources/input/xr_hand_controller_profile.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${XR_HAND_PROFILE}")
+file(READ "${XR_HAND_PROFILE}" XR_SKELETON_PROFILE)
+foreach(side left right)
+  set(skeleton_source "{\"type\":\"skeleton\",\"skeleton\":\"/skeleton/hand/${side}\",\"side\":\"${side}\",\"binding_image_point\":[192,192]}")
+  string(JSON XR_SKELETON_PROFILE SET "${XR_SKELETON_PROFILE}"
+         input_source "/input/skeleton/${side}" "${skeleton_source}")
+endforeach()
+file(WRITE "${XR_PACKAGE_DIR}/resources/input/xr_hand_controller_skeleton_profile.json"
+     "${XR_SKELETON_PROFILE}\n")
+
 add_library(${DRIVER_NAME} SHARED
   src/driver_xr_tracking.cpp
   src/runtime_pose_reader.cpp
   src/runtime_hand_reader.cpp
   src/runtime_controller_state_reader.cpp
+  src/runtime_body_tracker_reader.cpp
   ${XR_RUNTIME_POSE_PLATFORM_SOURCE}
   ${XR_RUNTIME_HAND_PLATFORM_SOURCE}
   ${XR_RUNTIME_CONTROLLER_PLATFORM_SOURCE}

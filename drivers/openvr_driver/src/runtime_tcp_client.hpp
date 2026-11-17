@@ -2,7 +2,7 @@
 
 #include <memory>
 #include <xr_spatial/contracts/runtime_spatial_proxy_mesh_contract.hpp>
-#include <xr_tracking/contracts/body_tracker_set_contract.hpp>
+#include <xr_tracking/contracts/body_tracker_set_wire.hpp>
 #include <optional>
 #include <string>
 

@@ -3,6 +3,7 @@
 #include "runtime_pose_reader.hpp"
 #include "runtime_hand_reader.hpp"
 #include "runtime_controller_state_reader.hpp"
+#include "runtime_body_tracker_reader.hpp"
 #include "controller_input_mapping.hpp"
 
 #include <algorithm>
@@ -99,6 +100,9 @@ constexpr const char* kHiddenHandControllerRenderModel = "xr_tracking_hidden_con
 constexpr const char* kLeftHandSerialKey = "leftHandSerial";
 constexpr const char* kRightHandSerialKey = "rightHandSerial";
 constexpr const char* kCoordinateModeKey = "coordinateMode";
+constexpr const char* kBodyTrackersEnabledKey = "bodyTrackersEnabled";
+constexpr const char* kRuntimeBodyTrackersShmNameKey = "runtimeBodyTrackersShmName";
+constexpr const char* kRuntimeBodyTrackersMaxAgeMsKey = "runtimeBodyTrackersMaxAgeMs";
 constexpr uint64_t kXrTrackingUniverseId = 42424242ULL;
 
 enum class CoordinateMode {
@@ -745,6 +749,7 @@ struct HandControllerConfig {
   std::string right_serial = "xr-tracking-right-hand-001";
   std::string render_model;
   bool expose_system_button = false;
+  bool skeleton_enabled = false;
   ControllerInputMappingConfig input_mapping;
   float pose_y_offset = 1.60f;
   CoordinateMode coordinate_mode = CoordinateMode::RuntimeReady;
@@ -753,6 +758,90 @@ struct HandControllerConfig {
 bool hand_pose_mode_is_hmd_relative(const std::string& pose_mode) {
   const std::string mode = lower_ascii(pose_mode);
   return mode == "hmd_relative" || mode == "relative_to_hmd";
+}
+
+constexpr size_t kOpenVrHandBoneCount = 31;
+
+struct SkeletonJointPose {
+  std::array<double, 3> position{};
+  vr::HmdQuaternion_t orientation{};
+};
+
+bool finite_skeleton_position(const std::array<double, 3>& position) {
+  return std::all_of(position.begin(), position.end(), [](double value) { return std::isfinite(value); });
+}
+
+bool valid_skeleton_rotation(const vr::HmdQuaternion_t& orientation) {
+  const double length2 = quat_dot(orientation, orientation);
+  return std::isfinite(length2) && length2 > 1e-12;
+}
+
+vr::VRBoneTransform_t relative_bone(const SkeletonJointPose& joint, const SkeletonJointPose& parent) {
+  const auto inverse = quat_conjugate(parent.orientation);
+  const auto position = quat_rotate_vec(inverse, {
+      joint.position[0] - parent.position[0],
+      joint.position[1] - parent.position[1],
+      joint.position[2] - parent.position[2]});
+  const auto rotation = quat_normalize(quat_multiply(inverse, joint.orientation));
+  return {{float(position[0]), float(position[1]), float(position[2]), 1.0f},
+          {float(rotation.w), float(rotation.x), float(rotation.y), float(rotation.z)}};
+}
+
+bool make_hand_skeleton(const xr_tracking::HandSideF32V2& side, bool left, const vr::DriverPose_t& base,
+                        CoordinateMode mode, double y_offset,
+                        std::array<vr::VRBoneTransform_t, kOpenVrHandBoneCount>& bones) {
+  const SkeletonJointPose root{{base.vecPosition[0], base.vecPosition[1], base.vecPosition[2]}, base.qRotation};
+  if (!finite_skeleton_position(root.position) || !valid_skeleton_rotation(root.orientation)) return false;
+  bones[0] = {{0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 0.0f}};
+
+  // Mercury uses -Z along the fingers. SteamVR uses +Z at the wrist,
+  // then +X along left fingers and -X along right fingers.
+  constexpr vr::HmdQuaternion_t wrist_basis{0.0, 1.0, 0.0, 0.0};
+  constexpr vr::HmdQuaternion_t left_finger_basis{0.5, -0.5, 0.5, 0.5};
+  constexpr vr::HmdQuaternion_t right_finger_basis{0.5, 0.5, -0.5, 0.5};
+  const auto finger_basis = left ? left_finger_basis : right_finger_basis;
+
+  std::array<SkeletonJointPose, xr_tracking::HAND_JOINT_COUNT_V2> joints{};
+  for (size_t i = 0; i < joints.size(); ++i) {
+    const auto& src = side.joints[i];
+    const auto rotation = quat(src.qw, src.qx, src.qy, src.qz);
+    if (src.joint_id != i || src.flags == 0 || !valid_skeleton_rotation(rotation)) return false;
+    auto position = vec_for_coordinate_mode(mode, src.px, src.py, src.pz);
+    if (!finite_skeleton_position(position)) return false;
+    position[1] += y_offset;
+    joints[i] = {position, quat_normalize(quat_multiply(
+        quat_for_coordinate_mode(mode, rotation), i == 0 ? wrist_basis : finger_basis))};
+  }
+
+  const auto& wrist = joints[0];
+  bones[1] = relative_bone(wrist, root);
+  constexpr std::array<size_t, 5> first_bones{2, 6, 11, 16, 21};
+  for (size_t finger = 0; finger < first_bones.size(); ++finger) {
+    const size_t first_joint = 1 + finger * 4;
+    size_t bone = first_bones[finger];
+    auto parent = wrist;
+    if (finger != 0) {
+      // The 21-joint stream omits these metacarpals. Use the same position
+      // estimate as the Monado adapter.
+      auto metacarpal = joints[first_joint];
+      for (size_t axis = 0; axis < 3; ++axis) {
+        metacarpal.position[axis] = wrist.position[axis] +
+            0.25 * (metacarpal.position[axis] - wrist.position[axis]);
+      }
+      bones[bone++] = relative_bone(metacarpal, wrist);
+      parent = metacarpal;
+    }
+    // Keep the tip rotation equal to the distal joint, as for the SteamVR
+    // reference skeleton. Auxiliary bones use the distal pose in root space.
+    for (size_t i = 0; i < 4; ++i) {
+      auto joint = joints[first_joint + i];
+      if (i == 3) joint.orientation = parent.orientation;
+      bones[bone++] = relative_bone(joint, parent);
+      parent = joint;
+    }
+    bones[26 + finger] = relative_bone(joints[first_joint + 2], root);
+  }
+  return true;
 }
 
 class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
@@ -787,7 +876,8 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_SerialNumber_String, serial().c_str());
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_ControllerType_String, "xr_hand_controller");
     vr::VRProperties()->SetStringProperty(property_container_, vr::Prop_InputProfilePath_String,
-        "{xr_tracking}/input/xr_hand_controller_profile.json");
+        cfg_.skeleton_enabled ? "{xr_tracking}/input/xr_hand_controller_skeleton_profile.json"
+                              : "{xr_tracking}/input/xr_hand_controller_profile.json");
     vr::VRProperties()->SetInt32Property(property_container_, vr::Prop_ControllerRoleHint_Int32,
                                          static_cast<int32_t>(left_ ? vr::TrackedControllerRole_LeftHand
                                                                     : vr::TrackedControllerRole_RightHand));
@@ -834,6 +924,18 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
 
     create_input_components();
     cached_pose_ = make_invalid_pose();
+    if (cfg_.skeleton_enabled) {
+      const auto error = vr::VRDriverInput()->CreateSkeletonComponent(
+          property_container_, left_ ? "/input/skeleton/left" : "/input/skeleton/right",
+          left_ ? "/skeleton/hand/left" : "/skeleton/hand/right", "/pose/raw",
+          vr::VRSkeletalTracking_Partial, nullptr, 0, &skeleton_component_);
+      if (error == vr::VRInputError_None) {
+        RunFrame();
+      } else {
+        skeleton_component_ = 0;
+        log_line("[xr_tracking_openvr] failed to create hand skeleton err=" + std::to_string(error));
+      }
+    }
     return vr::VRInitError_None;
   }
 
@@ -866,6 +968,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     y_touch_component_ = 0;
     system_click_component_ = 0;
     haptic_component_ = 0;
+    skeleton_component_ = 0;
     controller_reader_.reset();
     hand_reader_.reset();
     pose_reader_.reset();
@@ -908,7 +1011,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
         cached_pose_ = make_invalid_pose();
       }
       update_inputs_from_runtime_controller(&controller_side);
-      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+      publish_pose_and_skeleton();
       return;
     }
     if (controller_reader_ && !controller_error.empty()) {
@@ -930,7 +1033,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
       maybe_log_hand_error(error);
       cached_pose_ = make_invalid_pose();
       update_inputs(nullptr);
-      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+      publish_pose_and_skeleton();
       return;
     }
 
@@ -938,7 +1041,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     if (!runtime_hand_sample_is_fresh(sample, cfg_.reader.max_age_ms)) {
       cached_pose_ = make_invalid_pose();
       update_inputs(nullptr);
-      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+      publish_pose_and_skeleton();
       return;
     }
 
@@ -946,11 +1049,12 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     if (!runtime_hand_side_is_valid(sample.frame, side, left_)) {
       cached_pose_ = make_invalid_pose();
       update_inputs(nullptr);
-      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+      publish_pose_and_skeleton();
       return;
     }
 
-    if (hand_pose_mode_is_hmd_relative(cfg_.pose_mode)) {
+    const bool hmd_relative = hand_pose_mode_is_hmd_relative(cfg_.pose_mode);
+    if (hmd_relative) {
       RuntimePoseSample hmd_sample{};
       std::string hmd_error;
       const bool have_hmd = pose_reader_ && pose_reader_->read_latest(hmd_sample, &hmd_error);
@@ -961,7 +1065,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
         maybe_log_runtime_pose_error(hmd_error.empty() ? "runtime_hmd_pose unavailable/stale/invalid" : hmd_error);
         cached_pose_ = make_invalid_pose();
         update_inputs(nullptr);
-        vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+        publish_pose_and_skeleton();
         return;
       }
 
@@ -972,10 +1076,52 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     }
 
     update_inputs(&side);
-    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+    publish_pose_and_skeleton(&sample, hmd_relative);
   }
 
  private:
+  void publish_pose_and_skeleton(const RuntimeHandSample* hand_sample = nullptr, bool hmd_relative = false) {
+    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(cached_pose_));
+    if (skeleton_component_ == 0 || !cached_pose_.poseIsValid) return;
+
+    RuntimeHandSample latest;
+    if (!hand_sample) {
+      if (!hand_reader_ || !hand_reader_->read_latest(latest, nullptr)) return;
+      hand_sample = &latest;
+    }
+    const auto& frame = hand_sample->frame;
+    const auto& side = left_ ? frame.left : frame.right;
+    if (!runtime_hand_sample_is_fresh(*hand_sample, cfg_.reader.max_age_ms) ||
+        !runtime_hand_side_is_valid(frame, side, left_) ||
+        (frame.flags & xr_tracking::HAND_FLAG_JOINTS_VALID) == 0u ||
+        (side.flags & xr_tracking::HAND_JOINTS_VALID) == 0u ||
+        side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2 ||
+        frame.timestamp_ns == 0u) return;
+
+    // Optical joints can be older than the frame when the adapter republishes
+    // a prediction. Add the delay in the publisher's clock domain to the
+    // reader's frame age, which also works across the TCP clock boundary.
+    if ((side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) == 0u) {
+      if (frame.source_timestamp_ns == 0u) return;
+      if (cfg_.reader.max_age_ms != 0u) {
+        const auto max_age_ns = uint64_t(cfg_.reader.max_age_ms) * 1000000;
+        const auto frame_age = uint64_t(std::max(int64_t{0}, hand_sample->age_ns));
+        if (frame.timestamp_ns > frame.source_timestamp_ns &&
+            frame.timestamp_ns - frame.source_timestamp_ns > max_age_ns - frame_age) return;
+      }
+    }
+
+    // The legacy head-relative pose applies a common rigid transform to the
+    // hand. Its skeleton can be encoded relative to the untransformed base.
+    const auto base = hmd_relative ? make_pose_from_hand_world(side) : cached_pose_;
+    const double y_offset = cfg_.coordinate_mode == CoordinateMode::LegacyDriverTransform ? cfg_.pose_y_offset : 0.0;
+    std::array<vr::VRBoneTransform_t, kOpenVrHandBoneCount> bones{};
+    if (!make_hand_skeleton(side, left_, base, cfg_.coordinate_mode, y_offset, bones)) return;
+    for (const auto range : {vr::VRSkeletalMotionRange_WithController, vr::VRSkeletalMotionRange_WithoutController}) {
+      vr::VRDriverInput()->UpdateSkeletonComponent(skeleton_component_, range, bones.data(), uint32_t(bones.size()));
+    }
+  }
+
   vr::DriverPose_t make_invalid_pose() const {
     vr::DriverPose_t pose{};
     pose.qWorldFromDriverRotation = quat(1.0, 0.0, 0.0, 0.0);
@@ -1261,7 +1407,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     update_inputs_from_runtime_controller(&cached_runtime_controller_side_);
 
     if (object_id_ != vr::k_unTrackedDeviceIndexInvalid) {
-      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(vr::DriverPose_t));
+      publish_pose_and_skeleton();
     }
 
     if (now_ns >= last_controller_hold_log_ns_ + 1000000000ull) {
@@ -1367,6 +1513,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
   vr::VRInputComponentHandle_t y_touch_component_ = 0;
   vr::VRInputComponentHandle_t system_click_component_ = 0;
   vr::VRInputComponentHandle_t haptic_component_ = 0;
+  vr::VRInputComponentHandle_t skeleton_component_ = 0;
   bool has_cached_runtime_controller_side_ = false;
   xr_runtime::RuntimeControllerSideStateV1 cached_runtime_controller_side_{};
   uint64_t cached_runtime_controller_input_ns_ = 0;
@@ -1374,6 +1521,103 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
 
   uint64_t last_controller_debug_sequence_ = 0;
   uint64_t last_controller_debug_buttons_ = 0;
+};
+
+class XrBodyTrackerDriver final : public vr::ITrackedDeviceServerDriver {
+ public:
+  XrBodyTrackerDriver(const xr_tracking::BodyTrackerF32V1& tracker, CoordinateMode mode)
+      : key_(xr_tracking::body_tracker_key(tracker)), mode_(mode) {
+    using Kind = xr_tracking::BodyTrackerKey::Kind;
+    const char* id_end = std::find(tracker.tracker_id, tracker.tracker_id + sizeof(tracker.tracker_id), '\0');
+    const std::string name(tracker.tracker_id, id_end);
+    if (key_.kind == Kind::Text) {
+      serial_ = "xr-gate-body-id-" + name;
+    } else {
+      serial_ = key_.kind == Kind::StableHash ? "xr-gate-body-stable-" : "xr-gate-body-serial-";
+      serial_ += std::to_string(key_.value);
+    }
+    model_ = "XR Gate body tracker " + (name.empty() ? serial_ : name);
+    update(nullptr);
+  }
+
+  const std::string& serial() const { return serial_; }
+  const xr_tracking::BodyTrackerKey& key() const { return key_; }
+
+  vr::EVRInitError Activate(uint32_t object_id) override {
+    object_id_ = object_id;
+    const auto properties = vr::VRProperties()->TrackedDeviceToPropertyContainer(object_id);
+    vr::VRProperties()->SetStringProperty(properties, vr::Prop_TrackingSystemName_String, "xr_tracking");
+    vr::VRProperties()->SetStringProperty(properties, vr::Prop_ManufacturerName_String, "XR Gate");
+    vr::VRProperties()->SetStringProperty(properties, vr::Prop_ModelNumber_String, model_.c_str());
+    vr::VRProperties()->SetStringProperty(properties, vr::Prop_SerialNumber_String, serial_.c_str());
+    vr::VRProperties()->SetStringProperty(properties, vr::Prop_ControllerType_String, "xr_body_tracker");
+    vr::VRProperties()->SetStringProperty(properties, vr::Prop_InputProfilePath_String,
+                                         "{xr_tracking}/input/xr_body_tracker_profile.json");
+    return vr::VRInitError_None;
+  }
+
+  void Deactivate() override { object_id_ = vr::k_unTrackedDeviceIndexInvalid; }
+  void EnterStandby() override {}
+  void* GetComponent(const char*) override { return nullptr; }
+  void DebugRequest(const char*, char* response, uint32_t size) override {
+    if (size > 0) response[0] = '\0';
+  }
+  vr::DriverPose_t GetPose() override { return pose_; }
+
+  void update(const xr_tracking::BodyTrackerF32V1* tracker) {
+    pose_ = tracker_pose(tracker);
+    if (object_id_ != vr::k_unTrackedDeviceIndexInvalid) {
+      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, pose_, sizeof(pose_));
+    }
+  }
+
+ private:
+  vr::DriverPose_t tracker_pose(const xr_tracking::BodyTrackerF32V1* tracker) const {
+    using namespace xr_tracking;
+    vr::DriverPose_t pose{};
+    pose.qWorldFromDriverRotation = pose.qDriverFromHeadRotation = pose.qRotation =
+        quat(1.0, 0.0, 0.0, 0.0);
+    pose.result = vr::TrackingResult_Uninitialized;
+    if (!tracker || tracker->status == BODY_TRACKER_STATUS_UNAVAILABLE) return pose;
+    pose.deviceIsConnected = true;
+    pose.result = vr::TrackingResult_Running_OutOfRange;
+    if (tracker->status != BODY_TRACKER_STATUS_TRACKING && tracker->status != BODY_TRACKER_STATUS_STALE) {
+      return pose;
+    }
+
+    const auto& p = tracker->pose;
+    const auto flags = tracker->flags;
+    if ((flags & (BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_POSITION_VALID)) == 0u ||
+        !std::isfinite(p.px) || !std::isfinite(p.py) || !std::isfinite(p.pz)) return pose;
+    auto position = vec_for_coordinate_mode(mode_, p.px, p.py, p.pz);
+    if (mode_ == CoordinateMode::LegacyDriverTransform) position[1] += 1.60;
+    std::copy(position.begin(), position.end(), pose.vecPosition);
+    if ((flags & (BODY_TRACKER_FLAG_POSE_VALID | BODY_TRACKER_FLAG_ORIENTATION_VALID)) != 0u &&
+        std::isfinite(p.qw) && std::isfinite(p.qx) && std::isfinite(p.qy) && std::isfinite(p.qz)) {
+      pose.qRotation = quat_for_coordinate_mode(mode_, quat(p.qw, p.qx, p.qy, p.qz));
+    }
+    const auto copy_velocity = [this](float x, float y, float z, double* out) {
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
+      const auto velocity = vec_for_coordinate_mode(mode_, x, y, z);
+      std::copy(velocity.begin(), velocity.end(), out);
+    };
+    if ((flags & BODY_TRACKER_FLAG_LINEAR_VELOCITY_VALID) != 0u) {
+      copy_velocity(p.vx, p.vy, p.vz, pose.vecVelocity);
+    }
+    if ((flags & BODY_TRACKER_FLAG_ANGULAR_VELOCITY_VALID) != 0u) {
+      copy_velocity(p.wx, p.wy, p.wz, pose.vecAngularVelocity);
+    }
+    pose.poseIsValid = true;
+    if (tracker->status == BODY_TRACKER_STATUS_TRACKING) pose.result = vr::TrackingResult_Running_OK;
+    return pose;
+  }
+
+  const xr_tracking::BodyTrackerKey key_;
+  const CoordinateMode mode_;
+  std::string serial_;
+  std::string model_;
+  vr::TrackedDeviceIndex_t object_id_ = vr::k_unTrackedDeviceIndexInvalid;
+  vr::DriverPose_t pose_{};
 };
 
 class ServerDriver final : public vr::IServerTrackedDeviceProvider {
@@ -1391,11 +1635,20 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
 
     load_hand_settings();
     maybe_add_hand_controllers();
+    if (get_bool_setting(kBodyTrackersEnabledKey, false)) {
+      RuntimeBodyTrackerReaderConfig config;
+      config.shm_name = get_string_setting(kRuntimeBodyTrackersShmNameKey, "runtime_body_trackers");
+      config.tcp = hand_cfg_.reader.tcp;
+      body_reader_ = create_runtime_body_tracker_reader(config);
+      body_max_age_ns_ = int64_t(std::max(0, get_int_setting(kRuntimeBodyTrackersMaxAgeMsKey, 250))) * 1000000LL;
+    }
     return vr::VRInitError_None;
   }
 
   void Cleanup() override {
     log_line("[xr_tracking_openvr] server cleanup");
+    body_trackers_.clear();
+    body_reader_.reset();
     right_controller_.reset();
     left_controller_.reset();
     hmd_.reset();
@@ -1408,6 +1661,7 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
     if (hmd_) hmd_->RunFrame();
     if (left_controller_) left_controller_->RunFrame();
     if (right_controller_) right_controller_->RunFrame();
+    if (body_reader_) update_body_trackers();
   }
 
   bool ShouldBlockStandbyMode() override { return false; }
@@ -1415,6 +1669,35 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
   void LeaveStandby() override {}
 
  private:
+  void update_body_trackers() {
+    using namespace xr_tracking;
+    RuntimeBodyTrackerSample sample;
+    std::array<const BodyTrackerF32V1*, BODY_TRACKER_MAX_TRACKERS> current{};
+    if (body_reader_->read_latest(sample, nullptr) &&
+        (body_max_age_ns_ == 0 || sample.age_ns <= body_max_age_ns_) &&
+        (sample.frame.space == BODY_TRACKER_SPACE_RUNTIME_HMD ||
+         sample.frame.space == BODY_TRACKER_SPACE_STEAMVR_TRACKING ||
+         sample.frame.space == BODY_TRACKER_SPACE_OPENXR_LOCAL)) {
+      for (uint32_t i = 0; i < sample.frame.tracker_count; ++i) {
+        const auto& tracker = sample.frame.trackers[i];
+        const auto key = body_tracker_key(tracker);
+        if (key.kind == BodyTrackerKey::Kind::None) continue;
+        const auto found = std::find_if(body_trackers_.begin(), body_trackers_.end(),
+                                       [&](const auto& device) { return device->key() == key; });
+        const size_t index = static_cast<size_t>(found - body_trackers_.begin());
+        if (found == body_trackers_.end()) {
+          if (body_trackers_.size() == current.size()) continue;
+          auto device = std::make_unique<XrBodyTrackerDriver>(tracker, hand_cfg_.coordinate_mode);
+          if (!vr::VRServerDriverHost()->TrackedDeviceAdded(device->serial().c_str(),
+                    vr::TrackedDeviceClass_GenericTracker, device.get())) continue;
+          body_trackers_.push_back(std::move(device));
+        }
+        if (!current[index]) current[index] = &tracker;
+      }
+    }
+    for (size_t i = 0; i < body_trackers_.size(); ++i) body_trackers_[i]->update(current[i]);
+  }
+
   void load_hand_settings() {
     hand_cfg_.mode = get_string_setting(kHandControllerModeKey, "none");
     hand_cfg_.reader.transport = get_string_setting(kRuntimeHandTransportKey, "auto");
@@ -1479,9 +1762,8 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
       return;
     }
 
-    if (mode == "skeleton") {
-      log_line("[xr_tracking_openvr] handControllerMode=skeleton requested; skeletal input is TODO, registering controller sticks for now");
-    } else if (mode != "sticks" && mode != "controllers") {
+    hand_cfg_.skeleton_enabled = mode == "skeleton";
+    if (!hand_cfg_.skeleton_enabled && mode != "sticks" && mode != "controllers") {
       log_line("[xr_tracking_openvr] unknown handControllerMode=" + hand_cfg_.mode + "; hand controllers disabled");
       return;
     }
@@ -1505,6 +1787,9 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
   HandControllerConfig hand_cfg_;
   std::unique_ptr<XrHandControllerDriver> left_controller_;
   std::unique_ptr<XrHandControllerDriver> right_controller_;
+  std::unique_ptr<IRuntimeBodyTrackerReader> body_reader_;
+  std::vector<std::unique_ptr<XrBodyTrackerDriver>> body_trackers_;
+  int64_t body_max_age_ns_ = 0;
 };
 
 ServerDriver g_server_driver;

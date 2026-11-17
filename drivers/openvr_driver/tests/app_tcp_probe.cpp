@@ -1,4 +1,5 @@
 #include "runtime_tcp_client.hpp"
+#include "runtime_body_tracker_reader.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -32,18 +33,24 @@ int main(int argc, char** argv) {
     auto left = create_tcp_runtime_controller_state_reader(c), right = create_tcp_runtime_controller_state_reader(c);
 #endif
     if (std::string(pose->transport_name()) != "app_tcp") throw std::runtime_error("TCP reader not selected");
+    auto body = create_tcp_runtime_body_tracker_reader(p.tcp);
     const auto start = std::chrono::steady_clock::now();
     const auto duration = std::chrono::milliseconds(std::stoi(argv[2]));
     while (std::chrono::steady_clock::now() - start < duration) {
       RuntimePoseSample ps{}; RuntimeHandSample hs{}, hs2{};
       RuntimeControllerStateSample cs{}, cs2{};
+      RuntimeBodyTrackerSample bs{};
       std::string error;
       const bool hp = pose->read_latest(ps, &error), hh = hand_left->read_latest(hs, nullptr);
       const bool hh2 = hand_right->read_latest(hs2, nullptr);
       const bool hc = left->read_latest(cs, nullptr), hc2 = right->read_latest(cs2, nullptr);
+      const bool hb = body->read_latest(bs, nullptr);
       Json out{{"ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()},
                {"pose", hp}, {"hands", hh}, {"hands2", hh2}, {"controllers", hc}, {"controllers2", hc2},
                {"fresh", hp && ps.age_ns <= 100000000}, {"age_ns", ps.age_ns}, {"error", error},
+               {"body", hb}, {"body_fresh", hb && bs.age_ns <= 100000000},
+               {"body_count", bs.frame.tracker_count}, {"body_id", bs.frame.trackers[0].tracker_id},
+               {"body_y", bs.frame.trackers[0].pose.py},
                {"sequence", ps.pose.sequence}, {"position", {ps.pose.px, ps.pose.py, ps.pose.pz}},
                {"quaternion", {ps.pose.qx, ps.pose.qy, ps.pose.qz, ps.pose.qw}}, {"pose_flags", ps.pose.flags},
                {"left_buttons", std::to_string(cs.frame.left.buttons)}, {"right_buttons", std::to_string(cs2.frame.right.buttons)},
