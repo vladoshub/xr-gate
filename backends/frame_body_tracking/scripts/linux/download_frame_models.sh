@@ -13,6 +13,9 @@ checkpoint_sha256="296d1e4216f8f9e13e39e4761ad8080622eb08bb6d10fd742d75818c53879
 exporter="$SCRIPT_DIR/export_frame_backbone.py"
 requirements="$SCRIPT_DIR/requirements-frame-export.txt"
 cache="${XR_DEPENDENCY_CACHE_ROOT:-$ROOT_PROJECT/build/.dependency-cache}/frame"
+third_party_dir="${THIRD_PARTY_DIR:-$ROOT_PROJECT/third_party}"
+third_party_dir="${third_party_dir/#\~/${HOME:-~}}"
+upstream="$third_party_dir/frame"
 model_name="frame_backbone.onnx"
 model_dir="${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/body-tracking-models/frame"
 
@@ -22,11 +25,40 @@ mkdir -p "$cache"
 exec 9>"$cache/lock"
 flock 9
 
+needs_export=0
 if [[ "$XR_UPDATE_DEPS" == "1" || ! -s "$cached_model/$model_name" ]]; then
   xr_require_network "FRAME ONNX export is missing: $cached_model/$model_name"
+  needs_export=1
+fi
+
+mkdir -p "$third_party_dir"
+exec 8>"$third_party_dir/.frame-source.lock"
+flock 8
+if [[ ! -e "$upstream" && ! -L "$upstream" && -d "$cache/source/.git" ]]; then
+  mv -T -- "$cache/source" "$upstream"
+fi
+
+ref=""
+if [[ "$needs_export" == "1" ]]; then
+  ref="$(xr_ensure_git_source "$upstream" "$upstream_url" "$upstream_ref" 1 "$XR_UPDATE_DEPS" 1)"
+elif [[ -e "$upstream/.git" ]]; then
+  ref="$(xr_resolve_git_ref "$upstream" "$upstream_ref" || true)"
+fi
+if [[ -n "$ref" ]]; then
+  if ! git -C "$upstream" rev-parse --verify --quiet HEAD >/dev/null; then
+    git -C "$upstream" checkout --quiet --detach "$ref"
+  fi
+  echo "[frame_models] sources: $upstream"
+fi
+
+if [[ "$needs_export" == "1" ]]; then
   export_dir="$(mktemp -d "$cache/export.XXXXXXXX")"
   trap 'rm -rf -- "$export_dir"' EXIT
+  git -C "$upstream" archive "$ref" LICENSE src/framevision | tar -x -C "$export_dir"
+fi
+flock -u 8
 
+if [[ "$needs_export" == "1" ]]; then
   checkpoint="${XR_FRAME_CHECKPOINT:-$cache/backbone-$checkpoint_sha256.ckpt}"
   checkpoint="${checkpoint/#\~/${HOME:-~}}"
   if [[ -z "${XR_FRAME_CHECKPOINT:-}" ]]; then
@@ -39,10 +71,6 @@ if [[ "$XR_UPDATE_DEPS" == "1" || ! -s "$cached_model/$model_name" ]]; then
     echo "[frame_models][ERROR] checkpoint checksum mismatch: $checkpoint" >&2
     exit 1
   fi
-
-  upstream="$cache/source"
-  ref="$(xr_ensure_git_source "$upstream" "$upstream_url" "$upstream_ref" 1 "$XR_UPDATE_DEPS" 1)"
-  git -C "$upstream" archive "$ref" LICENSE src/framevision | tar -x -C "$export_dir"
 
   "${XR_FRAME_EXPORT_PYTHON:-python3}" -m venv "$export_dir/venv"
   "$export_dir/venv/bin/python" -m pip install --disable-pip-version-check -r "$requirements"

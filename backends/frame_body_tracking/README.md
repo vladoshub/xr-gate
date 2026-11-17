@@ -27,6 +27,11 @@ install just the model or `XR_DOWNLOAD_BODY_TRACKING_MODELS=0` to build the
 backend binary separately. If you already have the original `backbone.ckpt`
 from Edmond, set `XR_FRAME_CHECKPOINT` to its path when building.
 
+The FRAME source checkout stays in `third_party/frame/` after the export.
+Set `THIRD_PARTY_DIR` to use a different dependency directory. On the next
+model build, an existing Git cache at `build/.dependency-cache/frame/source/`
+moves to the new location if the destination is free.
+
 GitHub builds publish `body-tracking-models-frame.tar.gz` separately. Place it
 beside `unpack_xr_gate.sh` and the other release archives, or supply it with
 `--frame-models`. The unpack helper also accepts the GitHub artifact ZIP.
