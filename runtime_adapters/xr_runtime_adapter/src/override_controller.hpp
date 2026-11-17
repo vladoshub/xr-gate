@@ -167,10 +167,44 @@ enum class RuntimeControllerImuPredictionFreezeReason : uint8_t {
   MaxPredictionPath = 2,
 };
 
-enum class RuntimeControllerHmdRelativeBlendMode : uint8_t {
-  None = 0,
-  Enter = 1,
-  Exit = 2,
+enum class RuntimeControllerFallbackBlendMode : uint8_t {
+  None,
+  EnterHmdRelative,
+  ExitHmdRelative,
+  EnterBodyWrist,
+  ExitBodyWrist,
+};
+
+enum class RuntimeControllerFallbackSource : uint8_t {
+  None,
+  HmdRelative,
+  BodyWrist,
+};
+
+struct BodyWristObservation {
+  std::array<float, 3> position_m{};
+  float confidence = 0.0f;
+  uint64_t timestamp_ns = 0;
+};
+
+struct BodyWristObservations {
+  std::optional<BodyWristObservation> left;
+  std::optional<BodyWristObservation> right;
+};
+
+struct RuntimeControllerFallbackPoseState {
+  RuntimeControllerFallbackBlendMode blend_mode = RuntimeControllerFallbackBlendMode::None;
+  RuntimeControllerFallbackSource last_source = RuntimeControllerFallbackSource::None;
+  bool last_pose_valid = false;
+  uint64_t blend_start_ns = 0;
+  float from_position_m[3] = {};
+  float from_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float from_linear_velocity_mps[3] = {};
+  float from_angular_velocity_rad_s[3] = {};
+  float last_position_m[3] = {};
+  float last_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float last_linear_velocity_mps[3] = {};
+  float last_angular_velocity_rad_s[3] = {};
 };
 
 // Retained optical yaw belongs to the AHRS orientation frame. Losing an IMU
@@ -265,10 +299,10 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   RuntimeControllerImuPredictionFreezeReason prediction_freeze_reason =
       RuntimeControllerImuPredictionFreezeReason::None;
   bool reacquire_blend_active = false;
-  RuntimeControllerHmdRelativeBlendMode hmd_relative_blend_mode =
-      RuntimeControllerHmdRelativeBlendMode::None;
-  bool hmd_relative_last_published_pose_valid = false;
-  bool hmd_relative_last_published_pose_is_hmd_relative = false;
+  RuntimeControllerFallbackPoseState fallback_pose{};
+  // Learned from accepted optical wrist and grip poses. The fallback rotates
+  // this local offset with the facing direction of the synthetic controller.
+  float wrist_to_grip_offset_m[3] = {};
   // Timestamp of the newest accelerometer sample already integrated. This
   // prevents repeated runtime ticks from integrating the same SHM frame twice.
   uint64_t last_acceleration_sample_timestamp_ns = 0;
@@ -277,7 +311,6 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   // runtime loss/hold clock. Late pre-anchor force is not new unseen motion.
   uint64_t last_optical_measurement_ns = 0;
   uint64_t reacquire_blend_start_ns = 0;
-  uint64_t hmd_relative_blend_start_ns = 0;
   float anchor_position_m[3] = {};
   // Physical velocity from accepted optical measurements; never seed it from
   // the rendered correction's step velocity stored in velocity_mps.
@@ -318,14 +351,6 @@ struct RuntimeControllerImuSideRuntimeState : RuntimeControllerImuYawState {
   uint64_t prediction_path_last_timestamp_ns = 0;
   float reacquire_blend_from_position_m[3] = {};
   float reacquire_blend_from_velocity_mps[3] = {};
-  float hmd_relative_blend_from_position_m[3] = {};
-  float hmd_relative_blend_from_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-  float hmd_relative_blend_from_linear_velocity_mps[3] = {};
-  float hmd_relative_blend_from_angular_velocity_rad_s[3] = {};
-  float hmd_relative_last_published_position_m[3] = {};
-  float hmd_relative_last_published_orientation_xyzw[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-  float hmd_relative_last_published_linear_velocity_mps[3] = {};
-  float hmd_relative_last_published_angular_velocity_rad_s[3] = {};
 };
 
 struct RuntimeControllerSynthesisState {
@@ -373,6 +398,7 @@ struct RuntimeControllerSynthesisConfig {
   LostHandPoseFallbackMode lost_hand_pose_fallback = LostHandPoseFallbackMode::PoseInvalid;
   float hmd_relative_enter_blend_ms = 150.0f;
   float hmd_relative_exit_blend_ms = 250.0f;
+  bool body_wrist_fallback_enabled = true;
 
   // Controls only visual hand-derived gestures when building RuntimeControllerStateV1.
   // External ControllerInputV3 buttons/axes remain authoritative and are not affected.
@@ -429,7 +455,8 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     float gravity_magnitude_mps2,
     RuntimeControllerSynthesisState* runtime_state = nullptr,
-    const std::vector<xr_runtime::ControllerInputV3>* imu_history = nullptr);
+    const std::vector<xr_runtime::ControllerInputV3>* imu_history = nullptr,
+    const BodyWristObservations& body_wrists = {});
 
 xr_runtime::RuntimeControllerStateFrameV1 compose_6dof_controller_state(
     uint64_t sequence,

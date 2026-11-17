@@ -678,16 +678,25 @@ void relation_from_hand_side(const xr_tracking::HandSideF32V2& side,
   relation_from_pose_velocity(out_relation, position, orientation, linear_velocity_ptr, angular_velocity_ptr);
 }
 
-bool runtime_hand_has_optical_joints(const RuntimeHandSample& sample,
-                                     const xr_tracking::HandSideF32V2& side,
-                                     bool left,
-                                     uint32_t max_age_ms) {
+uint64_t runtime_hand_joint_timestamp(const RuntimeHandSample& sample,
+                                      const xr_tracking::HandSideF32V2& side) {
+  return (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u
+      ? sample.frame.timestamp_ns : sample.frame.source_timestamp_ns;
+}
+
+bool runtime_hand_has_joints(const RuntimeHandSample& sample,
+                             const xr_tracking::HandSideF32V2& side,
+                             bool left,
+                             uint32_t max_age_ms) {
   if (!runtime_hand_side_is_valid(sample.frame, side, left) ||
       !std::isfinite(side.confidence) ||
-      side.status != static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Tracking) ||
       (side.flags & xr_tracking::HAND_JOINTS_VALID) == 0u ||
       (sample.frame.flags & xr_tracking::HAND_FLAG_JOINTS_VALID) == 0u ||
-      side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2 ||
+      side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2) return false;
+  if ((side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u) {
+    return sample.frame.timestamp_ns != 0u;
+  }
+  if (side.status != static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Tracking) ||
       sample.frame.source_timestamp_ns == 0u) return false;
   // The runtime republishes at its tick rate. Check the optical source time as
   // well, so republishing cannot keep an old skeleton active indefinitely.
@@ -877,7 +886,9 @@ bool runtime_hand_to_joint_set(const xr_tracking::HandSideF32V2& side,
 
   // All joints already use runtime/world coordinates. Keep the base transform
   // at identity; Monado applies the device tracking origin exactly once.
-  out.hand_pose.relation_flags = static_cast<xrt_space_relation_flags>(kJointPoseValid | kJointPoseTracked);
+  const bool synthetic = (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u;
+  out.hand_pose.relation_flags = static_cast<xrt_space_relation_flags>(
+      kJointPoseValid | (synthetic ? 0u : kJointPoseTracked));
   out.is_active = true;
   return true;
 }
@@ -908,9 +919,9 @@ xrt_result_t xrtd_get_hand_tracking(struct xrt_device* xdev,
   std::lock_guard<std::mutex> lock(io.mutex);
   if (!read_hand(io)) return XRT_SUCCESS;
   const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
-  if (!runtime_hand_has_optical_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms)) return XRT_SUCCESS;
+  if (!runtime_hand_has_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms)) return XRT_SUCCESS;
   if (runtime_hand_to_joint_set(side, *out_value)) {
-    *out_timestamp_ns = static_cast<int64_t>(io.last_hand.frame.source_timestamp_ns);
+    *out_timestamp_ns = static_cast<int64_t>(runtime_hand_joint_timestamp(io.last_hand, side));
   }
   return XRT_SUCCESS;
 }
@@ -1184,8 +1195,8 @@ xrt_result_t xrtd_update_inputs(struct xrt_device* xdev) {
   if (dev->hand_tracking_enabled) {
     const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
     auto& input = xdev->inputs[ARRAY_SIZE(kControllerInputNames)];
-    input.active = have_hand && runtime_hand_has_optical_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms);
-    input.timestamp = have_hand ? static_cast<int64_t>(io.last_hand.frame.source_timestamp_ns) : now_ns;
+    input.active = have_hand && runtime_hand_has_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms);
+    input.timestamp = have_hand ? static_cast<int64_t>(runtime_hand_joint_timestamp(io.last_hand, side)) : now_ns;
   }
   return XRT_SUCCESS;
 }

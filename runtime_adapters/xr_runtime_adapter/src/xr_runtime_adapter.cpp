@@ -1245,6 +1245,140 @@ xr_tracking::HandTrackingFrameF32V2 runtime_no_hands_frame_v2(int64_t now_ns_val
   return out;
 }
 
+bool uses_body_wrist(const xr_runtime::RuntimeControllerSideStateV1& controller) {
+  return (controller.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) != 0u;
+}
+
+xr_tracking::HandSideF32V2 body_wrist_hand(
+    const xr_runtime::RuntimeControllerSideStateV1& controller,
+    const override_controller::BodyWristObservation& observation,
+    const override_controller::RuntimeControllerImuSideRuntimeState& state,
+    bool left, bool neutral_skeleton) {
+  xr_tracking::HandSideF32V2 hand{};
+  hand.handedness = left ? 1u : 2u;
+  hand.joint_count = 0;
+  if (!neutral_skeleton) return hand;
+
+  // Fixed relaxed right-hand landmarks, in metres from the wrist. Mirror
+  // across the sagittal plane for the left hand. Fingers extend along -Z.
+  constexpr V3d neutral_offsets[] = {
+      {0.000, 0.000, 0.000},
+      {-0.023, -0.003, -0.033}, {-0.042, -0.008, -0.057},
+      {-0.052, -0.014, -0.076}, {-0.059, -0.018, -0.090},
+      {-0.023, 0.000, -0.078}, {-0.026, -0.006, -0.113},
+      {-0.027, -0.015, -0.133}, {-0.027, -0.023, -0.146},
+      {-0.002, 0.000, -0.084}, {-0.002, -0.008, -0.121},
+      {-0.002, -0.018, -0.143}, {-0.002, -0.026, -0.157},
+      {0.017, 0.000, -0.079}, {0.019, -0.009, -0.113},
+      {0.020, -0.019, -0.133}, {0.020, -0.029, -0.145},
+      {0.033, -0.002, -0.069}, {0.038, -0.011, -0.096},
+      {0.039, -0.021, -0.112}, {0.039, -0.030, -0.123},
+  };
+  static_assert(std::size(neutral_offsets) == xr_tracking::HAND_JOINT_COUNT_V2);
+  const Qd q = normalize_q({controller.orientation_xyzw[3], controller.orientation_xyzw[0],
+                           controller.orientation_xyzw[1], controller.orientation_xyzw[2]});
+  const auto& local = state.wrist_to_grip_offset_m;
+  const V3d grip_offset = q_rotate(q, {local[0], local[1], local[2]});
+  const V3d wrist{controller.position[0] - grip_offset.x, controller.position[1] - grip_offset.y,
+                 controller.position[2] - grip_offset.z};
+  const V3d palm_offset = q_rotate(q, {0.0, 0.0, -0.045});
+  hand.status = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Degraded);
+  hand.flags = xr_tracking::HAND_POSE_VALID | xr_tracking::HAND_JOINTS_VALID |
+               xr_tracking::HAND_SYNTHETIC_JOINTS;
+  hand.confidence = observation.confidence;
+  hand.controller_px = controller.position[0];
+  hand.controller_py = controller.position[1];
+  hand.controller_pz = controller.position[2];
+  hand.wrist_px = static_cast<float>(wrist.x);
+  hand.wrist_py = static_cast<float>(wrist.y);
+  hand.wrist_pz = static_cast<float>(wrist.z);
+  hand.palm_px = static_cast<float>(wrist.x + palm_offset.x);
+  hand.palm_py = static_cast<float>(wrist.y + palm_offset.y);
+  hand.palm_pz = static_cast<float>(wrist.z + palm_offset.z);
+  hand.controller_qw = hand.wrist_qw = hand.palm_qw = static_cast<float>(q.w);
+  hand.controller_qx = hand.wrist_qx = hand.palm_qx = static_cast<float>(q.x);
+  hand.controller_qy = hand.wrist_qy = hand.palm_qy = static_cast<float>(q.y);
+  hand.controller_qz = hand.wrist_qz = hand.palm_qz = static_cast<float>(q.z);
+  hand.joint_count = xr_tracking::HAND_JOINT_COUNT_V2;
+  for (uint32_t i = 0; i < hand.joint_count; ++i) {
+    const auto& local_joint = neutral_offsets[i];
+    const V3d delta = q_rotate(q, {left ? -local_joint.x : local_joint.x, local_joint.y, local_joint.z});
+    auto& joint = hand.joints[i];
+    joint.joint_id = i;
+    joint.flags = 3u; // Position and orientation valid, without tracked bits.
+    joint.px = static_cast<float>(wrist.x + delta.x);
+    joint.py = static_cast<float>(wrist.y + delta.y);
+    joint.pz = static_cast<float>(wrist.z + delta.z);
+    joint.qw = hand.wrist_qw;
+    joint.qx = hand.wrist_qx;
+    joint.qy = hand.wrist_qy;
+    joint.qz = hand.wrist_qz;
+    joint.radius_m = i == 0 ? 0.018f : 0.008f;
+    joint.confidence = hand.confidence;
+  }
+  return hand;
+}
+
+void align_reacquired_hand_position(
+    xr_tracking::HandSideF32V2& hand,
+    const xr_runtime::RuntimeControllerSideStateV1& controller,
+    const override_controller::RuntimeControllerFallbackPoseState& pose) {
+  if (pose.blend_mode != override_controller::RuntimeControllerFallbackBlendMode::ExitBodyWrist ||
+      (hand.flags & xr_tracking::HAND_POSE_VALID) == 0u) return;
+  const float x = controller.position[0] - hand.controller_px;
+  const float y = controller.position[1] - hand.controller_py;
+  const float z = controller.position[2] - hand.controller_pz;
+  hand.controller_px += x;
+  hand.controller_py += y;
+  hand.controller_pz += z;
+  hand.palm_px += x;
+  hand.palm_py += y;
+  hand.palm_pz += z;
+  hand.wrist_px += x;
+  hand.wrist_py += y;
+  hand.wrist_pz += z;
+  for (uint32_t i = 0; i < std::min(hand.joint_count, xr_tracking::HAND_JOINT_COUNT_V2); ++i) {
+    hand.joints[i].px += x;
+    hand.joints[i].py += y;
+    hand.joints[i].pz += z;
+  }
+}
+
+void apply_body_wrist_hand_output(
+    xr_tracking::HandTrackingFrameF32V2& hands,
+    const xr_runtime::RuntimeControllerStateFrameV1& controllers,
+    const override_controller::RuntimeControllerSynthesisState& state,
+    const override_controller::BodyWristObservations& wrists, bool neutral_skeleton) {
+  using namespace xr_tracking;
+  align_reacquired_hand_position(hands.left, controllers.left, state.left.fallback_pose);
+  align_reacquired_hand_position(hands.right, controllers.right, state.right.fallback_pose);
+  const bool left = wrists.left && uses_body_wrist(controllers.left);
+  const bool right = wrists.right && uses_body_wrist(controllers.right);
+  if (!left && !right) return;
+  if (left) {
+    hands.left = body_wrist_hand(controllers.left, *wrists.left, state.left, true, neutral_skeleton);
+    hands.flags = (hands.flags & ~HAND_FLAG_LEFT_VALID) | (neutral_skeleton ? HAND_FLAG_LEFT_VALID : 0u);
+  }
+  if (right) {
+    hands.right = body_wrist_hand(controllers.right, *wrists.right, state.right, false, neutral_skeleton);
+    hands.flags = (hands.flags & ~HAND_FLAG_RIGHT_VALID) | (neutral_skeleton ? HAND_FLAG_RIGHT_VALID : 0u);
+  }
+
+  const bool left_valid = (hands.flags & HAND_FLAG_LEFT_VALID) != 0u;
+  const bool right_valid = (hands.flags & HAND_FLAG_RIGHT_VALID) != 0u;
+  const uint32_t side_flags = (left_valid ? hands.left.flags : 0u) | (right_valid ? hands.right.flags : 0u);
+  const uint32_t tracked = static_cast<uint32_t>(HandTrackingStatus::Tracking);
+  hands.hand_count = uint32_t(left_valid) + uint32_t(right_valid);
+  hands.confidence = std::max(left_valid ? hands.left.confidence : 0.0f,
+                              right_valid ? hands.right.confidence : 0.0f);
+  hands.flags &= ~HAND_FLAG_JOINTS_VALID;
+  if ((side_flags & HAND_JOINTS_VALID) != 0u) hands.flags |= HAND_FLAG_JOINTS_VALID;
+  if ((side_flags & (HAND_PINCH_VALID | HAND_GRAB_VALID)) == 0u) hands.flags &= ~HAND_FLAG_GESTURES_VALID;
+  const bool optical = (left_valid && hands.left.status == tracked) || (right_valid && hands.right.status == tracked);
+  hands.tracking_status = optical ? tracked : static_cast<uint32_t>(
+      hands.hand_count != 0 ? HandTrackingStatus::Degraded : HandTrackingStatus::Lost);
+}
+
 
 // Coordinate and orientation transform helpers live in coordinate_util.cpp.
 
@@ -2427,6 +2561,9 @@ struct BodyTrackerInputConfig {
   std::string udp_bind_host = "0.0.0.0";
   int udp_bind_port = 45676;
   double reattach_on_stale_ms = 1000.0;
+  bool use_controller_wrists = false;
+  float wrist_min_confidence = 0.60f;
+  bool filter_output_wrists = true;
 
   bool publish_runtime_shm = false;
   xr_runtime_adapter::AppTcpServer* runtime_tcp = nullptr;
@@ -2489,6 +2626,17 @@ class BodyTrackerInputThread {
   BodyTrackerInputSnapshot snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
     return snapshot_;
+  }
+
+  override_controller::BodyWristObservations wrist_observations(
+      int64_t now_ns, double max_age_ms, const RuntimeOriginSnapshot& origin) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!snapshot_.connected || wrist_origin_ready_ != origin.ready ||
+        wrist_origin_reset_counter_ != origin.origin_reset_counter ||
+        wrist_timestamp_ns_ > now_ns || is_age_stale(now_ns, wrist_timestamp_ns_, max_age_ms)) {
+      return {};
+    }
+    return wrist_observations_;
   }
 
   void set_origin_snapshot(RuntimeOriginSnapshot origin) {
@@ -2599,6 +2747,31 @@ class BodyTrackerInputThread {
       runtime_hmd = runtime_hmd_snapshot_;
     }
     apply_body_tracker_origin_transform(frame, origin);
+    const uint64_t wrist_timestamp_ns = cfg_.input == "shm" ? frame.timestamp_ns : now_ns;
+    override_controller::BodyWristObservations wrists;
+    if (cfg_.use_controller_wrists && wrist_timestamp_ns != 0 && wrist_timestamp_ns <= now_ns) {
+      for (uint32_t i = 0; i < frame.tracker_count; ++i) {
+        const auto& tracker = frame.trackers[i];
+        if (!is_wrist_role(tracker.role) ||
+            tracker.status != xr_tracking::BODY_TRACKER_STATUS_TRACKING ||
+            (tracker.flags & (xr_tracking::BODY_TRACKER_FLAG_ROLE_VALID |
+                              xr_tracking::BODY_TRACKER_FLAG_POSITION_VALID)) !=
+                (xr_tracking::BODY_TRACKER_FLAG_ROLE_VALID |
+                 xr_tracking::BODY_TRACKER_FLAG_POSITION_VALID) ||
+            !std::isfinite(tracker.confidence) || tracker.confidence <= 0.0f || tracker.confidence > 1.0f ||
+            tracker.confidence < cfg_.wrist_min_confidence ||
+            !std::isfinite(tracker.pose.px) || !std::isfinite(tracker.pose.py) ||
+            !std::isfinite(tracker.pose.pz)) {
+          continue;
+        }
+        auto& wrist = tracker.role == xr_tracking::BODY_TRACKER_ROLE_LEFT_WRIST
+            ? wrists.left : wrists.right;
+        if (!wrist || tracker.confidence > wrist->confidence) {
+          wrist = override_controller::BodyWristObservation{
+              {tracker.pose.px, tracker.pose.py, tracker.pose.pz}, tracker.confidence, wrist_timestamp_ns};
+        }
+      }
+    }
     stability_filter_.configure(cfg_.stability_gate);
     stability_filter_.set_runtime_hmd_position(
         runtime_hmd.valid
@@ -2617,6 +2790,10 @@ class BodyTrackerInputThread {
     }
 
     std::lock_guard<std::mutex> lock(mu_);
+    wrist_observations_ = std::move(wrists);
+    wrist_timestamp_ns_ = wrist_timestamp_ns <= now_ns ? static_cast<int64_t>(wrist_timestamp_ns) : 0;
+    wrist_origin_ready_ = origin.ready;
+    wrist_origin_reset_counter_ = origin.origin_reset_counter;
     snapshot_.enabled = true;
     snapshot_.connected = true;
     snapshot_.runtime_output_enabled = output_enabled();
@@ -2657,6 +2834,11 @@ class BodyTrackerInputThread {
     publish_runtime(std::move(*frame), now_ns);
   }
 
+  static bool is_wrist_role(uint32_t role) {
+    return role == xr_tracking::BODY_TRACKER_ROLE_LEFT_WRIST ||
+           role == xr_tracking::BODY_TRACKER_ROLE_RIGHT_WRIST;
+  }
+
   void publish_runtime(xr_tracking::BodyTrackerSetFrameF32V1 frame, uint64_t now_ns) {
     if (cfg_.publish_runtime_shm && !runtime_publisher_) {
       xr_tracking::BodyTrackerSetShmPublisherConfig cfg;
@@ -2682,6 +2864,14 @@ class BodyTrackerInputThread {
       frame.sequence = ++snapshot_.runtime_published;
     }
     frame.space = xr_tracking::BODY_TRACKER_SPACE_RUNTIME_HMD;
+    if (cfg_.filter_output_wrists) {
+      auto* end = frame.trackers + frame.tracker_count;
+      auto* kept = std::remove_if(frame.trackers, end, [](const auto& tracker) {
+        return is_wrist_role(tracker.role);
+      });
+      std::fill(kept, end, xr_tracking::BodyTrackerF32V1{});
+      frame.tracker_count = static_cast<uint32_t>(kept - frame.trackers);
+    }
     frame.flags &= ~xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
     if (frame.tracker_count != 0) frame.flags |= xr_tracking::BODY_TRACKER_FRAME_HAS_TRACKERS;
     if (runtime_publisher_) runtime_publisher_->publish(frame);
@@ -2720,6 +2910,10 @@ class BodyTrackerInputThread {
   std::thread thread_;
   mutable std::mutex mu_;
   BodyTrackerInputSnapshot snapshot_;
+  override_controller::BodyWristObservations wrist_observations_;
+  int64_t wrist_timestamp_ns_ = 0;
+  uint64_t wrist_origin_reset_counter_ = 0;
+  bool wrist_origin_ready_ = false;
   RuntimeOriginSnapshot origin_snapshot_;
   RuntimeHmdPoseSnapshot runtime_hmd_snapshot_;
   jitter_filter::RuntimeJitterFilter runtime_jitter_filter_{};
@@ -2833,7 +3027,9 @@ void write_controller_position_diagnostics(
       << prefix << "_imu_has_anchor=" << (state.has_position_anchor ? "yes" : "no")
       << prefix << "_imu_loss_age_ms=" << loss_age_ms
       << prefix << "_imu_reacquire_blend=" << (state.reacquire_blend_active ? "yes" : "no")
-      << prefix << "_hmd_relative_blend=" << static_cast<int>(state.hmd_relative_blend_mode)
+      << prefix << "_hmd_relative_blend="
+      << (state.fallback_pose.blend_mode == override_controller::RuntimeControllerFallbackBlendMode::EnterHmdRelative ? 1 :
+          state.fallback_pose.blend_mode == override_controller::RuntimeControllerFallbackBlendMode::ExitHmdRelative ? 2 : 0)
       << prefix << "_imu_acceleration_dp=(" << state.acceleration_position_delta_m[0] << ","
       << state.acceleration_position_delta_m[1] << "," << state.acceleration_position_delta_m[2] << ")"
       << prefix << "_raw_optical_status=" << (raw_optical ? raw_optical->status : 0u)
@@ -2986,6 +3182,9 @@ int main(int argc, char** argv) {
 
   std::string runtime_controller_mode = "hand_tracking_with_button_priority";
   std::string runtime_controller_lost_hand_pose_fallback = "pose_invalid";
+  bool runtime_controller_body_wrist_fallback = true;
+  double runtime_controller_body_wrist_min_confidence = 0.60;
+  bool runtime_controller_body_wrist_neutral_skeleton = true;
   double runtime_controller_hmd_relative_enter_blend_ms = 150.0;
   double runtime_controller_hmd_relative_exit_blend_ms = 250.0;
   std::string runtime_controller_left_orientation_source = "HAND_TRACKING_BACKEND";
@@ -3100,6 +3299,7 @@ int main(int argc, char** argv) {
   double body_trackers_reattach_on_stale_ms = 1000.0;
 
   bool publish_runtime_body_trackers_shm = false;
+  bool runtime_body_tracker_filter_wrists = true;
   bool no_runtime_body_trackers_unlink = false;
   std::string runtime_body_trackers_registry = xr_runtime::default_runtime_tracking_registry_path();
   std::string runtime_body_trackers_stream = "runtime_body_trackers";
@@ -3649,6 +3849,18 @@ int main(int argc, char** argv) {
 
   app.add_option("--body-trackers-input", body_trackers_input,
                  "Optional external body tracker set input: none, shm, or udp");
+  app.add_option("--runtime-controller-body-wrist-fallback", runtime_controller_body_wrist_fallback,
+                 "Use fresh body tracker wrists for lost optical controller positions")
+      ->envname("RUNTIME_CONTROLLER_BODY_WRIST_FALLBACK");
+  app.add_option("--runtime-controller-body-wrist-min-confidence", runtime_controller_body_wrist_min_confidence,
+                 "Minimum accepted body wrist confidence in [0, 1]")
+      ->envname("RUNTIME_CONTROLLER_BODY_WRIST_MIN_CONFIDENCE")->check(CLI::Range(0.0, 1.0));
+  app.add_option("--runtime-controller-body-wrist-neutral-skeleton", runtime_controller_body_wrist_neutral_skeleton,
+                 "Publish neutral hand joints while the body wrist fallback is active")
+      ->envname("RUNTIME_CONTROLLER_BODY_WRIST_NEUTRAL_SKELETON");
+  app.add_option("--runtime-body-tracker-filter-wrists", runtime_body_tracker_filter_wrists,
+                 "Remove wrist roles from the runtime body tracker outputs")
+      ->envname("RUNTIME_BODY_TRACKER_FILTER_WRISTS");
   app.add_option("--spatial-proxy-mesh-input", spatial_proxy_mesh_input,
                  "Optional spatial live-depth-grid/proxy-mesh input: none, shm, or udp");
   app.add_option("--spatial-proxy-mesh-registry", spatial_proxy_mesh_registry,
@@ -5090,6 +5302,9 @@ int main(int argc, char** argv) {
       cfg.udp_bind_host = body_trackers_udp_bind_host;
       cfg.udp_bind_port = body_trackers_udp_bind_port;
       cfg.reattach_on_stale_ms = body_trackers_reattach_on_stale_ms;
+      cfg.use_controller_wrists = runtime_controller_body_wrist_fallback && !controller_6dof_enabled;
+      cfg.wrist_min_confidence = static_cast<float>(runtime_controller_body_wrist_min_confidence);
+      cfg.filter_output_wrists = runtime_body_tracker_filter_wrists;
       cfg.publish_runtime_shm = publish_runtime_body_trackers_shm;
       cfg.runtime_tcp = publish_runtime_body_trackers_tcp ? app_tcp_server.get() : nullptr;
       cfg.runtime_registry = runtime_body_trackers_registry;
@@ -5258,6 +5473,8 @@ int main(int argc, char** argv) {
     runtime_controller_synthesis_cfg.left_hand_gestures_enabled = effective_runtime_left_hand_gestures_enabled;
     runtime_controller_synthesis_cfg.right_hand_gestures_enabled = effective_runtime_right_hand_gestures_enabled;
     runtime_controller_synthesis_cfg.lost_hand_pose_fallback = runtime_controller_lost_hand_pose_fallback_value;
+    runtime_controller_synthesis_cfg.body_wrist_fallback_enabled =
+        runtime_controller_body_wrist_fallback && body_tracker_thread != nullptr;
     runtime_controller_synthesis_cfg.hmd_relative_enter_blend_ms = static_cast<float>(
         std::max(0.0, runtime_controller_hmd_relative_enter_blend_ms));
     runtime_controller_synthesis_cfg.hmd_relative_exit_blend_ms = static_cast<float>(
@@ -6432,9 +6649,14 @@ int main(int argc, char** argv) {
         }
 
         const RuntimeOriginSnapshot runtime_origin_snapshot = origin_state.snapshot();
+        override_controller::BodyWristObservations body_wrists;
         if (body_tracker_thread) {
           body_tracker_thread->set_origin_snapshot(runtime_origin_snapshot);
           body_tracker_thread->set_runtime_hmd_snapshot(runtime_hmd_snapshot);
+          if (runtime_controller_synthesis_cfg.body_wrist_fallback_enabled && frame.hmd_valid) {
+            body_wrists = body_tracker_thread->wrist_observations(
+                xr_runtime::now_ns(), max_hand_age_ms, runtime_origin_snapshot);
+          }
         }
         if (spatial_proxy_mesh_thread) {
           spatial_proxy_mesh_thread->set_origin_snapshot(runtime_origin_snapshot);
@@ -6588,10 +6810,26 @@ int main(int argc, char** argv) {
           }
         }
 
+        const auto mercury_tracking = [&](bool left) {
+          if (frame.hand_v2.sequence != 0) {
+            const auto& side = left ? frame.hand_v2.left : frame.hand_v2.right;
+            const auto side_flag = left ? xr_runtime::HAND_FLAG_LEFT_VALID : xr_runtime::HAND_FLAG_RIGHT_VALID;
+            return side.status == 1u && side.handedness == (left ? 1u : 2u) &&
+                side.confidence > 0.0f && (frame.hand_v2.flags & side_flag) != 0u &&
+                runtime_hand_side_valid_for_frame(side);
+          }
+          const auto& side = left ? frame.hand.left : frame.hand.right;
+          return frame.hand_valid && side.status == 1u &&
+              (side.flags & xr_runtime::HAND_POSE_VALID) != 0u;
+        };
+        const bool block_left_body_wrist_gestures = body_wrists.left && !mercury_tracking(true);
+        const bool block_right_body_wrist_gestures = body_wrists.right && !mercury_tracking(false);
         const bool frame_runtime_left_hand_gestures_enabled =
-            effective_runtime_left_hand_gestures_enabled && !runtime_only_gesture_input_blocked;
+            effective_runtime_left_hand_gestures_enabled && !runtime_only_gesture_input_blocked &&
+            !block_left_body_wrist_gestures;
         const bool frame_runtime_right_hand_gestures_enabled =
-            effective_runtime_right_hand_gestures_enabled && !runtime_only_gesture_input_blocked;
+            effective_runtime_right_hand_gestures_enabled && !runtime_only_gesture_input_blocked &&
+            !block_right_body_wrist_gestures;
 
         const bool runtime_derived_gestures_have_fresh_tracking =
             !runtime_derived_gestures_require_fresh_tracking || runtime_visual_hand_tracking_fresh;
@@ -6806,6 +7044,8 @@ int main(int argc, char** argv) {
         std::optional<xr_runtime::HandTrackingFrameF32V2> controller_hand_for_log;
         const bool publish_controller_state =
             runtime_controller_state_publisher || runtime_controller_state_udp_publisher || app_tcp_frame;
+        const bool compose_body_wrist_hands = runtime_controller_synthesis_cfg.body_wrist_fallback_enabled &&
+            !controller_6dof_enabled && (runtime_hand_publisher || runtime_hand_udp_publisher);
         if (publish_controller_state && controller_6dof_enabled) {
           const auto& snapshot = *controller_snapshot_for_frame;
           controller_state_for_log = override_controller::compose_6dof_controller_state(
@@ -6818,7 +7058,7 @@ int main(int argc, char** argv) {
               controller_6dof_poses,
               snapshot.runtime_profile);
           controller_state_for_log_available = true;
-        } else if (publish_controller_state) {
+        } else if (publish_controller_state || compose_body_wrist_hands) {
           poll_runtime_controller_imu_control(std::chrono::steady_clock::now());
 
           std::optional<xr_runtime::HandTrackingFrameF32V2> runtime_controller_hand;
@@ -6867,12 +7107,16 @@ int main(int argc, char** argv) {
               static_cast<float>(
                   runtime_controller_imu_control_snapshot.gravity_magnitude),
               &runtime_controller_synthesis_state,
-              &controller_imu_history);
+              &controller_imu_history, body_wrists);
           if (simple_gestures) {
             simple_controller_gestures.publish(runtime_controller_state);
             simple_touchpad.publish(runtime_controller_state);
           }
           if (emulation_controller) {
+            if (runtime_controller_hand) {
+              if (block_left_body_wrist_gestures) runtime_controller_hand->left.status = 0u;
+              if (block_right_body_wrist_gestures) runtime_controller_hand->right.status = 0u;
+            }
             const xr_runtime_adapter::emulation::Vec3 gesture_viewer{
                 frame.hmd.px, frame.hmd.py, frame.hmd.pz};
             emulation_controller->apply(runtime_controller_state,
@@ -6901,13 +7145,15 @@ int main(int argc, char** argv) {
           }
           if (emulation_yaw) {
             xr_runtime_adapter::emulation::apply_pose_yaw_offset(
-                runtime_controller_state, presentation_yaw_config, left_gesture_yaw, right_gesture_yaw);
+                runtime_controller_state, presentation_yaw_config,
+                left_gesture_yaw && !uses_body_wrist(runtime_controller_state.left),
+                right_gesture_yaw && !uses_body_wrist(runtime_controller_state.right));
           }
           controller_state_for_log = runtime_controller_state;
           controller_state_for_log_available = true;
           controller_hand_for_log = runtime_controller_hand;
         }
-        if (controller_state_for_log_available) {
+        if (publish_controller_state && controller_state_for_log_available) {
           if (runtime_controller_state_publisher) {
             runtime_controller_state_publisher->publish(controller_state_for_log);
           }
@@ -6930,6 +7176,10 @@ int main(int argc, char** argv) {
             runtime_hand = runtime_hand_frame_v2_from_v1(output_frame.hand, frame.read_timestamp_ns);
           } else {
             runtime_hand = runtime_no_hands_frame_v2(frame.read_timestamp_ns, frame.hand_v2.reset_counter != 0 ? frame.hand_v2.reset_counter : frame.hand.reset_counter);
+          }
+          if (controller_state_for_log_available) {
+            apply_body_wrist_hand_output(runtime_hand, controller_state_for_log,
+                runtime_controller_synthesis_state, body_wrists, runtime_controller_body_wrist_neutral_skeleton);
           }
 
           const bool runtime_hand_has_hands =

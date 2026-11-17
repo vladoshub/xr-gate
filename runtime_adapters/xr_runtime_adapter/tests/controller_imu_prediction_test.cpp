@@ -2535,7 +2535,80 @@ void smooth_yaw_uses_elapsed_time_and_requires_observable_timed_poses() {
           "initial vertical pose established an arbitrary yaw frame");
 }
 
+void body_wrist_fallback_uses_calibrated_prediction_and_reacquires(bool calibrated) {
+  Scenario s;
+  s.state.left.acceleration_world_yaw_valid = calibrated;
+  s.cfg.left_imu_motion.hold_lost_ms = 30;
+  s.cfg.left_imu_motion.predict_lost_ms = 70;
+  s.cfg.left_imu_motion.reacquire_blend_ms = 180;
+  s.cfg.left_hand_gestures_enabled = true;
+  s.hand.left.flags |= HAND_JOINTS_VALID | HAND_PINCH_VALID;
+  s.hand.left.joint_count = 21;
+  s.hand.left.pinch_strength = 1.0f;
+  s.hand.left.pinch_active = 1;
+  s.hand.left.controller_px = 0.3f;
+  s.hand.left.wrist_px = 0.25f;
+  s.input.left.buttons = CONTROLLER_BUTTON_A;
+  HmdPoseF64V1 head{};
+  head.flags = HMD_FLAG_POSE_VALID;
+  head.tracking_status = 2;
+  head.qw = head.qy = std::sqrt(0.5);
+
+  auto step = [&](int ms, bool optical) {
+    const uint64_t now = s.prepare(ms);
+    s.hand.left.status = optical ? 1u : 2u;
+    const BodyWristObservations wrists{BodyWristObservation{{1.0f, 1.0f, -0.3f}, 0.9f, now},
+                                       std::nullopt};
+    return compose_runtime_controller_state(s.sequence, now, s.cfg, s.hand, s.hand,
+        s.input, head, 9.81f, &s.state, nullptr, wrists).left;
+  };
+
+  const auto optical = step(0, true);
+  require((optical.source_mask & RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) == 0u,
+          "a wrist overrode accepted optical tracking");
+  require((optical.buttons & CONTROLLER_BUTTON_TRIGGER) != 0u,
+          "body wrist availability blocked an observed gesture");
+  if (calibrated) {
+    const auto hold = step(10, false);
+    require((hold.source_mask & RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE) != 0u &&
+                (hold.source_mask & RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) == 0u,
+            "body wrist preempted calibrated IMU hold");
+    require((hold.buttons & CONTROLLER_BUTTON_TRIGGER) == 0u,
+            "a lost optical hand still triggered gestures during IMU hold");
+    const auto prediction = step(50, false);
+    require((prediction.source_mask & RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION) != 0u &&
+                (prediction.source_mask & RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) == 0u,
+            "body wrist preempted calibrated IMU prediction");
+  }
+
+  const int fallback_ms = calibrated ? 110 : 10;
+  const auto start = step(fallback_ms, false);
+  require((start.source_mask & RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) != 0u,
+          "body wrist required calibration or failed to start after timeout");
+  near(start.position[0], 0.3f, "wrist transition did not start from the published pose");
+  near(start.orientation_xyzw[1], std::sqrt(0.5f), "fallback orientation did not follow the HMD");
+  require((start.buttons & CONTROLLER_BUTTON_A) != 0u &&
+              (start.buttons & CONTROLLER_BUTTON_TRIGGER) == 0u,
+          "wrist fallback swallowed physical input or emitted a stale gesture");
+  near(step(fallback_ms + 90, false).position[0], 0.65f, "enter blend did not interpolate");
+  const auto body = step(fallback_ms + 180, false);
+  near(body.position[0], 1.0f, "wrist blend did not reach the body observation");
+  near(body.position[2], -0.35f, "wrist-to-grip offset did not rotate with the HMD");
+
+  s.hand.left.controller_px = 0.45f;
+  const int reacquire_ms = fallback_ms + 200;
+  const auto returning = step(reacquire_ms, true);
+  require((returning.source_mask & RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) == 0u &&
+              (returning.buttons & CONTROLLER_BUTTON_TRIGGER) != 0u,
+          "reacquired optics did not immediately resume real gestures");
+  near(returning.position[0], 1.0f, "reacquire started away from the last published wrist position");
+  near(step(reacquire_ms + 90, true).position[0], 0.725f, "reacquire did not blend towards Mercury");
+  near(step(reacquire_ms + 180, true).position[0], 0.45f, "reacquire did not reach Mercury");
+}
+
 int main() {
+  body_wrist_fallback_uses_calibrated_prediction_and_reacquires(true);
+  body_wrist_fallback_uses_calibrated_prediction_and_reacquires(false);
   constant_force_bias_cannot_reverse_a_correct_frame();
   opposite_heading_requires_sustained_new_evidence();
   opposite_heading_requires_sustained_new_evidence(true);

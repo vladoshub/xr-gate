@@ -43,8 +43,9 @@ def packet(kind, sequence, timestamp, payload):
 def body_packet(sequence, timestamp, trackers):
     payload_size = BODY_SET.size + 32 * BODY_TRACKER.size
     payload = BODY_SET.pack(1, payload_size, sequence, timestamp, timestamp, 0, 1, 7, bool(trackers), len(trackers))
-    for tracker_id, stable_hash, status, x in trackers:
-        payload += BODY_TRACKER.pack(0, 2, status, 127, stable_hash, 0, 0.75, 0.5, 0, 0,
+    for tracker_id, stable_hash, status, x, *attributes in trackers:
+        role, flags, confidence = attributes or (2, 127, 0.75)
+        payload += BODY_TRACKER.pack(0, role, status, flags, stable_hash, 0, confidence, 0.5, 0, 0,
                                      x, 1.0, -0.3, 0.5, -0.5, 0.5, -0.5,
                                      0.125, 0.25, 0.375, -0.125, -0.25, -0.375, tracker_id)
     payload += bytes((32 - len(trackers)) * BODY_TRACKER.size)
@@ -174,6 +175,58 @@ def runtime(enabled=True, extra=(), default_mode=False, tracking_source=True):
 
 
 class AppTcpTest(unittest.TestCase):
+    def test_body_wrist_threshold_and_output_modes(self):
+        wrist_source = 1 << 11
+        synthetic_joints = 1 << 6
+        role_and_position_valid = (1 << 5) | (1 << 1)
+        for fallback, neutral, filter_wrists, options in (
+                (True, True, True, []),
+                (True, False, False, ["--runtime-controller-body-wrist-neutral-skeleton", "0",
+                                      "--runtime-body-tracker-filter-wrists", "0"]),
+                (False, False, True, ["--runtime-controller-body-wrist-fallback", "0"])):
+            with self.subTest(fallback=fallback, neutral=neutral, filter_wrists=filter_wrists):
+                body_port = free_port(socket.SOCK_DGRAM)
+                extra = ["--body-trackers-input", "udp", "--body-trackers-udp-bind-host", "127.0.0.1",
+                         "--body-trackers-udp-bind-port", str(body_port), "--app-tcp-body-trackers",
+                         "--runtime-controller-body-wrist-min-confidence", "0.80", *options]
+                with runtime(extra=extra, default_mode=True) as (_, source, port):
+                    client = Client(port)
+                    try:
+                        source.hmd_quaternion = (0.707106781, 0.0, 0.707106781, 0.0)
+                        client.frame(lambda f: f["hands"] and f["hands"]["left"]["status"] == 1)
+                        source.visible = False
+                        client.frame(lambda f: f["hands"] and f["hands"]["left"]["status"] != 1)
+                        waist = (b"waist", 1, 2, 0.25)
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                            for seq, confidence in ((1, 0.75), (2, 0.91)):
+                                wrist = (b"left-wrist", 2, 2, 0.5, 14, role_and_position_valid, confidence)
+                                sock.sendto(body_packet(seq, time.monotonic_ns(), [wrist, waist]),
+                                            ("127.0.0.1", body_port))
+                                observed = client.frame(lambda f: f.get("body_trackers") and
+                                                        f["body_trackers"]["sequence"] >= seq)
+                                self.assertEqual([t["role"] for t in observed["body_trackers"]["trackers"]],
+                                                 [2] if filter_wrists else [14, 2])
+                                if seq == 1 or not fallback:
+                                    self.assertEqual(observed["controllers"]["left"]["source_mask"] & wrist_source, 0)
+                        if fallback:
+                            tracked = client.frame(lambda f: f["controllers"]["left"]["source_mask"] & wrist_source)
+                            controller = tracked["controllers"]["left"]
+                            hand = tracked["hands"]["left"]
+                            self.assertAlmostEqual(controller["orientation_xyzw"][1], 0.707106781, places=5)
+                            self.assertEqual(int(controller["buttons"]), 0)
+                            self.assertFalse(hand["pinch_active"] or hand["grab_active"])
+                            self.assertEqual(bool(hand["flags"] & synthetic_joints), neutral)
+                            self.assertEqual(len(hand["joints"]), 21 if neutral else 0)
+                            if neutral:
+                                self.assertTrue(all(joint["flags"] == 3 for joint in hand["joints"]))
+                        source.visible = True
+                        restored = client.frame(lambda f: f["hands"]["left"]["status"] == 1)
+                        self.assertEqual(restored["controllers"]["left"]["source_mask"] & wrist_source, 0)
+                        self.assertAlmostEqual(restored["controllers"]["left"]["position"][0],
+                                               restored["hands"]["left"]["controller"]["position"][0], places=5)
+                    finally:
+                        client.close()
+
     def test_body_trackers_tcp_opt_in(self):
         tracker = (b"waist", 9007199254740997, 2, 0.25)
         body_port = free_port(socket.SOCK_DGRAM)

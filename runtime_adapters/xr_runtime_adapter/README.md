@@ -508,6 +508,33 @@ PUBLISH_RUNTIME_BODY_TRACKERS=1
 
 For TCP publication set `RUNTIME_APP_TCP=1` and `RUNTIME_APP_TCP_BODY_TRACKERS=1`.
 
+### Controller fallback from body wrists
+
+A body backend can send `LEFT_WRIST` (role 14) and `RIGHT_WRIST` (role 15)
+in the existing `BODY_TRACKER_SET_F32_V1` input. Set `TRACKING`, `ROLE_VALID`,
+`POSITION_VALID`, and a positive confidence in [0, 1]. Only XYZ is required.
+Publish wrist positions in the same tracking space as the other body trackers.
+
+The adapter evaluates each wrist independently. Accepted optical tracking has
+priority, followed by the active hold or prediction of an aligned controller
+IMU. A fresh qualifying body wrist then provides controller position while the
+controller faces the valid HMD orientation. Position blends in and back to the
+optical controller over 180 ms. The adapter uses a wrist-to-grip offset when it
+has learned one from an optical hand. Freshness uses `--max-hand-age-ms` and
+the SHM frame time or UDP receipt time.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `RUNTIME_CONTROLLER_BODY_WRIST_FALLBACK` | `1` | Use qualifying body wrist poses during optical loss. |
+| `RUNTIME_CONTROLLER_BODY_WRIST_MIN_CONFIDENCE` | `0.60` | Minimum wrist confidence. |
+| `RUNTIME_CONTROLLER_BODY_WRIST_NEUTRAL_SKELETON` | `1` | Publish a neutral synthetic hand during fallback. Set to `0` for controller pose only. |
+| `RUNTIME_BODY_TRACKER_FILTER_WRISTS` | `1` | Omit the two wrist roles from the outgoing body SHM and TCP streams. Set to `0` to publish them. |
+
+The neutral joints are generated at runtime output, with gesture input released
+on the affected side during optical loss. Physical controller input remains
+available. The Monado driver accepts the marked synthetic joints when
+`XR_MONADO_HAND_TRACKING=1`.
+
 Optional body tracker stability gate:
 
 ```bash

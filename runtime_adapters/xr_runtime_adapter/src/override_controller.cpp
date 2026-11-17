@@ -2387,6 +2387,50 @@ void mark_pose_invalid(xr_runtime::RuntimeControllerSideStateV1& out) {
   out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID;
 }
 
+void remember_wrist_to_grip_offset(const xr_runtime::HandSideF32V2& hand,
+                                  RuntimeControllerImuSideRuntimeState& state) {
+  if ((hand.flags & xr_runtime::HAND_JOINTS_VALID) == 0u || hand.joint_count == 0) return;
+  const float wrist_to_grip[] = {hand.controller_px - hand.wrist_px,
+                                hand.controller_py - hand.wrist_py,
+                                hand.controller_pz - hand.wrist_pz};
+  const float grip_q[] = {hand.controller_qx, hand.controller_qy, hand.controller_qz, hand.controller_qw};
+  if (!finite_v3(wrist_to_grip) || !finite_q_xyzw(grip_q) || !nonzero_q_xyzw(grip_q)) return;
+  q_rotate(q_conj(q_from_xyzw(grip_q)), wrist_to_grip, state.wrist_to_grip_offset_m);
+}
+
+void fill_pose_from_body_wrist(xr_runtime::RuntimeControllerSideStateV1& out,
+                               const BodyWristObservation& wrist,
+                               const float head_q_xyzw[4],
+                               const RuntimeControllerImuSideRuntimeState* state) {
+  const Qf head_q = q_from_xyzw(head_q_xyzw);
+  float grip_offset[3]{};
+  if (state) q_rotate(head_q, state->wrist_to_grip_offset_m, grip_offset);
+  for (size_t axis = 0; axis < 3; ++axis) {
+    out.position[axis] = wrist.position_m[axis] + grip_offset[axis];
+    out.linear_velocity[axis] = 0.0f;
+    out.angular_velocity[axis] = 0.0f;
+  }
+  set_orientation_xyzw(out, head_q);
+  out.last_pose_ns = wrist.timestamp_ns;
+  out.flags &= ~(xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID |
+                 xr_runtime::RUNTIME_CONTROLLER_POSE_STALE |
+                 xr_runtime::RUNTIME_CONTROLLER_HMD_RELATIVE);
+  out.flags |= xr_runtime::RUNTIME_CONTROLLER_CONNECTED |
+               xr_runtime::RUNTIME_CONTROLLER_POSE_VALID |
+               xr_runtime::RUNTIME_CONTROLLER_TRACKED |
+               xr_runtime::RUNTIME_CONTROLLER_SYNTHETIC_POSE;
+  out.source_mask &= ~(xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_POSITION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_HAND_ORIENTATION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_HMD_RELATIVE_POSE |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_ORIENTATION |
+                       xr_runtime::RUNTIME_CONTROLLER_SOURCE_CONTROLLER_IMU_POSITION_PREDICTION);
+  out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_BODY_WRIST |
+                     xr_runtime::RUNTIME_CONTROLLER_SOURCE_SYNTHETIC_POSE |
+                     xr_runtime::RUNTIME_CONTROLLER_SOURCE_STATIC_ORIENTATION;
+}
+
 bool should_use_lost_hand_hmd_relative_fallback(
     LostHandPoseFallbackMode mode,
     const xr_runtime::ControllerDeviceStateV3* controller_side) {
@@ -2486,144 +2530,94 @@ bool runtime_controller_pose_is_final_hmd_relative(
   return (out.source_mask & prediction_sources) == 0u;
 }
 
-void clear_hmd_relative_pose_blend(
-    RuntimeControllerImuSideRuntimeState& state) {
-  state.hmd_relative_blend_mode =
-      RuntimeControllerHmdRelativeBlendMode::None;
-  state.hmd_relative_blend_start_ns = 0;
+void remember_published_pose(const xr_runtime::RuntimeControllerSideStateV1& out,
+                             RuntimeControllerFallbackSource source,
+                             RuntimeControllerFallbackPoseState& state) {
+  state.last_pose_valid = runtime_controller_pose_is_valid(out);
+  state.last_source = source;
+  if (!state.last_pose_valid) return;
+
+  std::copy_n(out.position, 3, state.last_position_m);
+  std::copy_n(out.orientation_xyzw, 4, state.last_orientation_xyzw);
+  std::copy_n(out.linear_velocity, 3, state.last_linear_velocity_mps);
+  std::copy_n(out.angular_velocity, 3, state.last_angular_velocity_rad_s);
 }
 
-void remember_hmd_relative_published_pose(
-    const xr_runtime::RuntimeControllerSideStateV1& out,
-    bool is_hmd_relative,
-    RuntimeControllerImuSideRuntimeState& state) {
-  if (!runtime_controller_pose_is_valid(out)) {
-    state.hmd_relative_last_published_pose_valid = false;
-    state.hmd_relative_last_published_pose_is_hmd_relative = false;
-    return;
-  }
-
-  state.hmd_relative_last_published_pose_valid = true;
-  state.hmd_relative_last_published_pose_is_hmd_relative = is_hmd_relative;
-  std::copy(std::begin(out.position), std::end(out.position),
-            state.hmd_relative_last_published_position_m);
-  std::copy(std::begin(out.orientation_xyzw),
-            std::end(out.orientation_xyzw),
-            state.hmd_relative_last_published_orientation_xyzw);
-  std::copy(std::begin(out.linear_velocity),
-            std::end(out.linear_velocity),
-            state.hmd_relative_last_published_linear_velocity_mps);
-  std::copy(std::begin(out.angular_velocity),
-            std::end(out.angular_velocity),
-            state.hmd_relative_last_published_angular_velocity_rad_s);
+void start_fallback_pose_blend(RuntimeControllerFallbackBlendMode mode,
+                               uint64_t timestamp_ns,
+                               RuntimeControllerFallbackPoseState& state) {
+  state.blend_mode = mode;
+  state.blend_start_ns = timestamp_ns;
+  std::copy_n(state.last_position_m, 3, state.from_position_m);
+  std::copy_n(state.last_orientation_xyzw, 4, state.from_orientation_xyzw);
+  std::copy_n(state.last_linear_velocity_mps, 3, state.from_linear_velocity_mps);
+  std::copy_n(state.last_angular_velocity_rad_s, 3, state.from_angular_velocity_rad_s);
 }
 
-void start_hmd_relative_pose_blend(
-    RuntimeControllerHmdRelativeBlendMode mode,
-    uint64_t timestamp_ns,
-    RuntimeControllerImuSideRuntimeState& state) {
-  state.hmd_relative_blend_mode = mode;
-  state.hmd_relative_blend_start_ns = timestamp_ns;
-  std::copy(std::begin(state.hmd_relative_last_published_position_m),
-            std::end(state.hmd_relative_last_published_position_m),
-            state.hmd_relative_blend_from_position_m);
-  std::copy(std::begin(state.hmd_relative_last_published_orientation_xyzw),
-            std::end(state.hmd_relative_last_published_orientation_xyzw),
-            state.hmd_relative_blend_from_orientation_xyzw);
-  std::copy(std::begin(state.hmd_relative_last_published_linear_velocity_mps),
-            std::end(state.hmd_relative_last_published_linear_velocity_mps),
-            state.hmd_relative_blend_from_linear_velocity_mps);
-  std::copy(std::begin(state.hmd_relative_last_published_angular_velocity_rad_s),
-            std::end(state.hmd_relative_last_published_angular_velocity_rad_s),
-            state.hmd_relative_blend_from_angular_velocity_rad_s);
-}
-
-void apply_hmd_relative_pose_blend(
-    xr_runtime::RuntimeControllerSideStateV1& out,
-    const RuntimeControllerSynthesisConfig& cfg,
-    uint64_t timestamp_ns,
-    bool real_optical_pose_available,
-    RuntimeControllerImuSideRuntimeState* state) {
-  if (state == nullptr) return;
+void apply_fallback_pose_blend(xr_runtime::RuntimeControllerSideStateV1& out,
+                              const RuntimeControllerSynthesisConfig& cfg,
+                              uint64_t timestamp_ns,
+                              bool real_optical_pose_available,
+                              RuntimeControllerFallbackPoseState& state) {
+  using Mode = RuntimeControllerFallbackBlendMode;
+  using Source = RuntimeControllerFallbackSource;
+  constexpr float kBodyWristBlendMs = 180.0f;
 
   const bool target_valid = runtime_controller_pose_is_valid(out);
-  const bool target_hmd_relative =
-      runtime_controller_pose_is_final_hmd_relative(out);
+  const bool target_wrist = (out.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) != 0u;
+  const bool target_hmd = runtime_controller_pose_is_final_hmd_relative(out);
+  const bool target_optical = real_optical_pose_available && target_valid && !target_hmd && !target_wrist;
+  const Source target_source = target_wrist ? Source::BodyWrist
+      : target_hmd ? Source::HmdRelative : Source::None;
 
-  bool interrupted = false;
-  if (state->hmd_relative_blend_mode ==
-          RuntimeControllerHmdRelativeBlendMode::Enter &&
-      !target_hmd_relative) {
-    // Input/controller/HMD permission disappeared, or optical tracking
-    // returned. Publish the newly selected target immediately.
-    clear_hmd_relative_pose_blend(*state);
-    interrupted = true;
-  } else if (state->hmd_relative_blend_mode ==
-                 RuntimeControllerHmdRelativeBlendMode::Exit &&
-             (!real_optical_pose_available || !target_valid ||
-              target_hmd_relative)) {
-    // Optical tracking disappeared during exit. compose_side has already
-    // selected either the currently allowed HMD-relative fallback or INVALID.
-    clear_hmd_relative_pose_blend(*state);
-    interrupted = true;
+  const bool hmd_interrupted = (state.blend_mode == Mode::EnterHmdRelative && !target_hmd) ||
+      (state.blend_mode == Mode::ExitHmdRelative && !target_optical);
+  if (hmd_interrupted ||
+      (state.blend_mode == Mode::EnterBodyWrist && !target_wrist) ||
+      (state.blend_mode == Mode::ExitBodyWrist && (!target_valid || target_wrist || target_hmd))) {
+    state.blend_mode = Mode::None;
   }
 
-  if (!interrupted &&
-      state->hmd_relative_blend_mode ==
-          RuntimeControllerHmdRelativeBlendMode::None &&
-      target_valid && state->hmd_relative_last_published_pose_valid) {
-    if (target_hmd_relative &&
-        !state->hmd_relative_last_published_pose_is_hmd_relative &&
-        cfg.hmd_relative_enter_blend_ms > 0.0f) {
-      start_hmd_relative_pose_blend(
-          RuntimeControllerHmdRelativeBlendMode::Enter,
-          timestamp_ns, *state);
-    } else if (!target_hmd_relative && real_optical_pose_available &&
-               state->hmd_relative_last_published_pose_is_hmd_relative &&
+  if (state.blend_mode == Mode::None && target_valid && state.last_pose_valid) {
+    if (target_wrist && state.last_source != Source::BodyWrist) {
+      start_fallback_pose_blend(Mode::EnterBodyWrist, timestamp_ns, state);
+    } else if (target_optical && state.last_source == Source::BodyWrist) {
+      start_fallback_pose_blend(Mode::ExitBodyWrist, timestamp_ns, state);
+    } else if (!hmd_interrupted && target_hmd && state.last_source != Source::HmdRelative &&
+               cfg.hmd_relative_enter_blend_ms > 0.0f) {
+      start_fallback_pose_blend(Mode::EnterHmdRelative, timestamp_ns, state);
+    } else if (!hmd_interrupted && target_optical && state.last_source == Source::HmdRelative &&
                cfg.hmd_relative_exit_blend_ms > 0.0f) {
-      start_hmd_relative_pose_blend(
-          RuntimeControllerHmdRelativeBlendMode::Exit,
-          timestamp_ns, *state);
+      start_fallback_pose_blend(Mode::ExitHmdRelative, timestamp_ns, state);
     }
   }
 
-  if (state->hmd_relative_blend_mode !=
-      RuntimeControllerHmdRelativeBlendMode::None) {
-    const float duration_ms =
-        state->hmd_relative_blend_mode ==
-                RuntimeControllerHmdRelativeBlendMode::Enter
-            ? cfg.hmd_relative_enter_blend_ms
-            : cfg.hmd_relative_exit_blend_ms;
+  if (state.blend_mode != Mode::None) {
+    const bool wrist_blend = state.blend_mode == Mode::EnterBodyWrist ||
+                             state.blend_mode == Mode::ExitBodyWrist;
+    const float duration_ms = wrist_blend ? kBodyWristBlendMs
+        : state.blend_mode == Mode::EnterHmdRelative
+            ? cfg.hmd_relative_enter_blend_ms : cfg.hmd_relative_exit_blend_ms;
     const uint64_t duration_ns = nonnegative_ms_to_ns(duration_ms);
-    const uint64_t elapsed_ns =
-        timestamp_ns >= state->hmd_relative_blend_start_ns
-            ? timestamp_ns - state->hmd_relative_blend_start_ns
-            : 0;
+    const uint64_t elapsed_ns = timestamp_ns >= state.blend_start_ns
+        ? timestamp_ns - state.blend_start_ns : 0;
     const float t = duration_ns > 0
-        ? std::clamp(static_cast<float>(elapsed_ns) /
-                         static_cast<float>(duration_ns),
-                     0.0f, 1.0f)
+        ? std::clamp(static_cast<float>(elapsed_ns) / static_cast<float>(duration_ns), 0.0f, 1.0f)
         : 1.0f;
 
-    for (int axis = 0; axis < 3; ++axis) {
-      out.position[axis] =
-          state->hmd_relative_blend_from_position_m[axis] +
-          (out.position[axis] -
-           state->hmd_relative_blend_from_position_m[axis]) * t;
-      out.linear_velocity[axis] =
-          state->hmd_relative_blend_from_linear_velocity_mps[axis] +
-          (out.linear_velocity[axis] -
-           state->hmd_relative_blend_from_linear_velocity_mps[axis]) * t;
-      out.angular_velocity[axis] =
-          state->hmd_relative_blend_from_angular_velocity_rad_s[axis] +
-          (out.angular_velocity[axis] -
-           state->hmd_relative_blend_from_angular_velocity_rad_s[axis]) * t;
+    for (size_t axis = 0; axis < 3; ++axis) {
+      out.position[axis] = state.from_position_m[axis] + (out.position[axis] - state.from_position_m[axis]) * t;
+      out.linear_velocity[axis] = wrist_blend && t < 1.0f ? 0.0f
+          : state.from_linear_velocity_mps[axis] +
+                (out.linear_velocity[axis] - state.from_linear_velocity_mps[axis]) * t;
+      out.angular_velocity[axis] = wrist_blend && t < 1.0f ? 0.0f
+          : state.from_angular_velocity_rad_s[axis] +
+                (out.angular_velocity[axis] - state.from_angular_velocity_rad_s[axis]) * t;
     }
-    set_orientation_xyzw(
-        out,
-        q_slerp_shortest(
-            q_from_xyzw(state->hmd_relative_blend_from_orientation_xyzw),
-            q_from_xyzw(out.orientation_xyzw), t));
+    if (!target_wrist) {
+      set_orientation_xyzw(out, q_slerp_shortest(
+          q_from_xyzw(state.from_orientation_xyzw), q_from_xyzw(out.orientation_xyzw), t));
+    }
 
     out.flags &= ~xr_runtime::RUNTIME_CONTROLLER_POSE_INVALID;
     out.flags |= xr_runtime::RUNTIME_CONTROLLER_POSE_VALID |
@@ -2632,13 +2626,10 @@ void apply_hmd_relative_pose_blend(
     out.source_mask &= ~xr_runtime::RUNTIME_CONTROLLER_SOURCE_POSE_INVALID;
     out.source_mask |= xr_runtime::RUNTIME_CONTROLLER_SOURCE_SYNTHETIC_POSE;
 
-    if (t >= 1.0f) {
-      clear_hmd_relative_pose_blend(*state);
-    }
+    if (t >= 1.0f) state.blend_mode = Mode::None;
   }
 
-  remember_hmd_relative_published_pose(
-      out, target_hmd_relative, *state);
+  remember_published_pose(out, target_source, state);
 }
 
 void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
@@ -2651,7 +2642,8 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
                   const xr_runtime::HmdPoseF64V1* hmd,
                   uint64_t timestamp_ns,
                   RuntimeControllerImuSideRuntimeState* runtime_state,
-                  const std::vector<xr_runtime::ControllerInputV3>* imu_history) {
+                  const std::vector<xr_runtime::ControllerInputV3>* imu_history,
+                  const std::optional<BodyWristObservation>& body_wrist) {
   out.role = left ? xr_runtime::CONTROLLER_SIDE_LEFT : xr_runtime::CONTROLLER_SIDE_RIGHT;
   copy_debug_source(out, xr_runtime::runtime_controller_mode_name(cfg.mode));
 
@@ -2663,10 +2655,14 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
   }
 
   const bool real_optical_pose_available = real_optical_hand_pose(hand_side);
+  const bool accepted_optical_pose = real_optical_pose_available && valid_hand_side;
+  const bool wrist_fallback_enabled = cfg.body_wrist_fallback_enabled &&
+      cfg.mode != xr_runtime::RuntimeControllerMode::CONTROLLER_ONLY_HMD_RELATIVE_POSE &&
+      cfg.mode != xr_runtime::RuntimeControllerMode::CONTROLLER_ONLY_POSE_INVALID;
   const bool hmd_relative_exit_lost_optical =
       runtime_state != nullptr &&
-      runtime_state->hmd_relative_blend_mode ==
-          RuntimeControllerHmdRelativeBlendMode::Exit &&
+      runtime_state->fallback_pose.blend_mode ==
+          RuntimeControllerFallbackBlendMode::ExitHmdRelative &&
       !real_optical_pose_available;
   if (hmd_relative_exit_lost_optical) {
     // Do not return to hand hold/prediction when optical tracking disappears
@@ -2864,10 +2860,32 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
     }
   }
 
+  const bool body_wrist_can_replace_optics = wrist_fallback_enabled && body_wrist &&
+      !accepted_optical_pose;
+  // Both the IMU hold and prediction publish the last-good optical source.
+  // Velocity-only prediction can also set it before force-frame alignment.
+  const bool calibrated_imu_loss_pose = runtime_state && runtime_state->acceleration_world_yaw_valid &&
+      (out.source_mask & xr_runtime::RUNTIME_CONTROLLER_SOURCE_LAST_GOOD_HAND_POSE) != 0u;
+  if (body_wrist_can_replace_optics && !calibrated_imu_loss_pose && hmd &&
+      (hmd->flags & xr_runtime::HMD_FLAG_POSE_VALID) != 0u && hmd->tracking_status == 2u) {
+    const float head_q[] = {static_cast<float>(hmd->qx), static_cast<float>(hmd->qy),
+                            static_cast<float>(hmd->qz), static_cast<float>(hmd->qw)};
+    if (finite_q_xyzw(head_q) && nonzero_q_xyzw(head_q)) {
+      fill_pose_from_body_wrist(out, *body_wrist, head_q, runtime_state);
+      // The published wrist is a presentation fallback. A later optical
+      // recovery starts a new IMU position anchor from real optical data.
+      if (runtime_state) clear_imu_position_loss_state(*runtime_state, true);
+    }
+  }
+
+  if (wrist_fallback_enabled && accepted_optical_pose && runtime_state) {
+    remember_wrist_to_grip_offset(*hand_side, *runtime_state);
+  }
+
   const bool hand_gestures_enabled = left ? cfg.left_hand_gestures_enabled
                                           : cfg.right_hand_gestures_enabled;
   if (cfg.mode == xr_runtime::RuntimeControllerMode::HAND_TRACKING_WITH_BUTTON_PRIORITY &&
-      valid_hand_side && hand_gestures_enabled) {
+      valid_hand_side && hand_gestures_enabled && !body_wrist_can_replace_optics) {
     // Whether hand gestures are allowed while an external ControllerInputV3 stream
     // exists is decided by xr_runtime_adapter per frame.  Do not key this off
     // controller_side presence here, otherwise hand_plus_controller cannot combine
@@ -2880,8 +2898,10 @@ void compose_side(xr_runtime::RuntimeControllerSideStateV1& out,
     out.flags |= xr_runtime::RUNTIME_CONTROLLER_CONNECTED;
   }
 
-  apply_hmd_relative_pose_blend(
-      out, cfg, timestamp_ns, real_optical_pose_available, runtime_state);
+  if (runtime_state) {
+    apply_fallback_pose_blend(
+        out, cfg, timestamp_ns, real_optical_pose_available, runtime_state->fallback_pose);
+  }
 }
 
 void compose_6dof_side(xr_runtime::RuntimeControllerSideStateV1& out,
@@ -3258,7 +3278,8 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
     const std::optional<xr_runtime::HmdPoseF64V1>& runtime_hmd_pose,
     float gravity_magnitude_mps2,
     RuntimeControllerSynthesisState* runtime_state,
-    const std::vector<xr_runtime::ControllerInputV3>* imu_history) {
+    const std::vector<xr_runtime::ControllerInputV3>* imu_history,
+    const BodyWristObservations& body_wrists) {
   xr_runtime::RuntimeControllerStateFrameV1 frame{};
   frame.sequence = sequence;
   frame.timestamp_ns = timestamp_ns;
@@ -3271,10 +3292,10 @@ xr_runtime::RuntimeControllerStateFrameV1 compose_runtime_controller_state(
 
   compose_side(frame.left, true, cfg, gravity_magnitude_mps2, hand, yaw_hand,
                controller, hmd, timestamp_ns,
-               runtime_state != nullptr ? &runtime_state->left : nullptr, imu_history);
+               runtime_state != nullptr ? &runtime_state->left : nullptr, imu_history, body_wrists.left);
   compose_side(frame.right, false, cfg, gravity_magnitude_mps2, hand, yaw_hand,
                controller, hmd, timestamp_ns,
-               runtime_state != nullptr ? &runtime_state->right : nullptr, imu_history);
+               runtime_state != nullptr ? &runtime_state->right : nullptr, imu_history, body_wrists.right);
 
   set_controller_frame_flags(frame);
   return frame;

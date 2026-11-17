@@ -1385,7 +1385,8 @@ void Controller::publish_side(RuntimeControllerSideStateV1& out, const HandConfi
   s.previous_emulated_buttons = emulated;
   s.previous_buttons = out.buttons;
   out.flags &= ~(RUNTIME_CONTROLLER_INPUT_VALID | RUNTIME_CONTROLLER_INPUT_STALE);
-  out.source_mask |= RUNTIME_CONTROLLER_SOURCE_HAND_GESTURES;
+  if ((out.source_mask & RUNTIME_CONTROLLER_SOURCE_BODY_WRIST) == 0u)
+    out.source_mask |= RUNTIME_CONTROLLER_SOURCE_HAND_GESTURES;
   if (s.valid || physical_valid) {
     out.flags |= RUNTIME_CONTROLLER_CONNECTED | RUNTIME_CONTROLLER_INPUT_VALID;
     if (s.valid) out.last_input_ns = std::max(out.last_input_ns, s.sample_ns);

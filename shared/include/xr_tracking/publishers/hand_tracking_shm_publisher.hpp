@@ -51,6 +51,7 @@ enum HandPoseFlags : uint32_t {
   HAND_JOINTS_VALID = 1u << 3,
   HAND_PINCH_VALID = 1u << 4,
   HAND_GRAB_VALID = 1u << 5,
+  HAND_SYNTHETIC_JOINTS = 1u << 6,
 };
 
 constexpr uint32_t HAND_JOINT_COUNT_V1 = 26;

@@ -161,6 +161,11 @@ Existing output-directory overrides such as `BIN_DIR` remain supported.
 
 ## Optional body trackers
 
+With `XR_MONADO_HAND_TRACKING=1`, the driver can also display the runtime
+adapter's neutral hand joints during the
+[body wrist fallback](../../runtime_adapters/xr_runtime_adapter/README.md#controller-fallback-from-body-wrists).
+The joint locations are valid and marked synthetic.
+
 Rebuild Monado with the installer above. The XR Gate driver exposes poses
 from `runtime_body_trackers` SHM or application TCP as individual OpenXR devices through
 `XR_MNDX_xdev_space`. Body trackers default to off. Start the tracking stack

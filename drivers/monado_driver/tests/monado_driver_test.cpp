@@ -541,8 +541,21 @@ void test_skeleton_mapping_and_loss() {
   };
   f.hand->sample.frame.left.status = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Degraded);
   inactive();  // A held/predicted controller is not an observed finger skeleton.
+  auto& hand_frame = f.hand->sample.frame;
+  hand_frame.timestamp_ns = static_cast<uint64_t>(monotonic_now_ns());
+  hand_frame.source_timestamp_ns -= 500000000ull;
+  hand_frame.left.flags |= xr_tracking::HAND_SYNTHETIC_JOINTS;
+  for (auto& joint : hand_frame.left.joints) joint.flags = kJointPoseValid;
+  f.left->get_hand_tracking(f.left, XRT_INPUT_HT_UNOBSTRUCTED_LEFT, 0, &joints, &timestamp);
+  assert(joints.is_active && timestamp == static_cast<int64_t>(hand_frame.timestamp_ns));
+  assert(joints.hand_pose.relation_flags == kJointPoseValid);
+  assert(values[XRT_HAND_JOINT_WRIST].relation.relation_flags == kJointPoseValid);
+  f.left->update_inputs(f.left);
+  assert(input(f.left, XRT_INPUT_HT_UNOBSTRUCTED_LEFT).active);
+  f.right->get_hand_tracking(f.right, XRT_INPUT_HT_UNOBSTRUCTED_RIGHT, 0, &joints, &timestamp);
+  assert(!joints.is_active); // The synthetic side does not refresh stale optics on the other side.
+  hand_frame.left.flags &= ~xr_tracking::HAND_SYNTHETIC_JOINTS;
   f.hand->sample.frame.left.status = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Tracking);
-  f.hand->sample.frame.source_timestamp_ns -= 500000000ull;
   inactive();  // Freshly republished frame with an expired optical source.
   f.hand->sample.frame.source_timestamp_ns = static_cast<uint64_t>(monotonic_now_ns());
   f.hand->sample.frame.left.joint_count = 0;
