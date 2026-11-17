@@ -288,6 +288,9 @@ int run_extra_capture(int argc, char** argv) {
   StreamPublishers publishers(service);
   for (const auto& worker : workers) {
     for (const auto& spec : worker.streams) publishers.add_stream(spec);
+    if (worker.config.camera.layout != "mono") {
+      publishers.add_stereo_pair(worker.name, worker.streams[0].stream_id, worker.streams[1].stream_id);
+    }
   }
   publishers.start();
   publishers.write_registry();

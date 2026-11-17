@@ -14,9 +14,9 @@ class RecoveringStereoReader {
  public:
   using Factory = std::function<std::unique_ptr<ICaptureTransport>()>;
   RecoveringStereoReader(Factory factory, int64_t max_delta_ns, bool latest_only,
-                         uint64_t max_scan_back)
+                         uint64_t max_scan_back, StereoPairing pairing = StereoPairing::Sequence)
       : factory_(std::move(factory)), max_delta_ns_(max_delta_ns),
-        latest_only_(latest_only), max_scan_back_(max_scan_back) {
+        latest_only_(latest_only), max_scan_back_(max_scan_back), pairing_(pairing) {
     reopen();
   }
 
@@ -46,7 +46,7 @@ class RecoveringStereoReader {
   void reopen() {
     auto transport = factory_();
     auto reader = std::make_unique<LatestStereoReader>(
-        *transport, max_delta_ns_, latest_only_, max_scan_back_);
+        *transport, max_delta_ns_, latest_only_, max_scan_back_, pairing_);
     reader_.reset();
     transport_ = std::move(transport);
     reader_ = std::move(reader);
@@ -55,6 +55,7 @@ class RecoveringStereoReader {
   int64_t max_delta_ns_;
   bool latest_only_;
   uint64_t max_scan_back_;
+  StereoPairing pairing_;
   std::unique_ptr<ICaptureTransport> transport_;
   std::unique_ptr<LatestStereoReader> reader_;
   uint64_t generation_ = 0;

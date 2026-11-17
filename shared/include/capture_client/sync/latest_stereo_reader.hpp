@@ -1,15 +1,20 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
+#include <stdexcept>
 #include <thread>
+#include <utility>
 
 #include <capture_client/sync/synchronizer.hpp>
 
 namespace capture_client {
+
+enum class StereoPairing { Sequence, Timestamp };
 
 // Reader for consumers that need only stereo images, not IMU.
 // Intended for hand tracking / debug tools.
@@ -23,13 +28,18 @@ class LatestStereoReader {
   LatestStereoReader(ICaptureTransport& transport,
                      int64_t max_stereo_delta_ns = 1'000'000,
                      bool latest_only = true,
-                     uint64_t max_scan_back = 8)
+                     uint64_t max_scan_back = 8,
+                     StereoPairing pairing = StereoPairing::Sequence)
       : transport_(transport),
         max_stereo_delta_ns_(max_stereo_delta_ns),
         latest_only_(latest_only),
-        max_scan_back_(std::max<uint64_t>(1, max_scan_back)) {
-    last_pair_seq_ = std::min(transport_.cam0().latest_sequence(),
-                              transport_.cam1().latest_sequence());
+        max_scan_back_(std::max<uint64_t>(1, max_scan_back)),
+        pairing_(pairing) {
+    if (pairing_ == StereoPairing::Timestamp && !latest_only_) {
+      throw std::invalid_argument("timestamp stereo pairing requires latest-only reads");
+    }
+    last_camera_seq_ = {transport_.cam0().latest_sequence(), transport_.cam1().latest_sequence()};
+    last_pair_seq_ = std::min(last_camera_seq_[0], last_camera_seq_[1]);
   }
 
   std::optional<StereoPair> read_next(double timeout_s = 1.0) {
@@ -38,6 +48,11 @@ class LatestStereoReader {
     while (std::chrono::steady_clock::now() < deadline) {
       const uint64_t latest0 = transport_.cam0().latest_sequence();
       const uint64_t latest1 = transport_.cam1().latest_sequence();
+      if (pairing_ == StereoPairing::Timestamp) {
+        if (auto pair = read_latest_by_timestamp(latest0, latest1)) return pair;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
       const uint64_t target = std::min(latest0, latest1);
 
       if (target <= last_pair_seq_) {
@@ -77,6 +92,46 @@ class LatestStereoReader {
   uint64_t last_pair_sequence() const { return last_pair_seq_; }
 
  private:
+  std::optional<StereoPair> read_latest_by_timestamp(uint64_t latest0, uint64_t latest1) {
+    const std::array<uint64_t, 2> latest{latest0, latest1};
+    if (latest0 <= last_camera_seq_[0] || latest1 <= last_camera_seq_[1] || latest == last_scan_) {
+      return std::nullopt;
+    }
+    last_scan_ = latest;
+    const auto first = [&](size_t camera) {
+      const auto earliest = latest[camera] > max_scan_back_ ? latest[camera] - max_scan_back_ + 1 : 1;
+      return std::max(last_camera_seq_[camera] + 1, earliest);
+    };
+    const auto first0 = first(0);
+    const auto first1 = first(1);
+    ImageFrame left, right;
+    auto seq0 = latest0;
+    auto seq1 = latest1;
+    // Each ring is ordered by capture timestamp. Drop the newer side until the
+    // timestamps match, without requiring the publishers' sequences to match.
+    while (seq0 >= first0 && seq1 >= first1) {
+      if (left.sequence != seq0 &&
+          (!transport_.cam0().read_image_sequence(seq0, left) || left.timestamp_ns <= 0)) {
+        --seq0;
+        continue;
+      }
+      if (right.sequence != seq1 &&
+          (!transport_.cam1().read_image_sequence(seq1, right) || right.timestamp_ns <= 0)) {
+        --seq1;
+        continue;
+      }
+      const auto delta = left.timestamp_ns - right.timestamp_ns;
+      if (std::llabs(delta) <= max_stereo_delta_ns_) {
+        last_camera_seq_ = {seq0, seq1};
+        last_pair_seq_ = std::min(seq0, seq1);
+        return StereoPair{std::max(left.timestamp_ns, right.timestamp_ns), std::move(left), std::move(right)};
+      }
+      if (delta > 0) --seq0;
+      else --seq1;
+    }
+    return std::nullopt;
+  }
+
   std::optional<StereoPair> read_pair_sequence(uint64_t seq) {
     ImageFrame c0, c1;
     if (!transport_.cam0().read_image_sequence(seq, c0)) return std::nullopt;
@@ -96,6 +151,9 @@ class LatestStereoReader {
   int64_t max_stereo_delta_ns_ = 1'000'000;
   bool latest_only_ = true;
   uint64_t max_scan_back_ = 8;
+  StereoPairing pairing_ = StereoPairing::Sequence;
+  std::array<uint64_t, 2> last_camera_seq_{};
+  std::array<uint64_t, 2> last_scan_{};
   uint64_t last_pair_seq_ = 0;
 };
 

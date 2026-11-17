@@ -58,6 +58,28 @@ XR_MONADO_BODY_TRACKERS=1 XR_MONADO_HAND_TRACKING=1 XR_MONADO_DEVICE=xreal_ultra
   ./devices/common/linux/scripts/monado_driver/start_monado_driver.sh
 ```
 
+## Camera selection
+
+FRAME reads the ordered stereo pair advertised by `capture_service_cpp` in
+the selected SHM registry. The publisher takes the main pair's stream IDs
+from `camera.output.left_stream` and `camera.output.right_stream`. Legacy
+registries use `camera0` and `camera1` as the fallback.
+
+To select cameras specifically for FRAME, set `XR_FRAME_CAPTURE_REGISTRY`
+in the tracking device's `frame_body_tracking.env`. The main registry is
+the default. Additional views from the main source default to
+`/tmp/capture_service_streams_additional.json`, and the extra capture worker
+defaults to `/tmp/capture_service_extra_streams.json` on Linux.
+
+FRAME selects `primary` or the sole advertised pair by default. Select a
+named pair with `XR_FRAME_STEREO_PAIR`. Specify `XR_FRAME_CAM0_STREAM` and
+`XR_FRAME_CAM1_STREAM` in calibration order when using individually published
+views without a declared pair. Both streams must publish calibrated `GRAY8`
+views with the correct image dimensions and share a timestamp domain. FRAME
+matches frames within 1 ms, including when their sequence numbers differ.
+Set `XR_FRAME_CALIB` to match the selected camera geometry and transformations
+when the Basalt cameras use a different pair.
+
 ## Tracking
 
 The fisheye remap uses a 180-degree roll and the selected downward pitch from

@@ -50,6 +50,7 @@ int main(int argc, char** argv) {
       for (const auto& spec : camera_source->stream_specs(static_cast<uint32_t>(cfg.camera.slot_count))) {
         publishers.add_stream(spec);
       }
+      publishers.add_stereo_pair("primary", cfg.camera.left_stream_id, cfg.camera.right_stream_id);
     }
     if (imu_source) {
       for (const auto& spec : imu_source->stream_specs(static_cast<uint32_t>(cfg.imu.slot_count),

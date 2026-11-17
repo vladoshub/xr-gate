@@ -218,8 +218,9 @@ int main(int argc, char** argv) {
   std::string calibration_path;
   std::string capture_registry = xr_runtime::default_capture_service_registry_path();
   std::string tracking_registry = xr_runtime::default_tracking_registry_path();
-  std::string camera0 = "camera0";
-  std::string camera1 = "camera1";
+  std::string camera0;
+  std::string camera1;
+  std::string stereo_pair;
   std::string pose_stream = "hmd_pose";
   std::string output_stream = "body_trackers";
   std::string output_shm = "track_frame_body_trackers";
@@ -236,10 +237,11 @@ int main(int argc, char** argv) {
   CLI::App app{"FRAME stereo body joint backend (ONNX Runtime CPU)"};
   app.add_option("--model", model_path, "Exported FRAME backbone ONNX model")->required()->take_last();
   app.add_option("--calib", calibration_path, "Basalt calibration used by the same capture profile")->required()->take_last();
-  app.add_option("--capture-registry", capture_registry, "Capture service SHM registry");
+  app.add_option("--capture-registry", capture_registry, "Capture service SHM registry")->take_last();
   app.add_option("--tracking-registry", tracking_registry, "Basalt input and body tracker output SHM registry");
-  app.add_option("--cam0-stream", camera0, "Left GRAY8 stream");
-  app.add_option("--cam1-stream", camera1, "Right GRAY8 stream");
+  app.add_option("--stereo-pair", stereo_pair, "Stereo pair name in the capture registry")->take_last();
+  app.add_option("--cam0-stream", camera0, "Override the left GRAY8 stream")->take_last();
+  app.add_option("--cam1-stream", camera1, "Override the right GRAY8 stream")->take_last();
   app.add_option("--pose-stream", pose_stream, "Timestamped Basalt T_world_imu stream");
   app.add_option("--output-stream", output_stream, "Body tracker stream ID");
   app.add_option("--output-shm", output_shm, "Body tracker SHM name");
@@ -272,9 +274,26 @@ int main(int argc, char** argv) {
     frame_body::FrameModel model(model_path, calibration, pitch_down, ort_threads, max_disagreement_m);
     capture_client::RecoveringStereoReader capture(
         [&] {
-          return std::make_unique<capture_client::ShmCaptureTransport>(
-              capture_registry, camera0, camera1, "imu0", false);
-        }, 1'000'000, true, 8);
+          auto transport = std::make_unique<capture_client::ShmCaptureTransport>(
+              capture_registry, camera0, camera1, "imu0", false, stereo_pair);
+          const std::array<const capture_client::StreamInfo*, 2> streams{
+              &transport->cam0().info(), &transport->cam1().info()};
+          if (streams[0]->shm_name == streams[1]->shm_name) {
+            throw std::runtime_error("FRAME needs two distinct camera streams in " + capture_registry);
+          }
+          for (size_t i = 0; i < streams.size(); ++i) {
+            const auto& stream = *streams[i];
+            const auto& camera = calibration.cameras[i];
+            if (stream.format_name != "GRAY8" || stream.width != camera.width || stream.height != camera.height) {
+              throw std::runtime_error("FRAME camera " + stream.stream_id + " must publish GRAY8 " +
+                  std::to_string(camera.width) + "x" + std::to_string(camera.height) +
+                  " to match calibration " + calibration_path);
+            }
+          }
+          std::cout << "[frame_body_tracking] capture=" << capture_registry
+                    << ", left=" << streams[0]->stream_id << ", right=" << streams[1]->stream_id << std::endl;
+          return transport;
+        }, 1'000'000, true, 8, capture_client::StereoPairing::Timestamp);
     PoseReader poses(tracking_registry, pose_stream, static_cast<uint64_t>(max_pose_delta_ms * 1e6));
     BodyTrackerSetShmPublisherConfig output;
     output.registry_path = tracking_registry;
@@ -289,7 +308,6 @@ int main(int argc, char** argv) {
     publisher.publish(lost_frame(0, 0));
     std::cout << "[frame_body_tracking] ONNX Runtime CPU " << Ort::GetVersionString()
               << ", model=" << model_path << ", calib=" << calibration_path
-              << ", capture=" << capture_registry
               << ", pose=" << pose_stream << ", output=" << output_stream
               << ", camera_time_offset_ns=" << offset << ", pitch_down_deg=" << pitch_down
               << ", max_camera_pitch_deg=" << max_camera_pitch << std::endl;

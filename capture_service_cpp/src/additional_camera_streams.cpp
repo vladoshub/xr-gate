@@ -202,6 +202,21 @@ struct AdditionalCameraStreams::Impl {
       }
     }
     if (!active_outputs) throw std::runtime_error("could not start additional camera outputs");
+    // There is an unambiguous pair if each stereo side has one active output.
+    const auto unique_output = [&](const std::string& side) -> std::string {
+      const auto it = sources.find(side);
+      if (it == sources.end()) return {};
+      std::string name;
+      for (const auto& output : it->second.outputs) {
+        if (!output.enabled) continue;
+        if (!name.empty()) return {};
+        name = output.spec.stream_id;
+      }
+      return name;
+    };
+    const auto left = unique_output(kLeftCameraView);
+    const auto right = unique_output(kRightCameraView);
+    if (!left.empty() && !right.empty()) publishers.add_stereo_pair("primary", left, right);
     publishers.start();
     publishers.write_registry();
     thread = std::thread(&Impl::run, this);

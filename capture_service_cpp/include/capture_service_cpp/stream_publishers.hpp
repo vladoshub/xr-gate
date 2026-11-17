@@ -4,6 +4,8 @@
 #include "capture_service_cpp/shm_publisher.hpp"
 #include "capture_service_cpp/tcp_fanout.hpp"
 
+#include <array>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -18,6 +20,7 @@ class StreamPublishers {
 
   const RuntimeConfig& config() const { return cfg_; }
   void add_stream(const StreamSpec& spec, bool reserve_shm_storage = false);
+  void add_stereo_pair(const std::string& name, const std::string& left, const std::string& right);
   void start();
   void write_registry();
   std::vector<std::string> shm_names() const;
@@ -37,6 +40,7 @@ class StreamPublishers {
   bool enable_shm_ = false;
   bool enable_tcp_ = false;
   std::unordered_map<std::string, StreamSpec> specs_;
+  std::map<std::string, std::array<std::string, 2>> stereo_pairs_;
   std::unordered_map<std::string, std::unique_ptr<ShmPublisher>> shm_publishers_;
   std::unordered_map<std::string, uint64_t> sequences_;
   std::unique_ptr<TcpFanoutPublisher> tcp_;

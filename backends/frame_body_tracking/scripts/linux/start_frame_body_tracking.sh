@@ -11,11 +11,10 @@ if [[ ! -x "$backend" ]]; then
   exit 1
 fi
 
+capture_registry="${XR_FRAME_CAPTURE_REGISTRY:-${CAPTURE_REGISTRY:-${XR_RUNTIME_DIR:-${TMPDIR:-/tmp}}/capture_service_streams.json}}"
 args=(
-  --capture-registry "${CAPTURE_REGISTRY:-${XR_RUNTIME_DIR:-${TMPDIR:-/tmp}}/capture_service_streams.json}"
+  --capture-registry "${capture_registry/#\~/${HOME:-~}}"
   --tracking-registry "${TRACKING_REGISTRY:-${XR_RUNTIME_DIR:-${TMPDIR:-/tmp}}/tracking_streams.json}"
-  --cam0-stream "${CAM0_STREAM:-camera0}"
-  --cam1-stream "${CAM1_STREAM:-camera1}"
   --pose-stream "${HMD_STREAM:-hmd_pose}"
   --output-stream "${BODY_TRACKERS_STREAM:-body_trackers}"
   --ort-threads "${XR_FRAME_THREADS:-4}"
@@ -24,6 +23,18 @@ args=(
   --max-fps "${XR_FRAME_MAX_FPS:-20}"
   --max-stereo-disagreement-m "${XR_FRAME_MAX_STEREO_DISAGREEMENT_M:-0.24}"
 )
+
+cam0="${XR_FRAME_CAM0_STREAM:-}"
+cam1="${XR_FRAME_CAM1_STREAM:-}"
+if [[ -z "${XR_FRAME_CAPTURE_REGISTRY:-}" && -z "${XR_FRAME_STEREO_PAIR:-}" ]]; then
+  cam0="${cam0:-${CAM0_STREAM:-}}"
+  cam1="${cam1:-${CAM1_STREAM:-}}"
+fi
+if [[ -n "${XR_FRAME_STEREO_PAIR:-}" ]]; then
+  args+=(--stereo-pair "$XR_FRAME_STEREO_PAIR")
+fi
+if [[ -n "$cam0" ]]; then args+=(--cam0-stream "$cam0"); fi
+if [[ -n "$cam1" ]]; then args+=(--cam1-stream "$cam1"); fi
 
 model="${XR_FRAME_MODEL:-$bin_root/body-tracking-models/frame/frame_backbone.onnx}"
 calib="${XR_FRAME_CALIB:-${BASALT_CALIB:-}}"
