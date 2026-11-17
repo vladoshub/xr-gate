@@ -62,6 +62,6 @@ runtime origin to the published positions.
 | Environment variable | Default | Effect |
 | --- | --- | --- |
 | `XR_FRAME_PITCH_DOWN_DEG` | `20` | Downward pitch of the virtual cameras |
-| `XR_FRAME_THREADS` | `4` | ONNX Runtime intra-op CPU threads |
+| `й` | `4` | ONNX Runtime intra-op CPU threads |
 | `XR_FRAME_MAX_FPS` | `20` | Inference rate limit, with `0` using every available latest pair |
 | `XR_FRAME_MAX_STEREO_DISAGREEMENT_M` | `0.24` | Maximum 3D disagreement between the two camera estimates |

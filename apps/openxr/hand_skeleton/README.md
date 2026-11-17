@@ -43,7 +43,9 @@ bash apps/openxr/hand_skeleton/run.sh \
   --body
 ```
 
-The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. It renders them at their OpenXR LOCAL positions. Look down to check the position of the legs. Bones appear when both endpoint positions are valid. Cyan marks the left side, orange the right, and yellow a valid position that Monado reports as untracked.
+The viewer requests the 15 FRAME joints and the waist tracker through the Monado `XR_MNDX_xdev_space` extension. The default preview centers a small 3D skeleton in the headset view. You can tilt the glasses down to bring the legs into camera view while the preview stays in front of you. Press `V` in the viewer window to inspect the joints at their OpenXR LOCAL positions and press it again to return to the preview.
+
+Bones appear when both endpoint positions are valid. Cyan marks the left side, orange the right, and yellow a valid position that Monado reports as untracked. `FRAME LOST` means there are no valid joint positions for the current frame.
 
 If the wrist fallback patch is installed, start XR Gate with `RUNTIME_BODY_TRACKER_FILTER_WRISTS=0` to include the FRAME wrists in the body stream and render the forearms.
 
@@ -54,7 +56,8 @@ If the wrist fallback patch is installed, start XR Gate with `RUNTIME_BODY_TRACK
 | `J` | Toggle between 21 and 26 joints |
 | `A` | Show joint orientation axes |
 | `R` | Toggle between OpenXR joint radii and fixed markers |
-| `G` | Toggle the reference grid |
+| `V` | Switch between the headset preview and world positions in body mode |
+| `G` | Toggle the reference grid in world and hand views |
 | `Esc` | Exit |
 
 The left hand is cyan and the right hand is orange. Yellow marks a valid joint position that OpenXR reports as untracked. Invalid joints are hidden, and inactive hands show `LOST`.

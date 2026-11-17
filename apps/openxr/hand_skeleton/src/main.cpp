@@ -286,6 +286,33 @@ static bool trackedPosition(const XrSpaceLocation &joint) {
          (joint.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT);
 }
 
+static Body previewBody(Body body) {
+  const auto first = std::find_if(body.begin(), body.end(),
+                                  [](const auto &joint) { return validPosition(joint); });
+  if (first == body.end())
+    return body;
+
+  V low = vec(first->pose.position), high = low;
+  for (auto joint = first + 1; joint != body.end(); ++joint) {
+    if (!validPosition(*joint))
+      continue;
+    const V p = vec(joint->pose.position);
+    low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+    high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+  }
+
+  const V center = (low + high) * .5f;
+  constexpr V previewCenter{0, -.025f, -1.45f};
+  constexpr float previewScale = .25f;
+  for (auto &joint : body) {
+    if (!validPosition(joint))
+      continue;
+    const V p = (vec(joint.pose.position) - center) * previewScale + previewCenter;
+    joint.pose.position = {p.x, p.y, p.z};
+  }
+  return body;
+}
+
 static void bodySkeleton(Mesh &mesh, const Body &body) {
   for (size_t i = 0; i < body.size(); i++) {
     const auto &joint = body[i];
@@ -486,6 +513,7 @@ class App {
   Renderer renderer;
   bool running = false, quit = false, axes = false, radii = false, grid = true,
        source21 = true;
+  bool bodyPreview;
   uint64_t frameCount = 0;
   std::chrono::steady_clock::time_point lastStatus{};
   template <class T> void proc(const char *name, T &p) {
@@ -780,6 +808,10 @@ class App {
         case SDLK_j:
           source21 = !source21;
           break;
+        case SDLK_v:
+          if (options.body)
+            bodyPreview = !bodyPreview;
+          break;
         default:
           break;
         }
@@ -841,7 +873,7 @@ class App {
   Mesh scene() {
     Mesh mesh;
     mesh.reserve(30000);
-    if (grid)
+    if (grid && !bodyPreview)
       for (int i = -10; i <= 10; i++) {
         float d = i * .2f;
         Color c{.07f, .12f, .16f};
@@ -849,7 +881,7 @@ class App {
         rod(mesh, {-2, -1.5f, d}, {2, -1.5f, d}, .001f, c);
       }
     if (options.body)
-      bodySkeleton(mesh, body);
+      bodySkeleton(mesh, bodyPreview ? previewBody(body) : body);
     else {
       skeleton(mesh, hands[0], leftColor, axes, radii, source21);
       skeleton(mesh, hands[1], rightColor, axes, radii, source21);
@@ -867,7 +899,7 @@ class App {
   }
   Mesh panel() {
     Mesh m;
-    float y = -.16f;
+    float y = options.body ? .155f : -.16f;
     if (options.demo) {
       textMesh(m, "DEMO - SYNTHETIC", -.19f, y, .002f, estimatedColor);
       y -= .025f;
@@ -915,6 +947,7 @@ class App {
     lastStatus = now;
     if (options.body) {
       auto s = std::string(options.demo ? "XR Gate Body [DEMO] | " : "XR Gate Body | ") +
+               (bodyPreview ? "Preview | " : "World | ") +
                bodyStatus();
       SDL_SetWindowTitle(window, s.c_str());
       std::cout << s << std::endl;
@@ -948,7 +981,8 @@ class App {
     XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
     li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     li.displayTime = fs.predictedDisplayTime;
-    li.space = space;
+    const XrSpace renderSpace = bodyPreview ? headSpace : space;
+    li.space = renderSpace;
     XR(xrLocateViews(session, &li, &state, 2, &n, views.data()));
     const auto valid =
         XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
@@ -958,27 +992,29 @@ class App {
     }
     locate(fs.predictedDisplayTime);
     Mesh mesh = scene(), hud = panel();
-    XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
-    XR(xrLocateSpace(headSpace, space, fs.predictedDisplayTime, &head));
-    const auto headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
-                           XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-    bool headValid = (head.locationFlags & headFlags) == headFlags;
-    // inverse(viewMatrix(head)) is the VIEW-space to LOCAL-space transform.
-    M headToLocal = identity();
-    if (headValid) {
-      V cols[] = {rotate(head.pose.orientation, {1, 0, 0}),
-                  rotate(head.pose.orientation, {0, 1, 0}),
-                  rotate(head.pose.orientation, {0, 0, 1})};
-      for (int c = 0; c < 3; c++) {
-        headToLocal.v[c * 4] = cols[c].x;
-        headToLocal.v[c * 4 + 1] = cols[c].y;
-        headToLocal.v[c * 4 + 2] = cols[c].z;
+    M headToRender = identity();
+    if (renderSpace != headSpace) {
+      XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
+      XR(xrLocateSpace(headSpace, renderSpace, fs.predictedDisplayTime, &head));
+      const auto headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+      if ((head.locationFlags & headFlags) == headFlags) {
+        // Place the head-relative HUD into the LOCAL projection layer.
+        V cols[] = {rotate(head.pose.orientation, {1, 0, 0}),
+                    rotate(head.pose.orientation, {0, 1, 0}),
+                    rotate(head.pose.orientation, {0, 0, 1})};
+        for (int c = 0; c < 3; c++) {
+          headToRender.v[c * 4] = cols[c].x;
+          headToRender.v[c * 4 + 1] = cols[c].y;
+          headToRender.v[c * 4 + 2] = cols[c].z;
+        }
+        headToRender.v[12] = head.pose.position.x;
+        headToRender.v[13] = head.pose.position.y;
+        headToRender.v[14] = head.pose.position.z;
+      } else {
+        hud.clear();
       }
-      headToLocal.v[12] = head.pose.position.x;
-      headToLocal.v[13] = head.pose.position.y;
-      headToLocal.v[14] = head.pose.position.z;
-    } else
-      hud.clear();
+    }
     std::array<XrCompositionLayerProjectionView, 2> projectionViews{
         {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
          {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}}};
@@ -991,7 +1027,7 @@ class App {
       wait.timeout = XR_INFINITE_DURATION;
       XR(xrWaitSwapchainImage(e.swapchain, &wait));
       M vp = projection(views[i].fov) * viewMatrix(views[i].pose);
-      draw(e.fbos[index], e.width, e.height, vp, mesh, vp * headToLocal, hud);
+      draw(e.fbos[index], e.width, e.height, vp, mesh, vp * headToRender, hud);
       if (i == 0 && options.mirror) {
         int w = 0, h = 0;
         SDL_GL_GetDrawableSize(window, &w, &h);
@@ -1018,7 +1054,7 @@ class App {
       pv.subImage.imageRect.extent = {e.width, e.height};
     }
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    layer.space = space;
+    layer.space = renderSpace;
     layer.viewCount = 2;
     layer.views = projectionViews.data();
     const XrCompositionLayerBaseHeader *layers[] = {
@@ -1086,7 +1122,8 @@ class App {
   }
 
 public:
-  explicit App(Options o) : options(o), source21(o.joints == 21) {}
+  explicit App(Options o)
+      : options(o), source21(o.joints == 21), bodyPreview(o.body) {}
   ~App() {
     if (context) {
       SDL_GL_MakeCurrent(window, context);
@@ -1133,7 +1170,9 @@ public:
     if (!options.demo)
       initSession();
     std::cout << "Left cyan; right orange; valid untracked joints yellow. ";
-    if (!options.body)
+    if (options.body)
+      std::cout << "V preview/world. ";
+    else
       std::cout << "J 21/26 joints, A axes, R radii. ";
     std::cout << "G grid, Esc exit.\n";
     while (!quit && !interrupted) {
@@ -1179,8 +1218,9 @@ int main(int argc, char **argv) {
                      "--joints 21|26  Select hand skeleton (default 21)\n"
                      "--no-mirror  Hide desktop mirror\n--demo       "
                      "Synthetic rendering only, no OpenXR runtime\n--frames N  "
-                     " Exit after N rendered frames\nHands: J 21/26 joints, A joint axes, "
-                     "R runtime radii. G grid, Esc exit.\n";
+                     " Exit after N rendered frames\nV switches body preview/world. "
+                     "J 21/26 joints, A joint axes, R runtime radii for hands. "
+                     "G grid, Esc exit.\n";
         return 0;
       } else
         throw std::runtime_error("Unknown or incomplete option: " + s);
