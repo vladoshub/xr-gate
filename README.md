@@ -7,7 +7,8 @@ This project is a hardware-independent gateway to VR/XR for devices with limited
 Supported: 
 1. 6DoF tracking is supported, both fully stereo and with IMU support (Basalt integration)
 2. Image analysis-based hand tracking (Mercury hand tracking integration)
-3. Various input devices emulate VR controllers, including those with their own IMUs for precise tracking (Samsung Gear VR support or VR-like Bluetooth controllers)
+3. Optional FRAME body tracking estimates body joint positions from synchronized stereo camera frames. [FRAME backend](backends/frame_body_tracking/README.md)
+4. Various input devices emulate VR controllers, including those with their own IMUs for precise tracking (Samsung Gear VR support or VR-like Bluetooth controllers)
 
 
 **Release builds are automatically built and packaged using GitHub Actions.**
@@ -67,7 +68,7 @@ capture_service_cpp
 SHM / TCP streams
         ↓
 capture_client + backends
-  Python stream SDK, 3DoF/6DoF, hand tracking, stereo video, spatial mesh/scanner
+  Python stream SDK, 3DoF/6DoF, hand tracking, body tracking, stereo video, spatial mesh/scanner
         ↓
 xr_runtime_adapter
   runtime-rate normalization, Movement prediction, coordinate transforms, controller state, gestures  ← Override controller ← Bluetooth joystick/keyboard
@@ -417,6 +418,8 @@ cd ~/xr-gate-release/xr-gate
 
 You can switch between 3DoF/6DoF or disable/enable hand-tracking without restarting your current session!
 CTRL + C - exit from xr_client
+
+With the FRAME model installed, press `0` in `xr_client` to toggle body tracking. Set `RUN_FRAME_BODY_TRACKING=1` to start it automatically. [FRAME setup](backends/frame_body_tracking/README.md#run)
 
 
 ## 4. Monado | SteamVR
