@@ -18,22 +18,27 @@ from xr_client.xr_backend_client import Launcher
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "POSIX SHM stability")
 class CaptureStabilityTest(unittest.TestCase):
-    def check_capture(self, *, skew_ns=0, burst=False, max_delta_ms=1):
+    def check_capture(self, *, skew_ns=0, burst=False, max_delta_ms=1, renamed=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            cameras = ("rig_left", "rig_right") if renamed else ("camera0", "camera1")
             publishers = [ShmRingPublisher(StreamSpec(
-                name, StreamKind.IMAGE if name.startswith("camera") else StreamKind.IMU,
-                width=2 if name.startswith("camera") else 0,
-                height=2 if name.startswith("camera") else 0,
-                format_code=int(FormatCode.GRAY8 if name.startswith("camera") else FormatCode.IMU_F32_LE),
-                payload_size=4 if name.startswith("camera") else 24), namespace=root.name)
-                for name in ("camera0", "camera1", "imu0")]
+                name, StreamKind.IMAGE if name in cameras else StreamKind.IMU,
+                width=2 if name in cameras else 0,
+                height=2 if name in cameras else 0,
+                format_code=int(FormatCode.GRAY8 if name in cameras else FormatCode.IMU_F32_LE),
+                payload_size=4 if name in cameras else 24), namespace=root.name)
+                for name in (*cameras, "imu0")]
             registry = root / "capture.json"
-            registry.write_text(json.dumps({"streams": {p.spec.stream_id: p.registry_entry() for p in publishers}}))
+            metadata = {"streams": {p.spec.stream_id: p.registry_entry() for p in publishers}}
+            if renamed:
+                metadata["stereo_pairs"] = {"primary": cameras}
+            registry.write_text(json.dumps(metadata))
             spec = ServiceSpec("capture_service", [], stream_activity_timeout_s=0.8,
                                stream_activity_stable_s=0.2)
             launcher = Launcher(SimpleNamespace(log_dir=folder,
                                                gate=SimpleNamespace(command=["gate", "--stereo-max-delta-ms", str(max_delta_ms)]),
+                                               pre_gate_services=[], post_gate_services=[], foreground_services=[],
                                                root_project=str(Path(__file__).resolve().parents[2])))
             launcher.running = [SimpleNamespace(spec=spec, process=SimpleNamespace(poll=lambda: None))]
             stop = threading.Event()
@@ -61,7 +66,12 @@ class CaptureStabilityTest(unittest.TestCase):
                     self.assertGreater(publishers[0].seq, 0)
                     self.assertGreater(publishers[1].seq, 0)
                 else:
-                    launcher.wait_for_stream_activity(spec, waits)
+                    if renamed:
+                        spec.wait_streams = [WaitStream(str(registry), stream, 0.8)
+                                             for stream in ("camera0", "camera1", "imu0")]
+                        launcher.wait_for_service_streams(spec)
+                    else:
+                        launcher.wait_for_stream_activity(spec, waits)
                     self.assertGreaterEqual(time.monotonic() - began, 0.2)
             finally:
                 stop.set()
@@ -72,6 +82,9 @@ class CaptureStabilityTest(unittest.TestCase):
 
     def test_continuous_synchronized_capture_is_ready_after_stabilization(self):
         self.check_capture()
+
+    def test_capture_readiness_follows_published_stereo_pair_names(self):
+        self.check_capture(renamed=True)
 
     def test_separate_fresh_cameras_without_stereo_sync_are_not_ready(self):
         self.check_capture(skew_ns=5_000_000)

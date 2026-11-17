@@ -321,6 +321,9 @@ PY_ROLES
   apply_git_patch_once "$MONADO_DIR" "$PATCH_DIR/monado/0003-register-runtime-body-trackers.patch" \
     "src/xrt/targets/common/target_builder_legacy.c" \
     "xr_tracking_runtime_body_trackers_create" "XR Gate body tracker registration"
+  apply_git_patch_once "$MONADO_DIR" "$PATCH_DIR/monado/0004-initialize-runtime-tracking-origin.patch" \
+    "src/xrt/targets/common/target_builder_legacy.c" \
+    "origin->initial_offset = .*XRT_POSE_IDENTITY" "XR Gate tracking origin initialization"
 }
 
 patch_xreal_air_builder_guard() {

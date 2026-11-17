@@ -1,0 +1,33 @@
+name: OpenXR skeleton viewer
+
+"on":
+  push:
+    branches: [main, master]
+    paths: ['apps/openxr/hand_skeleton/**', '.github/workflows/openxr-skeleton-viewer.yml']
+  pull_request:
+    paths: ['apps/openxr/hand_skeleton/**', '.github/workflows/openxr-skeleton-viewer.yml']
+
+jobs:
+  build-and-render:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install viewer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake pkg-config libopenxr-dev \
+            libsdl2-dev libglew-dev libgl1-mesa-dev libgl1-mesa-dri libegl-mesa0 libx11-dev
+      - name: Build viewer
+        run: |
+          cmake -S apps/openxr/hand_skeleton -B build/openxr-skeleton -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/openxr-skeleton --parallel 2
+      - name: Render the hand and body demos
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          SDL_VIDEODRIVER: offscreen
+          EGL_PLATFORM: surfaceless
+        run: |
+          set -euo pipefail
+          viewer=build/openxr-skeleton/xr_gate_hand_skeleton
+          "$viewer" --demo --frames 1 | grep -F "XR Gate Hands [DEMO]"
+          "$viewer" --body --demo --frames 1 | grep -F "FRAME VALID 16/16 TRACK 16"

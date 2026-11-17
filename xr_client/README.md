@@ -129,6 +129,7 @@ source checkouts use `out_dir`, defaulting to `out/xr-gate_windows`.
 ## Common manual controls
 
 ```text
+0 - start/stop FRAME body tracking (Linux / WSL)
 1 - restart running backends
 2 - start/stop hand_tracking
 3 - restart Basalt and toggle VIO / stereo VO
@@ -140,11 +141,14 @@ source checkouts use `out_dir`, defaulting to `out/xr-gate_windows`.
 9 - toggle 6DoF/3DoF
 ```
 
-On Linux and WSL, keys `1` through `9` execute without Enter, as they do in
-the Windows console. Text aliases still use Enter. The client restores the
+On Linux and WSL, keys `0` through `9` execute without Enter. The Windows
+console accepts `1` through `9` immediately. Text aliases still use Enter. The client restores the
 terminal settings on exit and temporarily enables line editing for recovery
 prompts. Background services receive closed stdin so they cannot consume menu
 input; foreground services and standalone controller training keep their input.
+
+FRAME starts stopped by default. Press `0` to toggle it or set
+`RUN_FRAME_BODY_TRACKING=1` to start it with the other backends.
 
 Key `5` stops the managed override controller process group, including children
 whose launcher shell has already exited. A failed stop is reported instead of

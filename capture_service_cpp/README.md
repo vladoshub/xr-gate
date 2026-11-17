@@ -23,8 +23,6 @@ imu0:          IMU_F32_LE
 xreal_raw_hid: BYTES
 ```
 
-The XREAL raw camera decoder, eye transforms, HID start command, IMU normalization, stream IDs, SHM/TCP publishers and registry format remain unchanged.
-
 ## Capture profile metadata
 
 Set a stable runtime profile name independently from the stream namespace:
@@ -54,6 +52,12 @@ capture_tcp_probe \
 It reads only `CAPHELLO`, prints the profile, sends `CLOSE`, and exits. It can
 also print `--print-namespace` or the complete `--print-json` metadata. Profile
 names are restricted to letters, digits, `_`, `-`, and `.`.
+
+The registry's `stereo_pairs` map lists stream IDs in left, right order.
+`primary` identifies the main stereo pair. The additional-view registry also
+advertises `primary` when it publishes one active output per stereo side.
+The extra capture registry uses the names of its configured stereo sources as
+pair names.
 
 ## Configuration
 

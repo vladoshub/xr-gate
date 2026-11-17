@@ -19,7 +19,7 @@ fatal() { echo "[unpack_device_release:$XR_RELEASE_DEVICE_TARGET][ERROR] $*" >&2
 usage() {
   cat <<USAGE
 Extract the $XR_RELEASE_DEVICE_DISPLAY_NAME runtime package and install the
-separately distributed Mercury hand-tracking models.
+separately distributed Mercury hand-tracking and FRAME body-tracking models.
 
 Usage:
   $0 [options] [DEST_DIR]
@@ -28,6 +28,7 @@ Options:
   -d, --dest DIR       Destination parent directory.
   --main ARCHIVE       Main runtime .tar.gz/.tgz or GitHub artifact .zip.
   --models ARCHIVE     Mercury model .tar.gz or GitHub artifact .zip.
+  --frame-models ARCHIVE  Optional FRAME model .tar.gz or GitHub artifact .zip.
   -f, --force          Replace an existing extracted package.
   --keep-tmp           Keep temporary extraction directory.
   -h, --help           Show this help.
@@ -37,6 +38,7 @@ Environment:
   XR_RELEASE_REQUIRE_DEVICE      If 1, require devices/<target>. Current: $XR_RELEASE_REQUIRE_DEVICE
   MAIN_ARCHIVE / MAIN_ZIP        Main archive override.
   MODELS_ARCHIVE / MODELS_ZIP    Models archive override.
+  FRAME_MODELS_ARCHIVE          FRAME model archive override.
   DEST_DIR, FORCE, KEEP_TMP       Equivalent option defaults.
 USAGE
 }
@@ -74,6 +76,7 @@ if [[ -z "$MODELS_ARCHIVE" ]]; then
     "$SCRIPT_DIR/hand-tracking-models-mercury.tar.gz" \
     "$SCRIPT_DIR/hand-tracking-models-mercury.zip")"
 fi
+FRAME_MODELS_ARCHIVE="${FRAME_MODELS_ARCHIVE:-}"
 
 DEST_DIR="${DEST_DIR:-$SCRIPT_DIR}"
 FORCE="${FORCE:-0}"
@@ -96,6 +99,11 @@ while [[ $# -gt 0 ]]; do
     --models|--models-archive|--models-zip)
       [[ $# -ge 2 ]] || fatal "$1 requires a file argument"
       MODELS_ARCHIVE="$2"
+      shift 2
+      ;;
+    --frame-models)
+      [[ $# -ge 2 ]] || fatal "$1 requires a file argument"
+      FRAME_MODELS_ARCHIVE="$2"
       shift 2
       ;;
     -f|--force)
@@ -141,6 +149,7 @@ fi
 # Expand a leading ~/ manually; quoted shell variables do not expand it.
 MAIN_ARCHIVE="${MAIN_ARCHIVE/#\~/$HOME}"
 MODELS_ARCHIVE="${MODELS_ARCHIVE/#\~/$HOME}"
+FRAME_MODELS_ARCHIVE="${FRAME_MODELS_ARCHIVE/#\~/$HOME}"
 DEST_DIR="${DEST_DIR/#\~/$HOME}"
 
 command -v tar >/dev/null 2>&1 || fatal "tar not found"
@@ -150,6 +159,16 @@ command -v cp >/dev/null 2>&1 || fatal "cp not found"
 
 [[ -f "$MAIN_ARCHIVE" ]] || fatal "main archive not found: $MAIN_ARCHIVE"
 [[ -f "$MODELS_ARCHIVE" ]] || fatal "models archive not found: $MODELS_ARCHIVE"
+if [[ -n "$FRAME_MODELS_ARCHIVE" ]]; then
+  [[ -f "$FRAME_MODELS_ARCHIVE" ]] || fatal "FRAME models archive not found: $FRAME_MODELS_ARCHIVE"
+else
+  frame_candidate="$(first_existing \
+    "$SCRIPT_DIR/body-tracking-models-frame.tar.gz" \
+    "$SCRIPT_DIR/body-tracking-models-frame.zip")"
+  if [[ -f "$frame_candidate" ]]; then
+    FRAME_MODELS_ARCHIVE="$frame_candidate"
+  fi
+fi
 
 mkdir -p "$DEST_DIR"
 DEST_DIR="$(cd "$DEST_DIR" && pwd)"
@@ -222,6 +241,21 @@ MODELS_TAR="$(select_tar_from_archive \
 
 log "main tar: $MAIN_TAR"
 log "models tar: $MODELS_TAR"
+
+SRC_FRAME_DIR=""
+if [[ -n "$FRAME_MODELS_ARCHIVE" ]]; then
+  mkdir -p "$TMP_DIR/frame_zip" "$TMP_DIR/frame_extract"
+  FRAME_MODELS_TAR="$(select_tar_from_archive \
+    "$FRAME_MODELS_ARCHIVE" "$TMP_DIR/frame_zip" "FRAME models" 'body-tracking-models-frame.tar.gz')"
+  log "FRAME models tar: $FRAME_MODELS_TAR"
+  tar -C "$TMP_DIR/frame_extract" -xzf "$FRAME_MODELS_TAR"
+  mapfile -t FRAME_MODELS < <(find "$TMP_DIR/frame_extract" -type f -name 'frame_backbone.onnx' -size +0c)
+  [[ "${#FRAME_MODELS[@]}" -eq 1 ]] || fatal "expected exactly one nonempty frame_backbone.onnx in FRAME models tar"
+  SRC_FRAME_DIR="$(dirname "${FRAME_MODELS[0]}")"
+  if [[ -f "$SRC_FRAME_DIR/SHA256SUMS.txt" ]]; then
+    (cd "$SRC_FRAME_DIR" && sha256sum -c --status SHA256SUMS.txt) || fatal "FRAME model checksum mismatch"
+  fi
+fi
 
 log "probe main runtime package layout"
 tar -C "$TMP_DIR/main_probe" -xzf "$MAIN_TAR"
@@ -311,6 +345,13 @@ KEYPOINT_MODEL="$DST_MERCURY_DIR/grayscale_keypoint_jan18.onnx"
 [[ -f "$DETECT_MODEL" ]] || fatal "missing detection model after extraction: $DETECT_MODEL"
 [[ -f "$KEYPOINT_MODEL" ]] || fatal "missing keypoint model after extraction: $KEYPOINT_MODEL"
 
+if [[ -n "$SRC_FRAME_DIR" ]]; then
+  DST_FRAME_DIR="$XR_PACKAGE_DIR/bin/body-tracking-models/frame"
+  log "install FRAME model to: $DST_FRAME_DIR"
+  mkdir -p "$DST_FRAME_DIR"
+  cp -a "$SRC_FRAME_DIR/." "$DST_FRAME_DIR/"
+fi
+
 log "OK"
 echo
 echo "Extracted runtime package:"
@@ -318,6 +359,11 @@ echo "  $XR_PACKAGE_DIR"
 echo
 echo "Installed Mercury models:"
 ls -lh "$DST_MERCURY_DIR"
+if [[ -n "$SRC_FRAME_DIR" ]]; then
+  echo
+  echo "Installed FRAME model:"
+  ls -lh "$DST_FRAME_DIR"
+fi
 echo
 echo "Next:"
 echo "  cd \"$XR_PACKAGE_DIR\""

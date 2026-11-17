@@ -184,6 +184,18 @@ def deep_update(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]
     return out
 
 
+def registry_primary_camera_pair(registry: str) -> Optional[tuple[str, str]]:
+    try:
+        pairs = json.loads(Path(registry).read_text()).get("stereo_pairs", {})
+        pair = pairs.get("primary")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if (isinstance(pair, list) and len(pair) == 2
+            and all(isinstance(name, str) and name for name in pair) and pair[0] != pair[1]):
+        return pair[0], pair[1]
+    return None
+
+
 def registry_has_stream(registry: str, stream: str) -> bool:
     path = Path(registry)
     try:

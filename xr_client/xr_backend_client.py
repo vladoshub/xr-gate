@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack, nullcontext
+from dataclasses import replace
 import json
 import math
 import os
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
-    from .common import env_truthy, expand_path, log, registry_has_stream
+    from .common import env_truthy, expand_path, log, registry_has_stream, registry_primary_camera_pair
     from .config_reader import (
         ClientConfig,
         GateSpec,
@@ -45,7 +46,7 @@ try:
     from .process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
     from .tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent, _load_capture_client
 except ImportError:
-    from common import env_truthy, expand_path, log, registry_has_stream
+    from common import env_truthy, expand_path, log, registry_has_stream, registry_primary_camera_pair
     from config_reader import (
         ClientConfig,
         GateSpec,
@@ -67,6 +68,7 @@ IS_WINDOWS = os.name == "nt"
 
 BASALT_MODE_OPTION = "--mode"
 BASALT_LEGACY_MODE_FLAGS = ("--no-imu", "--vo", "--vio")
+DEFAULT_CAMERA_STREAMS = ("camera0", "camera1")
 CONTROLLER_IMU_ALIGNMENT_STATUS = re.compile(
     rb"^\[xr_runtime_adapter\]\[imu-alignment\] "
     rb"controller_left_acceleration_yaw_valid=(yes|no) "
@@ -550,6 +552,28 @@ class Launcher:
 
         env = os.environ.copy()
         env.update(spec.env)
+        if spec.name in ("basalt_vio", "mercury_hand_tracking"):
+            transport = env.get("TRANSPORT", "shm")
+            registry = env.get("CAPTURE_REGISTRY", "/tmp/capture_service_streams.json")
+            if spec.name == "basalt_vio":
+                transport = env.get("BASALT_TRANSPORT", transport)
+            else:
+                registry = env.get("REGISTRY", registry)
+            if (command_option_value(spec.command, "--transport") or transport) == "shm":
+                pair = registry_primary_camera_pair(registry)
+                if pair:
+                    for key, stream in zip(("CAM0_STREAM", "CAM1_STREAM"), pair):
+                        if not env.get(key):
+                            env[key] = stream
+                    if spec.name == "mercury_hand_tracking":
+                        env["REGISTRY"] = registry
+        if spec.name == "frame_body_tracking":
+            basalt = self.service_spec_by_name("basalt_vio")
+            if basalt is not None:
+                default_mode = basalt.env.get("BASALT_MODE", env.get("BASALT_MODE", "vio"))
+                env["BASALT_MODE"] = basalt_mode_from_command(basalt.command, default_mode)
+                if "BASALT_CALIB" in basalt.env and "BASALT_CALIB" not in spec.env:
+                    env["BASALT_CALIB"] = basalt.env["BASALT_CALIB"]
         # The limiter truncates the same inode while the child keeps its fd.
         # Append mode makes subsequent child writes follow the new EOF instead
         # of creating a sparse NUL-filled gap at the old file offset.
@@ -631,6 +655,14 @@ class Launcher:
                 return item.process.poll() is None
         return False
 
+    @staticmethod
+    def resolve_capture_wait(producer_name: str, wait: WaitStream) -> WaitStream:
+        if producer_name == "capture_service" and wait.stream in DEFAULT_CAMERA_STREAMS:
+            pair = registry_primary_camera_pair(wait.registry)
+            if pair:
+                return replace(wait, stream=pair[DEFAULT_CAMERA_STREAMS.index(wait.stream)])
+        return wait
+
     def wait_stream(self, producer_name: str, wait: WaitStream) -> None:
         log(f"Waiting for stream '{wait.stream}' in {wait.registry}")
         start = time.monotonic()
@@ -640,14 +672,15 @@ class Launcher:
                     if item.spec.name == producer_name:
                         self.print_log_tail(item.log_path)
                 self.fail(f"{producer_name} stopped before stream '{wait.stream}' appeared")
-            if registry_has_stream(wait.registry, wait.stream):
-                log(f"OK: stream '{wait.stream}' is registered")
+            resolved = self.resolve_capture_wait(producer_name, wait)
+            if registry_has_stream(resolved.registry, resolved.stream):
+                log(f"OK: stream '{resolved.stream}' is registered")
                 return
             if time.monotonic() - start >= wait.timeout_s:
                 for item in self.running:
                     if item.spec.name == producer_name:
                         self.print_log_tail(item.log_path)
-                self.fail(f"Timeout waiting for stream '{wait.stream}' in {wait.registry}")
+                self.fail(f"Timeout waiting for stream '{resolved.stream}' in {resolved.registry}")
             time.sleep(0.25)
 
     def wait_for_stream_activity(self, spec: ServiceSpec, waits: Sequence[WaitStream]) -> None:
@@ -768,7 +801,7 @@ class Launcher:
                 )
                 continue
             self.wait_stream(spec.name, wait)
-            active_waits.append(wait)
+            active_waits.append(self.resolve_capture_wait(spec.name, wait))
         self.wait_for_stream_activity(spec, active_waits)
         if spec.ready_message:
             log(spec.ready_message)
@@ -1714,9 +1747,19 @@ class Launcher:
             timeout_s = max(0.0, float(getattr(gate, "timeout_s", 30.0)))
             deadline_s = time.monotonic() + timeout_s if timeout_s > 0.0 else None
 
+            command = gate.command
+            registry = command_option_value(command, "--registry")
+            if registry and command_option_value(command, "--transport") == "shm":
+                pair = registry_primary_camera_pair(registry)
+                if pair:
+                    for index, stream in enumerate(pair):
+                        option = f"--cam{index}-stream"
+                        if (stream != DEFAULT_CAMERA_STREAMS[index]
+                                and command_option_value(command, option) == DEFAULT_CAMERA_STREAMS[index]):
+                            command = replace_command_option(command, option, stream)
             log("Running startup gate" if attempt == 1 else "Retrying startup gate")
             log(f"  log: {log_path}")
-            log(f"  cmd: {' '.join(gate.command)}")
+            log(f"  cmd: {' '.join(command)}")
             if self.dry_run:
                 return
 
@@ -1734,7 +1777,7 @@ class Launcher:
                 if attempt > 1:
                     log_file.write(f"\n[xr_backend_client] --- startup gate retry {attempt} ---\n".encode("utf-8"))
                 process = subprocess.Popen(
-                    gate.command,
+                    command,
                     cwd=gate.cwd or self.cfg.root_project,
                     env=env,
                     stdout=subprocess.PIPE,
@@ -2190,6 +2233,10 @@ def apply_basalt_mode(
             spec.env["STARTUP_GATE_IMU"] = "0"
         else:
             spec.env.pop("STARTUP_GATE_IMU", None)
+
+    for spec in cfg.post_gate_services:
+        if spec.name == "frame_body_tracking":
+            spec.env["BASALT_MODE"] = normalized
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

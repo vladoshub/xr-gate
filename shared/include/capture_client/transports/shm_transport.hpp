@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -214,6 +215,7 @@ class CaptureRegistry {
     if (!j.contains("streams") || !j["streams"].is_object()) {
       throw std::runtime_error("registry has no object field: streams");
     }
+    stereo_pairs_ = j.value("stereo_pairs", nlohmann::json::object());
     for (auto& kv : j["streams"].items()) {
       StreamInfo info;
       const auto& v = kv.value();
@@ -243,8 +245,28 @@ class CaptureRegistry {
     return it->second;
   }
 
+  std::array<std::string, 2> stereo_pair(const std::string& name) const {
+    if (!stereo_pairs_.is_object()) {
+      throw std::runtime_error("capture registry stereo_pairs must be an object");
+    }
+    if (name.empty() && stereo_pairs_.empty()) return {"camera0", "camera1"};
+    auto pair = stereo_pairs_.find(name.empty() ? "primary" : name);
+    if (name.empty() && pair == stereo_pairs_.end() && stereo_pairs_.size() == 1) {
+      pair = stereo_pairs_.begin();
+    }
+    if (pair == stereo_pairs_.end()) {
+      if (!name.empty()) throw std::runtime_error("capture stereo pair not found: " + name);
+      throw std::runtime_error("capture registry has multiple stereo pairs; select a pair or specify both camera streams");
+    }
+    if (!pair->is_array() || pair->size() != 2 || !(*pair)[0].is_string() || !(*pair)[1].is_string()) {
+      throw std::runtime_error("invalid capture stereo pair: " + pair.key());
+    }
+    return pair->get<std::array<std::string, 2>>();
+  }
+
  private:
   std::unordered_map<std::string, StreamInfo> streams_;
+  nlohmann::json stereo_pairs_;
 };
 
 class ShmCaptureTransport final : public ICaptureTransport {
@@ -253,10 +275,18 @@ class ShmCaptureTransport final : public ICaptureTransport {
                                const std::string& cam0_stream = "camera0",
                                const std::string& cam1_stream = "camera1",
                                const std::string& imu_stream = "imu0",
-                               bool subscribe_imu = true)
-      : registry_(registry_path),
-        cam0_(std::make_unique<ShmStreamReader>(registry_.stream(cam0_stream))),
-        cam1_(std::make_unique<ShmStreamReader>(registry_.stream(cam1_stream))) {
+                               bool subscribe_imu = true,
+                               const std::string& stereo_pair_name = {})
+      : registry_(registry_path) {
+    std::array<std::string, 2> cameras{cam0_stream, cam1_stream};
+    if (cam0_stream.empty() || cam1_stream.empty()) {
+      const auto defaults = registry_.stereo_pair(stereo_pair_name);
+      for (size_t i = 0; i < cameras.size(); ++i) {
+        if (cameras[i].empty()) cameras[i] = defaults[i];
+      }
+    }
+    cam0_ = std::make_unique<ShmStreamReader>(registry_.stream(cameras[0]));
+    cam1_ = std::make_unique<ShmStreamReader>(registry_.stream(cameras[1]));
     if (subscribe_imu) {
       imu_ = std::make_unique<ShmStreamReader>(registry_.stream(imu_stream));
     } else {

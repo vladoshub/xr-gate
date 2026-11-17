@@ -508,6 +508,11 @@ PUBLISH_RUNTIME_BODY_TRACKERS=1
 
 For TCP publication set `RUNTIME_APP_TCP=1` and `RUNTIME_APP_TCP_BODY_TRACKERS=1`.
 
+Set `streams.body_trackers.coordinate_transform.offset_m` in the device tracking
+transform profile to translate body tracker positions in meters. FRAME uses the
+HMD coordinate basis for Basalt world poses and adds this translation to it.
+For XREAL Ultra, setting `y` to `0.15` raises the body trackers by 15 cm.
+
 ### Controller fallback from body wrists
 
 A body backend can send `LEFT_WRIST` (role 14) and `RIGHT_WRIST` (role 15)

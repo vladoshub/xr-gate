@@ -15,6 +15,8 @@ from the exact upstream checkouts used for a build into
 - OpenVR packages include the license from the exact SDK checkout.
 - Optional Mercury model archives include the upstream BSL-1.0 text and source
   metadata.
+- The separate FRAME model archive includes the upstream CC BY-NC 4.0 text in
+  `FRAME-LICENSE.txt` and the author and export notices in `SOURCE.txt`.
 - Optional xrizer packages include the upstream GPL license and Corresponding
   Source through the existing xrizer compliance flow.
 - Debian/Ubuntu builds copy exact distro package copyright metadata for the

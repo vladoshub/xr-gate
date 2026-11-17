@@ -38,7 +38,8 @@ class ManualControlPoller:
                 self._posix_terminal_state = state
             except (OSError, ValueError, termios.error):
                 pass  # Retain line-based controls if this TTY cannot use cbreak.
-        self._prompt = "XR control [1/2/3/4/5/6/7/8/9/h/q]: "
+        frame_key = "0/" if sys.platform.startswith("linux") else ""
+        self._prompt = f"XR control [{frame_key}1/2/3/4/5/6/7/8/9/h/q]: "
         self.mapping: Dict[str, str] = {
             "1": "manual-restart-running-backends",
             "r": "manual-restart-running-backends",
@@ -81,6 +82,8 @@ class ManualControlPoller:
             "imu": "manual-toggle-shake-controls",
             "imu_tap": "manual-toggle-shake-controls",
         }
+        if sys.platform.startswith("linux"):
+            self.mapping["0"] = "manual-toggle-body-tracking"
 
     @staticmethod
     def available() -> bool:
@@ -126,6 +129,8 @@ class ManualControlPoller:
     def print_menu(self) -> None:
         print("", flush=True)
         print("XR backend controls:", flush=True)
+        if "0" in self.mapping:
+            print("  0 - start/stop FRAME body tracking", flush=True)
         print("  1 - restart running backends", flush=True)
         print("  2 - start/stop hand_tracking", flush=True)
         print("  3 - toggle Basalt VIO / stereo VO (restarts Basalt)", flush=True)
@@ -138,7 +143,8 @@ class ManualControlPoller:
         print("  h - show this menu", flush=True)
         print("  q - stop all and exit", flush=True)
         if os.name == "posix":
-            print("  Keys 1-9 act without Enter; text commands use Enter."
+            first_key = "0" if "0" in self.mapping else "1"
+            print(f"  Keys {first_key}-9 act without Enter; text commands use Enter."
                   if self._posix_fd is not None else "  Type a command and press Enter.", flush=True)
         print("", flush=True)
         self._print_prompt()
@@ -157,7 +163,7 @@ class ManualControlPoller:
             return []
         event_name = self.mapping.get(raw)
         if not event_name:
-            print("Unknown command. Use 1, 2, 3, 4, 5, 6, 7, 8, 9, h or q.", flush=True)
+            print("Unknown command. Press h to see available controls.", flush=True)
             self._print_prompt()
             return []
         self._print_prompt()
@@ -184,8 +190,11 @@ class ManualControlPoller:
                 self.stop_requested = True
                 return []
             events = []
+            single_key_commands = set("123456789")
+            if "0" in self.mapping:
+                single_key_commands.add("0")
             for ch in data.decode("utf-8", errors="replace"):
-                events.extend(self._handle_character(ch, set("123456789")))
+                events.extend(self._handle_character(ch, single_key_commands))
             return events
         line = sys.stdin.readline()
         if line == "":

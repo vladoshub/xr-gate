@@ -65,7 +65,7 @@ checkouts used for the build into `LICENSES/components/`.
 
 - Upstream: https://github.com/microsoft/onnxruntime
 - Pinned default release: `1.18.1`.
-- Use: runtime dependency for Mercury inference.
+- Runtime dependency for Mercury and FRAME inference.
 - License: MIT, with additional third-party notices.
 - Baseline text: `LICENSES/ONNXRuntime-MIT.txt`.
 - Build packaging requires and redistributes the exact upstream `LICENSE` and
@@ -130,6 +130,24 @@ metadata rather than assigning a single guessed license to the whole package.
   publishing model assets, preserve the upstream bundle and verify that the
   selected upstream revision authorizes redistribution of those exact weights.
 
+### FRAME body-tracking ONNX model
+
+- FRAME (*Floor-aligned Representation for Avatar Motion from Egocentric
+  Video*) is by Andrea Boscolo Camiletto et al. (CVPR 2025).
+  https://vcai.mpi-inf.mpg.de/projects/FRAME/
+- The export uses the FRAME Python sources at commit
+  `e769c2f9068806101f6897e0b62b03e8c5280abd` during build.
+  https://github.com/abcamiletto/frame
+- The export converts the published `backbone.ckpt` (Edmond file `311764`)
+  to `frame_backbone.onnx` for the XR Gate backend.
+  https://doi.org/10.17617/3.XARMQA
+- The FRAME sources and published checkpoint use CC BY-NC 4.0.
+  https://creativecommons.org/licenses/by-nc/4.0/
+- The separate `body-tracking-models-frame.tar.gz` archive includes
+  `FRAME-LICENSE.txt`, the author credits and export details in `SOURCE.txt`,
+  and the checksum in `SHA256SUMS.txt`. The unpack helper installs these
+  alongside the ONNX model under `bin/body-tracking-models/frame/`.
+
 ### xrizer
 
 - Upstream: https://github.com/Supreeeme/xrizer
@@ -155,3 +173,11 @@ upstream notice and be added to this inventory before release.
   `drivers/monado_driver/openxr/spatial_compat.h` for the pinned Monado SDK.
 - License: MIT (selected from Apache-2.0 OR MIT).
 - Baseline text: `LICENSES/OpenXR-MIT.txt`. Copyright 2017-2026 The Khronos Group Inc.
+
+### Monado device-space declarations
+
+- Project: Monado.
+- Source: `src/external/openxr_includes/openxr/XR_MNDX_xdev_space.h` in the pinned Monado checkout.
+- Use: device-space declarations in
+  `apps/openxr/hand_skeleton/src/monado_xdev_space.hpp`.
+- License: BSL-1.0. See `LICENSES/BSL-1.0.txt`.

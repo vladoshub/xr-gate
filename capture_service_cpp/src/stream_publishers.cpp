@@ -31,6 +31,13 @@ void StreamPublishers::add_stream(const StreamSpec& spec, bool reserve_shm_stora
   sequences_.emplace(spec.stream_id, 0);
 }
 
+void StreamPublishers::add_stereo_pair(const std::string& name, const std::string& left, const std::string& right) {
+  if (left == right || !specs_.count(left) || !specs_.count(right)) {
+    throw std::runtime_error("stereo pair " + name + " needs two registered streams");
+  }
+  stereo_pairs_.emplace(name, std::array<std::string, 2>{left, right});
+}
+
 void StreamPublishers::start() {
   if (enable_tcp_) {
     tcp_ = std::make_unique<TcpFanoutPublisher>(specs_,
@@ -64,8 +71,19 @@ void StreamPublishers::write_registry() {
   if (enable_tcp_) { if (!first_mode) os << ", "; os << "\"tcp\""; }
   os << "],\n"
      << "  \"service\": \"capture_service\",\n"
-     << "  \"implementation\": \"capture_service_cpp_experimental\",\n"
-     << "  \"streams\": {\n";
+     << "  \"implementation\": \"capture_service_cpp_experimental\",\n";
+  if (!stereo_pairs_.empty()) {
+    os << "  \"stereo_pairs\": {";
+    bool first_pair = true;
+    for (const auto& [name, cameras] : stereo_pairs_) {
+      if (!first_pair) os << ",";
+      first_pair = false;
+      os << "\n    \"" << json_escape(name) << "\": [\"" << json_escape(cameras[0])
+         << "\", \"" << json_escape(cameras[1]) << "\"]";
+    }
+    os << "\n  },\n";
+  }
+  os << "  \"streams\": {\n";
 
   size_t emitted = 0;
   for (const auto& kv : specs_) {
