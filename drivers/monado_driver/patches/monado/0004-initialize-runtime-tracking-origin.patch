@@ -1,0 +1,13 @@
+diff --git a/src/xrt/targets/common/target_builder_legacy.c b/src/xrt/targets/common/target_builder_legacy.c
+index f876305..4627144 100644
+--- a/src/xrt/targets/common/target_builder_legacy.c
++++ b/src/xrt/targets/common/target_builder_legacy.c
+@@ -164,6 +164,8 @@ legacy_open_system_impl(struct xrt_builder *xb,
+ 		left->tracking_origin = origin;
+ 		right->tracking_origin = origin;
+ 		origin->type = XRT_TRACKING_TYPE_OTHER;
++		// XR Gate poses already share the runtime tracking frame.
++		origin->initial_offset = (struct xrt_pose)XRT_POSE_IDENTITY;
+ 
+ 		xsysd->static_xdevs[xsysd->static_xdev_count++] = head;
+ 		xsysd->static_xdevs[xsysd->static_xdev_count++] = left;
