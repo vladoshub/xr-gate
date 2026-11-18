@@ -63,7 +63,20 @@ if ! complete_sdk "$sdk_dir"; then
 
   stage="$(mktemp -d "$cache_dir/build.XXXXXXXX")"
   trap 'rm -rf -- "$stage"' EXIT
-  ln -s "$source_dir" "$stage/source"
+  git clone --quiet --shared --no-checkout -- "$source_dir" "$stage/source"
+  git -C "$stage/source" checkout --quiet --detach "$source_commit"
+  # Backport ONNX Runtime #24583 to the temporary source tree.
+  git -C "$stage/source" apply <<'ORT_GCC15_PATCH'
+diff --git a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h b/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
+--- a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
++++ b/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
+@@ -10,4 +10,5 @@
+ #include <string_view>
+ #include <unordered_map>
+ #include <unordered_set>
++#include <cstdint>
+ #include <vector>
+ORT_GCC15_PATCH
   build_args=(
     --config Release --build_shared_lib --cmake_generator Ninja
     --parallel "${BUILD_JOBS:-2}" --skip_tests --compile_no_warning_as_error
