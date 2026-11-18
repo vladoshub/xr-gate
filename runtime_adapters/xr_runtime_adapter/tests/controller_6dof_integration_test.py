@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the 6DoF controller input and the existing driver outputs."""
+"""Exercise external controller inputs and the existing driver outputs."""
 
 import argparse
 import contextlib
@@ -26,14 +26,14 @@ RING_HEADER = struct.Struct("<8s7IQ")
 RING_SLOT = struct.Struct("<4Q2I88x")
 
 
-def six_dof_frame(sequence, left_flags=7, right_status=2, timestamp=None):
+def six_dof_frame(sequence, left_flags=7, right_status=2, timestamp=None, buttons=BUTTONS):
     stamp = time.monotonic_ns() if timestamp is None else timestamp
     data = bytearray(INPUT_SIZE)
     struct.pack_into("<IIQQQ", data, 0, 3, INPUT_SIZE, sequence, stamp, stamp)
     for index, (flags, status) in enumerate(((left_flags, 2), (15, right_status))):
         side = 56 + index * SIDE_SIZE
         struct.pack_into("<4I3Q4f", data, side, status, index + 1, flags, 6,
-                         BUTTONS, 8, BUTTONS, .25, .5, -.25, .125)
+                         buttons, 8, buttons, .25, .5, -.25, .125)
         struct.pack_into("<Q", data, side + 64, 100 + index)
         struct.pack_into("<I", data, side + 80, 7)
     for x in (-.375, .625):
@@ -220,6 +220,47 @@ class Controller6DofTest(unittest.TestCase):
                     state = controller_frame(client, lambda frame: frame["left"]["input_valid"])["left"]
                     self.assertEqual(int(state["buttons"]), BUTTONS)
                     self.assertFalse(state["pose_valid"])
+
+    def test_tcp_listener_requires_an_explicit_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "xr_21_joint_hand_viewer_verified.json"
+            profile.write_text("{}")
+            result = subprocess.run(
+                [ADAPTER, "--input", "udp", "--udp-bind-port", str(free_port(socket.SOCK_DGRAM)),
+                 "--mode", "tick", "--duration", ".1", "--tracking-transform-config", str(profile),
+                 "--controller-input-transport", "tcp_listen"],
+                capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("controller_input_transport: none\n", result.stdout)
+        self.assertNotIn("controller input thread started", result.stdout)
+
+    def test_tcp_listener_receives_v3_after_reconnect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "xr_21_joint_hand_viewer_verified.json"
+            profile.write_text("{}")
+            port = free_port()
+            with runtime("tick", profile, "--controller-input-transport", "tcp_listen",
+                         "--controller-input-port", str(port),
+                         "--controller-input-mode", "controller_buttons_runtime_only") as client:
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        peer = socket.create_connection(("127.0.0.1", port), timeout=1)
+                        break
+                    except ConnectionRefusedError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(.01)
+                for sequence, buttons in enumerate((BUTTONS, 1), start=1):
+                    with peer:
+                        self.assertEqual(peer.recv(8, socket.MSG_WAITALL), b"XRARCRP1")
+                        payload = six_dof_frame(sequence, buttons=buttons)[:INPUT_SIZE]
+                        send_tcp(peer, payload, six_dof=False)
+                        state = controller_frame(
+                            client, lambda frame: int(frame["left"]["buttons"]) == buttons)["left"]
+                        self.assertTrue(state["input_valid"])
+                    if sequence == 1:
+                        peer = socket.create_connection(("127.0.0.1", port), timeout=1)
 
 
 if __name__ == "__main__":

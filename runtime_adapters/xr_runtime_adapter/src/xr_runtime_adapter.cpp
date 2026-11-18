@@ -2396,6 +2396,8 @@ class ControllerInputThread {
         const auto transport = xr_runtime::parse_controller_input_transport(cfg_.input.transport);
         if (transport == xr_runtime::ControllerInputTransport::TCP) {
           run_tcp_once();
+        } else if (transport == xr_runtime::ControllerInputTransport::TCP_LISTEN) {
+          run_tcp_listener();
         } else if (transport == xr_runtime::ControllerInputTransport::SHM) {
           if (cfg_.pose_6dof) {
             run_shm_once<xr_runtime::Controller6DofInputV1>(xr_runtime::CONTROLLER_6DOF_INPUT_V1_FORMAT_NAME);
@@ -2407,9 +2409,7 @@ class ControllerInputThread {
           return;
         }
       } catch (const std::exception& e) {
-        std::cerr << "[xr_runtime_adapter][WARN] controller input: " << e.what() << "\n";
-        note_reattach_failure(e.what());
-        set_error(e.what());
+        report_transport_error(e);
         sleep_ms(500);
       }
     }
@@ -2417,6 +2417,26 @@ class ControllerInputThread {
 
   void run_tcp_once() {
     xr_runtime::ControllerInputTcpClient client(cfg_.input.host, cfg_.input.port);
+    read_tcp_frames(client);
+  }
+
+  void run_tcp_listener() {
+    xr_runtime::ControllerInputTcpListener listener(cfg_.input.host, cfg_.input.port);
+    std::cout << "[xr_runtime_adapter] controller input listening on "
+              << cfg_.input.host << ":" << cfg_.input.port << std::endl;
+    while (!stop_) {
+      auto peer = listener.accept_for(100);
+      if (!peer || stop_) continue;
+      note_reattach_attempt();
+      try {
+        read_tcp_frames(*peer);
+      } catch (const std::exception& e) {
+        if (!stop_) report_transport_error(e);
+      }
+    }
+  }
+
+  void read_tcp_frames(xr_runtime::ControllerInputTcpClient& client) {
     note_reattach_success();
     set_connected(true, "");
     while (!stop_) {
@@ -2526,6 +2546,11 @@ class ControllerInputThread {
     }
   }
   void set_error(const std::string& error) { set_connected(false, error); }
+  void report_transport_error(const std::exception& e) {
+    std::cerr << "[xr_runtime_adapter][WARN] controller input: " << e.what() << "\n";
+    note_reattach_failure(e.what());
+    set_error(e.what());
+  }
   void note_reattach_attempt() { std::lock_guard<std::mutex> lock(mu_); ++snapshot_.reattach_attempts; }
   void note_reattach_success() { std::lock_guard<std::mutex> lock(mu_); ++snapshot_.reattach_successes; }
   void note_reattach_failure(const std::string& error) {
@@ -3530,7 +3555,7 @@ int main(int argc, char** argv) {
   app.add_option("--controller-input-transport", controller_input_transport,
 
 
-                 "External controller input transport: none, shm, udp, tcp, named_pipe");
+                 "External controller input transport: none, shm, udp, tcp, tcp_listen, named_pipe");
 
   app.add_option("--controller-6dof-input", controller_6dof_config.transport,
                  "6DoF controller input transport: none, shm, tcp (default none)")
@@ -3584,15 +3609,13 @@ int main(int argc, char** argv) {
 
 
 
-                 "Controller input host for udp/tcp transport");
+                 "Controller input host for udp/tcp, or local bind address for tcp_listen");
 
 
 
-  app.add_option("--controller-input-port", controller_input_config.port,
-
-
-
-                 "Controller input port for udp/tcp transport");
+  const auto* controller_input_port_option =
+      app.add_option("--controller-input-port", controller_input_config.port,
+                     "Controller input port for udp/tcp; required to enable tcp_listen");
 
 
 
@@ -4191,6 +4214,9 @@ int main(int argc, char** argv) {
     return app.exit(e);
   }
 
+  if (controller_input_transport == "tcp_listen" && controller_input_port_option->count() == 0) {
+    controller_input_transport = "none";
+  }
   const bool controller_6dof_enabled = controller_6dof_config.transport != "none";
   if (controller_6dof_enabled && controller_input_transport != "none") {
     std::cerr << "ERROR: --controller-6dof-input and --controller-input-transport are mutually "
@@ -4324,15 +4350,8 @@ int main(int argc, char** argv) {
            v == "controller_buttons_only" ||
            v == "controller_buttons_runtime_only";
   };
-  auto valid_controller_source = [](const std::string& v) {
-    return v == "none" || v == "shm" || v == "udp" || v == "tcp" || v == "named_pipe";
-  };
-
   if (!valid_controller_mode(controller_input_mode)) {
     throw std::runtime_error("--controller-input-mode must be one of: hand_tracking_only, hand_plus_controller, controller_buttons_only, controller_buttons_runtime_only");
-  }
-  if (!valid_controller_source(controller_input_transport)) {
-    throw std::runtime_error("--controller-input-transport must be one of: none, shm, udp, tcp, named_pipe");
   }
   if (max_controller_age_ms <= 0) {
     throw std::runtime_error("--max-controller-age-ms must be positive");
