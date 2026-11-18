@@ -287,11 +287,14 @@ RUNTIME_CONTROLLER_LEFT_MOVEMENT_SPACE_IMU="${RUNTIME_CONTROLLER_LEFT_MOVEMENT_S
 RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE_IMU="${RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE_IMU:-${RUNTIME_CONTROLLER_RIGHT_MOVEMENT_SPACE:-controller}}"
 CONTROLLER_INPUT_MODE="${CONTROLLER_INPUT_MODE:-controller_buttons_runtime_only}" # controller/hand gesture merge mode; hand_tracking_only #controller_buttons_only #hand_plus_controller №controller_buttons_runtime_only
 RUNTIME_CONTROLLER_MODE="${RUNTIME_CONTROLLER_MODE:-}" # empty keeps controller_override.mode from the transform config
-CONTROLLER_INPUT_TRANSPORT="${CONTROLLER_INPUT_TRANSPORT:-shm}"  # controller input transport;  none, shm, tcp
+CONTROLLER_INPUT_TRANSPORT="${CONTROLLER_INPUT_TRANSPORT:-shm}" # none, shm, tcp, tcp_listen
 CONTROLLER_INPUT_REGISTRY="${CONTROLLER_INPUT_REGISTRY:-$TRACKING_REGISTRY}" # controller input source registry path
 CONTROLLER_INPUT_STREAM="${CONTROLLER_INPUT_STREAM:-controller_input}" # controller input source stream name
-CONTROLLER_INPUT_HOST="${CONTROLLER_INPUT_HOST:-127.0.0.1}" # TCP host for controller input
-CONTROLLER_INPUT_PORT="${CONTROLLER_INPUT_PORT:-45672}" # TCP port for controller input
+CONTROLLER_INPUT_HOST="${CONTROLLER_INPUT_HOST:-127.0.0.1}" # local bind address for tcp_listen
+CONTROLLER_INPUT_PORT="${CONTROLLER_INPUT_PORT:-}"
+if [[ "$CONTROLLER_INPUT_TRANSPORT" != "tcp_listen" ]]; then
+  CONTROLLER_INPUT_PORT="${CONTROLLER_INPUT_PORT:-45672}"
+fi
 CONTROLLER_6DOF_INPUT="${CONTROLLER_6DOF_INPUT:-none}" # none, shm, tcp
 CONTROLLER_6DOF_REGISTRY="${CONTROLLER_6DOF_REGISTRY:-$TRACKING_REGISTRY}"
 CONTROLLER_6DOF_STREAM="${CONTROLLER_6DOF_STREAM:-controller_6dof}"
@@ -510,7 +513,6 @@ args=(
   --controller-input-registry "$CONTROLLER_INPUT_REGISTRY"
   --controller-input-stream "$CONTROLLER_INPUT_STREAM"
   --controller-input-host "$CONTROLLER_INPUT_HOST"
-  --controller-input-port "$CONTROLLER_INPUT_PORT"
   --controller-6dof-input "$CONTROLLER_6DOF_INPUT"
   --controller-6dof-registry "$CONTROLLER_6DOF_REGISTRY"
   --controller-6dof-stream "$CONTROLLER_6DOF_STREAM"
@@ -598,6 +600,9 @@ args=(
   --video-input "$VIDEO_INPUT"
 )
 
+if [[ -n "$CONTROLLER_INPUT_PORT" ]]; then
+  args+=(--controller-input-port "$CONTROLLER_INPUT_PORT")
+fi
 if [[ "$HMD_3DOF_PRIORITY" == "1" ]]; then
   args+=(--hmd-3dof-priority)
 fi

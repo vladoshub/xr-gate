@@ -1,0 +1,43 @@
+version: 1
+
+service:
+  profile: xreal_air2ultra_unified_480
+  namespace: xreal_air2ultra_tcp
+  publish: [shm]
+
+# The sender supplies the decoded, oriented unified_480 views. For a LAN
+# sender, set both bind_host values to the XR Gate PC's LAN address.
+camera:
+  enabled: true
+  driver: tcp
+  layout: stereo
+  timestamp_mode: sender_capture
+  slot_count: 8
+  primary:
+    width: 480
+    height: 640
+  tcp:
+    bind_host: 127.0.0.1
+    port: 45700
+  output:
+    width: 480
+    height: 640
+    left_stream: camera0
+    right_stream: camera1
+  transform:
+    left:
+      rotate: none
+      flip: none
+    right:
+      rotate: none
+      flip: none
+
+imu:
+  enabled: true
+  driver: tcp
+  slot_count: 2048
+  tcp:
+    bind_host: 127.0.0.1
+    port: 45702
+  output:
+    stream: imu0

@@ -10,6 +10,9 @@ imu0     IMU_F32_LE: gx, gy, gz [rad/s], ax, ay, az [m/s²]
 
 The rest of the XR Gate pipeline does not need to know which physical camera or IMU produced the streams.
 
+Remote sensor senders can push primary stereo, additional views, external
+cameras and IMU samples to enabled TCP inputs. [TCP input protocol and configurations](docs/tcp_input_protocol.md)
+
 ## Compatibility
 
 When no configuration file exists, the service uses the built-in XREAL Ultra profile. This preserves the previous behavior:
@@ -619,11 +622,14 @@ configs/opencv_interleaved_columns_xreal_imu.yaml
 ## Build on Linux
 
 ```bash
-sudo apt install -y libopencv-dev libhidapi-dev pkg-config
+sudo apt install -y libopencv-dev libhidapi-dev nlohmann-json3-dev pkg-config
 capture_service_cpp/scripts/linux/build_capture_service_cpp.sh
 ```
 
 ## Build on Windows
+
+Set `NLOHMANN_JSON_INCLUDE_DIR` to the include directory containing
+`nlohmann/json.hpp` when using headers outside CMake's search path.
 
 ```powershell
 capture_service_cpp\scripts\windows\build_capture_service_cpp.ps1 `
@@ -640,7 +646,7 @@ Linux:  SHM and TCP
 Windows: TCP
 ```
 
-TCP uses the existing `capture_net_v1_json_payload` protocol.
+TCP publication uses the `capture_net_v1_json_payload` protocol.
 
 
 ### Per-source SHM ring sizes

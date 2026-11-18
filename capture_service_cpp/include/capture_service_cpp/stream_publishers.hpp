@@ -7,6 +7,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -23,6 +24,8 @@ class StreamPublishers {
   void add_stereo_pair(const std::string& name, const std::string& left, const std::string& right);
   void start();
   void write_registry();
+  void set_tcp_imu_available(bool available);
+  void mark_tcp_capture_ready(uint32_t kind);
   std::vector<std::string> shm_names() const;
   bool tcp_enabled() const { return static_cast<bool>(tcp_); }
   uint64_t publish(const std::string& stream_id,
@@ -36,6 +39,7 @@ class StreamPublishers {
                    const std::string& frame_id);
 
  private:
+  void write_registry_locked();
   RuntimeConfig cfg_;
   bool enable_shm_ = false;
   bool enable_tcp_ = false;
@@ -44,6 +48,10 @@ class StreamPublishers {
   std::unordered_map<std::string, std::unique_ptr<ShmPublisher>> shm_publishers_;
   std::unordered_map<std::string, uint64_t> sequences_;
   std::unique_ptr<TcpFanoutPublisher> tcp_;
+  std::mutex registry_mutex_;
+  std::optional<bool> tcp_imu_available_;
+  std::atomic<bool> stereo_ready_{false};
+  std::atomic<bool> imu_ready_{false};
 };
 
 }  // namespace xr_capture_cpp

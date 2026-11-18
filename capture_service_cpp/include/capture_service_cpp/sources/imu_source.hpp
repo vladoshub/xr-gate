@@ -9,6 +9,7 @@
 
 namespace xr_capture_cpp {
 class XrealDeviceClock;
+class TcpCaptureSession;
 
 struct ImuSample {
   std::array<float, 3> gyro_rad_s{};
@@ -36,6 +37,7 @@ class IImuSource {
 };
 
 std::unique_ptr<IImuSource> create_imu_source(
-    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> xreal_clock = {});
+    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> xreal_clock = {},
+    std::shared_ptr<TcpCaptureSession> tcp_session = {});
 
 }  // namespace xr_capture_cpp

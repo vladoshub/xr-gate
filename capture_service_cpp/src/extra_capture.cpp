@@ -4,6 +4,7 @@
 #include "capture_service_cpp/image_transform.hpp"
 #include "capture_service_cpp/platform/camera_capture.hpp"
 #include "capture_service_cpp/sources/camera_source.hpp"
+#include "capture_service_cpp/sources/tcp_input.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -120,18 +121,23 @@ void capture_mono(const CameraWorker& worker, StreamPublishers& publishers) {
   });
 }
 
-void capture_stereo(const CameraWorker& worker, StreamPublishers& publishers) {
-  auto camera = create_camera_source(worker.config, nullptr);
+void capture_source(const CameraWorker& worker, StreamPublishers& publishers) {
+  const auto& cfg = worker.config.camera;
+  const bool tcp = cfg.driver == "tcp";
+  const bool mono = cfg.layout == "mono";
+  const int channels = worker.streams.front().format_code == kBgr8 ? 3 : 1;
+  auto camera = tcp ? make_tcp_camera_source(cfg, TcpInputRole::External, channels)
+                    : create_camera_source(worker.config, nullptr);
   camera->open();
-  capture_frames(worker.config.camera.stall_exit_ms, [&] {
+  capture_frames(tcp ? 0 : cfg.stall_exit_ms, [&] {
     StereoFrame frame;
     const auto status = camera->read(frame);
-    if (!frame.complete()) {
+    if (frame.left.empty() || (!mono && frame.right.empty())) {
       return status == SourceReadStatus::Data ? SourceReadStatus::TransportActivity : status;
     }
     const uint64_t timestamp_ns = frame.timestamp_ns ? frame.timestamp_ns : steady_ns();
     publish_image(publishers, worker.streams[0], frame.left, timestamp_ns);
-    publish_image(publishers, worker.streams[1], frame.right, timestamp_ns);
+    if (!mono) publish_image(publishers, worker.streams[1], frame.right, timestamp_ns);
     return SourceReadStatus::Data;
   });
   camera->close();
@@ -140,8 +146,11 @@ void capture_stereo(const CameraWorker& worker, StreamPublishers& publishers) {
 void run_camera(const CameraWorker& worker, StreamPublishers& publishers) {
   while (!g_stop.load()) {
     try {
-      if (worker.config.camera.layout == "mono") capture_mono(worker, publishers);
-      else capture_stereo(worker, publishers);
+      if (worker.config.camera.layout == "mono" && worker.config.camera.driver != "tcp") {
+        capture_mono(worker, publishers);
+      } else {
+        capture_source(worker, publishers);
+      }
     } catch (const std::exception& e) {
       std::cerr << "[capture_service_cpp][extra][" << worker.name << "] " << e.what()
                 << "; reopening in 2 s" << std::endl;

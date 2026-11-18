@@ -5,6 +5,7 @@
 #include "capture_service_cpp/imu_pipeline.hpp"
 #include "capture_service_cpp/sources/camera_source.hpp"
 #include "capture_service_cpp/sources/imu_source.hpp"
+#include "capture_service_cpp/sources/tcp_input.hpp"
 #include "capture_service_cpp/stream_publishers.hpp"
 #include "capture_service_cpp/timing/xreal_device_clock.hpp"
 
@@ -39,13 +40,22 @@ int main(int argc, char** argv) {
     }
     RuntimeConfig cfg = parse_args(argc, argv);
 
+    StreamPublishers publishers(cfg);
+    std::shared_ptr<TcpCaptureSession> tcp_session;
+    if (cfg.camera.enabled && cfg.camera.driver == "tcp" &&
+        (cfg.camera.stereo_enabled || !cfg.camera.additional_cameras.empty())) {
+      std::function<void(bool)> capability;
+      if (cfg.camera.stereo_enabled && cfg.imu.enabled && cfg.imu.driver == "tcp") {
+        capability = [&](bool available) { publishers.set_tcp_imu_available(available); };
+      }
+      tcp_session = std::make_shared<TcpCaptureSession>(std::move(capability));
+    }
     std::unique_ptr<ICameraSource> camera_source;
     std::unique_ptr<IImuSource> imu_source;
     auto xreal_clock = std::make_shared<XrealDeviceClock>();
-    if (cfg.camera.enabled) camera_source = create_camera_source(cfg, xreal_clock);
-    if (cfg.imu.enabled) imu_source = create_imu_source(cfg, xreal_clock);
+    if (cfg.camera.enabled) camera_source = create_camera_source(cfg, xreal_clock, tcp_session);
+    if (cfg.imu.enabled) imu_source = create_imu_source(cfg, xreal_clock, tcp_session);
 
-    StreamPublishers publishers(cfg);
     if (camera_source && cfg.camera.stereo_enabled) {
       for (const auto& spec : camera_source->stream_specs(static_cast<uint32_t>(cfg.camera.slot_count))) {
         publishers.add_stream(spec);

@@ -1,15 +1,19 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #ifndef _WIN32
 #include <cerrno>
+#include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -38,6 +42,7 @@ enum class ControllerInputTransport {
   UDP,
   TCP,
   NAMED_PIPE,
+  TCP_LISTEN,
 };
 
 enum class ControllerInputConflictPolicy {
@@ -63,8 +68,9 @@ inline ControllerInputTransport parse_controller_input_transport(const std::stri
   if (v == "shm") return ControllerInputTransport::SHM;
   if (v == "udp") return ControllerInputTransport::UDP;
   if (v == "tcp") return ControllerInputTransport::TCP;
+  if (v == "tcp_listen") return ControllerInputTransport::TCP_LISTEN;
   if (v == "named_pipe") return ControllerInputTransport::NAMED_PIPE;
-  throw std::runtime_error("--controller-input-transport must be one of: none, shm, udp, tcp, named_pipe");
+  throw std::runtime_error("--controller-input-transport must be one of: none, shm, udp, tcp, tcp_listen, named_pipe");
 }
 
 inline ControllerInputConflictPolicy parse_controller_input_conflict_policy(const std::string& v) {
@@ -120,9 +126,10 @@ inline void validate_controller_input_runtime_config(const ControllerInputRuntim
   }
 
   if ((transport == ControllerInputTransport::UDP ||
-       transport == ControllerInputTransport::TCP) &&
+       transport == ControllerInputTransport::TCP ||
+       transport == ControllerInputTransport::TCP_LISTEN) &&
       c.host.empty()) {
-    throw std::runtime_error("--controller-input-host must not be empty for udp/tcp transport");
+    throw std::runtime_error("--controller-input-host must not be empty for udp, tcp or tcp_listen");
   }
 
   if (transport == ControllerInputTransport::NAMED_PIPE &&
@@ -442,6 +449,7 @@ class ControllerInputTcpClient {
 #endif
     connect_socket();
     try {
+      set_receive_timeout();
       send_profile_hello();
     } catch (...) {
       close_socket();
@@ -472,14 +480,28 @@ class ControllerInputTcpClient {
   const ControllerRuntimeProfileV1& runtime_profile() const { return profile_; }
 
  private:
+  friend class ControllerInputTcpListener;
+  ControllerInputTcpClient() = default;
+
+  using Clock = std::chrono::steady_clock;
+  static constexpr auto kReceiveTimeout = std::chrono::milliseconds(200);
+#ifdef _WIN32
+  using Socket = SOCKET;
+  static constexpr Socket kInvalidSocket = INVALID_SOCKET;
+#else
+  using Socket = int;
+  static constexpr Socket kInvalidSocket = -1;
+#endif
+
   template <typename Payload>
   Payload read_payload(uint32_t magic, uint16_t version, const char* format) {
+    const auto deadline = accepted_peer_ ? Clock::now() + kReceiveTimeout : Clock::time_point::max();
     for (;;) {
       ControllerInputTcpHeader header{};
-      read_exact(&header, sizeof(header));
+      read_exact(&header, sizeof(header), deadline);
       if (header.magic == CONTROLLER_INPUT_TCP_PROFILE_MAGIC && header.version == 1 &&
           header.header_size == sizeof(header) && header.payload_size == sizeof(profile_)) {
-        read_exact(&profile_, sizeof(profile_));
+        read_exact(&profile_, sizeof(profile_), deadline);
         if (profile_.version != 1 || profile_.size_bytes != sizeof(profile_) || profile_.revision == 0)
           throw std::runtime_error("invalid controller runtime profile");
         continue;
@@ -489,19 +511,32 @@ class ControllerInputTcpClient {
         throw std::runtime_error(std::string("unsupported controller input TCP ABI; expected ") + format);
       }
       Payload payload{};
-      read_exact(&payload, sizeof(payload));
+      read_exact(&payload, sizeof(payload), deadline);
       // A capable publisher sends the negotiated snapshot before any usable frame.
       if ((header.reserved0 & CONTROLLER_INPUT_TCP_PROFILE_SUPPORTED) && profile_.revision == 0) continue;
       return payload;
     }
   }
 
-  void close_socket() {
+  static void close_native_socket(Socket fd) {
 #ifndef _WIN32
-    if (fd_ >= 0) close(fd_);
+    if (fd != kInvalidSocket) ::close(fd);
 #else
-    if (fd_ != INVALID_SOCKET) closesocket(fd_);
+    if (fd != kInvalidSocket) ::closesocket(fd);
 #endif
+  }
+
+  void close_socket() { close_native_socket(std::exchange(fd_, kInvalidSocket)); }
+
+  void set_receive_timeout() {
+#ifdef _WIN32
+    const DWORD timeout = static_cast<DWORD>(kReceiveTimeout.count());
+#else
+    const timeval timeout{0, static_cast<long>(kReceiveTimeout.count() * 1000)};
+#endif
+    if (::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout)) != 0) {
+      throw std::runtime_error("could not set controller_input TCP receive timeout");
+    }
   }
 
   void send_profile_hello() {
@@ -536,10 +571,6 @@ class ControllerInputTcpClient {
       fd_ = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
       if (fd_ < 0) continue;
       if (connect(fd_, rp->ai_addr, rp->ai_addrlen) == 0) {
-        struct timeval tv {};
-        tv.tv_sec = 0;
-        tv.tv_usec = 200000;
-        setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         freeaddrinfo(result);
         return;
       }
@@ -551,10 +582,11 @@ class ControllerInputTcpClient {
     throw std::runtime_error("failed to connect controller_input TCP " + host_ + ":" + port_s + ": " + std::strerror(errno));
   }
 
-  void read_exact(void* dst, size_t size) {
+  void read_exact(void* dst, size_t size, Clock::time_point deadline) {
     auto* out = static_cast<uint8_t*>(dst);
     size_t off = 0;
     while (off < size) {
+      if (Clock::now() >= deadline) throw std::runtime_error("controller_input TCP frame timeout");
       const ssize_t n = recv(fd_, out + off, size - off, 0);
       if (n == 0) throw std::runtime_error("controller_input TCP peer closed");
       if (n < 0) {
@@ -568,7 +600,6 @@ class ControllerInputTcpClient {
     }
   }
 
-  int fd_ = -1;
 #else
   static void init_winsock_once() {
     static bool initialized = [] {
@@ -601,8 +632,6 @@ class ControllerInputTcpClient {
       fd_ = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
       if (fd_ == INVALID_SOCKET) continue;
       if (connect(fd_, rp->ai_addr, static_cast<int>(rp->ai_addrlen)) == 0) {
-        const DWORD tv = 200;
-        setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
         freeaddrinfo(result);
         return;
       }
@@ -614,10 +643,11 @@ class ControllerInputTcpClient {
     throw std::runtime_error("failed to connect controller_input TCP " + host_ + ":" + port_s + ": " + last_winsock_error());
   }
 
-  void read_exact(void* dst, size_t size) {
+  void read_exact(void* dst, size_t size, Clock::time_point deadline) {
     auto* out = static_cast<uint8_t*>(dst);
     size_t off = 0;
     while (off < size) {
+      if (Clock::now() >= deadline) throw std::runtime_error("controller_input TCP frame timeout");
       const int n = recv(fd_, reinterpret_cast<char*>(out + off), static_cast<int>(size - off), 0);
       if (n == 0) throw std::runtime_error("controller_input TCP peer closed");
       if (n < 0) {
@@ -632,11 +662,122 @@ class ControllerInputTcpClient {
     }
   }
 
-  SOCKET fd_ = INVALID_SOCKET;
 #endif
+  Socket fd_ = kInvalidSocket;
+  bool accepted_peer_ = false;
   std::string host_;
   int port_ = 0;
   ControllerRuntimeProfileV1 profile_;
+};
+
+class ControllerInputTcpListener {
+ public:
+  ControllerInputTcpListener(const std::string& host, int port) {
+    if (host.empty() || port <= 0 || port > 65535) {
+      throw std::runtime_error("controller_input TCP listener requires a bind host and an explicit port");
+    }
+#ifdef _WIN32
+    ControllerInputTcpClient::init_winsock_once();
+#endif
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    addrinfo* addresses = nullptr;
+    const auto service = std::to_string(port);
+    if (::getaddrinfo(host.c_str(), service.c_str(), &hints, &addresses) != 0) {
+      throw std::runtime_error("cannot resolve controller_input TCP bind host " + host);
+    }
+    const std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)> guard(addresses, ::freeaddrinfo);
+    for (const auto* addr = addresses; addr; addr = addr->ai_next) {
+      const Socket socket = ::socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+      if (socket == kInvalidSocket) continue;
+      const int yes = 1;
+#ifdef _WIN32
+      ::setsockopt(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#else
+      ::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+      ::fcntl(socket, F_SETFD, FD_CLOEXEC);
+#endif
+      if (set_nonblocking(socket) &&
+          ::bind(socket, addr->ai_addr, static_cast<int>(addr->ai_addrlen)) == 0 &&
+          ::listen(socket, 1) == 0) {
+        fd_ = socket;
+        return;
+      }
+      ControllerInputTcpClient::close_native_socket(socket);
+    }
+    throw std::runtime_error("cannot listen for controller_input TCP on " + host + ":" + service);
+  }
+
+  ~ControllerInputTcpListener() { ControllerInputTcpClient::close_native_socket(fd_); }
+  ControllerInputTcpListener(const ControllerInputTcpListener&) = delete;
+  ControllerInputTcpListener& operator=(const ControllerInputTcpListener&) = delete;
+
+  std::unique_ptr<ControllerInputTcpClient> accept_for(int timeout_ms) {
+    if (!wait_readable(timeout_ms)) return {};
+    auto peer = std::unique_ptr<ControllerInputTcpClient>(new ControllerInputTcpClient);
+    peer->fd_ = ::accept(fd_, nullptr, nullptr);
+    if (peer->fd_ == kInvalidSocket) {
+      if (retry_socket_error()) return {};
+      throw std::runtime_error("controller_input TCP accept failed");
+    }
+    peer->accepted_peer_ = true;
+#ifdef _WIN32
+    // WinSock accepted sockets inherit the listener's nonblocking mode.
+    unsigned long blocking = 0;
+    if (::ioctlsocket(peer->fd_, FIONBIO, &blocking) != 0) {
+      throw std::runtime_error("cannot configure accepted controller_input TCP socket");
+    }
+#else
+    ::fcntl(peer->fd_, F_SETFD, FD_CLOEXEC);
+#endif
+    peer->set_receive_timeout();
+    peer->send_profile_hello();
+    return peer;
+  }
+
+ private:
+  using Socket = ControllerInputTcpClient::Socket;
+  static constexpr Socket kInvalidSocket = ControllerInputTcpClient::kInvalidSocket;
+
+  static bool set_nonblocking(Socket socket) {
+#ifdef _WIN32
+    unsigned long yes = 1;
+    return ::ioctlsocket(socket, FIONBIO, &yes) == 0;
+#else
+    const int flags = ::fcntl(socket, F_GETFL, 0);
+    return flags >= 0 && ::fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
+  }
+
+  static bool retry_socket_error() {
+#ifdef _WIN32
+    const int error = WSAGetLastError();
+    return error == WSAEINTR || error == WSAEWOULDBLOCK || error == WSAECONNRESET;
+#else
+    return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED;
+#endif
+  }
+
+  bool wait_readable(int timeout_ms) const {
+#ifdef _WIN32
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(fd_, &readable);
+    timeval timeout{timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+    const int result = ::select(0, &readable, nullptr, nullptr, &timeout);
+#else
+    pollfd listener{fd_, POLLIN, 0};
+    const int result = ::poll(&listener, 1, timeout_ms);
+#endif
+    if (result < 0 && !retry_socket_error()) {
+      throw std::runtime_error("controller_input TCP listener wait failed");
+    }
+    return result > 0;
+  }
+
+  Socket fd_ = kInvalidSocket;
 };
 
 }  // namespace xr_runtime

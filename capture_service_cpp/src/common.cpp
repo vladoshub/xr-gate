@@ -111,7 +111,7 @@ bool same_path(const std::string& first, const std::string& second) {
 }
 
 std::vector<std::string> configured_camera_devices(const CameraSourceConfig& cfg) {
-  if (!cfg.enabled) return {};
+  if (!cfg.enabled || cfg.driver == "tcp") return {};
   auto device_name = [](const CameraDeviceConfig& device) {
     if (!device.device_path.empty()) return device.device_path;
 #ifdef _WIN32
@@ -207,17 +207,19 @@ RuntimeConfig parse_args(int argc, char** argv) {
       cfg.imu.raw_enabled = false;
     }
   }
-  cfg.camera.primary.device_path = env_or("CPP_CAPTURE_VIDEO_DEVICE", env_or("VIDEO_DEVICE", cfg.camera.primary.device_path));
-  cfg.camera.primary.index = env_int("CPP_CAPTURE_CAMERA_INDEX", cfg.camera.primary.index);
-  cfg.camera.primary.api = env_or("CPP_CAPTURE_CAMERA_API", cfg.camera.primary.api);
-  cfg.camera.left_transform.rotate = env_or("XR_CAPTURE_CPP_LEFT_ROTATE", env_or("CPP_CAPTURE_LEFT_ROTATE", cfg.camera.left_transform.rotate));
-  cfg.camera.right_transform.rotate = env_or("XR_CAPTURE_CPP_RIGHT_ROTATE", env_or("CPP_CAPTURE_RIGHT_ROTATE", cfg.camera.right_transform.rotate));
-  cfg.camera.left_transform.flip = env_or("XR_CAPTURE_CPP_LEFT_FLIP", env_or("CPP_CAPTURE_LEFT_FLIP", cfg.camera.left_transform.flip));
-  cfg.camera.right_transform.flip = env_or("XR_CAPTURE_CPP_RIGHT_FLIP", env_or("CPP_CAPTURE_RIGHT_FLIP", cfg.camera.right_transform.flip));
+  if (cfg.camera.driver != "tcp") {
+    cfg.camera.primary.device_path = env_or("CPP_CAPTURE_VIDEO_DEVICE", env_or("VIDEO_DEVICE", cfg.camera.primary.device_path));
+    cfg.camera.primary.index = env_int("CPP_CAPTURE_CAMERA_INDEX", cfg.camera.primary.index);
+    cfg.camera.primary.api = env_or("CPP_CAPTURE_CAMERA_API", cfg.camera.primary.api);
+    cfg.camera.left_transform.rotate = env_or("XR_CAPTURE_CPP_LEFT_ROTATE", env_or("CPP_CAPTURE_LEFT_ROTATE", cfg.camera.left_transform.rotate));
+    cfg.camera.right_transform.rotate = env_or("XR_CAPTURE_CPP_RIGHT_ROTATE", env_or("CPP_CAPTURE_RIGHT_ROTATE", cfg.camera.right_transform.rotate));
+    cfg.camera.left_transform.flip = env_or("XR_CAPTURE_CPP_LEFT_FLIP", env_or("CPP_CAPTURE_LEFT_FLIP", cfg.camera.left_transform.flip));
+    cfg.camera.right_transform.flip = env_or("XR_CAPTURE_CPP_RIGHT_FLIP", env_or("CPP_CAPTURE_RIGHT_FLIP", cfg.camera.right_transform.flip));
+  }
   cfg.camera.stall_exit_ms = env_int("CPP_CAPTURE_CAMERA_STALL_EXIT_MS", cfg.camera.stall_exit_ms);
   cfg.imu.stall_exit_ms = env_int("CPP_CAPTURE_IMU_STALL_EXIT_MS", cfg.imu.stall_exit_ms);
   cfg.imu.xreal_hid.drop_first_packets = env_int("CPP_CAPTURE_IMU_DROP_FIRST_PACKETS", cfg.imu.xreal_hid.drop_first_packets);
-  cfg.imu.raw_enabled = env_bool("CPP_CAPTURE_RAW_HID_ENABLED", cfg.imu.raw_enabled);
+  if (cfg.imu.driver != "tcp") cfg.imu.raw_enabled = env_bool("CPP_CAPTURE_RAW_HID_ENABLED", cfg.imu.raw_enabled);
   cfg.imu.serial.port = env_or("CPP_CAPTURE_IMU_SERIAL_PORT", cfg.imu.serial.port);
   cfg.imu.serial.baud_rate = env_int("CPP_CAPTURE_IMU_SERIAL_BAUD", cfg.imu.serial.baud_rate);
   cfg.tcp_bind_host = env_or("TCP_BIND_HOST", env_or("CPP_CAPTURE_TCP_BIND_HOST", cfg.tcp_bind_host));

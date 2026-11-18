@@ -257,6 +257,34 @@ controller_input -> runtime_controller_state
 
 The resulting runtime controller state can be consumed by the OpenVR driver.
 
+### TCP listener for a remote controller publisher
+
+To stream `ControllerInputV3` from Android to XR Gate, run the Linux package with
+the address of the PC running XR Gate and an explicit controller input port.
+
+```bash
+CONTROLLER_INPUT_TRANSPORT=tcp_listen \
+CONTROLLER_INPUT_HOST=192.168.1.20 \
+CONTROLLER_INPUT_PORT=45672 \
+RUN_OVERRIDE_CONTROLLER=0 \
+  ./run_xr_client.sh --config xreal_ultra
+```
+
+The Android publisher connects to `192.168.1.20:45672`. For a publisher on the same
+host, use `127.0.0.1`. Leaving `CONTROLLER_INPUT_PORT` unset or empty disables
+this input. When starting the adapter binary directly, `--controller-input-transport
+tcp_listen` requires an explicit `--controller-input-port` to open a listener.
+With `tcp`, XR Gate initiates the connection to the publisher.
+
+XR Gate accepts one publisher at a time. After connecting, the publisher can
+read the eight-byte runtime profile hello (`XRARCRP1`) and stream each frame
+as a 32-byte `ControllerInputTcpHeader` followed by a 1432-byte
+`ControllerInputV3` payload. Encode both in little-endian byte order and use
+XR Gate's monotonic time domain for payload timestamps. The connection uses
+plain TCP without encryption.
+The binary layout and optional runtime profile metadata are defined in the
+[controller input contract](../../shared/include/xr_runtime/contracts/controller_input_contract.hpp).
+
 ### External 6DoF controllers
 
 A tracking backend can supply a complete controller pose alongside buttons and

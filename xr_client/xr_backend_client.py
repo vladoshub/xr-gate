@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
-    from .common import env_truthy, expand_path, log, registry_has_stream, registry_primary_camera_pair
+    from .common import env_truthy, expand_path, log, registry_has_stream, registry_primary_camera_pair, registry_tcp_input
     from .config_reader import (
         ClientConfig,
         GateSpec,
@@ -46,7 +46,7 @@ try:
     from .process_manager import RunningProcess, cleanup_ble_connections, terminate_one_process_tree, terminate_running_processes
     from .tap_controls import ImuTapControlsSpec, ImuTapDetector, TapEvent, _load_capture_client
 except ImportError:
-    from common import env_truthy, expand_path, log, registry_has_stream, registry_primary_camera_pair
+    from common import env_truthy, expand_path, log, registry_has_stream, registry_primary_camera_pair, registry_tcp_input
     from config_reader import (
         ClientConfig,
         GateSpec,
@@ -153,9 +153,11 @@ def basalt_mode_from_command(command: Sequence[str], default: str = "vio") -> st
 
 
 class Launcher:
-    def __init__(self, cfg: ClientConfig, *, dry_run: bool = False) -> None:
+    def __init__(self, cfg: ClientConfig, *, dry_run: bool = False, auto_tcp_basalt_mode: bool = True) -> None:
         self.cfg = cfg
         self.dry_run = dry_run
+        self.auto_tcp_basalt_mode = auto_tcp_basalt_mode
+        self._tcp_camera_only = False
         self.startup_rules = getattr(cfg, "service_startup_rules", None)
         if self.startup_rules is None:
             self.startup_rules = load_startup_rules()
@@ -759,12 +761,48 @@ class Launcher:
             for client in clients.values():
                 client.close()
 
+    def wait_for_tcp_capture(self, spec: ServiceSpec, registry: str) -> Optional[Dict[str, Any]]:
+        status = registry_tcp_input(registry)
+        self._tcp_camera_only = False
+        if status is None:
+            return None
+        log("Waiting for TCP capture input")
+        basalt = self.service_spec_by_name("basalt_vio")
+        while self.is_running(spec.name):
+            if status is not None and (not status.get("camera") or status.get("stereo_ready")):
+                available = status.get("imu_available")
+                if isinstance(available, bool):
+                    self._tcp_camera_only = not available
+                    mode = self.configured_basalt_mode()
+                    if basalt is not None and status.get("camera") and self.auto_tcp_basalt_mode:
+                        mode = "vio" if available else "vo"
+                    if basalt is not None and basalt.enabled and mode == "vio" and not available:
+                        self.fail("Basalt VIO requires IMU samples, but TCP capture has no IMU")
+                    needs_imu = mode == "vio" and available and not getattr(spec, "no_imu", False)
+                    if not needs_imu or status.get("imu_ready"):
+                        if basalt is not None and status.get("camera") and self.auto_tcp_basalt_mode:
+                            apply_basalt_mode(self.cfg, mode)
+                            log(f"Basalt mode from TCP input: {mode}")
+                        return status
+            time.sleep(0.1)
+            status = registry_tcp_input(registry)
+        self.fail(f"{spec.name} stopped while waiting for TCP capture input")
+
     def wait_for_service_streams(self, spec: ServiceSpec) -> None:
         imu_stream_names = {"imu0"}
         for env_name in ("IMU_STREAM", "CAPTURE_IMU_STREAM"):
             configured = str(spec.env.get(env_name, "")).strip()
             if configured:
                 imu_stream_names.add(configured)
+
+        camera_wait = None
+        if not self.dry_run and spec.name == "capture_service":
+            camera_wait = next((wait for wait in spec.wait_streams if wait.stream in DEFAULT_CAMERA_STREAMS), None)
+            if camera_wait is not None:
+                self.wait_stream(spec.name, camera_wait)
+                status = self.wait_for_tcp_capture(spec, camera_wait.registry)
+                if status is not None and isinstance(status.get("imu_stream"), str):
+                    imu_stream_names.add(status["imu_stream"])
 
         basalt_vo = self.configured_basalt_mode() == "vo"
 
@@ -775,6 +813,8 @@ class Launcher:
                 return "no_imu=true"
             if basalt_vo:
                 return "Basalt mode=vo"
+            if spec.name == "capture_service" and self._tcp_camera_only:
+                return "TCP capture has no IMU"
             return None
 
         if self.dry_run:
@@ -800,7 +840,8 @@ class Launcher:
                     f"{reason}"
                 )
                 continue
-            self.wait_stream(spec.name, wait)
+            if wait is not camera_wait:
+                self.wait_stream(spec.name, wait)
             active_waits.append(self.resolve_capture_wait(spec.name, wait))
         self.wait_for_stream_activity(spec, active_waits)
         if spec.ready_message:
@@ -1748,6 +1789,8 @@ class Launcher:
             deadline_s = time.monotonic() + timeout_s if timeout_s > 0.0 else None
 
             command = gate.command
+            if self._tcp_camera_only:
+                command = [argument for argument in command if argument != "--imu-gate"]
             registry = command_option_value(command, "--registry")
             if registry and command_option_value(command, "--transport") == "shm":
                 pair = registry_primary_camera_pair(registry)
@@ -2302,7 +2345,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else:
                 cfg.imu_tap_controls.enabled = True
                 cfg.imu_tap_controls.debug = True
-        launcher = Launcher(cfg, dry_run=args.dry_run)
+        launcher = Launcher(cfg, dry_run=args.dry_run, auto_tcp_basalt_mode=requested_basalt_mode is None)
         if IS_POSIX:
             stop_signals = [signal.SIGTERM]
             if hasattr(signal, "SIGHUP"):
