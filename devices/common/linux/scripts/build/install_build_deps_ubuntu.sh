@@ -69,6 +69,10 @@ if should_run_step frame_body_tracking; then
   add_packages libeigen3-dev
 fi
 
+if should_run_step mercury_hand_tracking || should_run_step frame_body_tracking; then
+  add_packages util-linux
+fi
+
 for step in capture_service_cpp xr_spatial mercury_hand_tracking monado_driver; do
   if should_run_step "$step"; then
     add_packages libopencv-dev libhidapi-dev libeigen3-dev

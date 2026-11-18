@@ -28,6 +28,7 @@ class BuildDependencyTests(unittest.TestCase):
                      "XR_DEVICE_OUT_ENV", "XR_DEVICE_BUILD_HOOK", "XR_DEVICE_PACKAGE_SCRIPT", "XR_OUT_ROOT",
                      "XR_OUT_BIN_ROOT", "XR_BIN_ROOT", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_LOCAL_BUILD_ID",
                      "XR_BUILD_XRIZER", "XR_DOWNLOAD_HAND_TRACKING_MODELS", "XR_DOWNLOAD_MERCURY_MODELS",
+                     "XR_DOWNLOAD_BODY_TRACKING_MODELS",
                      "XR_BUILD_VENDOR_COMPONENTS", "XR_VENDOR_COMPONENTS", "XR_CHECK_BUILD_DEPS",
                      "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT"):
             self.env.pop(name, None)

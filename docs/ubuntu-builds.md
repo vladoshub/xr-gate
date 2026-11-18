@@ -86,14 +86,16 @@ a source version. Per-component `FETCH_BASALT`, `FETCH_MONADO`, and
 the cache has been marked ready. Prefer `XR_UPDATE_DEPS=1` for one whole build.
 
 Source trees and initialized submodules remain in `third_party/`. Downloaded
-archives (including ONNX Runtime), vcpkg downloads/binaries/installed dependencies,
+archives, vcpkg downloads/binaries/installed dependencies,
 XDG tool caches and ccache persist in `build/.dependency-cache/` by default.
 `XR_DEPENDENCY_CACHE_ROOT=/absolute/path` can relocate this cache. Rust uses the
 user's persistent `CARGO_HOME` and `RUSTUP_HOME` (normally `~/.cargo` and
 `~/.rustup`); xrizer's first successful build must include its optional source
 compliance/vendor step to prepare those dependencies too. Optional models retain
 LFS objects in their checkout and hydrate locally before considering a download.
-Cached ONNX archives can restore a removed output directory without downloading.
+Mercury and FRAME share an ONNX Runtime SDK built from pinned `ROCm/onnxruntime`
+sources in `third_party/onnxruntime`. The SDK cache is scoped to the source commit,
+distro and build flags. It can restore a removed output directory offline.
 
 Offline builds disable Git transports, enable Cargo offline mode, block vcpkg's
 origin fallback, and disable automatic Rust toolchain installation. A Linux

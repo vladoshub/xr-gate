@@ -90,13 +90,6 @@ MONADO_BUILD_DIR="$(expand_tilde "$MONADO_BUILD_DIR")"
 BACKEND_BUILD_DIR="$(expand_tilde "$BACKEND_BUILD_DIR")"
 INSTALL_BIN_DIR="$(expand_tilde "$INSTALL_BIN_DIR")"
 
-# ONNXRuntime.
-ORT_VERSION="${ORT_VERSION:-1.18.1}"
-ORT_ROOT="${ORT_ROOT:-$ROOT_PROJECT/bin/onnxruntime/onnxruntime-linux-x64-$ORT_VERSION}"
-ORT_ARCHIVE="${ORT_ARCHIVE:-$ROOT_PROJECT/bin/onnxruntime/onnxruntime-linux-x64-${ORT_VERSION}.tgz}"
-ORT_URL="${ORT_URL:-https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz}"
-ORT_ROOT="$(expand_tilde "$ORT_ROOT")"
-ORT_ARCHIVE="$(expand_tilde "$ORT_ARCHIVE")"
 MERCURY_MODELS="${MERCURY_MODELS:-$ROOT_PROJECT/bin/hand-tracking-models/mercury}"
 MERCURY_MODELS="$(expand_tilde "$MERCURY_MODELS")"
 # Model files are optional/downstream assets. Do not fetch/copy them by default
@@ -135,12 +128,9 @@ require_file "$MONADO_PATCH"
 require_file "$MONADO_DIAGNOSTICS_PATCH"
 require_file "$MONADO_QUALITY_PATCH"
 
-log "Installing ONNXRuntime $ORT_VERSION under $ORT_ROOT"
-mkdir -p "$(dirname "$ORT_ARCHIVE")" "$(dirname "$ORT_ROOT")"
-if [[ ! -d "$ORT_ROOT" || "$XR_UPDATE_DEPS" == 1 ]]; then
-  xr_download "$ORT_URL" "$ORT_ARCHIVE"
-  tar -xzf "$ORT_ARCHIVE" -C "$(dirname "$ORT_ROOT")"
-fi
+ORT_ROOT="${ORT_ROOT:-$(ROOT_PROJECT="$ROOT_PROJECT" bash "$ROOT_PROJECT/devices/common/linux/scripts/build/build_onnxruntime.sh")}"
+ORT_ROOT="$(expand_tilde "$ORT_ROOT")"
+log "Using ONNX Runtime SDK at $ORT_ROOT"
 require_file "$ORT_ROOT/include/onnxruntime_c_api.h"
 require_file "$ORT_ROOT/lib/libonnxruntime.so"
 require_file "$ORT_ROOT/LICENSE"
@@ -294,7 +284,7 @@ Monado repository: $MONADO_REPO_URL
 Requested Monado commit: $MONADO_COMMIT
 Resolved Monado commit: $MERCURY_MONADO_RESOLVED_COMMIT
 Project overlay license: BSL-1.0
-ONNX Runtime version: $ORT_VERSION
+ONNX Runtime SDK: ${ORT_ROOT##*/}
 ONNX Runtime legal files remain under: ${ORT_ROOT#"$ROOT_PROJECT/"}
 The Monado checkout is patched by XR Gate before building; upstream does not endorse the modified binary.
 EOF_MERCURY_SOURCE

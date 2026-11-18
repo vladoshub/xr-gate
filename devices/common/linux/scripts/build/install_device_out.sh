@@ -112,18 +112,14 @@ run_step imu_3dof env \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/backends/imu_3dof" \
   bash "$XR_ROOT_PROJECT/backends/imu_3dof/scripts/linux/install_imu_3dof.sh"
 
-run_step mercury_hand_tracking env \
+run_step mercury_hand_tracking env -u ORT_ROOT \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/backends/mercury_hand_tracking" \
-  ORT_ROOT="$XR_OUT_BIN_ROOT/onnxruntime/onnxruntime-linux-x64-1.18.1" \
-  ORT_ARCHIVE="$XR_DEPENDENCY_CACHE_ROOT/downloads/onnxruntime-linux-x64-1.18.1.tgz" \
   MERCURY_MODELS="$XR_OUT_BIN_ROOT/hand-tracking-models/mercury" \
   INSTALL_MERCURY_MODELS=0 \
   bash "$XR_ROOT_PROJECT/backends/mercury_hand_tracking/scripts/linux/install_mercury.sh"
 
-run_step frame_body_tracking env \
+run_step frame_body_tracking env -u ORT_ROOT \
   INSTALL_BIN_DIR="$XR_OUT_BIN_ROOT/backends/frame_body_tracking" \
-  ORT_ROOT="$XR_OUT_BIN_ROOT/onnxruntime/onnxruntime-linux-x64-1.18.1" \
-  ORT_ARCHIVE="$XR_DEPENDENCY_CACHE_ROOT/downloads/onnxruntime-linux-x64-1.18.1.tgz" \
   bash "$XR_ROOT_PROJECT/backends/frame_body_tracking/scripts/linux/install_frame_body_tracking.sh"
 
 if should_download_body_tracking_models; then
