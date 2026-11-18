@@ -221,7 +221,9 @@ Download these artifacts:
 
 2. **hand-tracking-models-mercury.tar.gz**
 
-3. **unpack_xr_gate.sh**
+3. **body-tracking-models-frame.tar.gz**
+
+4. **unpack_xr_gate.sh**
 
 Mercury ONNX models are distributed separately in hand-tracking-models-mercury.tar.gz. They are not included in the core runtime package and are not downloaded by the default build.
 
