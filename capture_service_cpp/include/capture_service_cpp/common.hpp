@@ -88,6 +88,16 @@ struct ImageTransformConfig {
   std::string flip = "none";
 };
 
+struct TcpInputConfig {
+  int port = 0;
+  std::string bind_host = "127.0.0.1";
+};
+
+struct TcpViewDimensions {
+  int width = 0;
+  int height = 0;
+};
+
 struct AdditionalCameraConfig {
   std::string source;
   std::string stream_id;
@@ -112,12 +122,14 @@ struct CameraSourceConfig {
   std::string driver = "xreal_ultra";
   // device: XREAL footer t62, mapped with the shared HID clock model.
   // host_receive retains the legacy time basis for existing calibrations.
+  // sender_capture maps TCP timestamps from the sender's monotonic clock.
   std::string timestamp_mode = "host_receive";
 
   // xreal_packed: one vendor-packed XREAL stream.
   // side_by_side_horizontal / side_by_side_vertical: one normal OpenCV frame.
   // interleaved_columns: one raw GRAY8 stereo frame arranged L0,R0,L1,R1,...
   // dual: two independent OpenCV camera devices.
+  // stereo: separate decoded left and right planes over TCP.
   std::string layout = "xreal_packed";
   std::string stereo_order = "left_right";
   CameraDeviceConfig primary;
@@ -134,6 +146,8 @@ struct CameraSourceConfig {
   ImageTransformConfig left_transform{"ccw90", "none"};
   ImageTransformConfig right_transform{"ccw90", "xy"};
   std::map<std::string, AdditionalCameraConfig> additional_cameras;
+  TcpInputConfig tcp{45700};
+  std::map<std::string, TcpViewDimensions> tcp_views;
   int stall_exit_ms = 2000;
 };
 
@@ -199,6 +213,7 @@ struct ImuSourceConfig {
   XrealHidImuConfig xreal_hid;
   SerialImuConfig serial;
   SyntheticImuConfig synthetic;
+  TcpInputConfig tcp{45702};
 };
 
 struct RuntimeConfig {

@@ -196,6 +196,14 @@ def registry_primary_camera_pair(registry: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def registry_tcp_input(registry: str) -> Optional[Dict[str, Any]]:
+    try:
+        status = json.loads(Path(registry).read_text()).get("tcp_input")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return status if isinstance(status, dict) else None
+
+
 def registry_has_stream(registry: str, stream: str) -> bool:
     path = Path(registry)
     try:

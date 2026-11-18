@@ -124,6 +124,37 @@ class StartupCameraRecoveryTest(unittest.TestCase):
                     launcher.wait_for_service_streams(spec)
                 self.assertEqual([w.stream for w in activity.call_args.args[1]], ["camera0", "camera1"])
 
+    def test_tcp_video_without_imu_selects_vo_after_first_stereo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            launcher = self.launcher(folder)
+            launcher.cfg.post_gate_services = [ServiceSpec("basalt_vio", ["basalt"])]
+            registry = str(Path(folder) / "capture.json")
+            spec = ServiceSpec("capture_service", [], wait_streams=[
+                WaitStream(registry, stream) for stream in ("camera0", "camera1", "imu0")
+            ])
+            launcher.running = [SimpleNamespace(spec=spec, process=SimpleNamespace(poll=lambda: None))]
+            pending = {"camera": True, "stereo_ready": False, "imu_available": None, "imu_ready": False}
+            ready = {**pending, "stereo_ready": True, "imu_available": False}
+            with patch("xr_client.xr_backend_client.registry_tcp_input", side_effect=[pending, ready]), \
+                 patch.object(launcher, "wait_stream") as wait, \
+                 patch.object(launcher, "wait_for_stream_activity"):
+                launcher.wait_for_service_streams(spec)
+            self.assertEqual(launcher.configured_basalt_mode(), "vo")
+            self.assertEqual([call.args[1].stream for call in wait.call_args_list], ["camera0", "camera1"])
+
+    def test_tcp_vio_waits_for_published_imu(self):
+        with tempfile.TemporaryDirectory() as folder:
+            launcher = self.launcher(folder)
+            launcher.cfg.post_gate_services = [ServiceSpec("basalt_vio", ["basalt"])]
+            spec = ServiceSpec("capture_service", [])
+            launcher.running = [SimpleNamespace(spec=spec, process=SimpleNamespace(poll=lambda: None))]
+            pending = {"camera": True, "stereo_ready": True, "imu_available": True, "imu_ready": False}
+            ready = {**pending, "imu_ready": True}
+            with patch("xr_client.xr_backend_client.registry_tcp_input", side_effect=[pending, ready]) as status:
+                self.assertEqual(launcher.wait_for_tcp_capture(spec, "registry"), ready)
+            self.assertEqual(status.call_count, 2)
+            self.assertEqual(launcher.configured_basalt_mode(), "vio")
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "POSIX SHM readiness")
     def test_shm_readiness_requires_new_samples_from_both_cameras(self):
         from capture_client.shm_ring import ShmRingPublisher

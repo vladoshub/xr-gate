@@ -17,6 +17,8 @@ void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, St
 
     uint64_t last_data_ns = steady_ns();
     uint64_t published_samples = 0;
+    const bool tcp_capture = cfg.imu.driver == "tcp" ||
+                             (cfg.camera.enabled && cfg.camera.stereo_enabled && cfg.camera.driver == "tcp");
     while (!g_stop.load()) {
       ImuReadResult result;
       const SourceReadStatus status = source->read(result);
@@ -28,7 +30,7 @@ void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, St
       if (status == SourceReadStatus::Data) last_data_ns = steady_ns();
       if (status == SourceReadStatus::Timeout ||
           status == SourceReadStatus::TransportActivity) {
-        if (cfg.imu.stall_exit_ms > 0 &&
+        if (cfg.imu.driver != "tcp" && cfg.imu.stall_exit_ms > 0 &&
             steady_ns() - last_data_ns >= static_cast<uint64_t>(cfg.imu.stall_exit_ms) * 1000000ULL) {
           std::cerr << "[capture_service_cpp][ERROR] no valid IMU samples for "
                     << cfg.imu.stall_exit_ms << " ms from " << source_name << std::endl;
@@ -61,6 +63,7 @@ void imu_thread(const RuntimeConfig& cfg, std::unique_ptr<IImuSource> source, St
                           result.sample.timestamp_ns ? result.sample.timestamp_ns : steady_ns(),
                           0, 0, kFormatImuF32Le, 0, cfg.imu.frame_id);
       ++published_samples;
+      if (tcp_capture) publishers->mark_tcp_capture_ready(kKindImu);
       if (published_samples % 1000 == 0) {
         std::cerr << "[capture_service_cpp] IMU source=" << source_name
                   << " published_samples=" << published_samples << std::endl;

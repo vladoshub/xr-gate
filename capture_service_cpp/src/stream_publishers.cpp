@@ -58,6 +58,28 @@ std::vector<std::string> StreamPublishers::shm_names() const {
 }
 
 void StreamPublishers::write_registry() {
+  std::lock_guard<std::mutex> lock(registry_mutex_);
+  write_registry_locked();
+}
+
+void StreamPublishers::set_tcp_imu_available(bool available) {
+  std::lock_guard<std::mutex> lock(registry_mutex_);
+  tcp_imu_available_ = available;
+  stereo_ready_.store(false);
+  imu_ready_.store(false);
+  write_registry_locked();
+}
+
+void StreamPublishers::mark_tcp_capture_ready(uint32_t kind) {
+  auto& ready = kind == kKindImage ? stereo_ready_ : imu_ready_;
+  if (ready.load()) return;
+  std::lock_guard<std::mutex> lock(registry_mutex_);
+  if (kind == kKindImu && tcp_imu_available_ == false) return;
+  if (ready.exchange(true)) return;
+  write_registry_locked();
+}
+
+void StreamPublishers::write_registry_locked() {
   std::ostringstream os;
   os << "{\n"
      << "  \"config_path\": \"" << json_escape(cfg_.config_path) << "\",\n"
@@ -72,6 +94,16 @@ void StreamPublishers::write_registry() {
   os << "],\n"
      << "  \"service\": \"capture_service\",\n"
      << "  \"implementation\": \"capture_service_cpp_experimental\",\n";
+  const bool tcp_camera = cfg_.camera.enabled && cfg_.camera.stereo_enabled && cfg_.camera.driver == "tcp";
+  const bool tcp_imu = cfg_.imu.enabled && cfg_.imu.driver == "tcp";
+  if (tcp_camera || tcp_imu) {
+    const auto available = tcp_camera && tcp_imu ? tcp_imu_available_ : std::optional<bool>(cfg_.imu.enabled);
+    os << "  \"tcp_input\": {\"camera\": " << (tcp_camera ? "true" : "false")
+       << ", \"stereo_ready\": " << (stereo_ready_.load() ? "true" : "false")
+       << ", \"imu_ready\": " << (imu_ready_.load() ? "true" : "false")
+       << ", \"imu_available\": " << (available ? (*available ? "true" : "false") : "null")
+       << ", \"imu_stream\": \"" << json_escape(cfg_.imu.stream_id) << "\"},\n";
+  }
   if (!stereo_pairs_.empty()) {
     os << "  \"stereo_pairs\": {";
     bool first_pair = true;

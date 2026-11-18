@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)
 find_package(Threads REQUIRED)
+find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp HINTS "$ENV{NLOHMANN_JSON_INCLUDE_DIR}" REQUIRED)
 
 # All built-in source drivers are compiled into one hardware-independent
 # service. Runtime selection is made by config.yaml, not by a device-specific
@@ -41,6 +42,8 @@ set(CAPTURE_SERVICE_CPP_SOURCES
   src/sources/xreal_hid_imu_source.cpp
   src/sources/serial_imu_source.cpp
   src/sources/synthetic_imu_source.cpp
+  src/sources/tcp_input.cpp
+  src/sources/tcp_sensor_sources.cpp
   src/sources/serial_imu_protocol.cpp
   src/protocols/xr_controller_v1.cpp
   src/protocols/xr_imu_v1.cpp
@@ -76,7 +79,7 @@ else()
 endif()
 
 add_executable(capture_service_cpp ${CAPTURE_SERVICE_CPP_SOURCES})
-target_include_directories(capture_service_cpp PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include" ${HIDAPI_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
+target_include_directories(capture_service_cpp PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../shared/include" ${HIDAPI_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS} ${NLOHMANN_JSON_INCLUDE_DIR})
 target_link_libraries(capture_service_cpp PRIVATE ${OpenCV_LIBS} ${HIDAPI_LIBRARY} Threads::Threads)
 
 # Small metadata-only client used by backend launchers before the main capture
@@ -234,6 +237,14 @@ if(BUILD_TESTING)
   add_test(NAME imu_transform_smoke COMMAND imu_transform_smoke)
 
   if(NOT WIN32)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME tcp_input_linux
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tcp_input_linux.py
+                $<TARGET_FILE:capture_service_cpp>)
+      set_tests_properties(tcp_input_linux PROPERTIES TIMEOUT 30)
+    endif()
+
     add_executable(tcp_fanout_demand_linux
       tests/tcp_fanout_demand_linux.cpp
       src/tcp_fanout.cpp

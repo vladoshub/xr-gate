@@ -561,6 +561,11 @@ void apply_service_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   }
 }
 
+void apply_tcp_input_yaml(const FlatYaml& y, const std::string& key, TcpInputConfig& cfg) {
+  set_string(y, {key + ".bind_host"}, cfg.bind_host);
+  set_int(y, {key + ".port"}, cfg.port);
+}
+
 void apply_camera_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   const bool legacy_xreal_camera = has_prefix(y, "xreal_linux.camera.");
   if (legacy_xreal_camera && !has(y, "camera.driver")) {
@@ -570,8 +575,10 @@ void apply_camera_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_bool(y, {"camera.enabled", "xreal_linux.camera.enabled"}, cfg.camera.enabled);
   const std::string previous_camera_driver = cfg.camera.driver;
   set_string(y, {"camera.driver"}, cfg.camera.driver);
-  if (previous_camera_driver != cfg.camera.driver && cfg.camera.driver == "opencv") {
-    if (!has(y, "camera.layout")) cfg.camera.layout = "side_by_side_horizontal";
+  const bool tcp = lowercase(trim(cfg.camera.driver)) == "tcp";
+  if (tcp) cfg.camera.driver = "tcp";
+  if (tcp || (previous_camera_driver != cfg.camera.driver && cfg.camera.driver == "opencv")) {
+    if (!has(y, "camera.layout")) cfg.camera.layout = tcp ? "stereo" : "side_by_side_horizontal";
     if (!has(y, "camera.transform.left.rotate") && !has(y, "camera.left.rotate")) cfg.camera.left_transform.rotate = "none";
     if (!has(y, "camera.transform.right.rotate") && !has(y, "camera.right.rotate")) cfg.camera.right_transform.rotate = "none";
     if (!has(y, "camera.transform.left.flip") && !has(y, "camera.left.flip")) cfg.camera.left_transform.flip = "none";
@@ -581,6 +588,17 @@ void apply_camera_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
     if (!has(y, "camera.primary.convert_rgb") && !has(y, "camera.convert_rgb")) cfg.camera.primary.convert_rgb = true;
     cfg.camera.secondary.raw_format = false;
     cfg.camera.secondary.convert_rgb = true;
+  }
+  if (tcp) {
+    cfg.camera.timestamp_mode = "sender_capture";
+    apply_tcp_input_yaml(y, "camera.tcp", cfg.camera.tcp);
+    const std::string prefix = "camera.tcp.views.";
+    for (const auto& key : y.mappings) {
+      if (key.rfind(prefix, 0) != 0 || key.find('.', prefix.size()) != std::string::npos) continue;
+      auto& view = cfg.camera.tcp_views[key.substr(prefix.size())];
+      set_int(y, {key + ".width"}, view.width);
+      set_int(y, {key + ".height"}, view.height);
+    }
   }
   set_string(y, {"camera.layout"}, cfg.camera.layout);
   set_string(y, {"camera.timestamp_mode"}, cfg.camera.timestamp_mode);
@@ -676,6 +694,11 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
   set_bool(y, {"imu.enabled", "xreal_linux.imu.enabled"}, cfg.imu.enabled);
   const std::string previous_driver = cfg.imu.driver;
   set_string(y, {"imu.driver"}, cfg.imu.driver);
+  const bool tcp_imu = lowercase(trim(cfg.imu.driver)) == "tcp";
+  if (tcp_imu) {
+    cfg.imu.driver = "tcp";
+    apply_tcp_input_yaml(y, "imu.tcp", cfg.imu.tcp);
+  }
   set_string(y, {"imu.output.stream", "imu.stream", "xreal_linux.imu.imu_stream_id"}, cfg.imu.stream_id);
   set_string(y, {"imu.output.frame", "imu.frame"}, cfg.imu.frame_id);
   const bool raw_enabled_explicit = has(y, "imu.raw.enabled") || has(y, "xreal_linux.imu.publish_raw_hid");
@@ -732,7 +755,7 @@ void apply_yaml(const FlatYaml& y, RuntimeConfig& cfg) {
     cfg.imu.raw_stream_id = "imu_raw";
     cfg.imu.raw_frame_id = "imu_raw";
     cfg.imu.raw_payload_size = cfg.imu.serial.max_packet_size;
-  } else if (previous_driver != cfg.imu.driver && cfg.imu.driver == "synthetic" &&
+  } else if ((tcp_imu || (previous_driver != cfg.imu.driver && cfg.imu.driver == "synthetic")) &&
              !raw_enabled_explicit) {
     cfg.imu.raw_enabled = false;
   }
@@ -796,6 +819,12 @@ bool load_runtime_config_file(const std::string& path, RuntimeConfig& cfg) {
 
 namespace {
 
+void validate_tcp_input(const TcpInputConfig& cfg, const char* key) {
+  if (cfg.bind_host.empty() || cfg.port <= 0 || cfg.port > 65535) {
+    throw std::runtime_error(std::string(key) + " requires a bind_host and port in 1..65535");
+  }
+}
+
 void validate_runtime_config(RuntimeConfig& cfg, bool allow_mono) {
   cfg.camera.driver = lowercase(trim(cfg.camera.driver));
   cfg.camera.timestamp_mode = lowercase(trim(cfg.camera.timestamp_mode));
@@ -830,7 +859,8 @@ void validate_runtime_config(RuntimeConfig& cfg, bool allow_mono) {
     throw std::runtime_error("backend_control.poll_ms must be non-negative");
   }
   if (cfg.camera.enabled) {
-    if (cfg.camera.timestamp_mode != "device" && cfg.camera.timestamp_mode != "host_receive") {
+    const bool tcp = cfg.camera.driver == "tcp";
+    if (!tcp && cfg.camera.timestamp_mode != "device" && cfg.camera.timestamp_mode != "host_receive") {
       throw std::runtime_error("camera.timestamp_mode must be device or host_receive");
     }
     if (cfg.camera.timestamp_mode == "device" &&
@@ -842,15 +872,34 @@ void validate_runtime_config(RuntimeConfig& cfg, bool allow_mono) {
         cfg.camera.timestamp_mode != cfg.imu.xreal_hid.timestamp_mode) {
       throw std::runtime_error("XREAL camera and IMU timestamp modes must match");
     }
-    if (cfg.camera.driver != "xreal_ultra" && cfg.camera.driver != "opencv") {
-      throw std::runtime_error("unsupported camera.driver=" + cfg.camera.driver + "; supported: xreal_ultra, opencv");
+    if (cfg.camera.driver != "xreal_ultra" && cfg.camera.driver != "opencv" && !tcp) {
+      throw std::runtime_error("unsupported camera.driver=" + cfg.camera.driver + "; supported: xreal_ultra, opencv, tcp");
     }
     if (cfg.camera.output_width <= 0 || cfg.camera.output_height <= 0) {
       throw std::runtime_error("camera.output width and height must be positive");
     }
     const bool mono = allow_mono && cfg.camera.layout == "mono";
-    if (mono && cfg.camera.driver != "opencv") {
-      throw std::runtime_error("camera.layout=mono requires camera.driver=opencv");
+    if (mono && cfg.camera.driver != "opencv" && !tcp) {
+      throw std::runtime_error("camera.layout=mono requires camera.driver=opencv or tcp");
+    }
+    if (tcp) {
+      validate_tcp_input(cfg.camera.tcp, "camera.tcp");
+      if (cfg.camera.layout != "stereo" && !mono) {
+        throw std::runtime_error(allow_mono ? "TCP camera.layout must be stereo or mono"
+                                            : "primary TCP camera.layout must be stereo");
+      }
+      if (cfg.camera.timestamp_mode != "sender_capture" || cfg.camera.primary.width <= 0 ||
+          cfg.camera.primary.height <= 0) {
+        throw std::runtime_error("TCP cameras require sender_capture timestamps and positive input dimensions");
+      }
+      if (allow_mono && !cfg.camera.tcp_views.empty()) {
+        throw std::runtime_error("camera.tcp.views is supported on the primary TCP camera");
+      }
+      for (const auto& [id, view] : cfg.camera.tcp_views) {
+        if (id.empty() || id == "left" || id == "right" || view.width <= 0 || view.height <= 0) {
+          throw std::runtime_error("invalid additional TCP camera view: " + id);
+        }
+      }
     }
     if (cfg.camera.driver == "opencv" && !mono &&
         cfg.camera.layout != "side_by_side_horizontal" &&
@@ -867,9 +916,13 @@ void validate_runtime_config(RuntimeConfig& cfg, bool allow_mono) {
   }
   if (cfg.imu.enabled) {
     if (cfg.imu.driver != "xreal_hid" && cfg.imu.driver != "serial" &&
-        cfg.imu.driver != "synthetic") {
+        cfg.imu.driver != "synthetic" && cfg.imu.driver != "tcp") {
       throw std::runtime_error(
-          "unsupported imu.driver=" + cfg.imu.driver + "; supported: xreal_hid, serial, synthetic");
+          "unsupported imu.driver=" + cfg.imu.driver + "; supported: xreal_hid, serial, synthetic, tcp");
+    }
+    if (cfg.imu.driver == "tcp") {
+      validate_tcp_input(cfg.imu.tcp, "imu.tcp");
+      if (cfg.imu.raw_enabled) throw std::runtime_error("imu.raw.enabled must be false for imu.driver=tcp");
     }
     if (cfg.imu.driver == "xreal_hid" && cfg.imu.xreal_hid.read_timeout_ms <= 0) {
       throw std::runtime_error("imu.xreal_hid.read_timeout_ms must be positive");
@@ -942,6 +995,7 @@ void validate_runtime_config(RuntimeConfig& cfg, bool allow_mono) {
 ExtraCameraConfig extra_camera_config(const FlatYaml& yaml, const RuntimeConfig& service,
                                      const std::string& name) {
   RuntimeConfig cfg = service;
+  cfg.camera.tcp.port = 45701;
   std::string driver = cfg.camera.driver;
   set_string(yaml, {"camera.driver"}, driver);
   if (driver == "opencv") {

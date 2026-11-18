@@ -1,4 +1,5 @@
 #include "capture_service_cpp/tcp_fanout.hpp"
+#include "capture_service_cpp/platform/tcp_socket.hpp"
 
 #include <condition_variable>
 #include <deque>
@@ -8,48 +9,21 @@
 #include <thread>
 #include <unordered_set>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-using socket_t = SOCKET;
-static constexpr socket_t kInvalidSocket = INVALID_SOCKET;
-static void close_socket(socket_t s) { if (s != INVALID_SOCKET) closesocket(s); }
-static int last_socket_error() { return WSAGetLastError(); }
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
+#ifndef _WIN32
 #include <sys/select.h>
-#include <sys/socket.h>
-#include <unistd.h>
-using socket_t = int;
-static constexpr socket_t kInvalidSocket = -1;
-static void close_socket(socket_t s) { if (s >= 0) ::close(s); }
-static int last_socket_error() { return errno; }
 #endif
 
 namespace xr_capture_cpp {
+using tcp_socket::SocketRuntime;
+using tcp_socket::close_socket;
+using tcp_socket::kInvalidSocket;
+using tcp_socket::last_socket_error;
+using tcp_socket::socket_t;
+
 namespace {
 
 constexpr const char* kHelloPrefix = "CAPHELLO ";
 constexpr const char* kMsgPrefix = "CAPMSG1 ";
-
-struct SocketRuntime {
-  SocketRuntime() {
-#ifdef _WIN32
-    WSADATA data{};
-    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) throw std::runtime_error("WSAStartup failed");
-#endif
-  }
-  ~SocketRuntime() {
-#ifdef _WIN32
-    WSACleanup();
-#endif
-  }
-};
 
 void send_all(socket_t sock, const char* data, size_t len) {
 #ifdef _WIN32

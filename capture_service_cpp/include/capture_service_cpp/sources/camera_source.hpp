@@ -9,6 +9,8 @@
 
 namespace xr_capture_cpp {
 class XrealDeviceClock;
+class TcpCaptureSession;
+enum class TcpInputRole;
 
 struct CameraViewSpec {
   std::string source_id;
@@ -55,6 +57,11 @@ class ICameraSource {
 };
 
 std::unique_ptr<ICameraSource> create_camera_source(
-    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> xreal_clock = {});
+    const RuntimeConfig& cfg, std::shared_ptr<XrealDeviceClock> xreal_clock = {},
+    std::shared_ptr<TcpCaptureSession> tcp_session = {});
+
+std::unique_ptr<ICameraSource> make_tcp_camera_source(
+    const CameraSourceConfig& cfg, TcpInputRole role, int channels = 1,
+    std::shared_ptr<TcpCaptureSession> session = {});
 
 }  // namespace xr_capture_cpp

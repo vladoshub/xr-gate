@@ -22,7 +22,8 @@ void camera_thread(const RuntimeConfig& cfg, std::unique_ptr<ICameraSource> sour
     uint64_t last_view_ns = 0;
     uint64_t published_pairs = 0;
     bool stereo_stalled = false;
-    const auto stall_ns = cfg.camera.stall_exit_ms > 0
+    // TCP waits for a sender and handles the stall timeout per connection.
+    const auto stall_ns = cfg.camera.driver != "tcp" && cfg.camera.stall_exit_ms > 0
         ? static_cast<uint64_t>(cfg.camera.stall_exit_ms) * 1000000ULL : 0;
     while (!g_stop.load()) {
       StereoFrame frame;
@@ -69,6 +70,9 @@ void camera_thread(const RuntimeConfig& cfg, std::unique_ptr<ICameraSource> sour
                           static_cast<uint32_t>(frame.right.rows), kFormatGray8, 0,
                           cfg.camera.right_frame_id);
       ++published_pairs;
+      if (cfg.camera.driver == "tcp") {
+        publishers->mark_tcp_capture_ready(kKindImage);
+      }
       if (published_pairs % 1000 == 0) {
         std::cerr << "[capture_service_cpp] camera source=" << source_name
                   << " published_pairs=" << published_pairs << std::endl;
