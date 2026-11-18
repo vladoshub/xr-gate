@@ -8,8 +8,12 @@ source "$SCRIPT_DIR/dependency_policy.sh"
 readonly version=1.18.1
 readonly source_url=https://github.com/ROCm/onnxruntime.git
 readonly source_commit=387127404e6c1d84b3468c387d864877ed1c67fe
+# Keep the Eigen revision from this ONNX Runtime commit's cmake/deps.txt.
+readonly eigen_url=https://github.com/eigen-mirror/eigen.git
+readonly eigen_commit=e7248b26a1ed53fa030c5c459f7ea095dfd276ac
 package="onnxruntime-linux-x64-$version"
 source_dir="$ROOT_PROJECT/third_party/onnxruntime"
+eigen_dir="$ROOT_PROJECT/third_party/onnxruntime-eigen"
 install_dir="${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/onnxruntime/$package"
 cache_dir="${XR_DEPENDENCY_CACHE_ROOT:-$ROOT_PROJECT/build/.dependency-cache}/onnxruntime/$source_commit"
 
@@ -34,19 +38,28 @@ complete_sdk() {
      -s "$sdk/GIT_COMMIT_ID" && "$(<"$sdk/GIT_COMMIT_ID")" == "$source_commit" ]]
 }
 
+checkout_pinned_source() {
+  local directory="$1" url="$2" commit="$3" ref
+  ref="$(xr_ensure_git_source "$directory" "$url" "$commit" 1 "$XR_UPDATE_DEPS" 1)"
+  git -C "$directory" checkout --detach "$ref" >&2
+  if [[ "$(git -C "$directory" rev-parse HEAD)" != "$commit" ]]; then
+    echo "[onnxruntime][ERROR] expected commit $commit in $directory" >&2
+    return 2
+  fi
+  if ! git -C "$directory" diff --quiet HEAD --ignore-submodules=all; then
+    echo "[onnxruntime][ERROR] the pinned source checkout has local changes: $directory" >&2
+    return 2
+  fi
+}
+
 if ! complete_sdk "$sdk_dir"; then
   xr_require_network "ONNX Runtime $version source build is missing from the SDK cache"
-  ref="$(xr_ensure_git_source "$source_dir" "$source_url" "$source_commit" 1 "$XR_UPDATE_DEPS" 1)"
-  git -C "$source_dir" checkout --detach "$ref" >&2
-  if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$source_commit" ||
-        "$(<"$source_dir/VERSION_NUMBER")" != "$version" ]]; then
+  checkout_pinned_source "$source_dir" "$source_url" "$source_commit"
+  if [[ "$(<"$source_dir/VERSION_NUMBER")" != "$version" ]]; then
     echo "[onnxruntime][ERROR] expected $version at $source_commit" >&2
     exit 2
   fi
-  if ! git -C "$source_dir" diff --quiet HEAD --ignore-submodules=all; then
-    echo "[onnxruntime][ERROR] the pinned source checkout has local changes: $source_dir" >&2
-    exit 2
-  fi
+  checkout_pinned_source "$eigen_dir" "$eigen_url" "$eigen_commit"
 
   stage="$(mktemp -d "$cache_dir/build.XXXXXXXX")"
   trap 'rm -rf -- "$stage"' EXIT
@@ -54,12 +67,13 @@ if ! complete_sdk "$sdk_dir"; then
   build_args=(
     --config Release --build_shared_lib --cmake_generator Ninja
     --parallel "${BUILD_JOBS:-2}" --skip_tests --compile_no_warning_as_error
+    --use_preinstalled_eigen --eigen_path "$eigen_dir"
     --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=OFF CMAKE_POLICY_VERSION_MINIMUM=3.5
   )
   if (( EUID == 0 )); then
     build_args+=(--allow_running_as_root)
   fi
-  echo "[onnxruntime] building $version from $source_url at $source_commit" >&2
+  echo "[onnxruntime] building $version at $source_commit with Eigen at $eigen_commit" >&2
   (
     cd "$stage"
     python3 source/tools/ci_build/build.py --build_dir "$stage" "${build_args[@]}"
