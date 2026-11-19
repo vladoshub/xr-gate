@@ -231,7 +231,7 @@
          </StackPanel>
          <TextBox x:Name="RuntimeLocalPathBox" Text="{Binding RuntimeLocalPath, UpdateSourceTrigger=PropertyChanged}" />
         </DockPanel>
-        <TextBlock Text="A local path takes priority over the URL. Select the runtime .tar.gz or a folder containing xr-gate-ubuntu-24.04-linux-x64.tar.gz and hand-tracking-models-mercury.tar.gz. For a custom URL, keep the models archive beside the runtime." Foreground="#ACBED5" TextWrapping="Wrap" />
+        <TextBlock Text="A local path takes priority over the URL. Select the runtime .tar.gz or a folder containing xr-gate-ubuntu-24.04-linux-x64.tar.gz, hand-tracking-models-mercury.tar.gz and body-tracking-models-frame.tar.gz. For a custom URL, keep both model archives beside the runtime." Foreground="#ACBED5" TextWrapping="Wrap" />
        </StackPanel>
       </Border>
 

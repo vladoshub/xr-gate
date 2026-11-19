@@ -37,7 +37,7 @@ Settings → **Protect device display during tracking** включена по у
 - **Settings** — Hardware preset, параметры дисплея и запуска. Save settings находится по центру нижней панели. Hotkeys: F5 запускает VR, F6 останавливает трекинг и возвращает USB, F7 перезапускает трекинг с сохранением SteamVR. Глобальные клавиши работают, пока XR Gate открыт, в том числе свёрнут; галочка сохраняется автоматически. Show command prompt по умолчанию выключен; включите перед запуском, если нужны команды калибровки в консоли.
 - **Tools** — Diagnostics, регистрация драйвера и проверки трекинга. List USB devices остаётся в Settings.
 
-**Источник установки:** Settings → URL XR Gate показывает адрес скачивания стека. Local path XR Gate имеет приоритет: выберите `.tar.gz` стека или папку с `xr-gate-ubuntu-24.04-linux-x64.tar.gz` и `hand-tracking-models-mercury.tar.gz`. При своём URL архив моделей также должен лежать рядом со стеком. Нажмите Save settings, затем Install / Update.
+**Источник установки:** Settings → URL XR Gate показывает адрес скачивания стека. Local path XR Gate имеет приоритет. Выберите `.tar.gz` стека или папку с `xr-gate-ubuntu-24.04-linux-x64.tar.gz`, `hand-tracking-models-mercury.tar.gz` и `body-tracking-models-frame.tar.gz`. При своём URL оба архива моделей также должны лежать рядом со стеком. Нажмите Save settings, затем Install / Update. Установщик проверяет SHA-256 и распаковывает модели в `bin/hand-tracking-models/mercury` и `bin/body-tracking-models/frame` внутри стека WSL. Для релизов до появления FRAME достаточно архива Mercury.
 
 ## Bluetooth
 

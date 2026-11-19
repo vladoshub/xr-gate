@@ -11,6 +11,8 @@ $script:Requests = New-Object 'System.Collections.Generic.List[string]'
 $script:Downloads = New-Object 'System.Collections.Generic.List[string]'
 $script:Payload = 'runtime-v1'
 $script:DownloadFails = $false
+$script:IncludeBodyModels = $true
+$script:MissingBodyModels = $false
 function Get-XrSetting([string]$Key, [string]$Fallback = '') {
     if ($script:InputSettings.ContainsKey($Key)) { return [string]$script:InputSettings[$Key] }
     return $Fallback
@@ -23,14 +25,25 @@ function Digest([string]$Text) {
 function Get-ReleaseInfo([string]$Tag) {
     $script:Requests.Add($Tag)
     $resolved = if ($Tag -eq 'latest') { 'v-test-current' } else { $Tag }
-    return [pscustomobject]@{tag_name=$resolved; assets=@(
+    $assets = @(
         [pscustomobject]@{name='xr-gate-ubuntu-24.04-linux-x64.tar.gz'; digest=('sha256:' + (Digest 'runtime-v1')); size=10; browser_download_url="https://github.com/vladoshub/xr-gate/releases/download/$resolved/xr-gate-ubuntu-24.04-linux-x64.tar.gz"},
         [pscustomobject]@{name='hand-tracking-models-mercury.tar.gz'; digest=('sha256:' + (Digest 'models-v1')); size=9; browser_download_url="https://github.com/vladoshub/xr-gate/releases/download/$resolved/hand-tracking-models-mercury.tar.gz"}
-    )}
+    )
+    if ($script:IncludeBodyModels) {
+        $assets += [pscustomobject]@{name='body-tracking-models-frame.tar.gz'; digest=('sha256:' + (Digest 'body-models-v1')); size=14; browser_download_url="https://github.com/vladoshub/xr-gate/releases/download/$resolved/body-tracking-models-frame.tar.gz"}
+    }
+    return [pscustomobject]@{tag_name=$resolved; assets=$assets}
 }
 function Invoke-WebRequest([switch]$UseBasicParsing, $Uri, $OutFile, $Headers, $TimeoutSec) {
     $script:Downloads.Add([string]$Uri)
-    $body = if ([string]$Uri -like '*hand-tracking-models-mercury.tar.gz*') { 'models-v1' } else { $script:Payload }
+    if ($script:MissingBodyModels -and [string]$Uri -like '*body-tracking-models-frame.tar.gz*') {
+        $failure = New-Object Exception('Archive not found.')
+        Add-Member -InputObject $failure -MemberType NoteProperty -Name Response -Value ([pscustomobject]@{StatusCode=404})
+        throw $failure
+    }
+    $body = if ([string]$Uri -like '*hand-tracking-models-mercury.tar.gz*') { 'models-v1' }
+        elseif ([string]$Uri -like '*body-tracking-models-frame.tar.gz*') { 'body-models-v1' }
+        else { $script:Payload }
     [IO.File]::WriteAllBytes($OutFile, [Text.Encoding]::UTF8.GetBytes($body))
     if ($script:DownloadFails) { throw 'Simulated download failure.' }
 }
@@ -43,6 +56,14 @@ try {
     $count = $script:Downloads.Count
     Save-XrRuntimeArchive $source.Runtime $source.Cache | Out-Null
     Assert ($script:Downloads.Count -eq $count) 'Verified official cache was downloaded again.'
+    $bodyDownload = Save-XrRuntimeArchive $source.BodyModels $source.Cache
+    Assert ((Get-FileHash -LiteralPath $bodyDownload).Hash.ToLowerInvariant() -eq (Digest 'body-models-v1')) 'Official FRAME archive was not verified.'
+    $count = $script:Downloads.Count
+    Save-XrRuntimeArchive $source.BodyModels $source.Cache | Out-Null
+    Assert ($script:Downloads.Count -eq $count) 'Verified FRAME cache was downloaded again.'
+    $script:IncludeBodyModels = $false
+    Assert ($null -eq (Get-XrRuntimeSource 'v-before-frame').BodyModels) 'A release predating FRAME lost installation compatibility.'
+    $script:IncludeBodyModels = $true
 
     $script:InputSettings = @{XR_RUNTIME_URL='https://github.com/vladoshub/xr-gate/releases/download/v-pinned/xr-gate-ubuntu-24.04-linux-x64.tar.gz'}
     $source = Get-XrRuntimeSource 'latest'
@@ -52,16 +73,23 @@ try {
     New-Item -ItemType Directory -Path $local | Out-Null
     $runtime = Join-Path $local 'xr-gate-ubuntu-24.04-linux-x64.tar.gz'
     $models = Join-Path $local 'hand-tracking-models-mercury.tar.gz'
+    $bodyModels = Join-Path $local 'body-tracking-models-frame.tar.gz'
     [IO.File]::WriteAllText($runtime, 'local-runtime')
     [IO.File]::WriteAllText($models, 'local-models')
+    [IO.File]::WriteAllText($bodyModels, 'local-body-models')
     $script:InputSettings = @{XR_RUNTIME_LOCAL_PATH=$local; XR_RUNTIME_URL='not even a URL'}
     $requestsBefore = $script:Requests.Count; $downloadsBefore = $script:Downloads.Count
     $source = Get-XrRuntimeSource 'latest'
     Assert ($source.Kind -eq 'local' -and $source.RuntimeUrl -eq '' -and (Test-XrCustomRuntimeSource $source.Release)) 'Local files did not override the URL.'
     Assert ((Save-XrRuntimeArchive $source.Runtime $source.Cache) -eq $runtime) 'Local runtime was copied or downloaded instead of used directly.'
     Assert ($source.Runtime.digest -eq ('sha256:' + (Digest 'local-runtime'))) 'Local archive hash was not supplied to the Linux installer.'
+    Assert ((Save-XrRuntimeArchive $source.BodyModels $source.Cache) -eq $bodyModels) 'Local FRAME archive was not used directly.'
+    Assert ($source.BodyModels.digest -eq ('sha256:' + (Digest 'local-body-models'))) 'Local FRAME archive hash was not supplied to the Linux installer.'
     $script:InputSettings.XR_RUNTIME_LOCAL_PATH = $runtime
     Assert ((Get-XrRuntimeSource 'latest').Models.local_path -eq $models) 'Selecting a runtime file lost its sibling models archive.'
+    Assert ((Get-XrRuntimeSource 'latest').BodyModels.local_path -eq $bodyModels) 'Selecting a runtime file lost its sibling FRAME archive.'
+    Remove-Item -LiteralPath $bodyModels
+    Assert ($null -eq (Get-XrRuntimeSource 'latest').BodyModels) 'Legacy local archives unexpectedly required FRAME at source selection.'
     Remove-Item -LiteralPath $models
     $failed = $false
     try { Get-XrRuntimeSource 'latest' | Out-Null } catch { $failed = $_.Exception.Message -like '*Local XR Gate archive not found*' }
@@ -76,6 +104,13 @@ try {
     $source = Get-XrRuntimeSource 'latest'
     Assert ($source.Kind -eq 'url' -and $source.RuntimeUrl -like '*runtime.tar.gz?download=1') 'A custom runtime URL was not preserved.'
     Assert ($source.Models.browser_download_url -eq 'https://mirror.example/My%20release/hand-tracking-models-mercury.tar.gz') 'Custom models URL was not resolved beside the runtime.'
+    Assert ($source.BodyModels.browser_download_url -eq 'https://mirror.example/My%20release/body-tracking-models-frame.tar.gz') 'Custom FRAME models URL was not resolved beside the runtime.'
+    $bodyDownload = Save-XrRuntimeArchive $source.BodyModels $source.Cache
+    Assert ($source.BodyModels.digest -eq ('sha256:' + (Digest 'body-models-v1'))) 'Custom FRAME download hash was not recorded.'
+    $script:MissingBodyModels = $true
+    Assert (!(Save-XrRuntimeArchive $source.BodyModels $source.Cache -AllowMissing)) 'A legacy mirror without FRAME did not report the absent archive.'
+    Assert ([IO.File]::ReadAllText($bodyDownload) -eq 'body-models-v1') 'A missing FRAME URL removed the verified cache.'
+    $script:MissingBodyModels = $false
     $first = Save-XrRuntimeArchive $source.Runtime $source.Cache
     $hash = $source.Runtime.digest
     $script:Payload = 'runtime-v2'

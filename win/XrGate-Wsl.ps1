@@ -993,6 +993,10 @@ try {
         Write-Step ('XR Gate source: ' + $(if ($source.Kind -eq 'local') { $source.LocalPath } else { $source.RuntimeUrl }))
         $runtimeArchive = Save-XrRuntimeArchive $runtimeAsset $cache
         $modelsArchive = Save-XrRuntimeArchive $modelsAsset $cache
+        $bodyModelsArchive = ''
+        if ($source.BodyModels) {
+            $bodyModelsArchive = Save-XrRuntimeArchive $source.BodyModels $cache -AllowMissing
+        }
         if ($source.Kind -ne 'release') { $release.tag_name = $source.Kind + '-' + ([string]$runtimeAsset.digest).Substring(7,12) }
         Write-Step ("Selected release: " + $release.tag_name)
         Select-InstallationDriver $release $cache
@@ -1003,6 +1007,10 @@ try {
         $request.models_archive = ConvertTo-WslPath $modelsArchive
         $request.runtime_sha256 = ([string]$runtimeAsset.digest).Substring(7)
         $request.models_sha256 = ([string]$modelsAsset.digest).Substring(7)
+        if ($bodyModelsArchive) {
+            $request.body_models_archive = ConvertTo-WslPath $bodyModelsArchive
+            $request.body_models_sha256 = ([string]$source.BodyModels.digest).Substring(7)
+        }
         if ($ControllerConfig) { $request.controller_import = ConvertTo-WslPath $ControllerConfig }
         Invoke-Linux -Operation install -Request $request -AsRoot
         if ($script:LinuxExitCode -eq 20) {

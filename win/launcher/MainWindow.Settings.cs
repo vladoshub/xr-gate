@@ -88,7 +88,7 @@ public partial class MainWindow
 
     private void BrowseRuntimeFolder_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFolderDialog { Title = "Folder containing the XR Gate runtime and Mercury models archives" };
+        var dialog = new OpenFolderDialog { Title = "Folder containing the XR Gate runtime, Mercury and FRAME model archives" };
         if (dialog.ShowDialog(this) == true) settings.RuntimeLocalPath = dialog.FolderName;
     }
 

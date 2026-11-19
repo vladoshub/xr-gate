@@ -37,7 +37,7 @@ Choose your own Linux username and password in the Ubuntu window. Password chara
 - **Settings** — Hardware preset, display and launch settings. Save settings is in the center of the bottom bar. Hotkeys: F5 starts VR, F6 stops tracking and returns USB, F7 restarts tracking while keeping SteamVR running. Global hotkeys work while XR Gate is open, including when minimized; the checkbox saves automatically. Show command prompt is off by default; enable it before starting for console calibration commands.
 - **Tools** — Diagnostics, driver registration and tracking checks. List USB devices stays in Settings.
 
-**Installation source:** Settings → URL XR Gate shows the runtime download URL. Local path XR Gate overrides it: select the runtime `.tar.gz` or a folder containing `xr-gate-ubuntu-24.04-linux-x64.tar.gz` and `hand-tracking-models-mercury.tar.gz`. Custom download URLs also use the models archive beside the runtime. Save settings, then Install / Update.
+**Installation source:** Settings → URL XR Gate shows the runtime download URL. Local path XR Gate overrides it. Select the runtime `.tar.gz` or a folder containing `xr-gate-ubuntu-24.04-linux-x64.tar.gz`, `hand-tracking-models-mercury.tar.gz` and `body-tracking-models-frame.tar.gz`. Custom download URLs also use both model archives beside the runtime. Save settings, then Install / Update. The installer verifies SHA-256 and extracts the models to `bin/hand-tracking-models/mercury` and `bin/body-tracking-models/frame` inside the WSL runtime. Releases predating FRAME can be installed with the Mercury archive alone.
 
 ## Bluetooth adapter for WSL2
 

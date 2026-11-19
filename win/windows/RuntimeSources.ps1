@@ -1,4 +1,4 @@
-# Resolve the Ubuntu runtime and Mercury models independently of Windows drivers.
+# Resolve the Ubuntu runtime and tracking models independently of Windows drivers.
 function Test-XrCustomRuntimeSource($Release) {
     return ($null -ne $Release.PSObject.Properties['xr_runtime_source'] -and
         [string]$Release.xr_runtime_source -in @('local','url'))
@@ -21,7 +21,7 @@ function Get-XrSourceId([string]$Value) {
 }
 
 function Get-XrLocalArchive([string]$Path, [string]$Name) {
-    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Local XR Gate archive not found: $Path. Put the runtime and hand-tracking-models-mercury.tar.gz together." }
+    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Local XR Gate archive not found: $Path. Put the runtime, hand-tracking-models-mercury.tar.gz and body-tracking-models-frame.tar.gz together." }
     $file = Get-Item -LiteralPath $Path
     if ($file -isnot [IO.FileInfo] -or !$file.Name.EndsWith('.tar.gz', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Local XR Gate archives must be .tar.gz files.'
@@ -33,6 +33,8 @@ function Get-XrLocalArchive([string]$Path, [string]$Name) {
 function Get-XrRuntimeSource([string]$Tag) {
     $runtimeName = 'xr-gate-ubuntu-24.04-linux-x64.tar.gz'
     $modelsName = 'hand-tracking-models-mercury.tar.gz'
+    $bodyModelsName = 'body-tracking-models-frame.tar.gz'
+    $bodyModels = $null
     $local = (Get-XrSetting 'XR_RUNTIME_LOCAL_PATH' '').Trim()
     $url = (Get-XrSetting 'XR_RUNTIME_URL' '').Trim()
     $kind = 'release'
@@ -49,6 +51,11 @@ function Get-XrRuntimeSource([string]$Tag) {
         $runtime = Get-XrLocalArchive $runtimePath $runtimeName
         $models = Get-XrLocalArchive (Join-Path $folder $modelsName) $modelsName
         if ($runtime.local_path -eq $models.local_path) { throw 'Select the XR Gate runtime archive, not the Mercury models archive.' }
+        $bodyModelsPath = Join-Path $folder $bodyModelsName
+        if (Test-Path -LiteralPath $bodyModelsPath -PathType Leaf) {
+            $bodyModels = Get-XrLocalArchive $bodyModelsPath $bodyModelsName
+            if ($runtime.local_path -eq $bodyModels.local_path) { throw 'Select the XR Gate runtime archive, not the FRAME models archive.' }
+        }
         $kind = 'local'
         $release = [pscustomobject]@{tag_name=('local-' + ([string]$runtime.digest).Substring(7,12)); assets=@(); xr_runtime_source=$kind}
         $runtimeUrl = ''
@@ -73,22 +80,29 @@ function Get-XrRuntimeSource([string]$Tag) {
             $release = Get-ReleaseInfo $Tag
             $runtime = Select-ReleaseAsset $release $runtimeName
             $models = Select-ReleaseAsset $release $modelsName
+            # Releases predating FRAME have no body model asset.
+            if (@($release.assets | Where-Object { $_.name -ceq $bodyModelsName }).Count) {
+                $bodyModels = Select-ReleaseAsset $release $bodyModelsName
+            }
             $runtimeUrl = [string]$runtime.browser_download_url
         } else {
             $modelsUri = New-Object UriBuilder($uri)
             $modelsUri.Path = $uri.AbsolutePath.Substring(0, $uri.AbsolutePath.LastIndexOf('/') + 1) + $modelsName
             $modelsUri.Query = ''; $modelsUri.Fragment = ''
+            $bodyModelsUri = New-Object UriBuilder($modelsUri.Uri)
+            $bodyModelsUri.Path = $uri.AbsolutePath.Substring(0, $uri.AbsolutePath.LastIndexOf('/') + 1) + $bodyModelsName
             $runtimeUrl = $uri.AbsoluteUri
             $runtime = [pscustomobject]@{name=$runtimeName; browser_download_url=$runtimeUrl; custom_url=$true; digest=''; size=0}
             $models = [pscustomobject]@{name=$modelsName; browser_download_url=$modelsUri.Uri.AbsoluteUri; custom_url=$true; digest=''; size=0}
+            $bodyModels = [pscustomobject]@{name=$bodyModelsName; browser_download_url=$bodyModelsUri.Uri.AbsoluteUri; custom_url=$true; digest=''; size=0}
             $release = [pscustomobject]@{tag_name=('url-' + (Get-XrSourceId $runtimeUrl)); assets=@(); xr_runtime_source=$kind}
         }
     }
-    return [pscustomobject]@{Kind=$kind; Release=$release; Runtime=$runtime; Models=$models;
+    return [pscustomobject]@{Kind=$kind; Release=$release; Runtime=$runtime; Models=$models; BodyModels=$bodyModels;
         Cache=(Join-Path $script:StateDir ('cache/' + $release.tag_name)); RuntimeUrl=$runtimeUrl; LocalPath=$sourcePath}
 }
 
-function Save-XrRuntimeArchive($Asset, [string]$Directory) {
+function Save-XrRuntimeArchive($Asset, [string]$Directory, [switch]$AllowMissing) {
     if ($Asset.PSObject.Properties['local_path']) { return [string]$Asset.local_path }
     if (!$Asset.PSObject.Properties['custom_url']) { return Save-ReleaseAsset $Asset $Directory }
     New-Item -ItemType Directory -Force -Path $Directory | Out-Null
@@ -105,6 +119,13 @@ function Save-XrRuntimeArchive($Asset, [string]$Directory) {
         $Asset.digest = 'sha256:' + (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
         Move-Item -LiteralPath $partial -Destination $target -Force
         return $target
+    } catch {
+        $response = if ($_.Exception.PSObject.Properties['Response']) { $_.Exception.Response } else { $null }
+        if ($AllowMissing -and $response -and [int]$response.StatusCode -eq 404) {
+            Write-Step ('Archive unavailable at this URL: ' + $Asset.name)
+            return ''
+        }
+        throw
     } finally {
         $ProgressPreference = $previous
         if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }

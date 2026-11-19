@@ -494,9 +494,18 @@ class Runtime:
             models_hash = self.cfg["models_sha256"].lower()
             self.verify_archive(runtime_archive, runtime_hash, "xr-gate")
             self.verify_archive(models_archive, models_hash, "hand-tracking-models")
+            body_models_archive = self.cfg.get("body_models_archive")
+            body_models_hash = ""
+            if body_models_archive:
+                body_models_archive = Path(body_models_archive)
+                body_models_hash = self.cfg["body_models_sha256"].lower()
+                self.verify_archive(body_models_archive, body_models_hash, "body-tracking-models")
             releases = self.base / "releases"
             self.directory(releases)
-            version = releases / (release + "-" + runtime_hash[:12] + "-" + models_hash[:8])
+            version_name = release + "-" + runtime_hash[:12] + "-" + models_hash[:8]
+            if body_models_hash:
+                version_name += "-" + body_models_hash[:8]
+            version = releases / version_name
             package = version / "xr-gate"
             if not package.is_dir():
                 stage = Path(tempfile.mkdtemp(prefix=".install-", dir=releases))
@@ -504,6 +513,14 @@ class Runtime:
                 try:
                     self.as_user(["tar", "--no-same-owner", "-xzf", runtime_archive, "-C", stage])
                     self.as_user(["tar", "--no-same-owner", "-xzf", models_archive, "-C", stage / "xr-gate/bin"])
+                    if body_models_archive:
+                        self.as_user(["tar", "--no-same-owner", "-xzf", body_models_archive, "-C", stage / "xr-gate/bin"])
+                        frame_model = stage / "xr-gate/bin/body-tracking-models/frame/frame_backbone.onnx"
+                        if not frame_model.is_file() or frame_model.stat().st_size == 0:
+                            raise RuntimeError("The FRAME models archive must contain a nonempty body-tracking-models/frame/frame_backbone.onnx.")
+                    frame_backend = stage / "xr-gate/bin/backends/frame_body_tracking/frame_body_tracking_backend"
+                    if frame_backend.is_file() and not body_models_archive:
+                        raise RuntimeError("This runtime includes FRAME. Put body-tracking-models-frame.tar.gz beside the runtime archive or select a release containing it.")
                     os.replace(stage, version)
                 except BaseException:
                     shutil.rmtree(stage, ignore_errors=True)
@@ -548,9 +565,12 @@ class Runtime:
             elif self.cfg.get("gearvr") and not destination.exists():
                 template = self.controller_template(package)
                 self.write(destination, template.read_text())
-            self.write(version / "installed.json", json.dumps({
+            installed = {
                 "release": release, "runtime_sha256": runtime_hash, "models_sha256": models_hash
-            }, indent=2) + "\n")
+            }
+            if body_models_hash:
+                installed["body_models_sha256"] = body_models_hash
+            self.write(version / "installed.json", json.dumps(installed, indent=2) + "\n")
             link = self.base / ".current-new"
             link.unlink(missing_ok=True)
             link.symlink_to(package, target_is_directory=True)
