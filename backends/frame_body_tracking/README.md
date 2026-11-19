@@ -115,7 +115,7 @@ runtime origin to the published positions.
 
 | Environment variable | Default | Effect |
 | --- | --- | --- |
-| `XR_FRAME_PITCH_DOWN_DEG` | `0` (`20` for XREAL Ultra cameras) | Downward pitch of the virtual cameras |
+| `XR_FRAME_PITCH_DOWN_DEG` | `0` | Downward pitch of the virtual cameras |
 | `XR_FRAME_MAX_CAMERA_PITCH_DEG` | `0` (`-50` for XREAL Ultra cameras) | Highest pitch of either physical camera for inference; `-1` disables the pitch gate |
 | `XR_FRAME_THREADS` | `4` | ONNX Runtime intra-op CPU threads |
 | `XR_FRAME_MAX_FPS` | `20` | Inference rate limit, with `0` using every available latest pair |
