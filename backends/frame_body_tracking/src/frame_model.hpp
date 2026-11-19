@@ -50,6 +50,7 @@ struct JointRange {
 
 struct ObservationFilterConfig {
   bool check_field_of_view = true;
+  bool check_positive_depth = true;
   bool check_joint_distance = true;
   bool check_stereo_disagreement = true;
   bool check_camera_pitch = true;

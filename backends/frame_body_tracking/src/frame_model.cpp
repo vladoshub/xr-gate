@@ -239,7 +239,8 @@ Observations FrameModel::infer(const capture_client::ImageFrame& left,
       const size_t index = view * kJointCount + joint;
       const Eigen::Vector2d uv(uv_data[2 * index], uv_data[2 * index + 1]);
       const Eigen::Vector3d xyz(xyz_data[3 * index], xyz_data[3 * index + 1], xyz_data[3 * index + 2]);
-      if (!uv.allFinite() || !xyz.allFinite() || xyz.z() <= 0) break;
+      if (!uv.allFinite() || !xyz.allFinite()) break;
+      if (filters_.check_positive_depth && xyz.z() <= 0) break;
       if (filters_.check_field_of_view) {
         if (uv.minCoeff() < 0 || uv.maxCoeff() > 1) break;
         const Eigen::Vector3d ray = camera_ray(uv * (kInputSize - 1));

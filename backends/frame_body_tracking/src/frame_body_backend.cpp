@@ -259,6 +259,9 @@ int main(int argc, char** argv) {
   app.add_option("--check-field-of-view", filters.check_field_of_view,
                  "Require joint estimates to lie inside both camera images")
       ->envname("XR_FRAME_CHECK_FIELD_OF_VIEW");
+  app.add_option("--check-positive-depth", filters.check_positive_depth,
+                 "Require positive Z in each virtual camera's 3D joint estimate")
+      ->envname("XR_FRAME_CHECK_POSITIVE_DEPTH");
   app.add_option("--check-joint-distance", filters.check_joint_distance,
                  "Apply the configured minimum and maximum joint distances")
       ->envname("XR_FRAME_CHECK_JOINT_DISTANCE");
@@ -343,7 +346,8 @@ int main(int argc, char** argv) {
     std::cout << "[frame_body_tracking] filters field_of_view=" << filters.check_field_of_view
               << " joint_distance=" << filters.check_joint_distance
               << " stereo_disagreement=" << filters.check_stereo_disagreement
-              << " camera_pitch=" << check_camera_pitch << std::endl;
+              << " camera_pitch=" << check_camera_pitch
+              << " positive_depth=" << filters.check_positive_depth << std::endl;
 
     const auto wait_for_pose = [&](uint64_t timestamp) {
       const auto wait_start = Clock::now();

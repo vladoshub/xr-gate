@@ -130,12 +130,13 @@ overrides also work when starting `xr_client`. Restart FRAME to apply changes.
 | Environment variable | Default | Effect |
 | --- | --- | --- |
 | `XR_FRAME_CHECK_FIELD_OF_VIEW` | `1` | Require the joint's 2D estimate to be inside both physical camera images |
+| `XR_FRAME_CHECK_POSITIVE_DEPTH` | `1` | Require `Z > 0` in each virtual camera's 3D joint estimate |
 | `XR_FRAME_CHECK_JOINT_DISTANCE` | `1` | Apply the per-joint distance ranges below |
 | `XR_FRAME_CHECK_STEREO_DISAGREEMENT` | `1` | Apply `XR_FRAME_MAX_STEREO_DISAGREEMENT_M` |
 | `XR_FRAME_CHECK_CAMERA_PITCH` | `1` | Skip inference above `XR_FRAME_MAX_CAMERA_PITCH_DEG`; ignored when the threshold is `-1` |
 
 Set a check to `0` to disable it. The equivalent executable options are
-`--check-field-of-view`, `--check-joint-distance`,
+`--check-field-of-view`, `--check-positive-depth`, `--check-joint-distance`,
 `--check-stereo-disagreement` and `--check-camera-pitch`, each taking `0` or `1`.
 
 Each joint has `XR_FRAME_<JOINT>_MIN_M` and `XR_FRAME_<JOINT>_MAX_M` settings.
@@ -157,7 +158,11 @@ minimum distance to 10 cm. The matching executable option is
 `--left-shoulder-min-m 0.10`. Each range must have finite values with
 `0 <= MIN_M <= MAX_M`. The waist is derived from both accepted hip positions.
 
-Finite coordinates, positive camera depth and valid estimates from both cameras
-are required for a joint observation. A valid time-matched Basalt pose is
+Set `XR_FRAME_CHECK_POSITIVE_DEPTH=0` to accept joint estimates with zero or
+negative camera depth. Field-of-view, distance and stereo disagreement checks
+remain independent and apply according to their own settings.
+
+Finite coordinates and valid estimates from both cameras are required for
+a joint observation. A valid time-matched Basalt pose is
 required to publish its world position. When stereo disagreement checking is
 disabled, accepted observations receive `confidence=1`.
