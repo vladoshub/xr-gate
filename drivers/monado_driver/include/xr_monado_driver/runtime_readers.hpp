@@ -109,7 +109,7 @@ bool runtime_hand_frame_is_valid(const xr_tracking::HandTrackingFrameF32V2& fram
 bool runtime_hand_sample_is_fresh(const RuntimeHandSample& sample, uint32_t max_age_ms);
 bool runtime_hand_side_is_valid(const xr_tracking::HandTrackingFrameF32V2& frame,
                                 const xr_tracking::HandSideF32V2& side,
-                                bool left);
+                                bool left, bool allow_predicted = false);
 
 std::unique_ptr<IRuntimePoseReader> create_runtime_pose_reader(const RuntimePoseReaderConfig& cfg);
 std::unique_ptr<IRuntimeControllerStateReader> create_runtime_controller_state_reader(

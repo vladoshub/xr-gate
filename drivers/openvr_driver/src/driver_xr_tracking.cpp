@@ -77,6 +77,7 @@ constexpr const char* kProjectionTopKey = "projectionTop";
 constexpr const char* kProjectionBottomKey = "projectionBottom";
 constexpr const char* kPoseSmoothingAlphaKey = "poseSmoothingAlpha";
 constexpr const char* kHandControllerModeKey = "handControllerMode";
+constexpr const char* kHandSkeletonAllowPredictedKey = "handSkeletonAllowPredicted";
 constexpr const char* kRuntimeHandTransportKey = "runtimeHandTransport";
 constexpr const char* kRuntimeHandRegistryPathKey = "runtimeHandRegistryPath";
 constexpr const char* kRuntimeHandStreamKey = "runtimeHandStream";
@@ -750,6 +751,7 @@ struct HandControllerConfig {
   std::string render_model;
   bool expose_system_button = false;
   bool skeleton_enabled = false;
+  bool allow_predicted_hand_skeleton = false;
   ControllerInputMappingConfig input_mapping;
   float pose_y_offset = 1.60f;
   CoordinateMode coordinate_mode = CoordinateMode::RuntimeReady;
@@ -761,6 +763,7 @@ bool hand_pose_mode_is_hmd_relative(const std::string& pose_mode) {
 }
 
 constexpr size_t kOpenVrHandBoneCount = 31;
+constexpr uint32_t kPredictedHandStatus = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Lost);
 
 struct SkeletonJointPose {
   std::array<double, 3> position{};
@@ -1046,7 +1049,10 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     }
 
     const xr_tracking::HandSideF32V2& side = left_ ? sample.frame.left : sample.frame.right;
-    if (!runtime_hand_side_is_valid(sample.frame, side, left_)) {
+    // With only the hand stream available, the skeleton still needs a root pose.
+    const bool predicted_skeleton = skeleton_component_ != 0 && cfg_.allow_predicted_hand_skeleton &&
+        side.status == kPredictedHandStatus && hand_skeleton_sample_is_valid(sample, side);
+    if (!predicted_skeleton && !runtime_hand_side_is_valid(sample.frame, side, left_)) {
       cached_pose_ = make_invalid_pose();
       update_inputs(nullptr);
       publish_pose_and_skeleton();
@@ -1075,11 +1081,37 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
       cached_pose_ = make_pose_from_hand_world(side);
     }
 
-    update_inputs(&side);
+    update_inputs(predicted_skeleton ? nullptr : &side);
     publish_pose_and_skeleton(&sample, hmd_relative);
   }
 
  private:
+  bool hand_skeleton_sample_is_valid(const RuntimeHandSample& sample,
+                                     const xr_tracking::HandSideF32V2& side) const {
+    const auto& frame = sample.frame;
+    if (!runtime_hand_sample_is_fresh(sample, cfg_.reader.max_age_ms) ||
+        !runtime_hand_side_is_valid(frame, side, left_, cfg_.allow_predicted_hand_skeleton) ||
+        (frame.flags & xr_tracking::HAND_FLAG_JOINTS_VALID) == 0u ||
+        (side.flags & xr_tracking::HAND_JOINTS_VALID) == 0u ||
+        side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2 ||
+        frame.timestamp_ns == 0u) return false;
+
+    // The adapter bounds hold and prediction. These joints use the runtime publication time.
+    if (side.status == kPredictedHandStatus || (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u) {
+      return true;
+    }
+
+    // Use the publisher's clock for the optical delay, including across TCP.
+    if (frame.source_timestamp_ns == 0u) return false;
+    if (cfg_.reader.max_age_ms != 0u) {
+      const auto max_age_ns = uint64_t(cfg_.reader.max_age_ms) * 1000000;
+      const auto frame_age = uint64_t(std::max(int64_t{0}, sample.age_ns));
+      if (frame.timestamp_ns > frame.source_timestamp_ns &&
+          frame.timestamp_ns - frame.source_timestamp_ns > max_age_ns - frame_age) return false;
+    }
+    return true;
+  }
+
   void publish_pose_and_skeleton(const RuntimeHandSample* hand_sample = nullptr, bool hmd_relative = false) {
     vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, cached_pose_, sizeof(cached_pose_));
     if (skeleton_component_ == 0 || !cached_pose_.poseIsValid) return;
@@ -1091,25 +1123,7 @@ class XrHandControllerDriver final : public vr::ITrackedDeviceServerDriver {
     }
     const auto& frame = hand_sample->frame;
     const auto& side = left_ ? frame.left : frame.right;
-    if (!runtime_hand_sample_is_fresh(*hand_sample, cfg_.reader.max_age_ms) ||
-        !runtime_hand_side_is_valid(frame, side, left_) ||
-        (frame.flags & xr_tracking::HAND_FLAG_JOINTS_VALID) == 0u ||
-        (side.flags & xr_tracking::HAND_JOINTS_VALID) == 0u ||
-        side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2 ||
-        frame.timestamp_ns == 0u) return;
-
-    // Optical joints can be older than the frame when the adapter republishes
-    // a prediction. Add the delay in the publisher's clock domain to the
-    // reader's frame age, which also works across the TCP clock boundary.
-    if ((side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) == 0u) {
-      if (frame.source_timestamp_ns == 0u) return;
-      if (cfg_.reader.max_age_ms != 0u) {
-        const auto max_age_ns = uint64_t(cfg_.reader.max_age_ms) * 1000000;
-        const auto frame_age = uint64_t(std::max(int64_t{0}, hand_sample->age_ns));
-        if (frame.timestamp_ns > frame.source_timestamp_ns &&
-            frame.timestamp_ns - frame.source_timestamp_ns > max_age_ns - frame_age) return;
-      }
-    }
+    if (!hand_skeleton_sample_is_valid(*hand_sample, side)) return;
 
     // The legacy head-relative pose applies a common rigid transform to the
     // hand. Its skeleton can be encoded relative to the untransformed base.
@@ -1700,6 +1714,7 @@ class ServerDriver final : public vr::IServerTrackedDeviceProvider {
 
   void load_hand_settings() {
     hand_cfg_.mode = get_string_setting(kHandControllerModeKey, "none");
+    hand_cfg_.allow_predicted_hand_skeleton = get_bool_setting(kHandSkeletonAllowPredictedKey, false);
     hand_cfg_.reader.transport = get_string_setting(kRuntimeHandTransportKey, "auto");
     hand_cfg_.reader.tcp = load_tcp_settings();
     hand_cfg_.controller_reader.tcp = hand_cfg_.reader.tcp;

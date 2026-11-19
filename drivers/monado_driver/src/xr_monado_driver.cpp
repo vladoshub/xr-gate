@@ -51,6 +51,7 @@ constexpr float kDefaultRefreshHz = 90.0f;
 constexpr uint32_t kDefaultPoseMaxAgeMs = 250;
 constexpr uint32_t kDefaultControllerMaxAgeMs = 250;
 constexpr uint32_t kDefaultHandMaxAgeMs = 250;
+constexpr uint32_t kPredictedHandStatus = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Lost);
 
 struct XrRuntimeIo {
   // Pose, input and hand-tracker callbacks may run on different Monado threads.
@@ -79,6 +80,7 @@ struct XrTrackingDevice {
   bool is_controller = false;
   bool left = false;
   bool hand_tracking_enabled = false;
+  bool allow_predicted_hand_skeleton = false;
   xr_runtime::ControllerInputMappingConfig input_cfg;
   struct xrt_binding_profile controller_profiles[4];
 
@@ -678,22 +680,30 @@ void relation_from_hand_side(const xr_tracking::HandSideF32V2& side,
   relation_from_pose_velocity(out_relation, position, orientation, linear_velocity_ptr, angular_velocity_ptr);
 }
 
+bool runtime_hand_joints_use_publish_time(const xr_tracking::HandSideF32V2& side,
+                                          bool allow_predicted) {
+  return (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u ||
+         (allow_predicted && side.status == kPredictedHandStatus);
+}
+
 uint64_t runtime_hand_joint_timestamp(const RuntimeHandSample& sample,
-                                      const xr_tracking::HandSideF32V2& side) {
-  return (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u
+                                      const xr_tracking::HandSideF32V2& side,
+                                      bool allow_predicted) {
+  return runtime_hand_joints_use_publish_time(side, allow_predicted)
       ? sample.frame.timestamp_ns : sample.frame.source_timestamp_ns;
 }
 
 bool runtime_hand_has_joints(const RuntimeHandSample& sample,
                              const xr_tracking::HandSideF32V2& side,
                              bool left,
-                             uint32_t max_age_ms) {
-  if (!runtime_hand_side_is_valid(sample.frame, side, left) ||
+                             uint32_t max_age_ms,
+                             bool allow_predicted) {
+  if (!runtime_hand_side_is_valid(sample.frame, side, left, allow_predicted) ||
       !std::isfinite(side.confidence) ||
       (side.flags & xr_tracking::HAND_JOINTS_VALID) == 0u ||
       (sample.frame.flags & xr_tracking::HAND_FLAG_JOINTS_VALID) == 0u ||
       side.joint_count != xr_tracking::HAND_JOINT_COUNT_V2) return false;
-  if ((side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u) {
+  if (runtime_hand_joints_use_publish_time(side, allow_predicted)) {
     return sample.frame.timestamp_ns != 0u;
   }
   if (side.status != static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Tracking) ||
@@ -793,7 +803,8 @@ constexpr uint32_t kJointPoseTracked = XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
                                         XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT;
 
 bool runtime_joint_to_monado(const xr_tracking::HandJointF32V2& src,
-                             struct xrt_hand_joint_value& dst) {
+                             struct xrt_hand_joint_value& dst,
+                             bool report_tracked) {
   dst = {};
   dst.relation.pose.orientation = quat_identity();
   const auto position = vec3(src.px, src.py, src.pz);
@@ -806,9 +817,11 @@ bool runtime_joint_to_monado(const xr_tracking::HandJointF32V2& src,
   dst.relation.pose.position = position;
   dst.relation.pose.orientation = quat_normalize(orientation);
   uint32_t flags = kJointPoseValid;
-  flags |= src.flags & kJointPoseTracked;
-  // skeleton26 TRACKED is bit 3; the stream carries no per-joint velocities.
-  if ((src.flags & 8u) != 0u && (src.flags & kJointPoseTracked) == 0u) flags |= kJointPoseTracked;
+  if (report_tracked) {
+    flags |= src.flags & kJointPoseTracked;
+    // skeleton26 TRACKED is bit 3; the stream carries no per-joint velocities.
+    if ((src.flags & 8u) != 0u && (src.flags & kJointPoseTracked) == 0u) flags |= kJointPoseTracked;
+  }
   dst.relation.relation_flags = static_cast<xrt_space_relation_flags>(flags);
   dst.radius = std::isfinite(src.radius_m) && src.radius_m > 0.0f ? src.radius_m : 0.008f;
   return true;
@@ -837,9 +850,10 @@ bool runtime_hand_to_joint_set(const xr_tracking::HandSideF32V2& side,
       XRT_HAND_JOINT_LITTLE_DISTAL, XRT_HAND_JOINT_LITTLE_TIP,
   };
   static_assert(ARRAY_SIZE(joint_map) == xr_tracking::HAND_JOINT_COUNT_V2);
+  const bool predicted = side.status == kPredictedHandStatus;
   for (uint32_t i = 0; i < ARRAY_SIZE(joint_map); ++i) {
     if (side.joints[i].joint_id == i) {
-      runtime_joint_to_monado(side.joints[i], out.values.hand_joint_set_default[joint_map[i]]);
+      runtime_joint_to_monado(side.joints[i], out.values.hand_joint_set_default[joint_map[i]], !predicted);
     }
   }
   auto& wrist = out.values.hand_joint_set_default[XRT_HAND_JOINT_WRIST];
@@ -886,9 +900,9 @@ bool runtime_hand_to_joint_set(const xr_tracking::HandSideF32V2& side,
 
   // All joints already use runtime/world coordinates. Keep the base transform
   // at identity; Monado applies the device tracking origin exactly once.
-  const bool synthetic = (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u;
+  const bool estimated = predicted || (side.flags & xr_tracking::HAND_SYNTHETIC_JOINTS) != 0u;
   out.hand_pose.relation_flags = static_cast<xrt_space_relation_flags>(
-      kJointPoseValid | (synthetic ? 0u : kJointPoseTracked));
+      kJointPoseValid | (estimated ? 0u : kJointPoseTracked));
   out.is_active = true;
   return true;
 }
@@ -907,7 +921,7 @@ xrt_result_t xrtd_get_hand_tracking(struct xrt_device* xdev,
                                     int64_t desired_timestamp_ns,
                                     struct xrt_hand_joint_set* out_value,
                                     int64_t* out_timestamp_ns) {
-  (void)desired_timestamp_ns;  // Return the measured sample time, without finger extrapolation.
+  (void)desired_timestamp_ns;  // Use the input sample time without further finger extrapolation.
   *out_value = {};
   *out_timestamp_ns = 0;
   auto* dev = from_xdev(xdev);
@@ -919,9 +933,12 @@ xrt_result_t xrtd_get_hand_tracking(struct xrt_device* xdev,
   std::lock_guard<std::mutex> lock(io.mutex);
   if (!read_hand(io)) return XRT_SUCCESS;
   const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
-  if (!runtime_hand_has_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms)) return XRT_SUCCESS;
+  const bool allow_predicted = dev->allow_predicted_hand_skeleton;
+  if (!runtime_hand_has_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms, allow_predicted)) {
+    return XRT_SUCCESS;
+  }
   if (runtime_hand_to_joint_set(side, *out_value)) {
-    *out_timestamp_ns = static_cast<int64_t>(runtime_hand_joint_timestamp(io.last_hand, side));
+    *out_timestamp_ns = static_cast<int64_t>(runtime_hand_joint_timestamp(io.last_hand, side, allow_predicted));
   }
   return XRT_SUCCESS;
 }
@@ -1195,8 +1212,11 @@ xrt_result_t xrtd_update_inputs(struct xrt_device* xdev) {
   if (dev->hand_tracking_enabled) {
     const auto& side = dev->left ? io.last_hand.frame.left : io.last_hand.frame.right;
     auto& input = xdev->inputs[ARRAY_SIZE(kControllerInputNames)];
-    input.active = have_hand && runtime_hand_has_joints(io.last_hand, side, dev->left, io.hand_cfg.max_age_ms);
-    input.timestamp = have_hand ? static_cast<int64_t>(runtime_hand_joint_timestamp(io.last_hand, side)) : now_ns;
+    const bool allow_predicted = dev->allow_predicted_hand_skeleton;
+    input.active = have_hand && runtime_hand_has_joints(io.last_hand, side, dev->left,
+                                                       io.hand_cfg.max_age_ms, allow_predicted);
+    input.timestamp = have_hand
+        ? static_cast<int64_t>(runtime_hand_joint_timestamp(io.last_hand, side, allow_predicted)) : now_ns;
   }
   return XRT_SUCCESS;
 }
@@ -1430,6 +1450,7 @@ extern "C" struct xrt_device* xr_tracking_runtime_controller_create(struct xrt_d
   dev->is_controller = true;
   dev->left = left;
   dev->hand_tracking_enabled = hand_tracking_enabled;
+  dev->allow_predicted_hand_skeleton = hand_tracking_enabled && env_truthy("XR_MONADO_HAND_SKELETON_ALLOW_PREDICTED");
   dev->input_cfg = load_controller_input_config();
   dev->io = io;
   dev->owns_io = owns_io;

@@ -94,6 +94,11 @@ skeletal input component to each existing controller. It converts fresh
 motion ranges. Four metacarpals are reconstructed. Apps can bind
 `/input/skeleton/left` and `/input/skeleton/right`.
 
+Set `handSkeletonAllowPredicted` to `true` in `xr_tracking` to submit held and
+predicted hand joints (`status = 2`) in skeleton mode. The setting defaults to
+`false`. The driver checks freshness using the runtime publication time for
+these frames.
+
 With `bodyTrackersEnabled`, trackers are registered by persistent ID as they
 appear in `runtime_body_trackers`. This includes FRAME points such as
 `frame_neck`, hips and toe tips. Assign the roles SteamVR offers in **Manage

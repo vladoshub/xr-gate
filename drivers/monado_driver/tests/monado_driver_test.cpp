@@ -565,6 +565,45 @@ void test_skeleton_mapping_and_loss() {
   inactive();
 }
 
+void test_predicted_hand_skeleton_opt_in() {
+  for (const char* setting : {static_cast<const char*>(nullptr), "0", "1"}) {
+    ScopedEnv predict("XR_MONADO_HAND_SKELETON_ALLOW_PREDICTED", setting);
+    Fixture f(true);
+    auto& frame = f.hand->sample.frame;
+    frame.source_timestamp_ns -= 500'000'000;
+    frame.left.status = 2u;
+
+    xrt_hand_joint_set joints{};
+    int64_t timestamp = 0;
+    const auto expect_active = [&](bool active) {
+      assert(f.left->get_hand_tracking(f.left, XRT_INPUT_HT_UNOBSTRUCTED_LEFT, 0,
+                                       &joints, &timestamp) == XRT_SUCCESS);
+      assert(joints.is_active == active);
+      f.left->update_inputs(f.left);
+      const auto& hand_input = input(f.left, XRT_INPUT_HT_UNOBSTRUCTED_LEFT);
+      assert(hand_input.active == active);
+      if (active) assert(hand_input.timestamp == timestamp);
+    };
+
+    const bool enabled = setting != nullptr && setting[0] == '1';
+    expect_active(enabled);
+    if (!enabled) continue;
+
+    assert(timestamp == static_cast<int64_t>(frame.timestamp_ns));
+    assert(joints.hand_pose.relation_flags == kJointPoseValid);
+    const auto& wrist = joints.values.hand_joint_set_default[XRT_HAND_JOINT_WRIST].relation;
+    assert(wrist.relation_flags == kJointPoseValid && wrist.pose.position.x == frame.left.joints[0].px);
+    f.right->get_hand_tracking(f.right, XRT_INPUT_HT_UNOBSTRUCTED_RIGHT, 0, &joints, &timestamp);
+    assert(!joints.is_active);  // The other hand still uses the measured source time.
+
+    frame.left.flags &= ~xr_tracking::HAND_JOINTS_VALID;
+    expect_active(false);
+    frame.left.flags |= xr_tracking::HAND_JOINTS_VALID;
+    f.hand->sample.age_ns = 500'000'000;
+    expect_active(false);
+  }
+}
+
 void test_palm_runtime_orientation() {
   Fixture f(true);
   const xrt_quat samples[] = {
@@ -931,6 +970,7 @@ int main() {
   test_hand_gesture_input_fallback();
   test_absolute_pose_and_authoritative_invalid();
   test_skeleton_mapping_and_loss();
+  test_predicted_hand_skeleton_opt_in();
   test_palm_runtime_orientation();
   test_invalid_joints();
   test_stream_loss_and_resume();

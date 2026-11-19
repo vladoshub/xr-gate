@@ -30,6 +30,7 @@
     "projectionTop": -1.0,
     "projectionBottom": 1.0,
     "handControllerMode": "sticks",
+    "handSkeletonAllowPredicted": false,
     "bodyTrackersEnabled": false,
     "runtimeBodyTrackersShmName": "runtime_body_trackers",
     "runtimeBodyTrackersMaxAgeMs": 250,

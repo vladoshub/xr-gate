@@ -144,10 +144,13 @@ Per-joint velocities are unavailable in the
 runtime contract and remain invalid; controller velocities are still passed
 through normally.
 
-Hands become inactive on no-hands, degraded/held tracking, missing joints,
-expired optical source timestamps or a missing/stale hand stream. IMU-only
-controller prediction never fabricates finger tracking. Invalid individual
-joints are returned with cleared validity flags and finite placeholder poses.
+Hands become inactive on missing joints, expired optical source timestamps or
+a missing/stale hand stream. Set `XR_MONADO_HAND_SKELETON_ALLOW_PREDICTED=1`
+when starting Monado to expose held and predicted joints (`status = 2`). It
+defaults to `0`. With the option enabled, OpenXR receives valid joints with
+their tracking flags cleared. The driver uses the runtime publication time for
+these frames. Invalid individual joints have cleared validity flags and finite
+placeholder poses.
 
 After applying source changes, rebuild/install Monado using the normal installer:
 

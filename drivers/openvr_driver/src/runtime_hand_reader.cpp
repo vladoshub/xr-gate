@@ -41,7 +41,7 @@ bool runtime_hand_sample_is_fresh(const RuntimeHandSample& sample, uint32_t max_
 
 bool runtime_hand_side_is_valid(const xr_tracking::HandTrackingFrameF32V2& frame,
                                 const xr_tracking::HandSideF32V2& side,
-                                bool left) {
+                                bool left, bool allow_predicted) {
   if (!runtime_hand_frame_is_valid(frame)) return false;
 
   const uint32_t expected_handedness = left ? 1u : 2u;
@@ -55,9 +55,10 @@ bool runtime_hand_side_is_valid(const xr_tracking::HandTrackingFrameF32V2& frame
 
   const uint32_t tracking = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Tracking);
   const uint32_t degraded = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Degraded);
-  if (side.status != tracking && side.status != degraded) return false;
-
-  return true;
+  // The runtime hand gate uses wire status 2 (Lost) for a valid held or predicted pose.
+  const uint32_t lost = static_cast<uint32_t>(xr_tracking::HandTrackingStatus::Lost);
+  return side.status == tracking || side.status == degraded ||
+         (allow_predicted && side.status == lost);
 }
 
 std::unique_ptr<IRuntimeHandReader> create_runtime_hand_reader(const RuntimeHandReaderConfig& cfg) {

@@ -207,13 +207,15 @@ class TrackingHost final : public Host {
   };
 
   bool opt_in = false;
+  bool allow_predicted_skeleton = false;
   std::map<std::string, std::string> settings;
   std::vector<Device> devices;
   unsigned skeleton_count = 0;
   unsigned skeleton_updates = 0;
 
   bool GetBool(const char* section, const char* key, vr::EVRSettingsError* error) override {
-    if (opt_in && std::strcmp(key, "bodyTrackersEnabled") == 0) {
+    if ((opt_in && std::strcmp(key, "bodyTrackersEnabled") == 0) ||
+        (allow_predicted_skeleton && std::strcmp(key, "handSkeletonAllowPredicted") == 0)) {
       if (error) *error = vr::VRSettingsError_None;
       return true;
     }
@@ -383,12 +385,28 @@ void check_tracking_streams(vr::IServerTrackedDeviceProvider& server) {
   body.trackers[0].status = BODY_TRACKER_STATUS_LOST;
   body.trackers[0].flags &= ~BODY_TRACKER_FLAG_POSITION_VALID;
 
-  for (bool opt_in : {false, true}) {
+  struct StreamTestMode {
+    bool opt_in;
+    bool allow_predicted;
+    bool hand_only;
+  };
+  constexpr StreamTestMode modes[] = {
+      {false, false, false}, {true, false, false}, {true, true, false}, {true, true, true}};
+  for (const auto& [opt_in, allow_predicted, hand_only] : modes) {
     TrackingHost host;
     host.opt_in = opt_in;
+    host.allow_predicted_skeleton = allow_predicted;
+    if (hand_only) {
+      for (auto* hand : {&hands.left, &hands.right}) {
+        const auto& controller = hand == &hands.left ? controllers.left : controllers.right;
+        hand->controller_px = controller.position[0];
+        hand->controller_py = controller.position[1];
+        hand->controller_pz = controller.position[2];
+      }
+    }
     host.settings = {{"handControllerMode", opt_in ? "skeleton" : "sticks"},
                      {"runtimeHandShmName", hand_config.shm_name},
-                     {"runtimeControllerStateShmName", controller_config.shm_name},
+                     {"runtimeControllerStateShmName", hand_only ? prefix + "_missing" : controller_config.shm_name},
                      {"runtimeBodyTrackersShmName", body_config.shm_name}};
     hand_publisher.publish(hands);
     controller_publisher.publish(controllers);
@@ -406,11 +424,12 @@ void check_tracking_streams(vr::IServerTrackedDeviceProvider& server) {
       }
       auto& neck = host.devices[2].pose;
       require(neck.deviceIsConnected && !neck.poseIsValid, "a lost neck must not have a usable pose");
-      std::swap(body.trackers[0], body.trackers[1]);
-      body.trackers[1].status = BODY_TRACKER_STATUS_TRACKING;
-      body.trackers[1].flags |= BODY_TRACKER_FLAG_POSITION_VALID;
-      body.trackers[1].pose.py = 1.5f;
-      body_publisher.publish(body);
+      auto recovered_body = body;
+      std::swap(recovered_body.trackers[0], recovered_body.trackers[1]);
+      recovered_body.trackers[1].status = BODY_TRACKER_STATUS_TRACKING;
+      recovered_body.trackers[1].flags |= BODY_TRACKER_FLAG_POSITION_VALID;
+      recovered_body.trackers[1].pose.py = 1.5f;
+      body_publisher.publish(recovered_body);
       const auto samples = host.skeleton_updates;
       hands.source_timestamp_ns = uint64_t(xr_tracking::now_ns()) - 500000000;
       hand_publisher.publish(hands);
@@ -418,10 +437,28 @@ void check_tracking_streams(vr::IServerTrackedDeviceProvider& server) {
       require(host.devices.size() == 2 + ids.size() && neck.poseIsValid && neck.vecPosition[1] == 1.5,
               "neck must recover on the same device after reordering");
       require(host.skeleton_updates == samples, "stale optical hands must not update skeletal input");
-      body.timestamp_ns = uint64_t(xr_tracking::now_ns()) - 500000000;
-      body_publisher.publish(body);
+
+      hands.left.status = 2u;
+      hand_publisher.publish(hands);
       server.RunFrame();
+      const auto expected_updates = samples + (allow_predicted ? 2 : 0);
+      require(host.skeleton_updates == expected_updates, "status 2 requires the predicted skeleton opt-in");
+
+      hands.left.flags &= ~HAND_JOINTS_VALID;
+      hand_publisher.publish(hands);
+      server.RunFrame();
+      require(host.skeleton_updates == expected_updates, "a predicted skeleton still needs valid joints");
+      require(host.devices[0].pose.poseIsValid == !hand_only, "invalid joints cannot provide a predicted root pose");
+      hands.left.flags |= HAND_JOINTS_VALID;
+      hands.timestamp_ns = hands.source_timestamp_ns;
+      hand_publisher.publish(hands);
+      recovered_body.timestamp_ns = hands.timestamp_ns;
+      body_publisher.publish(recovered_body);
+      server.RunFrame();
+      require(host.skeleton_updates == expected_updates, "stale predicted frames must not update skeletal input");
       require(!neck.deviceIsConnected && !neck.poseIsValid, "stale body stream must invalidate its devices");
+      hands.timestamp_ns = hands.source_timestamp_ns = 0;
+      hands.left.status = uint32_t(HandTrackingStatus::Tracking);
     }
     server.Cleanup();
   }
