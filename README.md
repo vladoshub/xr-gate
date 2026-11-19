@@ -254,6 +254,14 @@ cd ~/xr-gate-release/xr-gate
 ./devices/xreal_ultra/linux/scripts/install_xreal_ultra_device_access.sh
 ```
 
+**For building OpenXR apps install some packages:**
+
+```bash
+sudo apt update 
+sudo apt install libglew-dev libopenxr-dev libopenxr-utils
+```
+
+
 **For XR-controller (UltraLeapUVC + nRF54L15) - also add the user to `dialout` and reboot**
 
 ```bash
