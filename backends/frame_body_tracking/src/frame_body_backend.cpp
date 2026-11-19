@@ -1,6 +1,7 @@
 #include "frame_model.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -233,6 +234,7 @@ int main(int argc, char** argv) {
   double max_pose_delta_ms = 50.0;
   int64_t clock_offset_ns = 0;
   double duration_s = 0.0;
+  frame_body::ObservationFilterConfig filters;
 
   CLI::App app{"FRAME stereo body joint backend (ONNX Runtime CPU)"};
   app.add_option("--model", model_path, "Exported FRAME backbone ONNX model")->required()->take_last();
@@ -249,13 +251,38 @@ int main(int argc, char** argv) {
   app.add_option("--pitch-down-deg", pitch_down, "Downward pitch of virtual fisheye camera")
       ->check(CLI::Range(-90.0, 90.0));
   app.add_option("--max-camera-pitch-deg", max_camera_pitch,
-                 "Highest physical camera pitch for legs and waist tracking (0=horizontal)")
+                 "Highest physical camera pitch for inference (0=horizontal, -1=always infer)")
+      ->envname("XR_FRAME_MAX_CAMERA_PITCH_DEG")
       ->check(CLI::Range(-90.0, 90.0));
   app.add_option("--max-stereo-disagreement-m", max_disagreement_m, "Maximum distance between the two 3D estimates")
       ->check(CLI::Range(0.001, 1.0));
+  app.add_option("--check-field-of-view", filters.check_field_of_view,
+                 "Require joint estimates to lie inside both camera images")
+      ->envname("XR_FRAME_CHECK_FIELD_OF_VIEW");
+  app.add_option("--check-joint-distance", filters.check_joint_distance,
+                 "Apply the configured minimum and maximum joint distances")
+      ->envname("XR_FRAME_CHECK_JOINT_DISTANCE");
+  app.add_option("--check-stereo-disagreement", filters.check_stereo_disagreement,
+                 "Reject joint estimates that disagree between the cameras")
+      ->envname("XR_FRAME_CHECK_STEREO_DISAGREEMENT");
+  app.add_option("--check-camera-pitch", filters.check_camera_pitch,
+                 "Skip inference above the physical camera pitch limit")
+      ->envname("XR_FRAME_CHECK_CAMERA_PITCH");
+  for (size_t joint = 0; joint < frame_body::kJointCount; ++joint) {
+    std::string option_name = kTrackers[joint].name + std::strlen("frame_");
+    std::string env_name = option_name;
+    std::replace(option_name.begin(), option_name.end(), '_', '-');
+    std::transform(env_name.begin(), env_name.end(), env_name.begin(),
+                   [](unsigned char value) { return static_cast<char>(std::toupper(value)); });
+    auto& range = filters.joint_ranges[joint];
+    app.add_option("--" + option_name + "-min-m", range.min_m, "Minimum joint distance from either camera (m)")
+        ->envname("XR_FRAME_" + env_name + "_MIN_M")->check(CLI::NonNegativeNumber);
+    app.add_option("--" + option_name + "-max-m", range.max_m, "Maximum joint distance from either camera (m)")
+        ->envname("XR_FRAME_" + env_name + "_MAX_M")->check(CLI::NonNegativeNumber);
+  }
   app.add_option("--max-fps", max_fps, "Cap inference rate, zero uses every available latest pair")
       ->check(CLI::Range(0.0, 240.0));
-  app.add_option("--pose-wait-ms", pose_wait_ms, "Wait for Basalt after inference")
+  app.add_option("--pose-wait-ms", pose_wait_ms, "Wait for the time-matched Basalt pose")
       ->check(CLI::Range(0.0, 1000.0));
   app.add_option("--max-pose-delta-ms", max_pose_delta_ms, "Maximum distance to either interpolation sample in time")
       ->check(CLI::Range(0.0, 1000.0));
@@ -268,10 +295,12 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, stop);
   std::signal(SIGTERM, stop);
   try {
+    filters.validate();
     const auto calibration = frame_body::read_calibration(calibration_path);
     const auto offset = offset_option->count() ? clock_offset_ns : calibration.camera_time_offset_ns;
+    const bool check_camera_pitch = filters.check_camera_pitch && max_camera_pitch != -1.0;
     const double max_forward_z = std::sin(max_camera_pitch * std::acos(-1.0) / 180.0);
-    frame_body::FrameModel model(model_path, calibration, pitch_down, ort_threads, max_disagreement_m);
+    frame_body::FrameModel model(model_path, calibration, pitch_down, ort_threads, max_disagreement_m, filters);
     capture_client::RecoveringStereoReader capture(
         [&] {
           auto transport = std::make_unique<capture_client::ShmCaptureTransport>(
@@ -311,6 +340,21 @@ int main(int argc, char** argv) {
               << ", pose=" << pose_stream << ", output=" << output_stream
               << ", camera_time_offset_ns=" << offset << ", pitch_down_deg=" << pitch_down
               << ", max_camera_pitch_deg=" << max_camera_pitch << std::endl;
+    std::cout << "[frame_body_tracking] filters field_of_view=" << filters.check_field_of_view
+              << " joint_distance=" << filters.check_joint_distance
+              << " stereo_disagreement=" << filters.check_stereo_disagreement
+              << " camera_pitch=" << check_camera_pitch << std::endl;
+
+    const auto wait_for_pose = [&](uint64_t timestamp) {
+      const auto wait_start = Clock::now();
+      auto pose = poses.at(timestamp);
+      while (!pose && !stopping &&
+             Clock::now() - wait_start < std::chrono::duration<double, std::milli>(pose_wait_ms)) {
+        std::this_thread::sleep_for(2ms);
+        pose = poses.at(timestamp);
+      }
+      return pose;
+    };
 
     auto next_inference = Clock::time_point{};
     const auto period = max_fps >= 0.01
@@ -319,47 +363,55 @@ int main(int argc, char** argv) {
     const auto started = Clock::now();
     uint64_t last_camera_timestamp_ns = 0;
     uint64_t processed = 0;
+    uint64_t inferences = 0;
     uint64_t missing_poses = 0;
-    uint64_t lower_body_gated = 0;
+    uint64_t pitch_gated = 0;
     while (!stopping && (duration_s <= 0 || Clock::now() - started < std::chrono::duration<double>(duration_s))) {
       const auto pair = capture.read_next(0.10);
       if (!pair) {
         publisher.publish(lost_frame(last_camera_timestamp_ns, poses.reset_counter()));
         continue;
       }
-      const auto inference_start = Clock::now();
-      if (inference_start < next_inference) continue;
-      next_inference = inference_start + period;
+      const auto frame_start = Clock::now();
+      if (frame_start < next_inference) continue;
+      next_inference = frame_start + period;
       const auto timestamp = static_cast<uint64_t>(
           capture_client::shift_camera_timestamp_ns(pair->timestamp_ns, offset));
       last_camera_timestamp_ns = timestamp;
-      const auto joints = model.infer(pair->cam0, pair->cam1);
-      const auto inference_end = Clock::now();
-      auto pose = poses.at(timestamp);
-      while (!pose && !stopping && Clock::now() - inference_end < std::chrono::duration<double, std::milli>(pose_wait_ms)) {
-        std::this_thread::sleep_for(2ms);
-        pose = poses.at(timestamp);
+      // Check the exposure-time camera pitch before doing any neural inference.
+      // With the gate disabled, retain inference followed by Basalt pose lookup.
+      auto pose = check_camera_pitch ? wait_for_pose(timestamp) : std::optional<Eigen::Isometry3d>{};
+      bool allow_inference = !check_camera_pitch;
+      if (check_camera_pitch && pose) {
+        // Camera +Z is the physical optical axis and Basalt world +Z is up.
+        // Express the pitch limit as the vertical component of the unit ray.
+        allow_inference = std::all_of(
+            calibration.cameras.begin(), calibration.cameras.end(), [&](const auto& camera) {
+              const Eigen::Vector3d forward = pose->linear() * camera.imu_from_camera.linear().col(2);
+              return forward.z() <= max_forward_z + 1e-9;
+            });
+        pitch_gated += !allow_inference;
       }
+      frame_body::Observations joints;
+      double inference_ms = 0.0;
+      if (allow_inference && !stopping) {
+        const auto inference_start = Clock::now();
+        joints = model.infer(pair->cam0, pair->cam1);
+        inference_ms = std::chrono::duration<double, std::milli>(Clock::now() - inference_start).count();
+        ++inferences;
+      }
+      if (!check_camera_pitch) pose = wait_for_pose(timestamp);
 
       if (!pose) ++missing_poses;
       auto frame = lost_frame(timestamp, poses.reset_counter());
       unsigned tracked = 0;
       if (pose && !stopping) {
-        // Camera +Z is the physical optical axis and Basalt world +Z is up.
-        // Express the pitch limit as the vertical component of the unit ray.
-        const bool allow_lower_body = std::all_of(
-            calibration.cameras.begin(), calibration.cameras.end(), [&](const auto& camera) {
-              const Eigen::Vector3d forward = pose->linear() * camera.imu_from_camera.linear().col(2);
-              return forward.z() <= max_forward_z + 1e-9;
-            });
-        lower_body_gated += !allow_lower_body;
-        const size_t end = allow_lower_body ? joints.size() : kLeftHip;
-        for (size_t i = 0; i < end; ++i) {
+        for (size_t i = 0; i < joints.size(); ++i) {
           if (!joints[i]) continue;
           set_position(frame.trackers[i], *joints[i], *pose);
           tracked += frame.trackers[i].status == BODY_TRACKER_STATUS_TRACKING;
         }
-        if (allow_lower_body && joints[kLeftHip] && joints[kRightHip]) {
+        if (joints[kLeftHip] && joints[kRightHip]) {
           const frame_body::JointObservation waist{
               (joints[kLeftHip]->position_imu + joints[kRightHip]->position_imu) * 0.5,
               std::min(joints[kLeftHip]->confidence, joints[kRightHip]->confidence)};
@@ -369,9 +421,8 @@ int main(int argc, char** argv) {
       publisher.publish(frame);
       if (++processed == 1 || processed % 60 == 0) {
         std::cout << "[frame_body_tracking] frames=" << processed << " tracked_joints=" << tracked
-                  << " missing_poses=" << missing_poses << " lower_body_gated=" << lower_body_gated
-                  << " inference_ms="
-                  << std::chrono::duration<double, std::milli>(inference_end - inference_start).count()
+                  << " inferences=" << inferences << " missing_poses=" << missing_poses
+                  << " pitch_gated=" << pitch_gated << " inference_ms=" << inference_ms
                   << std::endl;
       }
     }

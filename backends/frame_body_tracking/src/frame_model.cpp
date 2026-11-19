@@ -22,21 +22,6 @@ constexpr std::array<int64_t, 3> kDistortionShape{1, 2, 4};
 constexpr std::array<int64_t, 5> kUvShape{1, 1, 2, kJointCount, 2};
 constexpr std::array<int64_t, 5> kXyzShape{1, 1, 2, kJointCount, 3};
 
-struct JointRange {
-  double min_m;
-  double max_m;
-};
-
-// Broad anatomical ranges from either headset camera. The minimum distance
-// rejects collapsed arm predictions when arms are outside the view.
-constexpr std::array<JointRange, kJointCount> kJointRanges{{
-    {0.06, 0.75},
-    {0.16, 1.05}, {0.28, 1.40}, {0.18, 1.55},
-    {0.16, 1.05}, {0.28, 1.40}, {0.18, 1.55},
-    {0.25, 1.80}, {0.30, 2.20}, {0.35, 2.60}, {0.35, 2.70},
-    {0.25, 1.80}, {0.30, 2.20}, {0.35, 2.60}, {0.35, 2.70},
-}};
-
 template <size_t N>
 void validate_tensor(const Ort::TypeInfo& type,
                      const std::array<int64_t, N>& shape,
@@ -49,6 +34,17 @@ void validate_tensor(const Ort::TypeInfo& type,
   }
 }
 }  // namespace
+
+void ObservationFilterConfig::validate() const {
+  for (size_t joint = 0; joint < joint_ranges.size(); ++joint) {
+    const auto& range = joint_ranges[joint];
+    if (!std::isfinite(range.min_m) || !std::isfinite(range.max_m) ||
+        range.min_m < 0 || range.max_m < range.min_m) {
+      throw std::runtime_error("invalid FRAME distance range for joint " + std::to_string(joint) +
+                               ": expected finite 0 <= min <= max distances in meters");
+    }
+  }
+}
 
 Eigen::Vector2d Camera::project(const Eigen::Vector3d& ray) const {
   const double norm_xy = ray.head<2>().norm();
@@ -111,10 +107,13 @@ Calibration read_calibration(const std::string& path) {
 }
 
 FrameModel::FrameModel(const std::string& model_path, const Calibration& calibration,
-                       double downward_pitch_deg, int threads, double max_stereo_disagreement_m)
+                       double downward_pitch_deg, int threads, double max_stereo_disagreement_m,
+                       const ObservationFilterConfig& filters)
     : calibration_(calibration),
       max_stereo_disagreement_m_(max_stereo_disagreement_m),
+      filters_(filters),
       images_(2 * 3 * kPlanePixels) {
+  filters_.validate();
   const double pitch = downward_pitch_deg * std::numbers::pi / 180.0;
   camera_from_virtual_ = (Eigen::AngleAxisd(-pitch, Eigen::Vector3d::UnitX()) *
                          Eigen::AngleAxisd(std::numbers::pi, Eigen::Vector3d::UnitZ())).toRotationMatrix();
@@ -240,18 +239,23 @@ Observations FrameModel::infer(const capture_client::ImageFrame& left,
       const size_t index = view * kJointCount + joint;
       const Eigen::Vector2d uv(uv_data[2 * index], uv_data[2 * index + 1]);
       const Eigen::Vector3d xyz(xyz_data[3 * index], xyz_data[3 * index + 1], xyz_data[3 * index + 2]);
-      if (!uv.allFinite() || uv.minCoeff() < 0 || uv.maxCoeff() > 1 || !xyz.allFinite() || xyz.z() <= 0) break;
-      const Eigen::Vector3d ray = camera_ray(uv * (kInputSize - 1));
-      if (ray.z() <= 1e-6 || !camera.contains(camera.project(ray))) break;
+      if (!uv.allFinite() || !xyz.allFinite() || xyz.z() <= 0) break;
+      if (filters_.check_field_of_view) {
+        if (uv.minCoeff() < 0 || uv.maxCoeff() > 1) break;
+        const Eigen::Vector3d ray = camera_ray(uv * (kInputSize - 1));
+        if (ray.z() <= 1e-6 || !camera.contains(camera.project(ray))) break;
+      }
       const double distance_m = xyz.norm();
-      if (distance_m < kJointRanges[joint].min_m || distance_m > kJointRanges[joint].max_m) break;
+      const auto& range = filters_.joint_ranges[joint];
+      if (filters_.check_joint_distance && (distance_m < range.min_m || distance_m > range.max_m)) break;
       positions[view] = camera.imu_from_camera * (camera_from_virtual_ * xyz);
       ++valid_views;
     }
     if (valid_views != positions.size()) continue;
     const double disagreement_m = (positions[0] - positions[1]).norm();
-    if (disagreement_m >= max_stereo_disagreement_m_) continue;
-    const float confidence = static_cast<float>(1.0 - disagreement_m / max_stereo_disagreement_m_);
+    if (filters_.check_stereo_disagreement && disagreement_m >= max_stereo_disagreement_m_) continue;
+    const float confidence = filters_.check_stereo_disagreement
+        ? static_cast<float>(1.0 - disagreement_m / max_stereo_disagreement_m_) : 1.0f;
     joints[joint] = JointObservation{(positions[0] + positions[1]) * 0.5, confidence};
   }
   return joints;

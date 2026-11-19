@@ -43,10 +43,34 @@ struct JointObservation {
 
 using Observations = std::array<std::optional<JointObservation>, kJointCount>;
 
+struct JointRange {
+  double min_m;
+  double max_m;
+};
+
+struct ObservationFilterConfig {
+  bool check_field_of_view = true;
+  bool check_joint_distance = true;
+  bool check_stereo_disagreement = true;
+  bool check_camera_pitch = true;
+  // Distances from either headset camera, in FRAME joint order.
+  // Minimum ranges reject collapsed arm predictions outside the view.
+  std::array<JointRange, kJointCount> joint_ranges{{
+      {0.06, 0.75},
+      {0.16, 1.05}, {0.28, 1.40}, {0.18, 1.55},
+      {0.16, 1.05}, {0.28, 1.40}, {0.18, 1.55},
+      {0.25, 1.80}, {0.30, 2.20}, {0.35, 2.60}, {0.35, 2.70},
+      {0.25, 1.80}, {0.30, 2.20}, {0.35, 2.60}, {0.35, 2.70},
+  }};
+
+  void validate() const;
+};
+
 class FrameModel {
  public:
   FrameModel(const std::string& model_path, const Calibration& calibration,
-             double downward_pitch_deg, int threads, double max_stereo_disagreement_m);
+             double downward_pitch_deg, int threads, double max_stereo_disagreement_m,
+             const ObservationFilterConfig& filters = {});
 
   Observations infer(const capture_client::ImageFrame& left,
                      const capture_client::ImageFrame& right);
@@ -65,6 +89,7 @@ class FrameModel {
   Calibration calibration_;
   Eigen::Matrix3d camera_from_virtual_;
   double max_stereo_disagreement_m_;
+  ObservationFilterConfig filters_;
   std::array<std::vector<RemapPixel>, 2> remap_;
   std::vector<float> images_;
   Ort::Env env_{ORT_LOGGING_LEVEL_WARNING, "frame_body_tracking"};

@@ -88,15 +88,24 @@ when the Basalt cameras use a different pair.
 ## Tracking
 
 The fisheye remap uses a 180-degree roll and the selected downward pitch from
-each original camera. Both 3D estimates must fall inside the input view, have
-plausible distances from the cameras and agree in the IMU frame. Tracker
-confidence describes agreement between the two estimates. Missing estimates
-retain their tracker IDs and report `LOST`.
+each original camera. With the default filters, both 3D estimates must fall
+inside the input view, have plausible distances from the cameras and agree
+in the IMU frame. Tracker confidence describes agreement between the two
+estimates. Missing estimates retain their tracker IDs and report `LOST`.
 
-FRAME reports hips, legs and waist as `LOST` when either physical camera is
-above the configured pitch relative to the horizon. This uses the Basalt
-pose at exposure and the selected camera-to-IMU extrinsics. The runtime
-adapter may continue predicting during its configured hold and loss windows.
+With camera pitch checking enabled, FRAME checks both physical cameras before
+calling `model.infer()`. If either camera is above the configured pitch relative
+to the horizon, inference is skipped and all tracker IDs report `LOST`.
+This uses the Basalt pose at exposure and the selected camera-to-IMU extrinsics.
+Inference is also skipped if no valid time-matched Basalt pose arrives for
+this check within the configured pose wait.
+The ONNX session stays loaded, so tracking resumes on the next eligible frame
+without reloading the model. The runtime adapter may continue predicting during
+its configured hold and loss windows.
+
+Set `XR_FRAME_MAX_CAMERA_PITCH_DEG=-1` to run inference at any camera pitch.
+This disables only the pitch gate; the other configured observation filters
+still apply. `XR_FRAME_CHECK_CAMERA_PITCH=0` also disables this gate.
 
 The backend matches the exposure timestamp to the Basalt pose ring after
 applying the calibration's camera-to-IMU time offset. It uses the exact pose
@@ -107,7 +116,48 @@ runtime origin to the published positions.
 | Environment variable | Default | Effect |
 | --- | --- | --- |
 | `XR_FRAME_PITCH_DOWN_DEG` | `0` (`20` for XREAL Ultra cameras) | Downward pitch of the virtual cameras |
-| `XR_FRAME_MAX_CAMERA_PITCH_DEG` | `0` (`-40` for XREAL Ultra cameras) | Highest pitch of the physical cameras for hips, legs and waist tracking |
+| `XR_FRAME_MAX_CAMERA_PITCH_DEG` | `0` (`-50` for XREAL Ultra cameras) | Highest pitch of either physical camera for inference; `-1` disables the pitch gate |
 | `XR_FRAME_THREADS` | `4` | ONNX Runtime intra-op CPU threads |
 | `XR_FRAME_MAX_FPS` | `20` | Inference rate limit, with `0` using every available latest pair |
 | `XR_FRAME_MAX_STEREO_DISAGREEMENT_M` | `0.24` | Maximum 3D disagreement between the two camera estimates |
+
+### Observation filter settings
+
+The selected tracking device's `frame_body_tracking.env` configures the filters.
+For XREAL Ultra, edit `devices/xreal_ultra/frame_body_tracking.env`. Environment
+overrides also work when starting `xr_client`. Restart FRAME to apply changes.
+
+| Environment variable | Default | Effect |
+| --- | --- | --- |
+| `XR_FRAME_CHECK_FIELD_OF_VIEW` | `1` | Require the joint's 2D estimate to be inside both physical camera images |
+| `XR_FRAME_CHECK_JOINT_DISTANCE` | `1` | Apply the per-joint distance ranges below |
+| `XR_FRAME_CHECK_STEREO_DISAGREEMENT` | `1` | Apply `XR_FRAME_MAX_STEREO_DISAGREEMENT_M` |
+| `XR_FRAME_CHECK_CAMERA_PITCH` | `1` | Skip inference above `XR_FRAME_MAX_CAMERA_PITCH_DEG`; ignored when the threshold is `-1` |
+
+Set a check to `0` to disable it. The equivalent executable options are
+`--check-field-of-view`, `--check-joint-distance`,
+`--check-stereo-disagreement` and `--check-camera-pitch`, each taking `0` or `1`.
+
+Each joint has `XR_FRAME_<JOINT>_MIN_M` and `XR_FRAME_<JOINT>_MAX_M` settings.
+The ranges measure distance from each camera before combining the two estimates.
+
+| Joint suffix | Minimum (m) | Maximum (m) |
+| --- | --- | --- |
+| `NECK` | 0.06 | 0.75 |
+| `LEFT_SHOULDER`, `RIGHT_SHOULDER` | 0.16 | 1.05 |
+| `LEFT_ELBOW`, `RIGHT_ELBOW` | 0.28 | 1.40 |
+| `LEFT_WRIST`, `RIGHT_WRIST` | 0.18 | 1.55 |
+| `LEFT_HIP`, `RIGHT_HIP` | 0.25 | 1.80 |
+| `LEFT_KNEE`, `RIGHT_KNEE` | 0.30 | 2.20 |
+| `LEFT_FOOT`, `RIGHT_FOOT` | 0.35 | 2.60 |
+| `LEFT_TOE`, `RIGHT_TOE` | 0.35 | 2.70 |
+
+For example, `XR_FRAME_LEFT_SHOULDER_MIN_M=0.10` lowers the left shoulder's
+minimum distance to 10 cm. The matching executable option is
+`--left-shoulder-min-m 0.10`. Each range must have finite values with
+`0 <= MIN_M <= MAX_M`. The waist is derived from both accepted hip positions.
+
+Finite coordinates, positive camera depth and valid estimates from both cameras
+are required for a joint observation. A valid time-matched Basalt pose is
+required to publish its world position. When stereo disagreement checking is
+disabled, accepted observations receive `confidence=1`.
