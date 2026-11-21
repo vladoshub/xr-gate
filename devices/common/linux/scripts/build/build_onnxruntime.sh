@@ -10,13 +10,12 @@ readonly arch="$(xr_onnxruntime_arch)"
 version="$(xr_onnxruntime_version)"
 readonly version
 package="$(xr_onnxruntime_package_name "$arch" "$version")"
+readonly source_url=https://github.com/ROCm/onnxruntime.git
 if [[ "$version" == 1.31.0 ]]; then
-  readonly source_url=https://github.com/microsoft/onnxruntime.git
   # Upstream v1.31.0.
   readonly source_commit=402979ac1bef89dcd55add41eaa7277c407599eb
   source_dir="$ROOT_PROJECT/third_party/onnxruntime-$version"
 else
-  readonly source_url=https://github.com/ROCm/onnxruntime.git
   readonly source_commit=387127404e6c1d84b3468c387d864877ed1c67fe
   source_dir="$ROOT_PROJECT/third_party/onnxruntime"
 fi
@@ -60,6 +59,11 @@ checkout_pinned_source() {
 
 if ! complete_sdk "$sdk_dir"; then
   xr_require_network "ONNX Runtime $version source build is missing from the SDK cache"
+  # Reuse the checkout left by builds that used the Microsoft remote.
+  if [[ "$version" == 1.31.0 && -e "$source_dir/.git" &&
+        "$(git -C "$source_dir" config --local --get remote.origin.url)" == https://github.com/microsoft/onnxruntime.git ]]; then
+    git -C "$source_dir" remote set-url origin "$source_url"
+  fi
   checkout_pinned_source "$source_dir" "$source_url" "$source_commit"
   if [[ "$(<"$source_dir/VERSION_NUMBER")" != "$version" ]]; then
     echo "[onnxruntime][ERROR] expected $version at $source_commit" >&2

@@ -16,6 +16,11 @@ name: XR Gate split build
         type: boolean
         required: false
         default: false
+      build_ubuntu_riscv64:
+        description: "Build Ubuntu 24.04 RISC-V 64 (RV64GC, QEMU)"
+        type: boolean
+        required: false
+        default: false
       cpu_profile:
         description: "AMD64 CPU profile (ARM64 uses aarch64)"
         type: choice
@@ -189,12 +194,14 @@ jobs:
       targets: ${{ steps.targets.outputs.targets }}
       release_arches: ${{ steps.targets.outputs.release_arches }}
       cpu_profiles: ${{ steps.targets.outputs.cpu_profiles }}
+      build_riscv64: ${{ steps.targets.outputs.build_riscv64 }}
     steps:
       - name: Select CPU profiles and runners
         id: targets
         env:
           BUILD_AMD64: ${{ (github.event_name != 'workflow_dispatch' || inputs.build_ubuntu_amd64) && '1' || '0' }}
           BUILD_ARM64: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ubuntu_arm64 && '1' || '0' }}
+          BUILD_RISCV64: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ubuntu_riscv64 && '1' || '0' }}
           AMD64_CPU_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.cpu_profile || 'avx2' }}
         run: |
           python3 - <<'PY'
@@ -207,11 +214,17 @@ jobs:
           if os.environ["BUILD_ARM64"] == "1":
               targets.append(dict(arch="arm64", runner="ubuntu-24.04-arm", cpu="aarch64"))
 
+          build_riscv64 = os.environ["BUILD_RISCV64"]
+          release_targets = targets.copy()
+          if build_riscv64 == "1":
+              release_targets.append(dict(arch="riscv64", cpu="riscv64"))
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print("targets=" + json.dumps(targets), file=output)
-              print("release_arches=" + " ".join(target["arch"] for target in targets), file=output)
-              profiles = ", ".join(f"{target['arch']}={target['cpu']}" for target in targets)
+              print("release_arches=" + " ".join(target["arch"] for target in release_targets), file=output)
+              profiles = ", ".join(f"{target['arch']}={target['cpu']}" for target in release_targets)
               print("cpu_profiles=" + profiles, file=output)
+              print("build_riscv64=" + build_riscv64, file=output)
           PY
 
   build-opencv:
@@ -219,7 +232,7 @@ jobs:
     runs-on: ${{ matrix.target.runner }}
     container: ubuntu:${{ matrix.ubuntu }}
     needs: plan-linux
-    if: ${{ needs.plan-linux.outputs.release_arches != '' }}
+    if: ${{ needs.plan-linux.outputs.targets != '[]' }}
     env:
       XR_BUILD_CPU: ${{ matrix.target.cpu }}
     timeout-minutes: 60
@@ -252,7 +265,7 @@ jobs:
     runs-on: ${{ matrix.target.runner }}
     container: ubuntu:${{ matrix.ubuntu }}
     needs: [plan-linux, build-opencv]
-    if: ${{ needs.plan-linux.outputs.release_arches != '' }}
+    if: ${{ needs.plan-linux.outputs.targets != '[]' }}
     env:
       XR_BUILD_CPU: ${{ matrix.target.cpu }}
       XR_RELEASE_ARCH: ${{ matrix.target.arch }}
@@ -559,12 +572,138 @@ jobs:
           retention-days: 3
 
 
+  build-riscv64:
+    name: build ${{ matrix.component.name }} / Ubuntu 24.04 / riscv64
+    runs-on: ubuntu-24.04
+    needs: plan-linux
+    if: ${{ needs.plan-linux.outputs.build_riscv64 == '1' }}
+    timeout-minutes: 350
+    env:
+      XR_BUILD_CPU: riscv64
+      XR_BUILD_XRIZER: "0"
+      XR_OFFLINE: "0"
+      BUILD_JOBS: "3"
+      CMAKE_BUILD_PARALLEL_LEVEL: "3"
+      XR_BUILD_ONLY: ${{ matrix.component.build_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - name: core
+            build_only: "capture_service_cpp xreal_display_helper imu_3dof xr_runtime_adapter override_controller xr_video xr_spatial bridges monado_driver"
+          - name: basalt
+            build_only: "basalt_vio"
+          - name: mercury
+            build_only: "mercury_hand_tracking frame_body_tracking"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Enable RISC-V user-mode emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user-static
+          sudo systemctl restart systemd-binfmt
+
+      - name: Build RISC-V package component
+        run: |
+          set -euo pipefail
+          docker run --rm -i --platform linux/riscv64 \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/work" --workdir /work \
+            -e DEBIAN_FRONTEND -e QEMU_CPU=rv64,v=false \
+            -e XR_BUILD_CPU -e XR_BUILD_ONLY -e XR_BUILD_VENDOR_COMPONENTS -e XR_BUILD_XRIZER \
+            -e XR_KEEP_OPENCV_BUILD -e XR_OFFLINE -e XR_ONNXRUNTIME_VERSION \
+            -e XR_DOWNLOAD_HAND_TRACKING_MODELS -e XR_DOWNLOAD_BODY_TRACKING_MODELS \
+            -e BUILD_JOBS -e CMAKE_BUILD_PARALLEL_LEVEL \
+            -e "XR_BUILD_UID=$(id -u)" -e "XR_BUILD_GID=$(id -g)" \
+            -e "XR_RISCV_COMPONENT=${{ matrix.component.name }}" \
+            riscv64/ubuntu:24.04 bash -euo pipefail <<'BUILD'
+          test "$(uname -m)" = riscv64
+          ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+          export HOME=/tmp/xr-gate-builder
+          install -d -o "$XR_BUILD_UID" -g "$XR_BUILD_GID" "$HOME"
+          setpriv --reuid="$XR_BUILD_UID" --regid="$XR_BUILD_GID" --clear-groups \
+            bash -euo pipefail <<'AS_BUILDER'
+          ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+          package=out/riscv64/xr-gate
+          test "$(cat "$package/BUILD_CPU_TARGET")" = rv64gc
+          case "$XR_RISCV_COMPONENT" in
+            core)
+              "$package/bin/capture_service_cpp/capture_tcp_probe" --help >/dev/null
+              ;;
+            basalt)
+              "$package/bin/backends/basalt_vio/capture_basalt_backend" --help >/dev/null
+              ;;
+            mercury)
+              source devices/common/linux/scripts/runtime/onnxruntime_path.sh
+              test "$(cat "$package/bin/backends/mercury_hand_tracking/ONNXRUNTIME_PACKAGE")" = "$(xr_onnxruntime_package_name)"
+              "$package/bin/backends/frame_body_tracking/frame_body_tracking_backend" --help >/dev/null
+              ;;
+          esac
+          rm -rf "$package/bin/python-runtime/venv"
+          AS_BUILDER
+          BUILD
+          tar -C out/riscv64 -czf "xr-gate_${{ matrix.component.name }}.tar.gz" xr-gate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xr-gate-merge-input-ubuntu-24.04-riscv64-${{ matrix.component.name }}
+          path: xr-gate_${{ matrix.component.name }}.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ inputs.upload_partial_artifacts && 3 || 1 }}
+          compression-level: 0
+
+  merge-riscv64:
+    name: merge runtime / Ubuntu 24.04 / riscv64
+    runs-on: ubuntu-24.04
+    needs: build-riscv64
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xr-gate-merge-input-ubuntu-24.04-riscv64-*
+          path: partials
+
+      - name: Merge and validate RISC-V runtime
+        run: |
+          set -euo pipefail
+          mkdir -p merged
+          for part in core basalt mercury; do
+            archive="partials/xr-gate-merge-input-ubuntu-24.04-riscv64-$part/xr-gate_$part.tar.gz"
+            test "$(tar -xOzf "$archive" xr-gate/BUILD_CPU_TARGET)" = rv64gc
+            tar -xzf "$archive" -C merged
+          done
+          package=merged/xr-gate
+          test -x "$package/run_xr_client.sh"
+          test -f "$package/LICENSES/MIT.txt"
+          test "$(cat "$package/BUILD_OPENCV_LINKAGE")" = static-4.10.0
+          for binary in \
+            capture_service_cpp/capture_tcp_probe \
+            backends/basalt_vio/capture_basalt_backend \
+            backends/mercury_hand_tracking/libxr_mercury_runtime.so \
+            backends/frame_body_tracking/frame_body_tracking_backend \
+            drivers/xreal_ultra/monado_driver/monado-service \
+            runtime_adapters/xr_runtime_adapter/xr_runtime_adapter; do
+            LC_ALL=C readelf -h "$package/bin/$binary" | grep -E 'Machine:[[:space:]]+RISC-V$'
+          done
+          printf '%s\n' 24.04 > "$package/BUILD_UBUNTU_VERSION"
+          tar -C merged -czf xr-gate-ubuntu-24.04-linux-riscv64.tar.gz xr-gate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xr-gate-ubuntu-24.04-linux-riscv64
+          path: xr-gate-ubuntu-24.04-linux-riscv64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   build-xrizer:
     name: build optional xrizer / Ubuntu ${{ matrix.ubuntu }} / ${{ matrix.target.arch }}
     runs-on: ${{ matrix.target.runner }}
     container: ubuntu:${{ matrix.ubuntu }}
     needs: [plan-linux, build-opencv]
-    if: ${{ github.event_name == 'workflow_dispatch' && needs.plan-linux.outputs.release_arches != '' && inputs.include_xrizer == true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.plan-linux.outputs.targets != '[]' && inputs.include_xrizer == true }}
     env:
       XR_BUILD_CPU: ${{ matrix.target.cpu }}
     timeout-minutes: 180
@@ -1116,6 +1255,7 @@ jobs:
       - body-tracking-models-frame
       - merge-package
       - check-24-on-26
+      - merge-riscv64
       - build-steamvr-windows
     if: >-
       ${{
@@ -1130,15 +1270,18 @@ jobs:
         (needs.plan-linux.outputs.release_arches == '' || (
           needs.release-unpack-helper.result == 'success' &&
           needs.hand-tracking-models-mercury.result == 'success' &&
-          needs.body-tracking-models-frame.result == 'success' &&
+          needs.body-tracking-models-frame.result == 'success'
+        )) &&
+        (needs.plan-linux.outputs.targets == '[]' || (
           needs.merge-package.result == 'success' &&
           needs.check-24-on-26.result == 'success'
-        ))
-        && (inputs.release_windows_driver == false || needs.build-steamvr-windows.result == 'success')
+        )) &&
+        (needs.plan-linux.outputs.build_riscv64 != '1' || needs.merge-riscv64.result == 'success') &&
+        (inputs.release_windows_driver == false || needs.build-steamvr-windows.result == 'success')
       }}
     env:
       XR_BUILD_UBUNTU_RELEASE: ${{ needs.plan-linux.outputs.release_arches != '' && '1' || '0' }}
-      XR_BUILD_XRIZER: ${{ needs.plan-linux.outputs.release_arches != '' && inputs.include_xrizer && '1' || '0' }}
+      XR_BUILD_XRIZER: ${{ needs.plan-linux.outputs.targets != '[]' && inputs.include_xrizer && '1' || '0' }}
       XR_RELEASE_ARCHES: ${{ needs.plan-linux.outputs.release_arches }}
       XR_RELEASE_CPU_PROFILES: ${{ needs.plan-linux.outputs.cpu_profiles }}
     timeout-minutes: 20
@@ -1214,12 +1357,14 @@ jobs:
 
           [[ "$XR_BUILD_UBUNTU_RELEASE" == "1" ]] || exit 0
           for arch in $XR_RELEASE_ARCHES; do
+            ubuntu_versions=(24.04 26.04)
             case "$arch" in
               x64) expected_machine="Advanced Micro Devices X86-64" ;;
               arm64) expected_machine="AArch64" ;;
+              riscv64) expected_machine="RISC-V"; ubuntu_versions=(24.04) ;;
               *) echo "Unknown release architecture: $arch" >&2; exit 2 ;;
             esac
-            for ubuntu in 24.04 26.04; do
+            for ubuntu in "${ubuntu_versions[@]}"; do
               rm -rf verify/runtime
               mkdir -p verify/runtime
               tar -xzf "release-assets/runtime/xr-gate-ubuntu-${ubuntu}-linux-$arch.tar.gz" -C verify/runtime
@@ -1242,7 +1387,7 @@ jobs:
               test -f verify/runtime/xr-gate/LICENSE
               test -f verify/runtime/xr-gate/LICENSES/MIT.txt
               test -f verify/runtime/xr-gate/THIRD_PARTY_NOTICES.md
-              if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
+              if [[ "$XR_BUILD_XRIZER" == "1" && "$arch" != riscv64 ]]; then
                 test -d verify/runtime/xr-gate/bin/drivers/xrizer/runtime
                 test -f verify/runtime/xr-gate/LICENSES/GPL-3.0-or-later.txt
                 test -f verify/runtime/xr-gate/SOURCES/xrizer/SOURCE.txt
@@ -1295,9 +1440,10 @@ jobs:
           if [[ "$XR_BUILD_UBUNTU_RELEASE" == "1" ]]; then
             notes+=" Linux CPU profiles: $XR_RELEASE_CPU_PROFILES."
             for arch in $XR_RELEASE_ARCHES; do
-              for ubuntu in 24.04 26.04; do
-                ASSETS+=("release-assets/runtime/xr-gate-ubuntu-${ubuntu}-linux-$arch.tar.gz")
-              done
+              ASSETS+=("release-assets/runtime/xr-gate-ubuntu-24.04-linux-$arch.tar.gz")
+              if [[ "$arch" != riscv64 ]]; then
+                ASSETS+=("release-assets/runtime/xr-gate-ubuntu-26.04-linux-$arch.tar.gz")
+              fi
             done
             ASSETS+=(
               release-assets/models/hand-tracking-models-mercury.tar.gz
@@ -1310,6 +1456,7 @@ jobs:
           fi
           if [[ "$XR_BUILD_XRIZER" == "1" ]]; then
             for arch in $XR_RELEASE_ARCHES; do
+              [[ "$arch" != riscv64 ]] || continue
               for ubuntu in 24.04 26.04; do
                 source_dir="release-assets/xrizer-source/xrizer-corresponding-source-ubuntu-${ubuntu}-${arch}"
                 source_archive="$(find "$source_dir" -maxdepth 2 -type f -name 'xrizer-corresponding-source-*.tar.gz' -print -quit)"

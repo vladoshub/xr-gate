@@ -59,10 +59,12 @@ or ARM64 model build. Extract it into the package's `bin` directory.
 tar -xzf body-tracking-models-frame.tar.gz -C out/riscv64/xr-gate/bin
 ```
 
-In GitHub Actions, check `build_ubuntu_amd64` and `build_ubuntu_arm64`
-independently. Each checked architecture builds Ubuntu 24.04 and 26.04.
-AMD64 is selected by default and uses `cpu_profile`. Choose `generic` for
-AMD64 CPUs without AVX2. ARM64 uses `aarch64` on `ubuntu-24.04-arm`.
+In GitHub Actions, check `build_ubuntu_amd64`, `build_ubuntu_arm64`, or
+`build_ubuntu_riscv64` independently. AMD64 and ARM64 each build Ubuntu 24.04
+and 26.04. AMD64 is selected by default and uses `cpu_profile`. Choose
+`generic` for AMD64 CPUs without AVX2. ARM64 uses `aarch64` on
+`ubuntu-24.04-arm`. RISC-V builds Ubuntu 24.04 for RV64GC in parallel
+component jobs using Docker and QEMU on an AMD64 runner.
 With `publish_release` enabled, the selected builds go into one GitHub Release
 under `release_tag`. The Windows installer is selected independently with
 `release_windows_driver`.
@@ -238,11 +240,11 @@ user's persistent `CARGO_HOME` and `RUSTUP_HOME` (normally `~/.cargo` and
 `~/.rustup`); xrizer's first successful build must include its optional source
 compliance/vendor step to prepare those dependencies too. Optional models retain
 LFS objects in their checkout and hydrate locally before considering a download.
-Mercury and FRAME share an ONNX Runtime SDK. The default builds pinned sources
-from `microsoft/onnxruntime` in `third_party/onnxruntime-1.31.0`. The legacy
-version builds the pinned `ROCm/onnxruntime` checkout in
-`third_party/onnxruntime`. The SDK cache is scoped to the source commit,
-distro and build flags. It can restore a removed output directory offline.
+Mercury and FRAME share an ONNX Runtime SDK. Both versions build pinned
+commits from `ROCm/onnxruntime`. The default uses `third_party/onnxruntime-1.31.0`
+and the legacy version uses `third_party/onnxruntime`. The SDK cache is scoped
+to the source commit, distro and build flags. It can restore a removed output
+directory offline.
 
 Offline builds disable Git transports, enable Cargo offline mode, block vcpkg's
 origin fallback, and disable automatic Rust toolchain installation. A Linux
