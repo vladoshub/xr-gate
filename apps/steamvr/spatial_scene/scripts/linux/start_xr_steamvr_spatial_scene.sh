@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "$(uname -m)" in
+  aarch64|arm64) OPENVR_LINUX_BINARY_DIR=linuxarm64 ;;
+  *) OPENVR_LINUX_BINARY_DIR=linux64 ;;
+esac
 if [[ -x "$SCRIPT_DIR/../../xr_steamvr_spatial_scene" ]]; then
   INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
   ROOT_PROJECT="${ROOT_PROJECT:-$(cd "$INSTALL_DIR/../../../.." && pwd)}"
@@ -80,8 +84,8 @@ if [[ "$SPATIAL_SCENE_AUTO_STEAMVR_ENV" == "1" && "$SPATIAL_SCENE_DRY_RUN" != "1
 
   if [[ -n "$SPATIAL_SCENE_STEAMVR_ROOT" ]]; then
     export VR_OVERRIDE="${VR_OVERRIDE:-$SPATIAL_SCENE_STEAMVR_ROOT}"
-    append_ld_path "$SPATIAL_SCENE_STEAMVR_ROOT/bin/linux64"
-    append_ld_path "$SPATIAL_SCENE_STEAMVR_ROOT/lib/linux64"
+    append_ld_path "$SPATIAL_SCENE_STEAMVR_ROOT/bin/$OPENVR_LINUX_BINARY_DIR"
+    append_ld_path "$SPATIAL_SCENE_STEAMVR_ROOT/lib/$OPENVR_LINUX_BINARY_DIR"
     append_ld_path "$SPATIAL_SCENE_STEAMVR_ROOT/bin"
   fi
 
@@ -90,7 +94,7 @@ if [[ "$SPATIAL_SCENE_AUTO_STEAMVR_ENV" == "1" && "$SPATIAL_SCENE_DRY_RUN" != "1
     export VR_LOG_PATH="${VR_LOG_PATH:-$SPATIAL_SCENE_STEAM_ROOT/logs}"
     append_ld_path "$SPATIAL_SCENE_STEAM_ROOT/ubuntu12_64"
     append_ld_path "$SPATIAL_SCENE_STEAM_ROOT/ubuntu12_32"
-    append_ld_path "$SPATIAL_SCENE_STEAM_ROOT/linux64"
+    append_ld_path "$SPATIAL_SCENE_STEAM_ROOT/$OPENVR_LINUX_BINARY_DIR"
     append_ld_path "$SPATIAL_SCENE_STEAM_ROOT"
   fi
 fi

@@ -17,7 +17,7 @@ spec.loader.exec_module(installer)
 class ReleaseTest(unittest.TestCase):
     def archives(self):
         archives = {}
-        for component, name in installer.ASSETS.items():
+        for component, name in installer.release_assets().items():
             content = io.BytesIO()
             with tarfile.open(fileobj=content, mode="w:gz") as package:
                 paths = (["xr-gate/bin/release.txt"] if component == "runtime" else [
@@ -32,9 +32,12 @@ class ReleaseTest(unittest.TestCase):
         return archives
 
     def test_selected_release_downloads_and_verifies_both_assets(self):
-        archives = self.archives()
-        for version in ("v1.2.3", "v1.2.4"):
-            with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
+        for version, machine, arch in (("v1.2.3", "x86_64", "x64"),
+                                       ("v1.2.4", "aarch64", "arm64")):
+            with self.subTest(version=version, machine=machine), \
+                 patch.object(installer.platform, "machine", return_value=machine), \
+                 tempfile.TemporaryDirectory() as folder:
+                archives = self.archives()
                 metadata = {"tag_name": version, "assets": [
                     {"name": name, "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
                     for name, data in archives.items()]}
@@ -52,6 +55,7 @@ class ReleaseTest(unittest.TestCase):
                     installer.install(version, Path(folder))
                 self.assertEqual(len(urls), 3)
                 self.assertTrue(urls[0].endswith(f"/releases/tags/{version}"))
+                self.assertTrue(urls[1].endswith(f"/xr-gate-ubuntu-24.04-linux-{arch}.tar.gz"))
                 self.assertEqual((Path(folder) / "xr-gate/bin/release.txt").read_bytes(), b"fixture\n")
 
     def test_unverified_or_corrupt_assets_are_rejected_before_extraction(self):
@@ -59,7 +63,7 @@ class ReleaseTest(unittest.TestCase):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as folder:
                 metadata = {"tag_name": "v1.2.3", "assets": [
                     {"name": name, "digest": "sha256:" + "0" * 64}
-                    for name in installer.ASSETS.values()]}
+                    for name in installer.release_assets().values()]}
                 if case == "missing":
                     metadata["assets"].pop()
                 if case == "bad-digest":

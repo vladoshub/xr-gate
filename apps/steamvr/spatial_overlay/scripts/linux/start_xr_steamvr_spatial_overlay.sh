@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "$(uname -m)" in
+  aarch64|arm64) OPENVR_LINUX_BINARY_DIR=linuxarm64 ;;
+  *) OPENVR_LINUX_BINARY_DIR=linux64 ;;
+esac
 if [[ -x "$SCRIPT_DIR/../../xr_steamvr_spatial_overlay" ]]; then
   INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
   ROOT_PROJECT="${ROOT_PROJECT:-$(cd "$INSTALL_DIR/../../../.." && pwd)}"
@@ -117,8 +121,8 @@ if [[ "$SPATIAL_OVERLAY_AUTO_STEAMVR_ENV" == "1" && "$SPATIAL_OVERLAY_DRY_RUN" !
 
   if [[ -n "$SPATIAL_OVERLAY_STEAMVR_ROOT" ]]; then
     export VR_OVERRIDE="${VR_OVERRIDE:-$SPATIAL_OVERLAY_STEAMVR_ROOT}"
-    append_ld_path "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin/linux64"
-    append_ld_path "$SPATIAL_OVERLAY_STEAMVR_ROOT/lib/linux64"
+    append_ld_path "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin/$OPENVR_LINUX_BINARY_DIR"
+    append_ld_path "$SPATIAL_OVERLAY_STEAMVR_ROOT/lib/$OPENVR_LINUX_BINARY_DIR"
     append_ld_path "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin"
   fi
 
@@ -127,7 +131,7 @@ if [[ "$SPATIAL_OVERLAY_AUTO_STEAMVR_ENV" == "1" && "$SPATIAL_OVERLAY_DRY_RUN" !
     export VR_LOG_PATH="${VR_LOG_PATH:-$SPATIAL_OVERLAY_STEAM_ROOT/logs}"
     append_ld_path "$SPATIAL_OVERLAY_STEAM_ROOT/ubuntu12_64"
     append_ld_path "$SPATIAL_OVERLAY_STEAM_ROOT/ubuntu12_32"
-    append_ld_path "$SPATIAL_OVERLAY_STEAM_ROOT/linux64"
+    append_ld_path "$SPATIAL_OVERLAY_STEAM_ROOT/$OPENVR_LINUX_BINARY_DIR"
     append_ld_path "$SPATIAL_OVERLAY_STEAM_ROOT"
   fi
 fi
@@ -171,9 +175,9 @@ echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
 if [[ "$SPATIAL_OVERLAY_DUMP_OPENVR_LDD" == "1" && "$SPATIAL_OVERLAY_DRY_RUN" != "1" ]]; then
   echo "[start_xr_steamvr_spatial_overlay] OpenVR process check:"
   pgrep -a -f 'vrserver|vrcompositor|vrmonitor' || true
-  if [[ -n "${SPATIAL_OVERLAY_STEAMVR_ROOT:-}" && -x "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin/linux64/vrmonitor" ]]; then
+  if [[ -n "${SPATIAL_OVERLAY_STEAMVR_ROOT:-}" && -x "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin/$OPENVR_LINUX_BINARY_DIR/vrmonitor" ]]; then
     echo "[start_xr_steamvr_spatial_overlay] ldd vrmonitor:"
-    ldd "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin/linux64/vrmonitor" 2>&1 | sed 's/^/[ldd vrmonitor] /' || true
+    ldd "$SPATIAL_OVERLAY_STEAMVR_ROOT/bin/$OPENVR_LINUX_BINARY_DIR/vrmonitor" 2>&1 | sed 's/^/[ldd vrmonitor] /' || true
   fi
   if [[ -n "${SPATIAL_OVERLAY_STEAMVR_ROOT:-}" ]]; then
     echo "[start_xr_steamvr_spatial_overlay] libsteam_api candidates:"

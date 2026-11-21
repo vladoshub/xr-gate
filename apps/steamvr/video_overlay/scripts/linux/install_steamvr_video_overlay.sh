@@ -82,31 +82,13 @@ cmake -S "$APP_DIR" -B "$BUILD_DIR" \
   -DXR_TRACKING_ROOT="$ROOT_PROJECT" \
   -DXR_SHARED_INCLUDE_DIR="$ROOT_PROJECT/shared/include" \
   -DXR_OPENVR_SDK_ROOT="$XR_OPENVR_SDK_ROOT" \
+  -DXR_VIDEO_OVERLAY_INSTALL_DIR=. \
   -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH_EXTRA" \
   ${NLOHMANN_JSON_INCLUDE_DIR:+-DNLOHMANN_JSON_INCLUDE_DIR="$NLOHMANN_JSON_INCLUDE_DIR"}
 
 cmake --build "$BUILD_DIR" --target steamvr_video_overlay -j"$BUILD_JOBS"
 
-[[ -x "$BUILD_DIR/steamvr_video_overlay" ]] || fatal "Built binary not found: $BUILD_DIR/steamvr_video_overlay"
-cp "$BUILD_DIR/steamvr_video_overlay" "$INSTALL_BIN_DIR/steamvr_video_overlay"
-chmod +x "$INSTALL_BIN_DIR/steamvr_video_overlay"
-
-# Keep runtime simple: put openvr_api next to the binary, same pattern as the driver package.
-OPENVR_LIB=""
-for candidate in \
-  "$XR_OPENVR_SDK_ROOT/bin/linux64/libopenvr_api.so" \
-  "$XR_OPENVR_SDK_ROOT/lib/linux64/libopenvr_api.so" \
-  "$XR_OPENVR_SDK_ROOT/bin/linux64/openvr_api.so" \
-  "$XR_OPENVR_SDK_ROOT/lib/linux64/openvr_api.so"; do
-  if [[ -f "$candidate" ]]; then
-    OPENVR_LIB="$candidate"
-    break
-  fi
-done
-
-if [[ -n "$OPENVR_LIB" ]]; then
-  cp "$OPENVR_LIB" "$INSTALL_BIN_DIR/"
-fi
+cmake --install "$BUILD_DIR" --prefix "$INSTALL_BIN_DIR"
 
 OPENVR_LICENSE_FILE=""
 for candidate in "$XR_OPENVR_SDK_ROOT/LICENSE" "$XR_OPENVR_SDK_ROOT/LICENSE.txt"; do

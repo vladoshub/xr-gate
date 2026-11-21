@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import platform
 import re
 import subprocess
 import tarfile
@@ -11,10 +12,17 @@ import tempfile
 from urllib.parse import quote
 
 REPOSITORY = "vladoshub/xr-gate"
-ASSETS = {
-    "runtime": "xr-gate-ubuntu-24.04-linux-x64.tar.gz",
-    "models": "hand-tracking-models-mercury.tar.gz",
-}
+
+
+def release_assets():
+    machine = platform.machine().lower()
+    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
+    if arch is None:
+        raise RuntimeError(f"Unsupported XR Gate image architecture: {machine}")
+    return {
+        "runtime": f"xr-gate-ubuntu-24.04-linux-{arch}.tar.gz",
+        "models": "hand-tracking-models-mercury.tar.gz",
+    }
 
 
 def download(url, destination):
@@ -44,6 +52,7 @@ def extract_checked(archive, destination):
 def install(version, destination=Path("/opt")):
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
         raise ValueError("XR_VERSION must be a release tag, for example v1.2.3")
+    selected_assets = release_assets()
     destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
         metadata = Path(temporary) / "release.json"
@@ -53,12 +62,12 @@ def install(version, destination=Path("/opt")):
             raise RuntimeError(f"Published release not found: {version}")
         assets = {asset["name"]: asset for asset in release.get("assets", [])}
         digests = {}
-        for name in ASSETS.values():
+        for name in selected_assets.values():
             digest = assets.get(name, {}).get("digest") or ""
             if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
                 raise RuntimeError(f"Release {version} is missing {name} or its SHA-256 digest")
             digests[name] = digest.removeprefix("sha256:").lower()
-        for component, name in ASSETS.items():
+        for component, name in selected_assets.items():
             archive = Path(temporary) / name
             download(f"https://github.com/{REPOSITORY}/releases/download/{quote(version, safe='')}/{name}", archive)
             with archive.open("rb") as source:

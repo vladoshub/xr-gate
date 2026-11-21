@@ -4,7 +4,8 @@ English · [Русский](README.ru.md) · [Offline guide](START-HERE.html)
 
 ## 1. Download XR Gate
 
-Use Ubuntu 24.04 (64-bit) and a CPU with AVX2 support.
+Use Ubuntu 24.04 on x86-64 with AVX2 or on ARM64. Select an `XR_VERSION`
+that publishes the Ubuntu 24.04 runtime for your architecture.
 
 Download the [ZIP](https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip), extract it, and open a terminal in the `docker` folder. Run all commands below from that folder.
 

@@ -768,7 +768,7 @@ Or clean build with ACT:
 ./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh \
   --clean-artifacts \
   --full \
-  --input build_ubuntu_release=true \
+  --input build_ubuntu_amd64=true \
   --input release_windows_driver=false \
   --input publish_release=false \
   --input cpu_profile=avx2
@@ -781,7 +781,7 @@ ACT build without pure vendor components:
   --no-vendor-components \
   --clean-artifacts \
   --full \
-  --input build_ubuntu_release=true \
+  --input build_ubuntu_amd64=true \
   --input release_windows_driver=false \
   --input publish_release=false \
   --input cpu_profile=avx2

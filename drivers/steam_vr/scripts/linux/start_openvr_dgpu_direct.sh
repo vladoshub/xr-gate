@@ -208,19 +208,20 @@ find_nvidia_icd() {
 }
 
 find_amd_icd() {
-  local candidate
+  local candidate cpu_arch
+  cpu_arch="$(uname -m)"
   # Prefer Mesa RADV on Ubuntu. AMDVLK/AMDGPU-PRO ICDs are accepted when installed.
   for candidate in \
-    /usr/share/vulkan/icd.d/radeon_icd.x86_64.json \
-    /etc/vulkan/icd.d/radeon_icd.x86_64.json \
+    /usr/share/vulkan/icd.d/radeon_icd."$cpu_arch".json \
+    /etc/vulkan/icd.d/radeon_icd."$cpu_arch".json \
     /usr/share/vulkan/icd.d/amd_icd64.json \
     /etc/vulkan/icd.d/amd_icd64.json \
     /usr/share/vulkan/icd.d/amdvlk64.json \
     /etc/vulkan/icd.d/amdvlk64.json \
     /usr/share/vulkan/icd.d/amd_pro_icd64.json \
     /etc/vulkan/icd.d/amd_pro_icd64.json \
-    /usr/share/vulkan/icd.d/*radeon*x86_64*.json \
-    /etc/vulkan/icd.d/*radeon*x86_64*.json \
+    /usr/share/vulkan/icd.d/*radeon*"$cpu_arch"*.json \
+    /etc/vulkan/icd.d/*radeon*"$cpu_arch"*.json \
     /usr/share/vulkan/icd.d/*amd*64*.json \
     /etc/vulkan/icd.d/*amd*64*.json; do
     if [[ -f "$candidate" ]]; then
@@ -344,7 +345,7 @@ if [[ -z "$GPU_ICD" ]]; then
       fatal "NVIDIA Vulkan ICD not found; set VK_ICD_FILENAMES=/path/to/nvidia_icd.json or use XR_OPENVR_DGPU_VENDOR=amd"
       ;;
     amd)
-      fatal "AMD Vulkan ICD not found; install Mesa Vulkan drivers or set VK_ICD_FILENAMES=/path/to/radeon_icd.x86_64.json"
+      fatal "AMD Vulkan ICD not found; install Mesa Vulkan drivers or set VK_ICD_FILENAMES to the RADV ICD path"
       ;;
     auto)
       fatal "Vulkan ICD not found for NVIDIA or AMD; set VK_ICD_FILENAMES=/path/to/icd.json"

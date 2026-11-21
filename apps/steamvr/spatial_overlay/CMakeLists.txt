@@ -21,11 +21,12 @@ find_path(OPENVR_INCLUDE_DIR
     "${XR_OPENVR_SDK_DIR}/include"
   NO_DEFAULT_PATH)
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../shared/cmake/openvr_sdk_platform.cmake")
 find_library(OPENVR_API_LIBRARY
   NAMES openvr_api
   PATHS
-    "${XR_OPENVR_SDK_DIR}/lib/linux64"
-    "${XR_OPENVR_SDK_DIR}/bin/linux64"
+    "${XR_OPENVR_SDK_DIR}/lib/${OPENVR_ARCH_TARGET}"
+    "${XR_OPENVR_SDK_DIR}/bin/${OPENVR_ARCH_TARGET}"
     "${XR_OPENVR_SDK_DIR}/lib"
   NO_DEFAULT_PATH)
 
@@ -70,7 +71,12 @@ else()
   target_link_libraries(xr_steamvr_spatial_overlay PRIVATE ${X11_LIBRARIES})
 endif()
 
-# The install script copies libopenvr_api.so to bin/apps/steamvr/spatial_overlay/lib.
 set_target_properties(xr_steamvr_spatial_overlay PROPERTIES
   BUILD_WITH_INSTALL_RPATH ON
   INSTALL_RPATH "$ORIGIN/lib")
+
+install(TARGETS xr_steamvr_spatial_overlay RUNTIME DESTINATION .)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  get_filename_component(OPENVR_RUNTIME_LIBRARY "${OPENVR_API_LIBRARY}" REALPATH)
+  install(FILES "${OPENVR_RUNTIME_LIBRARY}" DESTINATION lib RENAME libopenvr_api.so)
+endif()

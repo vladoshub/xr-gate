@@ -74,8 +74,9 @@ cd "$XRIZER_DIR"
 
 
 find_libclang_dir() {
-  local candidate
-  for candidate in "${LIBCLANG_PATH:-}" /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib; do
+  local candidate multiarch
+  multiarch="$(gcc -print-multiarch 2>/dev/null || true)"
+  for candidate in "${LIBCLANG_PATH:-}" /usr/lib/llvm-*/lib "${multiarch:+/usr/lib/$multiarch}" /usr/lib; do
     if [[ -n "$candidate" ]] && compgen -G "$candidate/libclang.so*" >/dev/null; then
       printf '%s\n' "$candidate"
       return 0

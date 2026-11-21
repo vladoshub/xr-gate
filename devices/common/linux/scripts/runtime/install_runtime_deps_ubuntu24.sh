@@ -204,12 +204,8 @@ collect_package_library_path() {
     paths+=("$d")
   done < <(find "$package_root/bin" -type d \( -name lib -o -name lib64 \) -print0 2>/dev/null)
 
-  # Package-local runtime libraries used by launch scripts.
-  paths+=(
-    "$package_root/bin/onnxruntime/onnxruntime-linux-x64-1.18.1/lib"
-    "$package_root/bin/backends/basalt_vio/lib"
-    "$package_root/bin/backends/mercury_hand_tracking"
-  )
+  # The lib directory scan also includes versioned ONNX Runtime SDKs.
+  paths+=("$package_root/bin/backends/mercury_hand_tracking")
 
   for p in "${paths[@]}"; do
     [[ -d "$p" ]] || continue

@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import socket
 import subprocess
@@ -25,15 +26,30 @@ class OfflineBuildTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "project with spaces"
         self.root.mkdir()
-        self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU="generic")
+        cpu_profile = {"aarch64": "aarch64", "arm64": "aarch64", "riscv64": "riscv64"}.get(
+            platform.machine(), "generic")
+        self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU=cpu_profile)
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
                      "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_OFFLINE", "XR_UPDATE_DEPS",
-                     "XR_DEPENDENCY_CACHE_ROOT", "XR_OPENCV_PREFIX", "XR_BUILD_ONLY"):
+                     "XR_DEPENDENCY_CACHE_ROOT", "XR_OPENCV_PREFIX", "XR_BUILD_ONLY",
+                     "XR_ONNXRUNTIME_VERSION"):
             self.env.pop(name, None)
 
     def run_session(self, command, **env):
         return subprocess.run(["bash", str(BUILD / "with_build_session.sh"), *command],
                               env=dict(self.env, **env), capture_output=True, text=True)
+
+    def test_onnxruntime_version_has_separate_offline_readiness(self):
+        command = ["bash", "-c", 'printf "%s %s\n" "$XR_ONNXRUNTIME_VERSION" "$XR_OFFLINE"']
+        for version, first, second in (("", "1.31.0 0", "1.31.0 1"),
+                                       ("1.18.1", "1.18.1 0", "1.18.1 1")):
+            for expected in (first, second):
+                result = self.run_session(command, XR_ONNXRUNTIME_VERSION=version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        invalid = self.run_session(command, XR_ONNXRUNTIME_VERSION="1.30.0")
+        self.assertEqual(invalid.returncode, 2, invalid.stderr)
+        self.assertIn("XR_ONNXRUNTIME_VERSION must be", invalid.stderr)
 
     def git(self, directory, *args):
         return subprocess.check_output(["git", "-C", str(directory), *args], text=True,

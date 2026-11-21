@@ -74,6 +74,8 @@ LIST_ONLY=0
 JOB=""
 MATRIX_NAME=""
 ACT_INPUT_ARGS=()
+ACT_BUILD_AMD64=true
+ACT_BUILD_ARM64=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -100,6 +102,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || fatal "--input requires NAME=VALUE"
       [[ "$2" == *=* ]] || fatal "--input requires NAME=VALUE, got: $2"
       ACT_INPUT_ARGS+=(--input "$2")
+      case "$2" in
+        build_ubuntu_amd64=*) ACT_BUILD_AMD64="${2#*=}" ;;
+        build_ubuntu_arm64=*) ACT_BUILD_ARM64="${2#*=}" ;;
+      esac
       shift
       ;;
     --clean-artifacts) CLEAN_ARTIFACTS=1 ;;
@@ -113,6 +119,11 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+ACT_CONTAINER_PLATFORM=linux/amd64
+if [[ "$ACT_BUILD_ARM64" == true && "$ACT_BUILD_AMD64" == false ]]; then
+  ACT_CONTAINER_PLATFORM=linux/arm64
+fi
 
 [[ "$(uname -s)" == "Linux" ]] || fatal "this script is Linux-only"
 [[ -f "$WORKFLOW" ]] || fatal "workflow file not found: $WORKFLOW"
@@ -212,7 +223,7 @@ log "act binary: $ACT_BIN"
 
 if [[ "$PREPULL_IMAGE" == "1" ]]; then
   log "pre-pulling runner image: $ACT_RUNNER_IMAGE"
-  "${DOCKER_CMD[@]}" pull "$ACT_RUNNER_IMAGE"
+  "${DOCKER_CMD[@]}" pull --platform "$ACT_CONTAINER_PLATFORM" "$ACT_RUNNER_IMAGE"
 fi
 
 mkdir -p "$ACT_LOG_DIR"
@@ -228,10 +239,11 @@ XR_LOCAL_BUILD_ID="${ACT_ARTIFACT_DIR##*/}"
 
 ACT_ARGS=(
   -W "$WORKFLOW"
-  --container-architecture linux/amd64
+  --container-architecture "$ACT_CONTAINER_PLATFORM"
   --artifact-server-path "$ACT_ARTIFACT_DIR"
   --env "XR_LOCAL_BUILD_ID=$XR_LOCAL_BUILD_ID"
   -P "ubuntu-24.04=$ACT_RUNNER_IMAGE"
+  -P "ubuntu-24.04-arm=$ACT_RUNNER_IMAGE"
   -P "ubuntu-latest=$ACT_UBUNTU_LATEST_IMAGE"
 )
 

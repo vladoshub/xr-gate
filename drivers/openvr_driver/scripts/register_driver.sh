@@ -3,6 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+case "$(uname -m)" in
+  aarch64|arm64) OPENVR_LINUX_BINARY_DIR=linuxarm64 ;;
+  i?86) OPENVR_LINUX_BINARY_DIR=linux32 ;;
+  *) OPENVR_LINUX_BINARY_DIR=linux64 ;;
+esac
+
 # Keep this runtime registration script self-contained: release packaging copies
 # it into each driver variant without the source-tree build helper scripts.
 openvr_expand_tilde() {
@@ -195,9 +201,9 @@ esac
 
 if [[ "$XR_OPENVR_REGISTER_METHOD" == "vrpathreg" && -z "${VRPATHREG:-}" ]]; then
   CANDIDATES=(
-    "$HOME/.local/share/Steam/steamapps/common/SteamVR/bin/linux64/vrpathreg"
-    "$HOME/.steam/steam/steamapps/common/SteamVR/bin/linux64/vrpathreg"
-    "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/SteamVR/bin/linux64/vrpathreg"
+    "$HOME/.local/share/Steam/steamapps/common/SteamVR/bin/$OPENVR_LINUX_BINARY_DIR/vrpathreg"
+    "$HOME/.steam/steam/steamapps/common/SteamVR/bin/$OPENVR_LINUX_BINARY_DIR/vrpathreg"
+    "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/SteamVR/bin/$OPENVR_LINUX_BINARY_DIR/vrpathreg"
   )
 
   for candidate in "${CANDIDATES[@]}"; do
@@ -434,19 +440,21 @@ register_driver_manual_openvrpaths() {
     "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/config/openvrpaths.vrpath"
   )
 
-  python3 - "$DRIVER_DIR" "$XR_OPENVR_RUNTIME_MODE" "${XR_OPENVR_STEAMVR_RUNTIME_DIR:-}" "${candidates[@]}" <<'PY'
+  python3 - "$DRIVER_DIR" "$XR_OPENVR_RUNTIME_MODE" "${XR_OPENVR_STEAMVR_RUNTIME_DIR:-}" \
+    "$OPENVR_LINUX_BINARY_DIR" "${candidates[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-if len(sys.argv) < 5:
-    print("[register_driver][ERROR] manual registration needs driver, runtime mode, SteamVR runtime override, and openvrpaths candidates", file=sys.stderr)
+if len(sys.argv) < 6:
+    print("[register_driver][ERROR] manual registration needs driver, runtime mode, SteamVR runtime, architecture, and openvrpaths candidates", file=sys.stderr)
     sys.exit(2)
 
 driver_dir = str(Path(sys.argv[1]).expanduser().resolve())
 runtime_mode = sys.argv[2].strip().lower()
 steamvr_runtime_override = sys.argv[3].strip()
-raw_candidates = [Path(p).expanduser() for p in sys.argv[4:] if p]
+binary_dir = sys.argv[4]
+raw_candidates = [Path(p).expanduser() for p in sys.argv[5:] if p]
 
 # Deduplicate while preserving order.
 candidates = []
@@ -480,7 +488,7 @@ def find_steamvr_runtime() -> Path | None:
         if key in seen:
             continue
         seen.add(key)
-        if (path / "bin/linux64/vrserver").exists() or (path / "bin/linux64/vrmonitor").exists():
+        if (path / "bin" / binary_dir / "vrserver").exists() or (path / "bin" / binary_dir / "vrmonitor").exists():
             return path
         if path.exists() and path.name == "SteamVR":
             return path

@@ -155,7 +155,7 @@ install -m 0644 "$XR_OPENVR_DISPLAY_CONFIG" "$(dirname "$PACKAGE_SETTINGS")/disp
 echo "[build_driver] Patched package device=$XR_OPENVR_DEVICE displayFrequency=$XR_OPENVR_DISPLAY_FREQUENCY_HZ displayMode=$XR_OPENVR_DISPLAY_MODE displayConfig=$XR_OPENVR_DISPLAY_CONFIG in $PACKAGE_SETTINGS"
 
 BUILD_DRIVER_PACKAGE="$BUILD_DIR/xr_tracking"
-BUILD_DRIVER_SO="$BUILD_DRIVER_PACKAGE/bin/linux64/driver_xr_tracking.so"
+BUILD_DRIVER_SO="$BUILD_DRIVER_PACKAGE/bin/$(openvr_linux_binary_dir)/driver_xr_tracking.so"
 if [[ ! -f "$BUILD_DRIVER_SO" ]]; then
   echo "[ERROR] Built driver shared library not found:" >&2
   echo "  $BUILD_DRIVER_SO" >&2

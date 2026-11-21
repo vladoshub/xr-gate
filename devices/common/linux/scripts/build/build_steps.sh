@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 # Shared target selection for dependency preparation and package builds.
 
+build_step_supported() {
+  local profile="${XR_BUILD_CPU:-}"
+  if [[ "${profile,,}" == riscv64 ]]; then
+    case "$1" in
+      openvr_driver|steamvr_*|xrizer) return 1 ;;
+    esac
+  fi
+  return 0
+}
+
 should_run_step() {
   local name="$1"
   local token
 
+  build_step_supported "$name" || return 1
   if [[ -z "${XR_BUILD_ONLY:-}" ]]; then
     return 0
   fi
@@ -46,6 +57,7 @@ should_run_step() {
 should_build_xrizer() {
   local token
 
+  build_step_supported xrizer || return 1
   if [[ "${XR_BUILD_XRIZER:-0}" == "1" ]]; then
     return 0
   fi
@@ -80,8 +92,12 @@ should_download_hand_tracking_models() {
 }
 
 should_download_body_tracking_models() {
+  local profile="${XR_BUILD_CPU:-}" default=1
+  # FRAME's pinned PyTorch export wheels are hosted for AMD64 and ARM64.
+  # RISC-V can run the resulting architecture-independent ONNX model.
+  [[ "${profile,,}" != riscv64 ]] || default=0
   [[ " ${XR_BUILD_ONLY:-} " == *" body_tracking_models "* ]] ||
-    { [[ "${XR_DOWNLOAD_BODY_TRACKING_MODELS:-1}" == "1" ]] && should_run_step frame_body_tracking; }
+    { [[ "${XR_DOWNLOAD_BODY_TRACKING_MODELS:-$default}" == "1" ]] && should_run_step frame_body_tracking; }
 }
 
 

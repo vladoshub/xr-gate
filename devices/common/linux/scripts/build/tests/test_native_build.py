@@ -4,14 +4,18 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 BUILD = Path(__file__).resolve().parents[1]
 ROOT = BUILD.parents[4]
+HOST_ARCH = {"arm64": "aarch64", "amd64": "x86_64"}.get(platform.machine(), platform.machine())
+HOST_PROFILE = {"aarch64": "aarch64", "riscv64": "riscv64"}.get(HOST_ARCH, "avx2")
 
 
 class NativeBuildTests(unittest.TestCase):
@@ -19,10 +23,11 @@ class NativeBuildTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU="avx2")
+        self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU=HOST_PROFILE)
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
                      "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_KEEP_OPENCV_BUILD",
-                     "XR_OPENCV_PREFIX", "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT"):
+                     "XR_OPENCV_PREFIX", "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT",
+                     "XR_ONNXRUNTIME_VERSION"):
             self.env.pop(name, None)
 
     def session(self, script, env=None):
@@ -218,7 +223,7 @@ for replacement in ['ci:123:2',expected.replace(cpu_tag,'another-cpu'),expected.
 """
         env = dict(self.env, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
                    TEST_OPENCV_SCRIPT=str(BUILD / "build_opencv.sh"))
-        for profile in ("avx2", "generic"):
+        for profile in (("avx2", "generic") if HOST_ARCH == "x86_64" else (HOST_PROFILE,)):
             with self.subTest(profile=profile):
                 result = self.session(code, dict(env, XR_BUILD_CPU=profile))
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -260,27 +265,40 @@ from pathlib import Path
 names=['XR_BUILD_CPU','XR_CPU_TARGET','XR_CPU_TUNE','XR_OPENCV_CPU_BASELINE','VCPKG_TRIPLET','CFLAGS','CXXFLAGS','XR_CPU_CACHE_TAG']
 print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(Path(os.environ['XR_CPU_PROFILE_FILE']).read_text())}))
 """
-        for mode, march, tune, opencv in [("GeNeRiC", "x86-64", "generic", "SSE2"),
-                                         ("AVX2", "x86-64-v3", "generic", "AVX2"),
-                                         ("avx512", "x86-64-v4", "generic", "AVX512_SKX"),
-                                         ("native", "native", "native", "NATIVE")]:
+        profiles = [("aarch64", "armv8-a", "generic", "NEON"), ("riscv64", "rv64gc", "rocket", "DETECT")]
+        if HOST_ARCH == "x86_64":
+            profiles += [("GeNeRiC", "x86-64", "generic", "SSE2"),
+                         ("AVX2", "x86-64-v3", "generic", "AVX2"),
+                         ("avx512", "x86-64-v4", "generic", "AVX512_SKX"),
+                         ("native", "native", "native", "NATIVE")]
+        for mode, march, tune, opencv in profiles:
             with self.subTest(profile=mode):
-                r = self.session(code, dict(self.env, XR_BUILD_CPU=mode))
+                test_env = dict(self.env, XR_BUILD_CPU=mode)
+                architecture = {"aarch64": "aarch64", "riscv64": "riscv64"}.get(mode, "x86_64")
+                if architecture != HOST_ARCH:
+                    fake_host = self.root / architecture
+                    fake_host.mkdir()
+                    (fake_host / "sitecustomize.py").write_text(
+                        f"import platform\nplatform.machine = lambda: {architecture!r}\n")
+                    test_env["PYTHONPATH"] = str(fake_host)
+                r = self.session(code, test_env)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 data = json.loads(r.stdout)
                 env = data["env"]
                 self.assertEqual(env["XR_CPU_TARGET"], march)
                 self.assertEqual(env["XR_CPU_TUNE"], tune)
                 self.assertEqual(env["XR_OPENCV_CPU_BASELINE"], opencv)
-                self.assertEqual(env["VCPKG_TRIPLET"], f"x64-linux-{mode.lower()}-release")
+                vcpkg_arch = {"aarch64": "arm64", "riscv64": "riscv64"}.get(architecture, "x64")
+                self.assertEqual(env["VCPKG_TRIPLET"], f"{vcpkg_arch}-linux-{mode.lower()}-release")
                 for variable in ("CFLAGS", "CXXFLAGS"):
                     self.assertIn(f"-march={march} -mtune={tune}", env[variable])
                 self.assertEqual(data["metadata"]["march"], march)
+                self.assertEqual(data["metadata"]["architecture"], architecture)
                 self.assertEqual(data["metadata"]["cache_tag"], env["XR_CPU_CACHE_TAG"])
                 triplet = ROOT / "backends/basalt_vio/cmake/triplets" / (env["VCPKG_TRIPLET"] + ".cmake")
                 self.assertIn(f"-march={march} -mtune={tune}", triplet.read_text())
 
-    @unittest.skipUnless(shutil.which("gcc"), "GCC needed")
+    @unittest.skipUnless(HOST_ARCH == "x86_64" and shutil.which("gcc"), "x86-64 GCC needed")
     def test_generic_compiler_uses_sse2_without_avx_or_newer_sse(self):
         code = r'''
 import os, shlex, subprocess
@@ -312,7 +330,8 @@ subprocess.run([str(binary)], check=True)
     def test_local_output_directories_are_separate(self):
         for profile, suffix in [("GeNeRiC", "out/generic/xr-gate"),
                                 ("avx2", "out/xr-gate"), ("AvX512", "out/avx512/xr-gate"),
-                                ("native", "out/native/xr-gate")]:
+                                ("native", "out/native/xr-gate"), ("AARCH64", "out/aarch64/xr-gate"),
+                                ("RISCV64", "out/riscv64/xr-gate")]:
             env = dict(self.env, XR_ROOT_PROJECT=str(self.root), XR_OUT_PACKAGE_NAME="xr-gate", XR_BUILD_CPU=profile)
             for variable in ("XR_OUT_ROOT", "XR_OUT_BIN_ROOT"):
                 env.pop(variable, None)
@@ -333,6 +352,9 @@ subprocess.run([str(binary)], check=True)
         fresh.write_text(json.dumps(module.describe("avx512")))
         with self.assertRaisesRegex(ValueError, "another CPU profile"):
             module.check_output(self.root, fresh)
+        fresh.write_text(json.dumps(module.describe("aarch64")))
+        with self.assertRaisesRegex(ValueError, "another CPU profile"):
+            module.check_output(self.root, fresh)
         fresh.write_text(json.dumps(module.describe("generic")))
         with self.assertRaisesRegex(ValueError, "another CPU profile"):
             module.check_output(self.root, fresh)
@@ -343,7 +365,8 @@ subprocess.run([str(binary)], check=True)
         with self.assertRaisesRegex(ValueError, "another CPU profile"):
             module.check_output(self.root, fresh)
 
-    def test_generic_runtime_accepts_baseline_cpu_and_rejects_missing_sse2(self):
+    @patch("platform.machine", return_value="x86_64")
+    def test_generic_runtime_accepts_baseline_cpu_and_rejects_missing_sse2(self, _machine):
         spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -362,7 +385,78 @@ subprocess.run([str(binary)], check=True)
         with self.assertRaisesRegex(ValueError, "missing CPU features"):
             module.check_package(self.root, info(module.V1_FLAGS))
 
-    def test_runtime_rejects_unsupported_avx512_and_native_cpu(self):
+    def test_aarch64_runtime_requires_matching_architecture_and_neon(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (self.root / "BUILD_CPU_TARGET").write_text("armv8-a\n")
+
+        with patch.object(module.platform, "machine", return_value="x86_64"):
+            with self.assertRaisesRegex(ValueError, "requires Linux aarch64"):
+                module.describe("aarch64", check_host=True)
+            with self.assertRaisesRegex(ValueError, "requires Linux aarch64"):
+                module.check_package(self.root)
+        with patch.object(module.platform, "machine", return_value="aarch64"):
+            module.check_package(self.root, "Features : fp asimd aes\nFeatures : fp asimd\n")
+            with self.assertRaisesRegex(ValueError, "missing CPU features: asimd"):
+                module.check_package(self.root, "Features : fp asimd\nFeatures : fp\n")
+
+    def test_riscv64_runtime_requires_rv64gc_and_accepts_cpus_without_rvv(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (self.root / "BUILD_CPU_TARGET").write_text("rv64gc\n")
+
+        with patch.object(module.platform, "machine", return_value="aarch64"):
+            with self.assertRaisesRegex(ValueError, "requires Linux riscv64"):
+                module.check_package(self.root)
+        with patch.object(module.platform, "machine", return_value="riscv64"):
+            module.check_package(self.root, "isa : rv64imafdc_zicsr_zifencei\nhart isa : rv64gc\n")
+            with self.assertRaisesRegex(ValueError, "missing CPU features: d"):
+                module.check_package(self.root, "isa : rv64imafdc\nhart isa : rv64imafc\n")
+
+    def test_onnxruntime_package_selection_for_each_architecture(self):
+        # Mock only uname, which is the runtime selector's source of architecture.
+        command = r'''
+uname() { printf '%s\n' "$TEST_MACHINE"; }
+source "$1"
+xr_onnxruntime_package_name
+'''
+        for architecture, package_arch in [("x86_64", "x64"), ("aarch64", "aarch64"), ("riscv64", "riscv64")]:
+            for selected_version in ("", "1.18.1"):
+                result = subprocess.run(
+                    ["bash", "-c", command, "test", str(BUILD.parent / "runtime/onnxruntime_path.sh")],
+                    env=dict(self.env, TEST_MACHINE=architecture, XR_ONNXRUNTIME_VERSION=selected_version),
+                    capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout.strip(),
+                                 f"onnxruntime-linux-{package_arch}-{selected_version or '1.31.0'}")
+
+    def test_mercury_selects_its_built_sdk_with_both_versions_present(self):
+        bin_root = self.root / "bin"
+        mercury = bin_root / "backends/mercury_hand_tracking"
+        mercury.mkdir(parents=True)
+        (mercury / "libxr_mercury_runtime.so").touch()
+        legacy = bin_root / "onnxruntime/onnxruntime-linux-x64-1.18.1"
+        current = bin_root / "onnxruntime/onnxruntime-linux-x64-1.31.0"
+        for sdk in (legacy, current):
+            (sdk / "lib").mkdir(parents=True)
+            (sdk / "lib/libonnxruntime.so").touch()
+        command = r'''
+uname() { printf 'x86_64\n'; }
+source "$1"
+xr_onnxruntime_mercury_root "$2" "$3"
+'''
+        args = ["bash", "-c", command, "test", str(BUILD.parent / "runtime/onnxruntime_path.sh"),
+                str(bin_root), str(mercury)]
+        marker = mercury / "ONNXRUNTIME_PACKAGE"
+        self.assertEqual(subprocess.check_output(args, env=self.env, text=True).strip(), str(legacy))
+        for sdk, build_selection in ((current, "1.18.1"), (legacy, "1.31.0")):
+            marker.write_text(sdk.name + "\n")
+            env = dict(self.env, XR_ONNXRUNTIME_VERSION=build_selection)
+            self.assertEqual(subprocess.check_output(args, env=env, text=True).strip(), str(sdk))
+
+    @patch("platform.machine", return_value="x86_64")
+    def test_runtime_rejects_unsupported_avx512_and_native_cpu(self, _machine):
         spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

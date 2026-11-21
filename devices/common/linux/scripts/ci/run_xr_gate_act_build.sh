@@ -5,7 +5,7 @@ XR_ROOT_PROJECT="${XR_ROOT_PROJECT:-$(cd "$SCRIPT_DIR/../../../../.." && pwd)}"
 export XR_ROOT_PROJECT
 export XR_ACT_DEFAULT_WORKFLOW="${XR_ACT_DEFAULT_WORKFLOW:-$XR_ROOT_PROJECT/.github/workflows/xr-gate-split-build.yml}"
 export XR_ACT_LOG_STEM="${XR_ACT_LOG_STEM:-xr_gate}"
-export XR_ACT_MAIN_ARTIFACT_HINT="${XR_ACT_MAIN_ARTIFACT_HINT:-xr-gate-linux-x64.zip / xr-gate-linux-x64.tar.gz}"
+export XR_ACT_MAIN_ARTIFACT_HINT="${XR_ACT_MAIN_ARTIFACT_HINT:-xr-gate-ubuntu-*-linux-*.tar.gz}"
 export XR_ACT_MODELS_ARTIFACT_HINT="${XR_ACT_MODELS_ARTIFACT_HINT:-hand-tracking-models-mercury.zip / hand-tracking-models-mercury.tar.gz}"
 
 forward=()

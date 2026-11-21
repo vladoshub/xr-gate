@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Describe Linux x86-64 build profiles and check a packaged CPU requirement."""
+"""Describe Linux build profiles and check a packaged CPU requirement."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
+import platform
 import re
 
 
@@ -11,11 +12,21 @@ V1_FLAGS = {"cmov", "cx8", "fpu", "fxsr", "lm", "mmx", "sse", "sse2", "syscall"}
 V3_FLAGS = V1_FLAGS | {"avx", "avx2", "fma", "f16c", "bmi1", "bmi2", "lzcnt", "movbe", "xsave",
             "cx16", "lahf_lm", "popcnt", "sse3", "ssse3", "sse4_1", "sse4_2"}
 V4_FLAGS = V3_FLAGS | {"avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"}
+AARCH64_FLAGS = {"fp", "asimd"}
 PROFILES = {
-    "generic": ("x86-64", "generic", "SSE2"),
-    "avx2": ("x86-64-v3", "generic", "AVX2"),
-    "avx512": ("x86-64-v4", "generic", "AVX512_SKX"),
-    "native": ("native", "native", "NATIVE"),
+    "generic": ("x86_64", "x86-64", "generic", "SSE2"),
+    "avx2": ("x86_64", "x86-64-v3", "generic", "AVX2"),
+    "avx512": ("x86_64", "x86-64-v4", "generic", "AVX512_SKX"),
+    "native": ("x86_64", "native", "native", "NATIVE"),
+    "aarch64": ("aarch64", "armv8-a", "generic", "NEON"),
+    "riscv64": ("riscv64", "rv64gc", "rocket", "DETECT"),
+}
+PORTABLE_FEATURES = {
+    "x86-64": V1_FLAGS,
+    "x86-64-v3": V3_FLAGS,
+    "x86-64-v4": V4_FLAGS,
+    "armv8-a": AARCH64_FLAGS,
+    "rv64gc": set("imafdc"),
 }
 SCHEMA = "xr_gate_cpu_profile_v1"
 
@@ -29,20 +40,37 @@ def normalize_flags(flags):
     return result
 
 
-def host_features(cpuinfo=None):
+def check_architecture(architecture, operation):
+    machine = platform.machine().lower()
+    detected = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+    if detected != architecture:
+        raise ValueError(f"{operation} requires Linux {architecture}; detected {machine}")
+
+
+def host_features(cpuinfo=None, architecture="x86_64"):
     text = Path("/proc/cpuinfo").read_text() if cpuinfo is None else cpuinfo
-    cpus = re.findall(r"^flags\s*:\s*(.*)$", text, re.M)
+    if architecture == "riscv64":
+        # Linux reports a common ISA and may also list the ISA of each hart.
+        isas = re.findall(r"^(?:hart )?isa\s*:\s*rv64([a-z]+)", text, re.M)
+        if not isas:
+            raise ValueError("Cannot determine riscv64 CPU features from /proc/cpuinfo")
+        return set.intersection(*(set(isa.replace("g", "imafd")) for isa in isas))
+
+    label = "Features" if architecture == "aarch64" else "flags"
+    cpus = re.findall(rf"^{label}\s*:\s*(.*)$", text, re.M)
     if not cpus:
-        raise ValueError("Cannot determine x86 CPU features from /proc/cpuinfo")
+        raise ValueError(f"Cannot determine {architecture} CPU features from /proc/cpuinfo")
     # Every schedulable CPU must support the requirement.
     return set.intersection(*(normalize_flags(cpu.split()) for cpu in cpus))
 
 
-def describe(mode, cpuinfo=None):
+def describe(mode, cpuinfo=None, check_host=False):
     mode = mode.strip().lower()
     if mode not in PROFILES:
-        raise ValueError("XR_BUILD_CPU must be generic, avx2, avx512 or native")
-    march, tune, baseline = PROFILES[mode]
+        raise ValueError(f"XR_BUILD_CPU must be one of {', '.join(PROFILES)}")
+    architecture, march, tune, baseline = PROFILES[mode]
+    if check_host:
+        check_architecture(architecture, f"XR_BUILD_CPU={mode}")
     if mode == "native":
         text = Path("/proc/cpuinfo").read_text() if cpuinfo is None else cpuinfo
         features = host_features(text)
@@ -50,9 +78,9 @@ def describe(mode, cpuinfo=None):
         identity = "\n".join(sorted(set(identity)) + sorted(features))
         cache_tag = "native-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
     else:
-        features = {"generic": V1_FLAGS, "avx2": V3_FLAGS, "avx512": V4_FLAGS}[mode]
+        features = PORTABLE_FEATURES[march]
         cache_tag = march
-    return dict(schema=SCHEMA, profile=mode, march=march, tune=tune,
+    return dict(schema=SCHEMA, profile=mode, architecture=architecture, march=march, tune=tune,
                 opencv_baseline=baseline, cache_tag=cache_tag,
                 required_features=sorted(features))
 
@@ -63,12 +91,9 @@ def check_package(root, cpuinfo=None):
     if not marker.is_file():
         return
     march = marker.read_text().strip()
-    if march == "x86-64":
-        required = V1_FLAGS
-    elif march == "x86-64-v3":
-        required = V3_FLAGS
-    elif march == "x86-64-v4":
-        required = V4_FLAGS
+    architecture = {"armv8-a": "aarch64", "rv64gc": "riscv64"}.get(march, "x86_64")
+    if march in PORTABLE_FEATURES:
+        required = PORTABLE_FEATURES[march]
     elif march == "native":
         metadata = root / "BUILD_CPU_PROFILE.json"
         if not metadata.is_file():
@@ -82,7 +107,8 @@ def check_package(root, cpuinfo=None):
         required = set(data["required_features"])
     else:
         raise ValueError("Unknown package CPU target: " + march)
-    missing = required - host_features(cpuinfo)
+    check_architecture(architecture, "This runtime")
+    missing = required - host_features(cpuinfo, architecture)
     if missing:
         raise ValueError(f"This runtime requires {march}; missing CPU features: " + ", ".join(sorted(missing)))
 
@@ -96,7 +122,8 @@ def check_output(root, metadata):
     old_metadata = root / "BUILD_CPU_PROFILE.json"
     if old_metadata.is_file():
         old = json.loads(old_metadata.read_text())
-        compatible = old.get("cache_tag") == new["cache_tag"] and old.get("march") == new["march"]
+        compatible = (old.get("cache_tag") == new["cache_tag"] and old.get("march") == new["march"]
+                      and old.get("architecture", new["architecture"]) == new["architecture"])
     else:
         compatible = marker.read_text().strip() == new["march"] != "native"
     if not compatible:
@@ -109,6 +136,7 @@ def main():
     desc = commands.add_parser("describe")
     desc.add_argument("profile")
     desc.add_argument("--output", type=Path)
+    desc.add_argument("--check-host", action="store_true", help="Require the build host architecture")
     check = commands.add_parser("check")
     check.add_argument("root", type=Path)
     output = commands.add_parser("check-output")
@@ -117,7 +145,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == "describe":
-            data = describe(args.profile)
+            data = describe(args.profile, check_host=args.check_host)
             if args.output:
                 args.output.write_text(json.dumps(data, indent=2) + "\n")
             print("\t".join(data[k] for k in ("profile", "march", "tune", "opencv_baseline", "cache_tag")))
