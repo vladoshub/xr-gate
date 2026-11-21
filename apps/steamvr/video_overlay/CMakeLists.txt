@@ -38,19 +38,7 @@ if(NOT EXISTS "${XR_SHARED_INCLUDE_DIR}/xr_video/shm/stereo_video_shm_reader.hpp
   message(FATAL_ERROR "XR video shared headers not found: ${XR_SHARED_INCLUDE_DIR}")
 endif()
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-  set(XR_PLATFORM_BITS 64)
-else()
-  set(XR_PLATFORM_BITS 32)
-endif()
-
-if(WIN32)
-  set(OPENVR_ARCH_TARGET "win${XR_PLATFORM_BITS}")
-elseif(APPLE)
-  set(OPENVR_ARCH_TARGET "osx${XR_PLATFORM_BITS}")
-else()
-  set(OPENVR_ARCH_TARGET "linux${XR_PLATFORM_BITS}")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../../../shared/cmake/openvr_sdk_platform.cmake")
 
 find_library(OPENVR_LIBRARIES
   NAMES openvr_api
@@ -58,8 +46,7 @@ find_library(OPENVR_LIBRARIES
     "${XR_OPENVR_SDK_ROOT}/bin"
     "${XR_OPENVR_SDK_ROOT}/lib"
   PATH_SUFFIXES
-    "${OPENVR_ARCH_TARGET}"
-    "linux64" "win64" "osx32"
+    ${OPENVR_SDK_LIBRARY_SUFFIXES}
   NO_DEFAULT_PATH
 )
 
@@ -125,9 +112,12 @@ target_compile_options(steamvr_video_overlay PRIVATE
   -Wpedantic
 )
 
-install(TARGETS steamvr_video_overlay
-  RUNTIME DESTINATION bin/apps/steamvr/video_overlay
-)
+set(XR_VIDEO_OVERLAY_INSTALL_DIR "bin/apps/steamvr/video_overlay" CACHE STRING "Video overlay install directory")
+install(TARGETS steamvr_video_overlay RUNTIME DESTINATION "${XR_VIDEO_OVERLAY_INSTALL_DIR}")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  get_filename_component(OPENVR_RUNTIME_LIBRARY "${OPENVR_LIBRARIES}" REALPATH)
+  install(FILES "${OPENVR_RUNTIME_LIBRARY}" DESTINATION "${XR_VIDEO_OVERLAY_INSTALL_DIR}" RENAME libopenvr_api.so)
+endif()
 
 message(STATUS "OpenVR SDK: ${XR_OPENVR_SDK_ROOT}")
 message(STATUS "OpenVR architecture target: ${OPENVR_ARCH_TARGET}")

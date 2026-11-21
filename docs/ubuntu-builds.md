@@ -9,7 +9,8 @@ is not the runtime ABI target. Select the CPU profile with `XR_BUILD_CPU`:
 | `generic` | `-march=x86-64 -mtune=generic` | SSE2 | Portable x86-64 runtime without AVX/AVX2/FMA requirements |
 | `avx2` (default) | `-march=x86-64-v3 -mtune=generic` | AVX2 | Shared AVX2/FMA/BMI runtime |
 | `avx512` | `-march=x86-64-v4 -mtune=generic` | AVX512_SKX | CPUs with AVX-512F/CD/BW/DQ/VL |
-| `native` | `-march=native -mtune=native` | NATIVE | The build machine's CPU |
+| `native` | `-march=native -mtune=native` | NATIVE | The x86-64 build machine's CPU |
+| `aarch64` | `-march=armv8-a -mtune=generic` | NEON | Portable Linux ARM64 runtime |
 
 The same profile configures Basalt, OpenCV and the vcpkg dependencies. `generic`
 uses the original x86-64 baseline (including SSE2); it does not require SSE3,
@@ -34,23 +35,36 @@ XR_BUILD_CPU=generic ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 XR_BUILD_CPU=avx2 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 XR_BUILD_CPU=avx512 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 XR_BUILD_CPU=native ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+XR_BUILD_CPU=aarch64 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-For GitHub Actions, select `cpu_profile=generic` in the dispatch inputs for CPUs
-without AVX2. AVX2 remains the default. With local act:
+Build the `aarch64` profile on a Linux ARM64 host. It applies to every device
+profile and can be used with `XR_BUILD_ONLY`.
+
+In GitHub Actions, check `build_ubuntu_amd64` and `build_ubuntu_arm64`
+independently. Each checked architecture builds Ubuntu 24.04 and 26.04.
+AMD64 is selected by default and uses `cpu_profile`. Choose `generic` for
+AMD64 CPUs without AVX2. ARM64 uses `aarch64` on `ubuntu-24.04-arm`.
+With `publish_release` enabled, the selected builds go into one GitHub Release
+under `release_tag`. The Windows installer is selected independently with
+`release_windows_driver`.
+
+For a local act run, select one architecture per invocation.
 
 ```bash
-./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --full --allow-pull --input cpu_profile=generic --input publish_release=false
+./devices/common/linux/scripts/ci/run_xr_gate_act_build.sh --full --allow-pull \
+  --input build_ubuntu_amd64=true --input build_ubuntu_arm64=false \
+  --input release_windows_driver=false --input cpu_profile=generic --input publish_release=false
 ```
 
-Build one profile per invocation. Local output roots are separated automatically:
+Local output roots are separated automatically.
 `out/generic/xr-gate/` for generic, `out/xr-gate/` for AVX2,
-`out/avx512/xr-gate/` for AVX512, and
-`out/native/xr-gate/` for native. An explicit `XR_OUT_ROOT` still works; the
-installer rejects reusing it for a different CPU profile/native CPU identity.
+`out/avx512/xr-gate/` for AVX512, `out/native/xr-gate/` for native, and
+`out/aarch64/xr-gate/` for ARM64. An explicit `XR_OUT_ROOT` still works. The
+installer rejects reuse across CPU profiles and native CPU identities.
 CI explicitly selects its original `out/xr-gate/` layout in each isolated job.
-Artifact filenames are unchanged; `BUILD_CPU_TARGET` and `BUILD_CPU_PROFILE.json`
-inside each package record the actual profile. The installer checks CPU support.
+`BUILD_CPU_TARGET` and `BUILD_CPU_PROFILE.json` inside each package record
+the selected profile. The installer checks architecture and CPU features.
 The builder must also support the chosen instructions for build-time helper tools.
 
 ## Local dependency cache and offline rebuilds
@@ -219,21 +233,23 @@ python3 -m unittest discover -s devices/common/linux/scripts/build/tests -v
 
 ## Runtime compatibility and installation
 
-Artifacts retain their existing names:
+The runtime archive suffix identifies the architecture.
 
 - `xr-gate-ubuntu-24.04-linux-x64.tar.gz`
 - `xr-gate-ubuntu-26.04-linux-x64.tar.gz`
+- `xr-gate-ubuntu-24.04-linux-arm64.tar.gz`
+- `xr-gate-ubuntu-26.04-linux-arm64.tar.gz`
 
 Use the matching build by default. The **24.04 static-OpenCV build is also tested
 on 26.04** by a separate CI job required before publication, and its installer
 accepts that combination. Legacy 24.04 packages keep the strict version guard.
-The unpack helper still prefers the matching distro archive and accepts an
+The unpack helper prefers the matching distro and architecture and accepts an
 explicit `--main` path. Never overlay two runtime archives in the same directory.
 
 This is not a guarantee for every Linux distro: the 24.04 toolchain still sets
-the minimum glibc/libstdc++ versions. Older systems, musl/Alpine and non-x86-64
-systems require separate build targets. A future older-baseline build must be
-tested independently; bundling OpenCV does not lower the glibc requirement.
+the minimum glibc/libstdc++ versions. Older systems, musl/Alpine and other CPU
+architectures require separate build targets. A future older-baseline build must
+be tested independently. Bundling OpenCV does not lower the glibc requirement.
 
 After unpacking, run:
 

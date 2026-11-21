@@ -26,27 +26,20 @@ if(NOT EXISTS "${OPENVR_INCLUDE_DIR}/openvr_driver.h")
   message(FATAL_ERROR "openvr_driver.h not found under ${OPENVR_INCLUDE_DIR}")
 endif()
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-  set(XR_PLATFORM_BITS 64)
-else()
-  set(XR_PLATFORM_BITS 32)
-endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../shared/cmake/openvr_sdk_platform.cmake")
 
 if(WIN32)
   add_compile_definitions(_WIN32)
-  set(OPENVR_ARCH_TARGET "win${XR_PLATFORM_BITS}")
   set(XR_RUNTIME_POSE_PLATFORM_SOURCE src/platform/windows_runtime_pose_reader.cpp)
   set(XR_RUNTIME_HAND_PLATFORM_SOURCE src/platform/windows_runtime_hand_reader.cpp)
   set(XR_RUNTIME_CONTROLLER_PLATFORM_SOURCE src/platform/windows_runtime_controller_state_reader.cpp)
 elseif(APPLE)
   add_compile_definitions(OSX POSIX)
-  set(OPENVR_ARCH_TARGET "osx${XR_PLATFORM_BITS}")
   set(XR_RUNTIME_POSE_PLATFORM_SOURCE src/platform/posix_runtime_pose_reader.cpp)
   set(XR_RUNTIME_HAND_PLATFORM_SOURCE src/platform/posix_runtime_hand_reader.cpp)
   set(XR_RUNTIME_CONTROLLER_PLATFORM_SOURCE src/platform/posix_runtime_controller_state_reader.cpp)
 else()
   add_compile_definitions(LINUX POSIX)
-  set(OPENVR_ARCH_TARGET "linux${XR_PLATFORM_BITS}")
   set(XR_RUNTIME_POSE_PLATFORM_SOURCE src/platform/posix_runtime_pose_reader.cpp)
   set(XR_RUNTIME_HAND_PLATFORM_SOURCE src/platform/posix_runtime_hand_reader.cpp)
   set(XR_RUNTIME_CONTROLLER_PLATFORM_SOURCE src/platform/posix_runtime_controller_state_reader.cpp)
@@ -58,8 +51,7 @@ find_library(OPENVR_LIBRARIES
     "${XR_OPENVR_SDK_ROOT}/bin"
     "${XR_OPENVR_SDK_ROOT}/lib"
   PATH_SUFFIXES
-    "${OPENVR_ARCH_TARGET}"
-    "linux64" "win64" "osx32"
+    ${OPENVR_SDK_LIBRARY_SUFFIXES}
   NO_DEFAULT_PATH
 )
 

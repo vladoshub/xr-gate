@@ -30,18 +30,7 @@ cmake -S "$APP_DIR" -B "$BUILD_DIR" \
 
 cmake --build "$BUILD_DIR" --target xr_steamvr_spatial_overlay -j"$BUILD_JOBS"
 
-cp "$BUILD_DIR/xr_steamvr_spatial_overlay" "$INSTALL_BIN_DIR/xr_steamvr_spatial_overlay"
-
-OPENVR_LIB=""
-for p in \
-  "$XR_OPENVR_SDK_DIR/lib/linux64/libopenvr_api.so" \
-  "$XR_OPENVR_SDK_DIR/bin/linux64/libopenvr_api.so" \
-  "$XR_OPENVR_SDK_DIR/lib/libopenvr_api.so"; do
-  if [[ -f "$p" ]]; then OPENVR_LIB="$p"; break; fi
-done
-if [[ -n "$OPENVR_LIB" ]]; then
-  cp "$OPENVR_LIB" "$INSTALL_BIN_DIR/lib/libopenvr_api.so"
-fi
+cmake --install "$BUILD_DIR" --prefix "$INSTALL_BIN_DIR"
 
 OPENVR_LICENSE_FILE=""
 for candidate in "$XR_OPENVR_SDK_DIR/LICENSE" "$XR_OPENVR_SDK_DIR/LICENSE.txt"; do

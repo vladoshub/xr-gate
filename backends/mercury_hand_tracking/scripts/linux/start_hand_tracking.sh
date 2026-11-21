@@ -64,7 +64,10 @@ FINAL="$(expand_tilde "$FINAL")"
 MERCURY_CALIB="${MERCURY_CALIB:-$FINAL/mercury_calib_unified_480_ccw90.json}"
 MERCURY_CALIB="$(expand_tilde "$MERCURY_CALIB")"
 
-ORT_ROOT="${ORT_ROOT:-$ROOT_PROJECT/bin/onnxruntime/onnxruntime-linux-x64-1.18.1}"
+if [[ -z "${ORT_ROOT:-}" ]]; then
+  source "$ROOT_PROJECT/devices/common/linux/scripts/runtime/onnxruntime_path.sh"
+  ORT_ROOT="$ROOT_PROJECT/bin/onnxruntime/$(xr_onnxruntime_package_name)"
+fi
 ORT_ROOT="$(expand_tilde "$ORT_ROOT")"
 export LD_LIBRARY_PATH="$ORT_ROOT/lib:${LD_LIBRARY_PATH:-}"
 

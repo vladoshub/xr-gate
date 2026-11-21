@@ -64,6 +64,7 @@ printf '[xr] PACKAGE_TAG=%s\n' "${XR_OPENVR_PACKAGE_TAG:-<none>}"
 printf '[xr] BUILD_FREQUENCIES=%s\n' "${BUILD_FREQUENCIES[*]}"
 printf '[xr] BUILD_MODES=%s\n' "${BUILD_MODES[*]}"
 
+driver_binary_dir="$(openvr_linux_binary_dir)"
 for mode in "${BUILD_MODES[@]}"; do
   for freq in "${BUILD_FREQUENCIES[@]}"; do
     driver_dir_name="$(openvr_driver_dir_name "$freq" "$mode" "$XR_OPENVR_DEVICE" "$XR_OPENVR_PACKAGE_TAG")"
@@ -84,7 +85,7 @@ for mode in "${BUILD_MODES[@]}"; do
     INSTALL_DRIVER_ROOT="$install_driver_root" \
       "${SCRIPT_DIR}/build_driver.sh"
 
-    driver_so="$install_driver_root/xr_tracking/bin/linux64/driver_xr_tracking.so"
+    driver_so="$install_driver_root/xr_tracking/bin/$driver_binary_dir/driver_xr_tracking.so"
     if [[ ! -f "$driver_so" ]]; then
       echo "ERROR: built driver not found: $driver_so" >&2
       exit 1

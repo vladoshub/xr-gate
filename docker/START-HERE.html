@@ -4,7 +4,7 @@
 <section data-language="en" lang="en">
 <h1>XR Gate with Docker on Linux</h1>
 <h2>1. Download XR Gate</h2>
-<p>Use Ubuntu 24.04 (64-bit) and a CPU with AVX2 support.</p>
+<p>Use Ubuntu 24.04 on x86-64 with AVX2 or on ARM64. Set <code>XR_VERSION</code> to a release with a runtime for your architecture.</p>
 <p>Download the <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, extract it, and open a terminal in the <code>docker</code> folder. Run all commands below from that folder.</p>
 <h2>2. Install Docker</h2>
 <p>If Docker Engine 28 or newer and Docker Compose are already installed, skip this step.</p>
@@ -47,7 +47,7 @@ chmod +x xr-gate
 <section data-language="ru" lang="ru" hidden>
 <h1>XR Gate в Docker на Linux</h1>
 <h2>1. Скачайте XR Gate</h2>
-<p>Нужны Ubuntu 24.04 (64 бита) и процессор с поддержкой AVX2.</p>
+<p>Подходит Ubuntu 24.04 на x86-64 с AVX2 или на ARM64. Укажите в <code>XR_VERSION</code> релиз с архивом для вашей архитектуры.</p>
 <p>Скачайте <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, распакуйте его и откройте терминал в папке <code>docker</code>. Все команды ниже выполняйте из этой папки.</p>
 <h2>2. Установите Docker</h2>
 <p>Если Docker Engine версии 28 или новее и Docker Compose уже установлены, пропустите этот шаг.</p>

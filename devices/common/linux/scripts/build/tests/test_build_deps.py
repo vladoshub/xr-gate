@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import tempfile
 import unittest
@@ -152,7 +153,8 @@ PY
         ]
         for relative in scripts:
             self.executable(self.project / relative, text)
-        self.env.update(XR_BUILD_CPU="avx2", XR_USE_BUNDLED_OPENCV="0",
+        cpu_profile = "aarch64" if platform.machine() in ("aarch64", "arm64") else "avx2"
+        self.env.update(XR_BUILD_CPU=cpu_profile, XR_USE_BUNDLED_OPENCV="0",
                         XR_DEVICE_BUILD_HOOK=str(self.project / "vendor-hook.sh"),
                         XR_DEVICE_PACKAGE_SCRIPT=str(self.project / "package-hook.sh"),
                         XR_BUILD_XRIZER="1", XR_DOWNLOAD_HAND_TRACKING_MODELS="1")

@@ -6,7 +6,6 @@ services:
       context: .
       args:
         XR_VERSION: ${XR_VERSION:?Set XR_VERSION in .env}
-    platform: linux/amd64
     container_name: xr-gate
     init: true
     stdin_open: true

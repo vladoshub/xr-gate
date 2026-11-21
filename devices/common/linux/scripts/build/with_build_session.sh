@@ -33,7 +33,7 @@ export CCACHE_SECONDARY_STORAGE="" CCACHE_REMOTE_STORAGE=""
 export XR_CPU_PROFILE_FILE="$session/cpu-profile.json"
 support_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 profile_values="$(python3 "$support_dir/../runtime/cpu_target.py" \
-  describe "${XR_BUILD_CPU:-avx2}" --output "$XR_CPU_PROFILE_FILE")"
+  describe "${XR_BUILD_CPU:-avx2}" --check-host --output "$XR_CPU_PROFILE_FILE")"
 IFS=$'\t' read -r XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG <<< "$profile_values"
 export XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG
 export CFLAGS="${CFLAGS:-} -march=$XR_CPU_TARGET -mtune=$XR_CPU_TUNE -g0"
@@ -75,7 +75,11 @@ printf '%s\n' 'max_size = 2G' 'remote_storage =' > "$CCACHE_CONFIGPATH"
 export CLEAN_BUILD=1
 export CMAKE_BUILD_TYPE=Release BUILD_TYPE=Release
 export VCPKG_MAX_CONCURRENCY="${BUILD_JOBS:-2}"
-export VCPKG_TRIPLET="x64-linux-$XR_BUILD_CPU-release"
+if [[ "$XR_BUILD_CPU" == aarch64 ]]; then
+  export VCPKG_TRIPLET="arm64-linux-aarch64-release"
+else
+  export VCPKG_TRIPLET="x64-linux-$XR_BUILD_CPU-release"
+fi
 export XR_VCPKG_INSTALLED_DIR="$XR_DEPENDENCY_CACHE_ROOT/vcpkg-installed/$XR_CPU_CACHE_TAG"
 export BASALT_VCPKG_INSTALLED="${BASALT_VCPKG_INSTALLED:-$XR_VCPKG_INSTALLED_DIR/$VCPKG_TRIPLET}"
 if command -v ccache >/dev/null 2>&1; then

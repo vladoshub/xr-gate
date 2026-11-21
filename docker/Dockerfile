@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM --platform=linux/amd64 ubuntu:24.04
+FROM ubuntu:24.04
 
 ARG XR_VERSION
 LABEL org.opencontainers.image.title="XR Gate TCP runtime" \

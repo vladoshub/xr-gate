@@ -4,14 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_PROJECT="$(cd "${ROOT_PROJECT:-$SCRIPT_DIR/../../../../..}" && pwd)"
 source "$SCRIPT_DIR/dependency_policy.sh"
+source "$SCRIPT_DIR/../runtime/onnxruntime_path.sh"
 
-readonly version=1.18.1
+readonly version="$XR_ONNXRUNTIME_VERSION"
 readonly source_url=https://github.com/ROCm/onnxruntime.git
 readonly source_commit=387127404e6c1d84b3468c387d864877ed1c67fe
 # Keep the Eigen revision from this ONNX Runtime commit's cmake/deps.txt.
 readonly eigen_url=https://github.com/eigen-mirror/eigen.git
 readonly eigen_commit=e7248b26a1ed53fa030c5c459f7ea095dfd276ac
-package="onnxruntime-linux-x64-$version"
+package="$(xr_onnxruntime_package_name)"
 source_dir="$ROOT_PROJECT/third_party/onnxruntime"
 eigen_dir="$ROOT_PROJECT/third_party/onnxruntime-eigen"
 install_dir="${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/onnxruntime/$package"

@@ -9,10 +9,10 @@ if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 24.04 ]]; then
   echo 'This host installer targets Ubuntu 24.04. Other Docker-capable Linux hosts can use the bundle manually.' >&2
   exit 1
 fi
-if [[ "$(uname -m)" != x86_64 ]]; then
-  echo 'This release requires an x86-64 CPU with AVX2 support.' >&2
-  exit 1
-fi
+case "$(uname -m)" in
+  x86_64|aarch64|arm64) ;;
+  *) echo 'This host installer supports x86-64 and aarch64.' >&2; exit 1 ;;
+esac
 
 if [[ "$(ps -p 1 -o comm=)" != systemd ]]; then
   echo 'systemd is required by this host installer for Docker and BlueZ.' >&2

@@ -60,14 +60,18 @@ RELEASE_UBUNTU=""
 if [[ -r /etc/os-release ]]; then
   RELEASE_UBUNTU="$(. /etc/os-release; [[ "$ID" != ubuntu ]] || printf '%s' "$VERSION_ID")"
 fi
+case "$(uname -m)" in
+  aarch64|arm64) RELEASE_ARCH=arm64 ;;
+  *) RELEASE_ARCH=x64 ;;
+esac
 MAIN_ARCHIVE="${MAIN_ARCHIVE:-${MAIN_ZIP:-}}"
 if [[ -z "$MAIN_ARCHIVE" ]]; then
   MAIN_ARCHIVE="$(first_existing \
-    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-ubuntu-${RELEASE_UBUNTU}-linux-x64.tar.gz" \
-    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-ubuntu-${RELEASE_UBUNTU}-linux-x64.zip" \
-    "$SCRIPT_DIR/${XR_RELEASE_DEVICE_TARGET}_linux_x64.tar.gz" \
-    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-linux-x64.tar.gz" \
-    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-linux-x64.zip")"
+    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-ubuntu-${RELEASE_UBUNTU}-linux-$RELEASE_ARCH.tar.gz" \
+    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-ubuntu-${RELEASE_UBUNTU}-linux-$RELEASE_ARCH.zip" \
+    "$SCRIPT_DIR/${XR_RELEASE_DEVICE_TARGET}_linux_${RELEASE_ARCH}.tar.gz" \
+    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-linux-$RELEASE_ARCH.tar.gz" \
+    "$SCRIPT_DIR/${XR_RELEASE_TARGET_HYPHEN}-linux-$RELEASE_ARCH.zip")"
 fi
 
 MODELS_ARCHIVE="${MODELS_ARCHIVE:-${MODELS_ZIP:-}}"
@@ -233,7 +237,11 @@ MAIN_TAR="$(select_tar_from_archive \
   "${XR_RELEASE_DEVICE_TARGET}_linux_x64.tar.gz" \
   "${XR_RELEASE_TARGET_HYPHEN}-linux-x64.tar.gz" \
   "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-24.04-linux-x64.tar.gz" \
-  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-x64.tar.gz")"
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-x64.tar.gz" \
+  "${XR_RELEASE_DEVICE_TARGET}_linux_arm64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-linux-arm64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-24.04-linux-arm64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-arm64.tar.gz")"
 
 MODELS_TAR="$(select_tar_from_archive \
   "$MODELS_ARCHIVE" "$TMP_DIR/models_zip" "models" \

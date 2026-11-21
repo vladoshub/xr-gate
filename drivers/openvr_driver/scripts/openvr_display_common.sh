@@ -2,6 +2,14 @@
 # Shared helpers for OpenVR display/profile build and registration scripts.
 # Intended to be sourced; does not enable/disable shell options.
 
+openvr_linux_binary_dir() {
+  case "$(uname -m)" in
+    aarch64|arm64) printf 'linuxarm64\n' ;;
+    i?86) printf 'linux32\n' ;;
+    *) printf 'linux64\n' ;;
+  esac
+}
+
 openvr_expand_tilde() {
   local value="$1"
   case "$value" in
