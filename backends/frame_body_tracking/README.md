@@ -1,9 +1,10 @@
 # FRAME body tracking
 
 The Linux backend reads synchronized GRAY8 frames from the selected stereo
-camera profile and runs the FRAME backbone on the CPU with ONNX Runtime 1.18.1. It publishes
-positions for the 15 FRAME joints and a waist position from the midpoint of
-the hips in `body_trackers`.
+camera profile and runs the FRAME backbone on the CPU with ONNX Runtime 1.18.1
+on AMD64 and ARM64, or 1.31.0 on RISC-V. It publishes positions for the 15
+FRAME joints and a waist position from the midpoint of the hips in
+`body_trackers`.
 
 ## Build
 
@@ -19,7 +20,7 @@ XR_BUILD_ONLY="frame_body_tracking xr_runtime_adapter" \
   ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
-The first build downloads the FRAME backbone checkpoint, exports it on the CPU,
+The first AMD64 or ARM64 build downloads the FRAME backbone checkpoint, exports it on the CPU,
 and installs it as `bin/body-tracking-models/frame/frame_backbone.onnx`. The
 build cache keeps the export for subsequent builds. Set `XR_OUT_ROOT` to update
 an existing runtime package. Use `XR_BUILD_ONLY=body_tracking_models` to
@@ -35,6 +36,8 @@ moves to the new location if the destination is free.
 GitHub builds publish `body-tracking-models-frame.tar.gz` separately. Place it
 beside `unpack_xr_gate.sh` and the other release archives, or supply it with
 `--frame-models`. The unpack helper also accepts the GitHub artifact ZIP.
+For a local `riscv64` build, extract the model tarball into
+`out/riscv64/xr-gate/bin` to install the pre-exported model.
 
 ## Run
 

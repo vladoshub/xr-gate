@@ -75,11 +75,14 @@ printf '%s\n' 'max_size = 2G' 'remote_storage =' > "$CCACHE_CONFIGPATH"
 export CLEAN_BUILD=1
 export CMAKE_BUILD_TYPE=Release BUILD_TYPE=Release
 export VCPKG_MAX_CONCURRENCY="${BUILD_JOBS:-2}"
-if [[ "$XR_BUILD_CPU" == aarch64 ]]; then
-  export VCPKG_TRIPLET="arm64-linux-aarch64-release"
-else
-  export VCPKG_TRIPLET="x64-linux-$XR_BUILD_CPU-release"
-fi
+case "$XR_BUILD_CPU" in
+  aarch64) export VCPKG_TRIPLET="arm64-linux-aarch64-release" ;;
+  riscv64)
+    export VCPKG_TRIPLET="riscv64-linux-riscv64-release"
+    export VCPKG_FORCE_SYSTEM_BINARIES=1
+    ;;
+  *) export VCPKG_TRIPLET="x64-linux-$XR_BUILD_CPU-release" ;;
+esac
 export XR_VCPKG_INSTALLED_DIR="$XR_DEPENDENCY_CACHE_ROOT/vcpkg-installed/$XR_CPU_CACHE_TAG"
 export BASALT_VCPKG_INSTALLED="${BASALT_VCPKG_INSTALLED:-$XR_VCPKG_INSTALLED_DIR/$VCPKG_TRIPLET}"
 if command -v ccache >/dev/null 2>&1; then

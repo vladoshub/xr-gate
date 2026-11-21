@@ -26,7 +26,8 @@ class OfflineBuildTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "project with spaces"
         self.root.mkdir()
-        cpu_profile = "aarch64" if platform.machine() in ("aarch64", "arm64") else "generic"
+        cpu_profile = {"aarch64": "aarch64", "arm64": "aarch64", "riscv64": "riscv64"}.get(
+            platform.machine(), "generic")
         self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU=cpu_profile)
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
                      "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_OFFLINE", "XR_UPDATE_DEPS",

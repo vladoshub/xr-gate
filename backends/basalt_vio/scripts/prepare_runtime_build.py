@@ -49,27 +49,33 @@ endif()
     # opengv's own add_definitions(-march=native) comes after the triplet flags.
     # Fix that port too; changing only Basalt's CXX_MARCH is insufficient.
     port = root / "vcpkg/ports/opengv/portfile.cmake"
-    port_text = port.read_text()
+    original_port = port.read_text()
     old_fix = '''# XR_GATE_AVX2_OPENGV
 if(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
     vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt" "-march=native" "-march=x86-64-v3")
 endif()
 
 '''
-    port_text = port_text.replace(old_fix, "")
+    port_text = original_port.replace(old_fix, "")
     port_marker = "# XR_GATE_CPU_PROFILE_OPENGV"
+    port_text = port_text.replace(
+        port_marker + '\nif(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")',
+        port_marker + '\nif(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE MATCHES "^(x64|riscv64)$")',
+    )
     if port_marker not in port_text:
         anchor = "vcpkg_cmake_configure("
         if anchor not in port_text:
             raise SystemExit("Unrecognized opengv overlay port")
         fix = '''# XR_GATE_CPU_PROFILE_OPENGV
-if(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+if(VCPKG_TARGET_IS_LINUX AND VCPKG_TARGET_ARCHITECTURE MATCHES "^(x64|riscv64)$")
     # The selected vcpkg triplet owns -march/-mtune for every CPU profile.
     vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt" "-march=native" "")
 endif()
 
 '''
-        port.write_text(port_text.replace(anchor, fix + anchor, 1))
+        port_text = port_text.replace(anchor, fix + anchor, 1)
+    if port_text != original_port:
+        port.write_text(port_text)
 
 
 if __name__ == "__main__":

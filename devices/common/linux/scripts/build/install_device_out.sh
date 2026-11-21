@@ -40,6 +40,10 @@ fi
 #   XR_BUILD_ONLY="capture_service_cpp drivers"
 run_step() {
   local name="$1"; shift
+  if ! build_step_supported "$name"; then
+    log "skip $name on $XR_BUILD_CPU"
+    return 0
+  fi
   if ! should_run_step "$name"; then
     log "skip $name due XR_BUILD_ONLY='$XR_BUILD_ONLY'"
     return 0
@@ -168,8 +172,10 @@ if should_build_xrizer; then
     XR_BIN_ROOT="$XR_OUT_BIN_ROOT" \
     XRIZER_INSTALL_RUSTUP="${XRIZER_INSTALL_RUSTUP:-1}" \
     bash "$XR_ROOT_PROJECT/drivers/xrizer/scripts/linux/install_xrizer.sh"
-else
+elif build_step_supported xrizer; then
   log "skip xrizer: optional GPL component disabled; set XR_BUILD_XRIZER=1 or XR_BUILD_ONLY=xrizer to build it"
+else
+  log "skip xrizer on $XR_BUILD_CPU"
 fi
 
 run_step monado_driver bash "$XR_ROOT_PROJECT/drivers/build_profiles.sh" monado

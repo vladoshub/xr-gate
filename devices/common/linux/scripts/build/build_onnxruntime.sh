@@ -6,15 +6,19 @@ ROOT_PROJECT="$(cd "${ROOT_PROJECT:-$SCRIPT_DIR/../../../../..}" && pwd)"
 source "$SCRIPT_DIR/dependency_policy.sh"
 source "$SCRIPT_DIR/../runtime/onnxruntime_path.sh"
 
-readonly version="$XR_ONNXRUNTIME_VERSION"
-readonly source_url=https://github.com/ROCm/onnxruntime.git
-readonly source_commit=387127404e6c1d84b3468c387d864877ed1c67fe
-# Keep the Eigen revision from this ONNX Runtime commit's cmake/deps.txt.
-readonly eigen_url=https://github.com/eigen-mirror/eigen.git
-readonly eigen_commit=e7248b26a1ed53fa030c5c459f7ea095dfd276ac
-package="$(xr_onnxruntime_package_name)"
-source_dir="$ROOT_PROJECT/third_party/onnxruntime"
-eigen_dir="$ROOT_PROJECT/third_party/onnxruntime-eigen"
+readonly arch="$(xr_onnxruntime_arch)"
+readonly version="$(xr_onnxruntime_version "$arch")"
+package="$(xr_onnxruntime_package_name "$arch")"
+if [[ "$arch" == riscv64 ]]; then
+  readonly source_url=https://github.com/microsoft/onnxruntime.git
+  # Upstream v1.31.0.
+  readonly source_commit=402979ac1bef89dcd55add41eaa7277c407599eb
+  source_dir="$ROOT_PROJECT/third_party/onnxruntime-riscv64"
+else
+  readonly source_url=https://github.com/ROCm/onnxruntime.git
+  readonly source_commit=387127404e6c1d84b3468c387d864877ed1c67fe
+  source_dir="$ROOT_PROJECT/third_party/onnxruntime"
+fi
 install_dir="${XR_BIN_ROOT:-$ROOT_PROJECT/bin}/onnxruntime/$package"
 cache_dir="${XR_DEPENDENCY_CACHE_ROOT:-$ROOT_PROJECT/build/.dependency-cache}/onnxruntime/$source_commit"
 
@@ -60,14 +64,26 @@ if ! complete_sdk "$sdk_dir"; then
     echo "[onnxruntime][ERROR] expected $version at $source_commit" >&2
     exit 2
   fi
-  checkout_pinned_source "$eigen_dir" "$eigen_url" "$eigen_commit"
-
   stage="$(mktemp -d "$cache_dir/build.XXXXXXXX")"
   trap 'rm -rf -- "$stage"' EXIT
   git clone --quiet --shared --no-checkout -- "$source_dir" "$stage/source"
   git -C "$stage/source" checkout --quiet --detach "$source_commit"
-  # Backport ONNX Runtime #24583 to the temporary source tree.
-  git -C "$stage/source" apply <<'ORT_GCC15_PATCH'
+  build_args=(
+    --config Release --build_shared_lib --cmake_generator Ninja
+    --parallel "${BUILD_JOBS:-2}" --skip_tests --compile_no_warning_as_error
+  )
+  cmake_defines=(onnxruntime_BUILD_UNIT_TESTS=OFF CMAKE_POLICY_VERSION_MINIMUM=3.5)
+  if [[ "$arch" == riscv64 ]]; then
+    # Let CMake use the native riscv64 toolchain and the release's own dependencies.
+    cmake_defines+=(onnxruntime_USE_RVV=OFF)
+  else
+    # Keep the Eigen revision pinned by the legacy release's cmake/deps.txt.
+    eigen_dir="$ROOT_PROJECT/third_party/onnxruntime-eigen"
+    eigen_commit=e7248b26a1ed53fa030c5c459f7ea095dfd276ac
+    checkout_pinned_source "$eigen_dir" https://github.com/eigen-mirror/eigen.git "$eigen_commit"
+    build_args+=(--use_preinstalled_eigen --eigen_path "$eigen_dir")
+    # Backport ONNX Runtime #24583 to the temporary legacy source tree.
+    git -C "$stage/source" apply <<'ORT_GCC15_PATCH'
 diff --git a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h b/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
 --- a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
 +++ b/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
@@ -78,16 +94,12 @@ diff --git a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h b
 +#include <cstdint>
  #include <vector>
 ORT_GCC15_PATCH
-  build_args=(
-    --config Release --build_shared_lib --cmake_generator Ninja
-    --parallel "${BUILD_JOBS:-2}" --skip_tests --compile_no_warning_as_error
-    --use_preinstalled_eigen --eigen_path "$eigen_dir"
-    --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=OFF CMAKE_POLICY_VERSION_MINIMUM=3.5
-  )
+  fi
+  build_args+=(--cmake_extra_defines "${cmake_defines[@]}")
   if (( EUID == 0 )); then
     build_args+=(--allow_running_as_root)
   fi
-  echo "[onnxruntime] building $version at $source_commit with Eigen at $eigen_commit" >&2
+  echo "[onnxruntime] building $version at $source_commit for $arch" >&2
   (
     cd "$stage"
     python3 source/tools/ci_build/build.py --build_dir "$stage" "${build_args[@]}"

@@ -62,6 +62,7 @@ if [[ -r /etc/os-release ]]; then
 fi
 case "$(uname -m)" in
   aarch64|arm64) RELEASE_ARCH=arm64 ;;
+  riscv64) RELEASE_ARCH=riscv64 ;;
   *) RELEASE_ARCH=x64 ;;
 esac
 MAIN_ARCHIVE="${MAIN_ARCHIVE:-${MAIN_ZIP:-}}"
@@ -241,7 +242,11 @@ MAIN_TAR="$(select_tar_from_archive \
   "${XR_RELEASE_DEVICE_TARGET}_linux_arm64.tar.gz" \
   "${XR_RELEASE_TARGET_HYPHEN}-linux-arm64.tar.gz" \
   "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-24.04-linux-arm64.tar.gz" \
-  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-arm64.tar.gz")"
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-arm64.tar.gz" \
+  "${XR_RELEASE_DEVICE_TARGET}_linux_riscv64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-linux-riscv64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-24.04-linux-riscv64.tar.gz" \
+  "${XR_RELEASE_TARGET_HYPHEN}-ubuntu-26.04-linux-riscv64.tar.gz")"
 
 MODELS_TAR="$(select_tar_from_archive \
   "$MODELS_ARCHIVE" "$TMP_DIR/models_zip" "models" \

@@ -27,6 +27,7 @@ case "${_xr_cpu_output_profile,,}" in
   avx512) _xr_cpu_output_prefix="avx512/" ;;
   native) _xr_cpu_output_prefix="native/" ;;
   aarch64) _xr_cpu_output_prefix="aarch64/" ;;
+  riscv64) _xr_cpu_output_prefix="riscv64/" ;;
 esac
 export XR_OUT_ROOT="${XR_OUT_ROOT:-$XR_ROOT_PROJECT/out/$_xr_cpu_output_prefix$XR_OUT_PACKAGE_NAME}"
 unset _xr_cpu_output_prefix _xr_cpu_output_profile

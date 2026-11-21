@@ -19,12 +19,14 @@ PROFILES = {
     "avx512": ("x86_64", "x86-64-v4", "generic", "AVX512_SKX"),
     "native": ("x86_64", "native", "native", "NATIVE"),
     "aarch64": ("aarch64", "armv8-a", "generic", "NEON"),
+    "riscv64": ("riscv64", "rv64gc", "rocket", "DETECT"),
 }
 PORTABLE_FEATURES = {
     "x86-64": V1_FLAGS,
     "x86-64-v3": V3_FLAGS,
     "x86-64-v4": V4_FLAGS,
     "armv8-a": AARCH64_FLAGS,
+    "rv64gc": set("imafdc"),
 }
 SCHEMA = "xr_gate_cpu_profile_v1"
 
@@ -47,6 +49,13 @@ def check_architecture(architecture, operation):
 
 def host_features(cpuinfo=None, architecture="x86_64"):
     text = Path("/proc/cpuinfo").read_text() if cpuinfo is None else cpuinfo
+    if architecture == "riscv64":
+        # Linux reports a common ISA and may also list the ISA of each hart.
+        isas = re.findall(r"^(?:hart )?isa\s*:\s*rv64([a-z]+)", text, re.M)
+        if not isas:
+            raise ValueError("Cannot determine riscv64 CPU features from /proc/cpuinfo")
+        return set.intersection(*(set(isa.replace("g", "imafd")) for isa in isas))
+
     label = "Features" if architecture == "aarch64" else "flags"
     cpus = re.findall(rf"^{label}\s*:\s*(.*)$", text, re.M)
     if not cpus:
@@ -82,7 +91,7 @@ def check_package(root, cpuinfo=None):
     if not marker.is_file():
         return
     march = marker.read_text().strip()
-    architecture = "aarch64" if march == "armv8-a" else "x86_64"
+    architecture = {"armv8-a": "aarch64", "rv64gc": "riscv64"}.get(march, "x86_64")
     if march in PORTABLE_FEATURES:
         required = PORTABLE_FEATURES[march]
     elif march == "native":

@@ -11,6 +11,7 @@ is not the runtime ABI target. Select the CPU profile with `XR_BUILD_CPU`:
 | `avx512` | `-march=x86-64-v4 -mtune=generic` | AVX512_SKX | CPUs with AVX-512F/CD/BW/DQ/VL |
 | `native` | `-march=native -mtune=native` | NATIVE | The x86-64 build machine's CPU |
 | `aarch64` | `-march=armv8-a -mtune=generic` | NEON | Portable Linux ARM64 runtime |
+| `riscv64` | `-march=rv64gc -mtune=rocket` | Detect from compiler target | Linux RISC-V 64-bit runtime for RV64GC |
 
 The same profile configures Basalt, OpenCV and the vcpkg dependencies. `generic`
 uses the original x86-64 baseline (including SSE2); it does not require SSE3,
@@ -41,6 +42,23 @@ XR_BUILD_CPU=aarch64 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 Build the `aarch64` profile on a Linux ARM64 host. It applies to every device
 profile and can be used with `XR_BUILD_ONLY`.
 
+Build the `riscv64` profile on a Linux RISC-V host with an RV64GC/LP64D
+toolchain. It includes Monado and uses ONNX Runtime 1.31.0 with scalar MLAS
+for Mercury and FRAME. The build skips the SteamVR and xrizer components.
+
+```bash
+XR_BUILD_CPU=riscv64 ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+XR_BUILD_CPU=riscv64 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 \
+  ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+Use the pre-exported FRAME model archive from the release or from an AMD64
+or ARM64 model build. Extract it into the package's `bin` directory.
+
+```bash
+tar -xzf body-tracking-models-frame.tar.gz -C out/riscv64/xr-gate/bin
+```
+
 In GitHub Actions, check `build_ubuntu_amd64` and `build_ubuntu_arm64`
 independently. Each checked architecture builds Ubuntu 24.04 and 26.04.
 AMD64 is selected by default and uses `cpu_profile`. Choose `generic` for
@@ -59,8 +77,9 @@ For a local act run, select one architecture per invocation.
 
 Local output roots are separated automatically.
 `out/generic/xr-gate/` for generic, `out/xr-gate/` for AVX2,
-`out/avx512/xr-gate/` for AVX512, `out/native/xr-gate/` for native, and
-`out/aarch64/xr-gate/` for ARM64. An explicit `XR_OUT_ROOT` still works. The
+`out/avx512/xr-gate/` for AVX512, `out/native/xr-gate/` for native,
+`out/aarch64/xr-gate/` for ARM64, and `out/riscv64/xr-gate/` for RISC-V.
+An explicit `XR_OUT_ROOT` still works. The
 installer rejects reuse across CPU profiles and native CPU identities.
 CI explicitly selects its original `out/xr-gate/` layout in each isolated job.
 `BUILD_CPU_TARGET` and `BUILD_CPU_PROFILE.json` inside each package record
@@ -107,9 +126,11 @@ user's persistent `CARGO_HOME` and `RUSTUP_HOME` (normally `~/.cargo` and
 `~/.rustup`); xrizer's first successful build must include its optional source
 compliance/vendor step to prepare those dependencies too. Optional models retain
 LFS objects in their checkout and hydrate locally before considering a download.
-Mercury and FRAME share an ONNX Runtime SDK built from pinned `ROCm/onnxruntime`
-sources in `third_party/onnxruntime`. The SDK cache is scoped to the source commit,
-distro and build flags. It can restore a removed output directory offline.
+Mercury and FRAME share an ONNX Runtime SDK. AMD64 and ARM64 use pinned
+`ROCm/onnxruntime` sources in `third_party/onnxruntime`. RISC-V builds use
+`microsoft/onnxruntime` v1.31.0 in `third_party/onnxruntime-riscv64`. The SDK
+cache is scoped to the source commit, distro and build flags. It can restore
+a removed output directory offline.
 
 Offline builds disable Git transports, enable Cargo offline mode, block vcpkg's
 origin fallback, and disable automatic Rust toolchain installation. A Linux

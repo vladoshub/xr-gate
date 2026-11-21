@@ -153,7 +153,8 @@ PY
         ]
         for relative in scripts:
             self.executable(self.project / relative, text)
-        cpu_profile = "aarch64" if platform.machine() in ("aarch64", "arm64") else "avx2"
+        cpu_profile = {"aarch64": "aarch64", "arm64": "aarch64", "riscv64": "riscv64"}.get(
+            platform.machine(), "avx2")
         self.env.update(XR_BUILD_CPU=cpu_profile, XR_USE_BUNDLED_OPENCV="0",
                         XR_DEVICE_BUILD_HOOK=str(self.project / "vendor-hook.sh"),
                         XR_DEVICE_PACKAGE_SCRIPT=str(self.project / "package-hook.sh"),
@@ -165,14 +166,29 @@ PY
                                  INSTALL_LFS_DEPS="1", XRIZER_INSTALL_SYSTEM_DEPS="1", ADD_INPUT_GROUP="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(commands), 20)
+        riscv64 = self.env["XR_BUILD_CPU"] == "riscv64"
+        self.assertEqual(len(commands), 14 if riscv64 else 20)
         for command in commands:
             self.assertNotIn('forbidden', command)
             self.assertEqual(set(command['flags'].values()), {'0'}, command)
         self.assertTrue(any(command['step'].endswith('download_mercury_models.sh') for command in commands))
         self.assertTrue(any(command['step'].endswith('install_frame_body_tracking.sh') for command in commands))
-        self.assertTrue(any(command['step'].endswith('download_frame_models.sh') for command in commands))
-        self.assertTrue(any(command['step'].endswith('install_xrizer.sh') for command in commands))
+        self.assertEqual(any(command['step'].endswith('download_frame_models.sh') for command in commands), not riscv64)
+        self.assertEqual(any(command['step'].endswith('install_xrizer.sh') for command in commands), not riscv64)
+
+    def test_riscv64_build_selects_monado_and_native_tracking_backends(self):
+        self.stub_build()
+        (self.root / "sitecustomize.py").write_text("import platform\nplatform.machine = lambda: 'riscv64'\n")
+        result = self.run_script(BUILD / "install_xr_gate_out.sh",
+                                 XR_BUILD_CPU="riscv64", PYTHONPATH=str(self.root))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [json.loads(line) for line in self.log.read_text().splitlines()]
+        profiles = [command["args"] for command in commands if Path(command["step"]).name == "build_profiles.sh"]
+        self.assertEqual(profiles, [["monado"]])
+        names = {Path(command["step"]).name for command in commands}
+        self.assertTrue({"install_basalt.sh", "install_mercury.sh", "install_frame_body_tracking.sh"} <= names)
+        self.assertFalse({"install_xrizer.sh", "install_steamvr_video_overlay.sh",
+                          "download_frame_models.sh"} & names)
 
     def test_missing_dependencies_stop_build_before_any_compilation(self):
         self.stub_build()
@@ -198,7 +214,8 @@ PY
                     result = self.run_script(BUILD / entrypoint, **overrides)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     commands = [json.loads(line) for line in self.log.read_text().splitlines()]
-                    self.assertEqual(len(commands), 20)
+                    expected_steps = 14 if self.env["XR_BUILD_CPU"] == "riscv64" else 20
+                    self.assertEqual(len(commands), expected_steps)
                     self.assertTrue(all("step" in command for command in commands))
 
     def test_standalone_xreal_helpers_never_install_packages(self):
