@@ -32,6 +32,9 @@ export CCACHE_CONFIGPATH="$session/ccache.conf"
 export CCACHE_SECONDARY_STORAGE="" CCACHE_REMOTE_STORAGE=""
 export XR_CPU_PROFILE_FILE="$session/cpu-profile.json"
 support_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$support_dir/../runtime/onnxruntime_path.sh"
+XR_ONNXRUNTIME_VERSION="$(xr_onnxruntime_version)"
+export XR_ONNXRUNTIME_VERSION
 profile_values="$(python3 "$support_dir/../runtime/cpu_target.py" \
   describe "${XR_BUILD_CPU:-avx2}" --check-host --output "$XR_CPU_PROFILE_FILE")"
 IFS=$'\t' read -r XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG <<< "$profile_values"

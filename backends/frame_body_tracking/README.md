@@ -1,8 +1,8 @@
 # FRAME body tracking
 
 The Linux backend reads synchronized GRAY8 frames from the selected stereo
-camera profile and runs the FRAME backbone on the CPU with ONNX Runtime 1.18.1
-on AMD64 and ARM64, or 1.31.0 on RISC-V. It publishes positions for the 15
+camera profile and runs the FRAME backbone on the CPU with ONNX Runtime 1.31.0
+by default. It publishes positions for the 15
 FRAME joints and a waist position from the midpoint of the hips in
 `body_trackers`.
 
@@ -12,6 +12,10 @@ The regular XR Gate build and the Mercury component of the Linux split build
 use the same ONNX Runtime SDK for both backends. To rebuild FRAME and the
 runtime adapter in an existing package, run these commands from the repo root.
 Use the package's existing `XR_BUILD_CPU` setting.
+
+Set `XR_ONNXRUNTIME_VERSION=1.18.1` when building to select the legacy SDK.
+See the [ONNX Runtime build settings](../../docs/ubuntu-builds.md#onnx-runtime-version)
+for rebuilding both backends with the same version.
 
 ```bash
 XR_BUILD_ONLY="frame_body_tracking xr_runtime_adapter" \

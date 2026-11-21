@@ -128,7 +128,11 @@ require_file "$MONADO_PATCH"
 require_file "$MONADO_DIAGNOSTICS_PATCH"
 require_file "$MONADO_QUALITY_PATCH"
 
-ORT_ROOT="${ORT_ROOT:-$(ROOT_PROJECT="$ROOT_PROJECT" bash "$ROOT_PROJECT/devices/common/linux/scripts/build/build_onnxruntime.sh")}"
+ort_package=""
+if [[ -z "${ORT_ROOT:-}" ]]; then
+  ORT_ROOT="$(ROOT_PROJECT="$ROOT_PROJECT" bash "$ROOT_PROJECT/devices/common/linux/scripts/build/build_onnxruntime.sh")"
+  ort_package="${ORT_ROOT##*/}"
+fi
 ORT_ROOT="$(expand_tilde "$ORT_ROOT")"
 log "Using ONNX Runtime SDK at $ORT_ROOT"
 require_file "$ORT_ROOT/include/onnxruntime_c_api.h"
@@ -263,6 +267,11 @@ cp "$BACKEND_BIN" "$INSTALL_BIN_DIR/capture_hand_tracking_backend"
 cp "$RUNTIME_SO" "$INSTALL_BIN_DIR/libxr_mercury_runtime.so"
 cp "$DATASET_PROBE" "$INSTALL_BIN_DIR/xr_mercury_dataset_probe"
 chmod +x "$INSTALL_BIN_DIR/capture_hand_tracking_backend" "$INSTALL_BIN_DIR/xr_mercury_dataset_probe"
+if [[ -n "$ort_package" ]]; then
+  printf '%s\n' "$ort_package" > "$INSTALL_BIN_DIR/ONNXRUNTIME_PACKAGE"
+else
+  rm -f "$INSTALL_BIN_DIR/ONNXRUNTIME_PACKAGE"
+fi
 rm -rf "$INSTALL_BIN_DIR/configs" "$INSTALL_BIN_DIR/scripts"
 cp -a "$BACKEND_DIR/configs" "$INSTALL_BIN_DIR/configs"
 cp -a "$BACKEND_DIR/scripts" "$INSTALL_BIN_DIR/scripts"

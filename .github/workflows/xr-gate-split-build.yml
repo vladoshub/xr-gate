@@ -22,6 +22,12 @@ name: XR Gate split build
         options: [avx2, generic, avx512, native]
         required: false
         default: avx2
+      onnxruntime_version:
+        description: "ONNX Runtime version for Linux Mercury and FRAME"
+        type: choice
+        options: ["1.31.0", "1.18.1"]
+        required: false
+        default: "1.31.0"
       openvr_frequencies:
         description: "Linux OpenVR driver frequencies to build"
         required: false
@@ -92,6 +98,7 @@ env:
   XR_BUILD_CAPTURE_SERVICE_PYTHON: "0"
   XR_DOWNLOAD_HAND_TRACKING_MODELS: "0"
   XR_DOWNLOAD_BODY_TRACKING_MODELS: "0"
+  XR_ONNXRUNTIME_VERSION: ${{ inputs.onnxruntime_version }}
   XR_BUILD_XRIZER: ${{ github.event_name == 'workflow_dispatch' && inputs.include_xrizer && '1' || '0' }}
   XR_BUILD_VENDOR_COMPONENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.include_vendor_components == false && '0' || '1' }}
   XR_OPENVR_BUILD_FREQUENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.openvr_frequencies || '60 90' }}
@@ -382,6 +389,10 @@ jobs:
         if: ${{ matrix.component.name == 'mercury' }}
         run: |
           set -euo pipefail
+          source devices/common/linux/scripts/runtime/onnxruntime_path.sh
+          ort_package="$(xr_onnxruntime_package_name)"
+          test -f "out/xr-gate/bin/onnxruntime/$ort_package/lib/libonnxruntime.so"
+          test "$(cat out/xr-gate/bin/backends/mercury_hand_tracking/ONNXRUNTIME_PACKAGE)" = "$ort_package"
           test -x out/xr-gate/bin/backends/frame_body_tracking/frame_body_tracking_backend
           test -x out/xr-gate/devices/common/linux/scripts/frame_body_tracking/start_frame_body_tracking.sh
           test -x out/xr-gate/bin/scripts/backends/frame_body_tracking/start_frame_body_tracking.sh
@@ -760,8 +771,10 @@ jobs:
           set -euo pipefail
           MODEL_DIR=model_artifact/body-tracking-models/frame
           (cd "$MODEL_DIR" && sha256sum -c SHA256SUMS.txt)
+          source devices/common/linux/scripts/runtime/onnxruntime_path.sh
+          ort_version="$(xr_onnxruntime_version)"
           python3 -m venv "$RUNNER_TEMP/frame-onnx-check"
-          "$RUNNER_TEMP/frame-onnx-check/bin/python" -m pip install 'numpy<2' onnxruntime==1.18.1
+          "$RUNNER_TEMP/frame-onnx-check/bin/python" -m pip install 'numpy<2' "onnxruntime==$ort_version"
           "$RUNNER_TEMP/frame-onnx-check/bin/python" - "$MODEL_DIR/frame_backbone.onnx" <<'PY'
           import sys
           import numpy as np
@@ -919,6 +932,7 @@ jobs:
           # Conroe has no AVX/AVX2/FMA. Exercise startup and linked libraries.
           qemu-x86_64 -cpu Conroe merged/xr-gate/bin/capture_service_cpp/capture_tcp_probe --help >/dev/null
           qemu-x86_64 -cpu Conroe merged/xr-gate/bin/backends/basalt_vio/capture_basalt_backend --help >/dev/null
+          qemu-x86_64 -cpu Conroe merged/xr-gate/bin/backends/frame_body_tracking/frame_body_tracking_backend --help >/dev/null
 
       - name: Upload merged package
         uses: actions/upload-artifact@v4

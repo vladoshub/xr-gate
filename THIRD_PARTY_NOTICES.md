@@ -64,12 +64,12 @@ checkouts used for the build into `LICENSES/components/`.
 ### ONNX Runtime
 
 - Upstream: https://github.com/microsoft/onnxruntime
-- Pinned default release: `1.18.1`.
+- Pinned default release is `1.31.0`. The optional ROCm fork build uses `1.18.1`.
 - Runtime dependency for Mercury and FRAME inference.
 - License: MIT, with additional third-party notices.
 - Baseline text: `LICENSES/ONNXRuntime-MIT.txt`.
 - Build packaging requires and redistributes the exact upstream `LICENSE` and
-  `ThirdPartyNotices.txt` shipped in the downloaded ONNX Runtime archive.
+  `ThirdPartyNotices.txt` from the ONNX Runtime build.
 
 ### OpenVR SDK
 

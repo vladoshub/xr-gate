@@ -43,7 +43,7 @@ Build the `aarch64` profile on a Linux ARM64 host. It applies to every device
 profile and can be used with `XR_BUILD_ONLY`.
 
 Build the `riscv64` profile on a Linux RISC-V host with an RV64GC/LP64D
-toolchain. It includes Monado and uses ONNX Runtime 1.31.0 with scalar MLAS
+toolchain. It includes Monado and defaults to scalar MLAS in ONNX Runtime
 for Mercury and FRAME. The build skips the SteamVR and xrizer components.
 
 ```bash
@@ -86,6 +86,118 @@ CI explicitly selects its original `out/xr-gate/` layout in each isolated job.
 the selected profile. The installer checks architecture and CPU features.
 The builder must also support the chosen instructions for build-time helper tools.
 
+## ONNX Runtime version
+
+Mercury and FRAME build with ONNX Runtime **1.31.0** on AMD64, ARM64 and
+RISC-V. Set `XR_ONNXRUNTIME_VERSION=1.18.1` to select the legacy SDK for a
+local build, or choose `onnxruntime_version` when dispatching the GitHub
+workflow. The FRAME model check uses the selected version too.
+
+To switch versions in an existing package, rebuild both inference backends
+with the package's CPU profile and output directory. For example, to roll
+back a generic AMD64 package:
+
+```bash
+XR_BUILD_CPU=generic XR_ONNXRUNTIME_VERSION=1.18.1 \
+  XR_BUILD_ONLY="mercury_hand_tracking frame_body_tracking" \
+  XR_DOWNLOAD_BODY_TRACKING_MODELS=0 \
+  ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+```
+
+Each backend loads the version it was built against. The environment variable
+is only needed for the build. Use 1.31.0 for RISC-V inference, since 1.18.1
+can produce incorrect scalar matrix multiplication results there.
+
+## Cross-compilation from AMD64 Linux
+
+### Install GNU cross-compilers
+
+On Ubuntu 24.04 AMD64, install the toolchain for the target you need.
+The cross-glibc packages supply the target's C library and headers.
+
+```bash
+sudo apt update
+sudo apt install cmake ninja-build pkg-config qemu-user
+
+# ARM64
+sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+  binutils-aarch64-linux-gnu libc6-dev-arm64-cross
+
+# RISC-V 64-bit
+sudo apt install gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+  binutils-riscv64-linux-gnu libc6-dev-riscv64-cross
+```
+
+Verify the compiler, ELF architecture and target loader:
+
+```bash
+work="$(mktemp -d)"
+printf '#include <cstdio>\nint main() { std::puts("Cross-build OK"); }\n' > "$work/test.cpp"
+
+aarch64-linux-gnu-g++ -march=armv8-a "$work/test.cpp" -o "$work/test-arm64"
+aarch64-linux-gnu-readelf -h "$work/test-arm64"
+qemu-aarch64 -L /usr/aarch64-linux-gnu "$work/test-arm64"
+
+riscv64-linux-gnu-g++ -march=rv64gc -mabi=lp64d "$work/test.cpp" -o "$work/test-riscv64"
+riscv64-linux-gnu-readelf -h "$work/test-riscv64"
+qemu-riscv64 -cpu rv64,v=false -L /usr/riscv64-linux-gnu "$work/test-riscv64"
+```
+
+To cross-compile an individual CMake component, pass
+`-DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain.cmake`. Set
+`CMAKE_SYSTEM_NAME=Linux`, the target processor (`aarch64` or `riscv64`),
+and the matching cross GCC/G++ in that file. Provide a sysroot or CMake
+search paths containing the target builds of the component's dependencies
+such as OpenCV. Use a separate CMake build directory for each target.
+See the [CMake toolchain guide](https://cmake.org/cmake/help/latest/manual/cmake-toolchains.7.html)
+and [ONNX Runtime cross-build guide](https://onnxruntime.ai/docs/build/inferencing.html#risc-v).
+
+### Build the complete package using QEMU
+
+The full package entrypoint expects a Linux environment for the target
+architecture. On AMD64, run it inside an Ubuntu container with QEMU
+user-mode emulation. From the repository root on the host:
+
+```bash
+sudo apt install docker.io qemu-user-static
+sudo systemctl restart systemd-binfmt
+```
+
+Choose the container for your target.
+
+| `XR_BUILD_CPU` | Docker platform | Image |
+| --- | --- | --- |
+| `aarch64` | `linux/arm64` | `ubuntu:24.04` |
+| `riscv64` | `linux/riscv64` | `riscv64/ubuntu:24.04` |
+
+```bash
+profile=aarch64
+platform=linux/arm64
+image=ubuntu:24.04
+
+sudo docker run --rm --platform "$platform" "$image" uname -m
+
+sudo docker run --rm --platform "$platform" \
+  --mount "type=bind,source=$PWD,target=/src" --workdir /src \
+  -e XR_BUILD_CPU="$profile" -e XR_DOWNLOAD_HAND_TRACKING_MODELS=1 -e XR_OFFLINE=0 \
+  -e XR_ONNXRUNTIME_VERSION="${XR_ONNXRUNTIME_VERSION:-1.31.0}" \
+  -e XR_BUILD_UID="$(id -u)" -e XR_BUILD_GID="$(id -g)" \
+  "$image" bash -eu -c '
+    ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+    export HOME=/tmp/xr-gate-builder
+    install -d -o "$XR_BUILD_UID" -g "$XR_BUILD_GID" "$HOME"
+    setpriv --reuid="$XR_BUILD_UID" --regid="$XR_BUILD_GID" --clear-groups \
+      ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+  '
+```
+
+The first container should print your selected architecture. For Docker
+hosts that return `exec format error`, see the
+[QEMU registration instructions](https://docs.docker.com/build/building/multi-platform/#install-qemu-manually).
+The build writes to Git checkouts under `third_party/`, so use a separate
+source checkout per architecture if running builds concurrently. The package
+is written to `out/$profile/xr-gate/` on the host.
+
 ## Local dependency cache and offline rebuilds
 
 Run the normal build once with internet access after installing system packages.
@@ -126,11 +238,11 @@ user's persistent `CARGO_HOME` and `RUSTUP_HOME` (normally `~/.cargo` and
 `~/.rustup`); xrizer's first successful build must include its optional source
 compliance/vendor step to prepare those dependencies too. Optional models retain
 LFS objects in their checkout and hydrate locally before considering a download.
-Mercury and FRAME share an ONNX Runtime SDK. AMD64 and ARM64 use pinned
-`ROCm/onnxruntime` sources in `third_party/onnxruntime`. RISC-V builds use
-`microsoft/onnxruntime` v1.31.0 in `third_party/onnxruntime-riscv64`. The SDK
-cache is scoped to the source commit, distro and build flags. It can restore
-a removed output directory offline.
+Mercury and FRAME share an ONNX Runtime SDK. The default builds pinned sources
+from `microsoft/onnxruntime` in `third_party/onnxruntime-1.31.0`. The legacy
+version builds the pinned `ROCm/onnxruntime` checkout in
+`third_party/onnxruntime`. The SDK cache is scoped to the source commit,
+distro and build flags. It can restore a removed output directory offline.
 
 Offline builds disable Git transports, enable Cargo offline mode, block vcpkg's
 origin fallback, and disable automatic Rust toolchain installation. A Linux

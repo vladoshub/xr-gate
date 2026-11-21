@@ -308,11 +308,11 @@ package_component_legal_files() {
   # ONNX Runtime release archives place legal files at the archive root rather
   # than under licenses/. Require both the project license and the complete
   # generated third-party notice whenever libonnxruntime is redistributed.
-  local ort_root=""
-  local ort_license=""
-  local ort_notices=""
-  ort_root="$(find "$XR_OUT_BIN_ROOT/onnxruntime" -mindepth 1 -maxdepth 1 -type d -name 'onnxruntime-*' -print -quit 2>/dev/null || true)"
-  if [[ -n "$ort_root" && -e "$ort_root/lib/libonnxruntime.so" ]]; then
+  local ort_root ort_license ort_notices candidate
+  for ort_root in "$XR_OUT_BIN_ROOT"/onnxruntime/onnxruntime-*; do
+    [[ -e "$ort_root/lib/libonnxruntime.so" ]] || continue
+    ort_license=""
+    ort_notices=""
     for candidate in "$ort_root/LICENSE" "$ort_root/LICENSE.txt"; do
       [[ -f "$candidate" ]] && { ort_license="$candidate"; break; }
     done
@@ -321,16 +321,16 @@ package_component_legal_files() {
     done
     [[ -n "$ort_license" ]] || fatal "ONNX Runtime is present without upstream LICENSE under: $ort_root"
     [[ -n "$ort_notices" ]] || fatal "ONNX Runtime is present without ThirdPartyNotices.txt under: $ort_root"
-    mkdir -p "$XR_OUT_ROOT/LICENSES/components/onnxruntime"
-    copy_file "$ort_license" "$XR_OUT_ROOT/LICENSES/components/onnxruntime/LICENSE.txt"
-    copy_file "$ort_notices" "$XR_OUT_ROOT/LICENSES/components/onnxruntime/ThirdPartyNotices.txt"
-    cat > "$XR_OUT_ROOT/LICENSES/components/onnxruntime/SOURCE_INFO.txt" <<EOF_ORT_INFO
+    component_dst="$XR_OUT_ROOT/LICENSES/components/onnxruntime/${ort_root##*/}"
+    copy_file "$ort_license" "$component_dst/LICENSE.txt"
+    copy_file "$ort_notices" "$component_dst/ThirdPartyNotices.txt"
+    cat > "$component_dst/SOURCE_INFO.txt" <<EOF_ORT_INFO
 Component: ONNX Runtime
 Packaged path: ${ort_root#"$XR_OUT_ROOT/"}
 License: MIT plus upstream ThirdPartyNotices.txt
 EOF_ORT_INFO
     found=1
-  fi
+  done
 
   # Fail closed for the main redistributed binaries. A partial package may omit
   # a component entirely, but a present binary must have its exact build-time

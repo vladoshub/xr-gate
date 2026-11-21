@@ -26,7 +26,8 @@ class NativeBuildTests(unittest.TestCase):
         self.env = dict(os.environ, ROOT_PROJECT=str(self.root), XR_BUILD_CPU=HOST_PROFILE)
         for name in ("XR_BUILD_SESSION_DIR", "XR_BUILD_SESSION_OWNER", "XR_LOCAL_BUILD_ID",
                      "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "XR_KEEP_OPENCV_BUILD",
-                     "XR_OPENCV_PREFIX", "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT"):
+                     "XR_OPENCV_PREFIX", "XR_OFFLINE", "XR_UPDATE_DEPS", "XR_DEPENDENCY_CACHE_ROOT",
+                     "XR_ONNXRUNTIME_VERSION"):
             self.env.pop(name, None)
 
     def session(self, script, env=None):
@@ -421,13 +422,38 @@ uname() { printf '%s\n' "$TEST_MACHINE"; }
 source "$1"
 xr_onnxruntime_package_name
 '''
-        for architecture, suffix in [("x86_64", "x64-1.18.1"), ("aarch64", "aarch64-1.18.1"),
-                                     ("riscv64", "riscv64-1.31.0")]:
-            with self.subTest(architecture=architecture):
+        for architecture, package_arch in [("x86_64", "x64"), ("aarch64", "aarch64"), ("riscv64", "riscv64")]:
+            for selected_version in ("", "1.18.1"):
                 result = subprocess.run(
                     ["bash", "-c", command, "test", str(BUILD.parent / "runtime/onnxruntime_path.sh")],
-                    env=dict(self.env, TEST_MACHINE=architecture), capture_output=True, text=True, check=True)
-                self.assertEqual(result.stdout.strip(), "onnxruntime-linux-" + suffix)
+                    env=dict(self.env, TEST_MACHINE=architecture, XR_ONNXRUNTIME_VERSION=selected_version),
+                    capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout.strip(),
+                                 f"onnxruntime-linux-{package_arch}-{selected_version or '1.31.0'}")
+
+    def test_mercury_selects_its_built_sdk_with_both_versions_present(self):
+        bin_root = self.root / "bin"
+        mercury = bin_root / "backends/mercury_hand_tracking"
+        mercury.mkdir(parents=True)
+        (mercury / "libxr_mercury_runtime.so").touch()
+        legacy = bin_root / "onnxruntime/onnxruntime-linux-x64-1.18.1"
+        current = bin_root / "onnxruntime/onnxruntime-linux-x64-1.31.0"
+        for sdk in (legacy, current):
+            (sdk / "lib").mkdir(parents=True)
+            (sdk / "lib/libonnxruntime.so").touch()
+        command = r'''
+uname() { printf 'x86_64\n'; }
+source "$1"
+xr_onnxruntime_mercury_root "$2" "$3"
+'''
+        args = ["bash", "-c", command, "test", str(BUILD.parent / "runtime/onnxruntime_path.sh"),
+                str(bin_root), str(mercury)]
+        marker = mercury / "ONNXRUNTIME_PACKAGE"
+        self.assertEqual(subprocess.check_output(args, env=self.env, text=True).strip(), str(legacy))
+        for sdk, build_selection in ((current, "1.18.1"), (legacy, "1.31.0")):
+            marker.write_text(sdk.name + "\n")
+            env = dict(self.env, XR_ONNXRUNTIME_VERSION=build_selection)
+            self.assertEqual(subprocess.check_output(args, env=env, text=True).strip(), str(sdk))
 
     @patch("platform.machine", return_value="x86_64")
     def test_runtime_rejects_unsupported_avx512_and_native_cpu(self, _machine):

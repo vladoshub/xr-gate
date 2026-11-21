@@ -7,13 +7,14 @@ source "$SCRIPT_DIR/dependency_policy.sh"
 source "$SCRIPT_DIR/../runtime/onnxruntime_path.sh"
 
 readonly arch="$(xr_onnxruntime_arch)"
-readonly version="$(xr_onnxruntime_version "$arch")"
-package="$(xr_onnxruntime_package_name "$arch")"
-if [[ "$arch" == riscv64 ]]; then
+version="$(xr_onnxruntime_version)"
+readonly version
+package="$(xr_onnxruntime_package_name "$arch" "$version")"
+if [[ "$version" == 1.31.0 ]]; then
   readonly source_url=https://github.com/microsoft/onnxruntime.git
   # Upstream v1.31.0.
   readonly source_commit=402979ac1bef89dcd55add41eaa7277c407599eb
-  source_dir="$ROOT_PROJECT/third_party/onnxruntime-riscv64"
+  source_dir="$ROOT_PROJECT/third_party/onnxruntime-$version"
 else
   readonly source_url=https://github.com/ROCm/onnxruntime.git
   readonly source_commit=387127404e6c1d84b3468c387d864877ed1c67fe
@@ -73,9 +74,13 @@ if ! complete_sdk "$sdk_dir"; then
     --parallel "${BUILD_JOBS:-2}" --skip_tests --compile_no_warning_as_error
   )
   cmake_defines=(onnxruntime_BUILD_UNIT_TESTS=OFF CMAKE_POLICY_VERSION_MINIMUM=3.5)
-  if [[ "$arch" == riscv64 ]]; then
-    # Let CMake use the native riscv64 toolchain and the release's own dependencies.
-    cmake_defines+=(onnxruntime_USE_RVV=OFF)
+  if [[ "$version" == 1.31.0 ]]; then
+    # The upstream packer for 1.31.0 reads a staged install with lib64.
+    cmake_defines+=(CMAKE_INSTALL_LIBDIR=lib64)
+    build_args+=(--skip_submodule_sync)
+    if [[ "$arch" == riscv64 ]]; then
+      cmake_defines+=(onnxruntime_USE_RVV=OFF)
+    fi
   else
     # Keep the Eigen revision pinned by the legacy release's cmake/deps.txt.
     eigen_dir="$ROOT_PROJECT/third_party/onnxruntime-eigen"
@@ -103,6 +108,9 @@ ORT_GCC15_PATCH
   (
     cd "$stage"
     python3 source/tools/ci_build/build.py --build_dir "$stage" "${build_args[@]}"
+    if [[ "$version" == 1.31.0 ]]; then
+      DESTDIR="$stage/installed" cmake --install Release --prefix /usr/local
+    fi
     # The upstream packer expects paths without spaces, so pass relative paths.
     bash source/tools/ci_build/github/linux/copy_strip_binary.sh \
       -r . -s source -a "$package" -l "libonnxruntime.so.$version" -c Release -t "$source_commit"
