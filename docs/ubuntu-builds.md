@@ -45,6 +45,7 @@ profile and can be used with `XR_BUILD_ONLY`.
 Build the `riscv64` profile on a Linux RISC-V host with an RV64GC/LP64D
 toolchain. It includes Monado and defaults to scalar MLAS in ONNX Runtime
 for Mercury and FRAME. The build skips the SteamVR and xrizer components.
+The Monado build also disables its SteamVR Lighthouse loader on RISC-V.
 
 ```bash
 XR_BUILD_CPU=riscv64 ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh

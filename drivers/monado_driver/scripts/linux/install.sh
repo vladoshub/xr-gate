@@ -489,6 +489,11 @@ configure_and_build_monado() {
     cmake_args+=("-DOpenCV_DIR=$XR_OPENCV_PREFIX/lib/cmake/opencv4")
   fi
 
+  if [[ "${XR_BUILD_CPU:-$(uname -m)}" == riscv64 ]]; then
+    log "disabling Monado SteamVR Lighthouse loader on RISC-V"
+    cmake_args+=(-DXRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE=OFF)
+  fi
+
   if is_truthy "$XR_MONADO_ENABLE_X11"; then
     log "requesting Monado X11/XCB compositor target"
     cmake_args+=(
