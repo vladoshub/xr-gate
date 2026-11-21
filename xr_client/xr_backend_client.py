@@ -11,7 +11,7 @@ New services/backends should be added in JSON config, not hard-coded here.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 import json
 import math
@@ -150,6 +150,34 @@ def basalt_mode_from_command(command: Sequence[str], default: str = "vio") -> st
     if "--vio" in command:
         return "vio"
     return normalize_basalt_mode(default)
+
+
+@contextmanager
+def defer_stop_signals():
+    """Let the caller register a new subprocess before a signal unwinds it."""
+    if not IS_POSIX or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    handlers = {}
+    pending = None
+
+    def defer(signum, frame):
+        nonlocal pending
+        if pending is None:
+            pending = (signum, frame)
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            handler = signal.getsignal(signum)
+            if callable(handler):
+                handlers[signum] = handler
+                signal.signal(signum, defer)
+        yield
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        if pending is not None:
+            handlers[pending[0]](*pending)
 
 
 class Launcher:
@@ -581,31 +609,32 @@ class Launcher:
         # of creating a sparse NUL-filled gap at the old file offset.
         log_file = log_path.open("ab", buffering=0)
         log_file.truncate(0)
-        ble_cleanup_file = None
-        try:
-            if sys.platform.startswith("linux") and spec.name == "override_controller":
-                fd, name = tempfile.mkstemp(prefix="xr-gate-gearvr-", suffix=".cleanup")
-                os.close(fd)
-                ble_cleanup_file = Path(name)
-                env["OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE"] = name
-            proc = subprocess.Popen(
-                spec.command,
-                cwd=spec.cwd or self.cfg.root_project,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                **self.popen_kwargs(),
-            )
-        except Exception:
-            log_file.close()
-            if ble_cleanup_file is not None:
-                ble_cleanup_file.unlink(missing_ok=True)
-            raise
+        with defer_stop_signals():
+            ble_cleanup_file = None
+            try:
+                if sys.platform.startswith("linux") and spec.name == "override_controller":
+                    fd, name = tempfile.mkstemp(prefix="xr-gate-gearvr-", suffix=".cleanup")
+                    os.close(fd)
+                    ble_cleanup_file = Path(name)
+                    env["OVERRIDE_CONTROLLER_BLE_CLEANUP_FILE"] = name
+                proc = subprocess.Popen(
+                    spec.command,
+                    cwd=spec.cwd or self.cfg.root_project,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    **self.popen_kwargs(),
+                )
+            except Exception:
+                log_file.close()
+                if ble_cleanup_file is not None:
+                    ble_cleanup_file.unlink(missing_ok=True)
+                raise
 
-        item = RunningProcess(spec=spec, process=proc, log_path=log_path, log_file=log_file,
-                              ble_cleanup_file=ble_cleanup_file)
-        self.running.append(item)
+            item = RunningProcess(spec=spec, process=proc, log_path=log_path, log_file=log_file,
+                                  ble_cleanup_file=ble_cleanup_file)
+            self.running.append(item)
         if spec.name == "override_controller":
             self._controller_imu_console_suppressed = False
             self._controller_gyro_zero_pending = True
@@ -668,7 +697,11 @@ class Launcher:
     def wait_stream(self, producer_name: str, wait: WaitStream) -> None:
         log(f"Waiting for stream '{wait.stream}' in {wait.registry}")
         start = time.monotonic()
+        capture = self.running_process_by_name("capture_service") if producer_name != "capture_service" else None
         while True:
+            if capture is not None and capture.process.poll() is not None:
+                self.print_log_tail(capture.log_path)
+                self.fail(f"capture_service stopped while waiting for '{wait.stream}'")
             if not self.is_running(producer_name):
                 for item in self.running:
                     if item.spec.name == producer_name:
@@ -1675,14 +1708,7 @@ class Launcher:
             return
 
     def _release_startup_gate_process(self, process: subprocess.Popen) -> None:
-        """Release a one-shot startup gate process without blocking restart actions."""
-        def reap() -> None:
-            try:
-                terminate_one_process_tree(process, graceful_wait_s=0.75, kill_wait_s=1.0)
-            except Exception:
-                pass
-
-        threading.Thread(target=reap, name="startup-gate-reaper", daemon=True).start()
+        terminate_one_process_tree(process)
 
     def _emit_gate_timeout_countdown(self, gate: GateSpec, deadline_s: Optional[float], *, force: bool = False) -> None:
         if deadline_s is None:
@@ -1819,20 +1845,18 @@ class Launcher:
             with log_path.open("wb" if attempt == 1 else "ab") as log_file, ExitStack() as cleanup:
                 if attempt > 1:
                     log_file.write(f"\n[xr_backend_client] --- startup gate retry {attempt} ---\n".encode("utf-8"))
-                process = subprocess.Popen(
-                    command,
-                    cwd=gate.cwd or self.cfg.root_project,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    **self.popen_kwargs(),
-                )
-                if single_attempt:
-                    # A full retry must close the old gate's SHM readers and
-                    # process tree before reopening the display/capture stack.
-                    cleanup.callback(terminate_one_process_tree, process)
+                with defer_stop_signals():
+                    process = subprocess.Popen(
+                        command,
+                        cwd=gate.cwd or self.cfg.root_project,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        **self.popen_kwargs(),
+                    )
+                    cleanup.callback(self._release_startup_gate_process, process)
                 threading.Thread(
                     target=self._read_gate_stdout,
                     args=(process, line_queue),
@@ -1851,8 +1875,6 @@ class Launcher:
                             f"{item.spec.name} exited with code {item.process.returncode}"
                             for item in failed_producers
                         )
-                        if not single_attempt:
-                            self._release_startup_gate_process(process)
                         code = 1
                         break
                     now = time.monotonic()
@@ -1883,23 +1905,15 @@ class Launcher:
 
                     if gate_pass_line_seen or (self._gate_visual_ready and self._gate_imu_ready):
                         gate_ready_from_output = True
-                        if not single_attempt:
-                            self._release_startup_gate_process(process)
                         code = 0
                         break
 
                     self._emit_gate_timeout_countdown(gate, deadline_s)
 
-                if gate_timed_out:
-                    if not single_attempt:
-                        self._release_startup_gate_process(process)
-                    code = None
-                elif code is None:
+                if not gate_timed_out and code is None:
                     try:
                         code = process.wait(timeout=0.5)
                     except subprocess.TimeoutExpired:
-                        if not single_attempt:
-                            self._release_startup_gate_process(process)
                         code = 1
 
             if gate_ready_from_output or code == 0:
@@ -2009,7 +2023,15 @@ class Launcher:
             return
         env = os.environ.copy()
         env.update(spec.env)
-        code = subprocess.call(spec.command, cwd=spec.cwd or self.cfg.root_project, env=env)
+        if sys.stdin.isatty():
+            code = subprocess.call(spec.command, cwd=spec.cwd or self.cfg.root_project, env=env)
+        else:
+            with ExitStack() as cleanup:
+                with defer_stop_signals():
+                    process = subprocess.Popen(spec.command, cwd=spec.cwd or self.cfg.root_project,
+                                               env=env, **self.popen_kwargs())
+                    cleanup.callback(terminate_one_process_tree, process)
+                code = process.wait()
         if code != 0:
             self.fail(f"Foreground service {spec.name} exited with code {code}")
 

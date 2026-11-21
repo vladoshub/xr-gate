@@ -1,6 +1,7 @@
 """Exercise capture inputs through real TCP sockets and the output rings."""
 
 import json
+import os
 import socket
 import struct
 import subprocess
@@ -87,7 +88,7 @@ class TcpCaptureTest(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"{description}\n{self.log.read_text(errors='replace')}")
 
-    def start(self, camera, imu, external):
+    def start(self, camera, imu, external, *, env=None):
         config = self.root / "main.yaml"
         extra = self.root / "extra.yaml"
         config.write_text(f"""service:
@@ -110,7 +111,7 @@ cameras:
 """)
         with self.log.open("w") as log:
             self.proc = subprocess.Popen([EXE, "--config", config, "--extra-config", extra],
-                                         stdout=log, stderr=subprocess.STDOUT)
+                                         env=env, stdout=log, stderr=subprocess.STDOUT)
         self.addCleanup(self.stop)
 
     def stop(self):
@@ -122,10 +123,10 @@ cameras:
                 self.proc.kill()
                 self.proc.wait()
 
-    def connect(self, port):
+    def connect(self, port, host="127.0.0.1"):
         def attempt():
             try:
-                return socket.create_connection(("127.0.0.1", port), timeout=1)
+                return socket.create_connection((host, port), timeout=1)
             except ConnectionRefusedError:
                 return None
 
@@ -228,6 +229,25 @@ output:
         imu.close()
         primary.sendall(message(2, struct.pack("<QQ", 2, time.monotonic_ns() + CLOCK_SHIFT) + b"lefthelpnext"))
         self.wait_for(lambda: main.latest_sequence("camera0") == 3, "IMU disconnect stopped video")
+
+    def test_primary_disconnect_ends_capture_when_configured(self):
+        host = "127.0.0.2"
+        env = dict(os.environ, CPP_CAPTURE_CAMERA_TCP_EXIT_ON_DISCONNECT="1",
+                   CPP_CAPTURE_INPUT_BIND_HOST=host)
+        camera = "stall_exit_ms: 500\n" + self.tcp_camera(self.camera_port, "stereo")
+        self.start(camera, f"driver: tcp\ntcp:\n  port: {self.imu_port}",
+                   self.tcp_camera(self.external_port, "mono"), env=env)
+        main = self.client(self.registry)
+        time.sleep(0.6)
+        self.assertIsNone(self.proc.poll(), "capture exited while waiting for a sender")
+
+        with self.connect(self.camera_port, host) as primary:
+            session = hello(primary, "primary", views=[view("left"), view("right")], imu=True)
+            imu = self.connect(self.imu_port, host)
+            hello(imu, "imu", session=session)
+            primary.sendall(message(2, struct.pack("<QQ", 1, time.monotonic_ns() + CLOCK_SHIFT) + b"leftrght"))
+            self.wait_for(lambda: main.read_latest_image("camera0"), "missing image")
+        self.assertEqual(self.proc.wait(timeout=3), 3, self.log.read_text(errors="replace"))
 
     def test_local_primary_and_tcp_external(self):
         self.start(self.local_camera(self.camera_port, stereo=True),

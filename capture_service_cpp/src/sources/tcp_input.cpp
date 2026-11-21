@@ -423,8 +423,11 @@ struct TcpSensorInput::Impl {
       if (client != kInvalidSocket) return read_message(sample);
     } catch (const std::runtime_error& e) {
       if (!g_stop.load()) {
+        const bool exit_on_disconnect = cfg.exit_on_disconnect && ready;
         std::cerr << "[capture_service_cpp][tcp_input][" << role_name(role) << ":" << cfg.port << "] "
-                  << e.what() << "; waiting for a sender" << std::endl;
+                  << e.what() << (exit_on_disconnect ? "; stopping capture" : "; waiting for a sender")
+                  << std::endl;
+        if (exit_on_disconnect) request_stop_with_exit_code(kExitDeviceLost);
       }
       close_client();
     } catch (const Json::exception&) {

@@ -1307,12 +1307,27 @@ def resolve_config_argument(args: argparse.Namespace) -> Optional[str]:
     log(f"Selected config: {selected}")
     return str(selected)
 
+def load_config_overlay(path: Path, parents: frozenset[Path] = frozenset()) -> Dict[str, Any]:
+    path = path.resolve()
+    if path in parents:
+        raise ValueError(f"Config inheritance cycle at {path}")
+    with path.open(encoding="utf-8") as config:
+        overlay = json.load(config)
+    if not isinstance(overlay, dict):
+        raise ValueError(f"Config must be a JSON object: {path}")
+    parent = overlay.pop("extends", None)
+    if parent is None:
+        return overlay
+    if not isinstance(parent, str) or not parent:
+        raise ValueError(f"Config extends must be a path: {path}")
+    base = load_config_overlay(path.parent / parent, parents | {path})
+    return deep_update(base, overlay)
+
+
 def load_config(path: Optional[str]) -> ClientConfig:
     data = default_config_dict()
     if path:
-        with open(expand_path(path), "r", encoding="utf-8") as f:
-            overlay = json.load(f)
-        data = deep_update(data, overlay)
+        data = deep_update(data, load_config_overlay(Path(expand_path(path))))
 
     initial_root_project = expand_path(str(os.environ.get("XR_ROOT_PROJECT") or data.get("root_project", "~/src/xr_tracking")))
     root_project = _load_config_device_env(data, initial_root_project)

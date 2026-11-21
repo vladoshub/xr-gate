@@ -91,6 +91,7 @@ struct ImageTransformConfig {
 struct TcpInputConfig {
   int port = 0;
   std::string bind_host = "127.0.0.1";
+  bool exit_on_disconnect = false;
 };
 
 struct TcpViewDimensions {

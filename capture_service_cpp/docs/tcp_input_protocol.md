@@ -123,11 +123,12 @@ publishes the standard `camera0`, `camera1` and `imu0` streams.
 From a Linux release directory, start XR Gate with the installed config.
 
 ```bash
-CONFIG_PATH="$PWD/bin/capture_service_cpp/configs/xreal_ultra_tcp_input.yaml" \
-  ./run_xr_client.sh --config xreal_ultra
+./run_xr_client.sh --config xreal_ultra_tcp
 ```
 
-Set both `bind_host` values to the PC's LAN address for a remote sender.
+Set `CPP_CAPTURE_INPUT_BIND_HOST` to the PC's LAN address for a remote sender.
+To let the remote device start the profile and own its lifetime, use the
+[XR Client configuration server](../../xr_client/README.md#tcp-configuration-server).
 Set `has_imu: true` for Ultra video with its HID IMU. Use the matching
 Ultra stereo and camera-to-IMU calibration.
 

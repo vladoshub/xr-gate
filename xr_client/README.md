@@ -33,12 +33,47 @@ Linux profiles currently included in the package:
 
 ```text
 xr_client/configs/xreal_ultra.json
+xr_client/configs/xreal_ultra_tcp.json
 xr_client/configs/leap_motion_uvc_nrf54l15.json
 ```
 
 The Leap Motion profile still uses the XREAL display device environment, then
 loads `devices/leap_motion_uvc_nrf54l15/tracking.env` as the tracking-sensor
 layer.
+
+## TCP configuration server
+
+Start the server from the Linux package with `./run_xr_client.sh --config-server`.
+It listens on `127.0.0.1:45703` while no XR session is running. Use `--host`
+and `--port` to select another listen address and port. For a sender on your
+LAN, bind the configuration and sensor listeners to the PC's LAN address.
+
+```bash
+CPP_CAPTURE_INPUT_BIND_HOST=192.168.1.20 \
+  ./run_xr_client.sh --config-server --host 192.168.1.20
+```
+
+1. The device opens the control TCP connection to port 45703 and sends one
+   ASCII profile name terminated by a newline, for example
+   `xreal_ultra_tcp\n`. The name selects a JSON file in the packaged profile
+   directory or the directory set by `XR_CLIENT_CONFIG_DIR`.
+2. The server replies `OK\n` after launching the XR client, or `ERR <reason>\n`
+   if it rejects the request. Keep this socket open for the entire session.
+   With `xreal_ultra_tcp`, connect separately to the camera port 45700 and,
+   when sending IMU data, port 45702. Retry the sensor connection if the port
+   is still opening after `OK`.
+3. Closing the control socket stops the launcher and its services. When the
+   launcher exits, the server closes that session and resumes listening.
+   Only one device session runs at a time. Control TCP is plaintext and
+   intended for loopback or a trusted LAN.
+
+You can also start the TCP receiver directly with
+`./run_xr_client.sh --config xreal_ultra_tcp`. The profile uses the same Ultra
+tracking calibration as `xreal_ultra` and skips the USB display helper.
+Capture Service waits for stereo frames and ends the session if its established
+primary camera feed disconnects or stalls. It can use a custom receiver YAML
+through `XR_CAPTURE_INPUT_CONFIG`. The sender must provide decoded 480×640
+GRAY8 planes in the calibrated orientation. [TCP sensor protocol](../capture_service_cpp/docs/tcp_input_protocol.md)
 
 ## Service startup rules
 

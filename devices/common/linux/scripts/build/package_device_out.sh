@@ -843,6 +843,7 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 if [[ $# -eq 0 ]]; then
   echo "Usage: ./run_xr_client.sh --config <profile> [xr_client options]" >&2
+  echo "       ./run_xr_client.sh --config-server [--host HOST] [--port PORT]" >&2
   echo "Examples:" >&2
   echo "  ./run_xr_client.sh --config xreal_ultra" >&2
   echo "  ./run_xr_client.sh --config xreal_ultra --no-imu" >&2
@@ -851,6 +852,10 @@ if [[ $# -eq 0 ]]; then
   echo "Available profiles:" >&2
   find "$XR_CLIENT_CONFIG_DIR" -maxdepth 1 -type f -name '*.json' -printf '  %f\n' 2>/dev/null | sort >&2 || true
   exit 2
+fi
+if [[ "$1" == "--config-server" ]]; then
+  shift
+  exec "$PYTHON" "$XR_PYTHON_ROOT/xr_client/config_server.py" "$PACKAGE_ROOT/run_xr_client.sh" "$@"
 fi
 exec "$PYTHON" "$XR_PYTHON_ROOT/xr_client/xr_backend_client.py" "$@"
 EOF_RUNNER
@@ -868,8 +873,10 @@ Examples:
 ```bash
 ./run_xr_client.sh --config xreal_ultra
 ./run_xr_client.sh --config xreal_ultra --no-imu
+./run_xr_client.sh --config xreal_ultra_tcp
 ./run_xr_client.sh --config leap_motion_uvc_nrf54l15
 ./run_xr_client.sh --config leap_motion_uvc
+./run_xr_client.sh --config-server
 ```
 
 Config names are resolved from `bin/python/xr_client/configs`; an explicit JSON
@@ -1031,6 +1038,8 @@ required=(
   "$XR_OUT_ROOT/devices/common/common.env"
   "$XR_OUT_ROOT/devices/common/linux/scripts/capture_service/start_capture_service.sh"
   "$XR_OUT_BIN_ROOT/python/xr_client/xr_backend_client.py"
+  "$XR_OUT_BIN_ROOT/python/xr_client/config_server.py"
+  "$XR_OUT_BIN_ROOT/capture_service_cpp/configs/xreal_ultra_tcp_input.yaml"
   "$XR_OUT_BIN_ROOT/python/xr_client/startup_rules.py"
   "$XR_OUT_BIN_ROOT/python/xr_client/configs/service_startup_rules.yaml"
   "$XR_OUT_BIN_ROOT/capture_service_cpp/capture_service_cpp"
@@ -1047,6 +1056,12 @@ required=(
 )
 for target in ${XR_PACKAGE_DEVICE_TARGETS:-$XR_TARGET_DEVICE}; do
   required+=("$XR_OUT_ROOT/devices/$target")
+  if [[ "$target" == "xreal_ultra" ]]; then
+    required+=(
+      "$XR_OUT_BIN_ROOT/python/xr_client/configs/xreal_ultra_tcp.json"
+      "$XR_OUT_ROOT/devices/xreal_ultra/xreal_ultra_tcp_tracking.env"
+    )
+  fi
   if [[ -f "$XR_OUT_ROOT/devices/$target/configs/xr_runtime_adapter/xr_21_joint_hand_viewer_verified.json" ]]; then
     required+=("$XR_OUT_ROOT/devices/$target/configs/xr_runtime_adapter/emulation-controller.json")
   fi

@@ -1,0 +1,9 @@
+{
+  "extends": "xreal_ultra.json",
+  "prestart_control": null,
+  "tracking_env": "{root}/devices/xreal_ultra/xreal_ultra_tcp_tracking.env",
+  "gate": {
+    "max_attempts": 1,
+    "timeout_prompt": false
+  }
+}

@@ -207,7 +207,10 @@ RuntimeConfig parse_args(int argc, char** argv) {
       cfg.imu.raw_enabled = false;
     }
   }
-  if (cfg.camera.driver != "tcp") {
+  if (cfg.camera.driver == "tcp") {
+    cfg.camera.tcp.bind_host = env_or("CPP_CAPTURE_INPUT_BIND_HOST", cfg.camera.tcp.bind_host);
+    cfg.camera.tcp.exit_on_disconnect = env_bool("CPP_CAPTURE_CAMERA_TCP_EXIT_ON_DISCONNECT", false);
+  } else {
     cfg.camera.primary.device_path = env_or("CPP_CAPTURE_VIDEO_DEVICE", env_or("VIDEO_DEVICE", cfg.camera.primary.device_path));
     cfg.camera.primary.index = env_int("CPP_CAPTURE_CAMERA_INDEX", cfg.camera.primary.index);
     cfg.camera.primary.api = env_or("CPP_CAPTURE_CAMERA_API", cfg.camera.primary.api);
@@ -219,7 +222,11 @@ RuntimeConfig parse_args(int argc, char** argv) {
   cfg.camera.stall_exit_ms = env_int("CPP_CAPTURE_CAMERA_STALL_EXIT_MS", cfg.camera.stall_exit_ms);
   cfg.imu.stall_exit_ms = env_int("CPP_CAPTURE_IMU_STALL_EXIT_MS", cfg.imu.stall_exit_ms);
   cfg.imu.xreal_hid.drop_first_packets = env_int("CPP_CAPTURE_IMU_DROP_FIRST_PACKETS", cfg.imu.xreal_hid.drop_first_packets);
-  if (cfg.imu.driver != "tcp") cfg.imu.raw_enabled = env_bool("CPP_CAPTURE_RAW_HID_ENABLED", cfg.imu.raw_enabled);
+  if (cfg.imu.driver == "tcp") {
+    cfg.imu.tcp.bind_host = env_or("CPP_CAPTURE_INPUT_BIND_HOST", cfg.imu.tcp.bind_host);
+  } else {
+    cfg.imu.raw_enabled = env_bool("CPP_CAPTURE_RAW_HID_ENABLED", cfg.imu.raw_enabled);
+  }
   cfg.imu.serial.port = env_or("CPP_CAPTURE_IMU_SERIAL_PORT", cfg.imu.serial.port);
   cfg.imu.serial.baud_rate = env_int("CPP_CAPTURE_IMU_SERIAL_BAUD", cfg.imu.serial.baud_rate);
   cfg.tcp_bind_host = env_or("TCP_BIND_HOST", env_or("CPP_CAPTURE_TCP_BIND_HOST", cfg.tcp_bind_host));
