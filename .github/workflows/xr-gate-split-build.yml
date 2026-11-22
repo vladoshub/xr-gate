@@ -588,7 +588,7 @@ jobs:
 
   build-riscv64:
     name: build ${{ matrix.component.name }} / Ubuntu ${{ matrix.target.ubuntu }} / riscv64
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-${{ matrix.target.ubuntu }}
     needs: plan-linux
     if: ${{ needs.plan-linux.outputs.riscv_targets != '[]' }}
     timeout-minutes: 350
@@ -628,12 +628,11 @@ jobs:
         if: ${{ matrix.target.cpu == 'rva23s64' }}
         run: |
           set -euo pipefail
-          # tonistiigi/binfmt:qemu-v10.2.3-68. The Ubuntu 24.04 runner ships an older QEMU.
-          image=tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
-          if [[ -e /proc/sys/fs/binfmt_misc/qemu-riscv64 ]]; then
-            docker run --privileged --rm "$image" --uninstall qemu-riscv64
-          fi
-          docker run --privileged --rm -e QEMU_PRESERVE_ARGV0=1 "$image" --install riscv64
+          # Ubuntu QEMU restores RISC-V vector state across signals (LP: #2133188).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user qemu-user-binfmt
+          sudo systemctl restart systemd-binfmt
+          qemu-riscv64 --version
           grep -E '^flags:.*P.*F' /proc/sys/fs/binfmt_misc/qemu-riscv64
 
       - name: Build RISC-V package component

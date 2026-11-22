@@ -25,7 +25,12 @@ src="$ROOT_PROJECT/third_party/opencv"
 build="$XR_BUILD_SESSION_DIR/opencv/build"
 mkdir -p "$prefix"
 bash "$SCRIPT_DIR/prepare_opencv_source.sh" "$src" "$OPENCV_COMMIT"
-cmake -S "$src" -B "$build" -G Ninja \
+opencv_options=()
+if [[ "$XR_BUILD_CPU" == rva23s64 ]]; then
+  # OpenCV 4.10's RVV intrinsics are incompatible with GCC 15.
+  opencv_options+=(-DCV_ENABLE_INTRINSICS=OFF)
+fi
+cmake -S "$src" -B "$build" -G Ninja "${opencv_options[@]}" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
   -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_C_FLAGS="-march=$XR_CPU_TARGET -mtune=$XR_CPU_TUNE -g0" \
