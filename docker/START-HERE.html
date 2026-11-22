@@ -4,18 +4,20 @@
 <section data-language="en" lang="en">
 <h1>XR Gate with Docker on Linux</h1>
 <h2>1. Download XR Gate</h2>
-<p>Use Ubuntu 24.04 on x86-64 with AVX2 or on ARM64. Set <code>XR_VERSION</code> to a release with a runtime for your architecture.</p>
+<p>Use Ubuntu 24.04 or 26.04 on x86-64 with AVX2, ARM64 or RISC-V 64. On RISC-V, use the RV64GC package for 24.04 and RVA23S64 for 26.04. Select an <code>XR_VERSION</code> with an archive for the chosen Ubuntu image and CPU architecture.</p>
 <p>Download the <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, extract it, and open a terminal in the <code>docker</code> folder. Run all commands below from that folder.</p>
 <h2>2. Install Docker</h2>
 <p>If Docker Engine 28 or newer and Docker Compose are already installed, skip this step.</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo bash scripts/install-engine-ubuntu.sh
 </code></pre></div>
+<p>On RISC-V, the script installs Ubuntu's <code>docker.io</code>, <code>docker-buildx</code> and <code>docker-compose-v2</code> packages.</p>
 <h2>3. Build XR Gate</h2>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
 chmod +x xr-gate
 </code></pre></div>
 <p>To choose a release, change <code>XR_VERSION</code> in <code>.env</code>. Hardware settings are in <code>hardware/xreal_ultra.env</code>. For another device, copy <code>hardware/generic.env.example</code>, fill in <code>XR_PROFILE</code>, <code>XR_USB_IDS</code> and device paths, then select the new file with <code>XR_HARDWARE_ENV</code> in <code>.env</code>. Set <code>XR_REQUIRE_CAMERA=1</code> if the profile uses a camera.</p>
-<p>For a local build, set <code>XR_RELEASE_SOURCE=local</code> in <code>.env</code> and place the Ubuntu 24.04 runtime archive for x64 or ARM64 and <code>hand-tracking-models-mercury.tar.gz</code> in <code>docker/archives/</code>. Set <code>XR_VERSION</code> to the corresponding release tag. The build also installs <code>body-tracking-models-frame.tar.gz</code> if present in that directory.</p>
+<p>Set <code>XR_UBUNTU_VERSION=26.04</code> in <code>.env</code> to use the Ubuntu 26.04 base image and runtime. The default is <code>24.04</code>.</p>
+<p>For a local build, set <code>XR_RELEASE_SOURCE=local</code> and place the matching Ubuntu runtime archive for x64, ARM64 or RISC-V 64 and <code>hand-tracking-models-mercury.tar.gz</code> in <code>docker/archives/</code>. Set <code>XR_VERSION</code> to the corresponding release tag. The build also installs <code>body-tracking-models-frame.tar.gz</code> if present.</p>
 <p>Then build the image:</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
 </code></pre></div>
@@ -48,18 +50,20 @@ chmod +x xr-gate
 <section data-language="ru" lang="ru" hidden>
 <h1>XR Gate в Docker на Linux</h1>
 <h2>1. Скачайте XR Gate</h2>
-<p>Подходит Ubuntu 24.04 на x86-64 с AVX2 или на ARM64. Укажите в <code>XR_VERSION</code> релиз с архивом для вашей архитектуры.</p>
+<p>Подходит Ubuntu 24.04 или 26.04 на x86-64 с AVX2, ARM64 или RISC-V 64. На RISC-V для 24.04 используется пакет RV64GC. Для 26.04 требуется RVA23S64. Укажите в <code>XR_VERSION</code> релиз с архивом для выбранной версии Ubuntu и архитектуры.</p>
 <p>Скачайте <a href="https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip">ZIP</a>, распакуйте его и откройте терминал в папке <code>docker</code>. Все команды ниже выполняйте из этой папки.</p>
 <h2>2. Установите Docker</h2>
 <p>Если Docker Engine версии 28 или новее и Docker Compose уже установлены, пропустите этот шаг.</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo bash scripts/install-engine-ubuntu.sh
 </code></pre></div>
+<p>На RISC-V скрипт устанавливает <code>docker.io</code>, <code>docker-buildx</code> и <code>docker-compose-v2</code> из репозиториев Ubuntu.</p>
 <h2>3. Соберите XR Gate</h2>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>cp --no-clobber .env.example .env
 chmod +x xr-gate
 </code></pre></div>
 <p>Чтобы выбрать релиз, измените <code>XR_VERSION</code> в <code>.env</code>. Параметры оборудования находятся в <code>hardware/xreal_ultra.env</code>. Для другого устройства скопируйте <code>hardware/generic.env.example</code>, заполните <code>XR_PROFILE</code>, <code>XR_USB_IDS</code> и пути устройств, затем укажите новый файл в <code>XR_HARDWARE_ENV</code> в <code>.env</code>. Если профиль использует камеру, включите <code>XR_REQUIRE_CAMERA=1</code>.</p>
-<p>Для сборки из локальных архивов укажите <code>XR_RELEASE_SOURCE=local</code> в <code>.env</code>. Положите в <code>docker/archives/</code> архив XR Gate для Ubuntu 24.04 и вашей архитектуры и <code>hand-tracking-models-mercury.tar.gz</code>. В <code>XR_VERSION</code> укажите тег этого релиза. Если в той же папке есть <code>body-tracking-models-frame.tar.gz</code>, сборка установит и его.</p>
+<p>Укажите <code>XR_UBUNTU_VERSION=26.04</code> в <code>.env</code>, чтобы использовать базовый образ Ubuntu 26.04 и соответствующий архив. По умолчанию выбрана <code>24.04</code>.</p>
+<p>Для сборки из локальных архивов укажите <code>XR_RELEASE_SOURCE=local</code>. Положите в <code>docker/archives/</code> архив XR Gate для нужной версии Ubuntu и вашей архитектуры, а также <code>hand-tracking-models-mercury.tar.gz</code>. В <code>XR_VERSION</code> укажите тег этого релиза. Если в той же папке есть <code>body-tracking-models-frame.tar.gz</code>, сборка установит и его.</p>
 <p>Затем соберите образ:</p>
 <div class="codeblock"><button type="button" class="copy">Copy</button><pre><code>sudo ./xr-gate build
 </code></pre></div>

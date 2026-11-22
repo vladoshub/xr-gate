@@ -15,9 +15,9 @@ spec.loader.exec_module(installer)
 
 
 class ReleaseTest(unittest.TestCase):
-    def archives(self):
+    def archives(self, ubuntu_version="24.04"):
         archives = {}
-        for component, name in installer.release_assets().items():
+        for component, name in installer.release_assets(ubuntu_version).items():
             content = io.BytesIO()
             with tarfile.open(fileobj=content, mode="w:gz") as package:
                 paths = (["xr-gate/bin/release.txt"] if component == "runtime" else [
@@ -32,12 +32,17 @@ class ReleaseTest(unittest.TestCase):
         return archives
 
     def test_selected_release_downloads_and_verifies_both_assets(self):
-        for version, machine, arch in (("v1.2.3", "x86_64", "x64"),
-                                       ("v1.2.4", "aarch64", "arm64")):
-            with self.subTest(version=version, machine=machine), \
+        builds = (
+            ("v1.2.3", "x86_64", "x64", "24.04"),
+            ("v1.2.4", "aarch64", "arm64", "24.04"),
+            ("v1.2.5", "riscv64", "riscv64", "24.04"),
+            ("v1.2.5", "riscv64", "riscv64", "26.04"),
+        )
+        for version, machine, arch, ubuntu in builds:
+            with self.subTest(version=version, machine=machine, ubuntu=ubuntu), \
                  patch.object(installer.platform, "machine", return_value=machine), \
                  tempfile.TemporaryDirectory() as folder:
-                archives = self.archives()
+                archives = self.archives(ubuntu)
                 metadata = {"tag_name": version, "assets": [
                     {"name": name, "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
                     for name, data in archives.items()]}
@@ -52,21 +57,27 @@ class ReleaseTest(unittest.TestCase):
                         destination.write_bytes(archives[destination.name])
 
                 with patch.object(installer, "download", side_effect=download):
-                    installer.install(version, Path(folder))
+                    installer.install(version, Path(folder), ubuntu_version=ubuntu)
                 self.assertEqual(len(urls), 3)
                 self.assertTrue(urls[0].endswith(f"/releases/tags/{version}"))
-                self.assertTrue(urls[1].endswith(f"/xr-gate-ubuntu-24.04-linux-{arch}.tar.gz"))
+                self.assertTrue(urls[1].endswith(f"/xr-gate-ubuntu-{ubuntu}-linux-{arch}.tar.gz"))
                 self.assertEqual((Path(folder) / "xr-gate/bin/release.txt").read_bytes(), b"fixture\n")
 
     def test_install_from_local_archives_with_optional_frame(self):
-        for machine, include_frame in (("x86_64", True), ("aarch64", False)):
-            with self.subTest(machine=machine), \
+        builds = (
+            ("x86_64", "24.04", True),
+            ("aarch64", "24.04", False),
+            ("riscv64", "24.04", True),
+            ("riscv64", "26.04", False),
+        )
+        for machine, ubuntu, include_frame in builds:
+            with self.subTest(machine=machine, ubuntu=ubuntu), \
                  patch.object(installer.platform, "machine", return_value=machine), \
                  tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 archives_dir = root / "archives"
                 archives_dir.mkdir()
-                for name, data in self.archives().items():
+                for name, data in self.archives(ubuntu).items():
                     (archives_dir / name).write_bytes(data)
                 frame_path = "body-tracking-models/frame/frame_backbone.onnx"
                 if include_frame:
@@ -76,7 +87,8 @@ class ReleaseTest(unittest.TestCase):
                         package.addfile(model, io.BytesIO(b"frame model"))
 
                 with patch.object(installer, "download") as download:
-                    installer.install("v1.2.3", root / "out", archives_dir=archives_dir)
+                    installer.install("v1.2.3", root / "out", ubuntu_version=ubuntu,
+                                      archives_dir=archives_dir)
                 download.assert_not_called()
                 bin_dir = root / "out/xr-gate/bin"
                 self.assertEqual((bin_dir / "release.txt").read_bytes(), b"fixture\n")

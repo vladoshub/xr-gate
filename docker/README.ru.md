@@ -4,8 +4,10 @@
 
 ## 1. Скачайте XR Gate
 
-Подходит Ubuntu 24.04 на x86-64 с AVX2 или на ARM64. Выберите `XR_VERSION`
-с архивом для Ubuntu 24.04 и вашей архитектуры.
+Подходит Ubuntu 24.04 или 26.04 на x86-64 с AVX2, ARM64 или RISC-V 64.
+На RISC-V для Ubuntu 24.04 используется пакет RV64GC. Для Ubuntu 26.04
+требуется RVA23S64. Выберите `XR_VERSION` с архивом для нужной версии
+Ubuntu в образе и вашей архитектуры.
 
 Скачайте [ZIP](https://github.com/vladoshub/xr-gate/archive/refs/heads/main.zip), распакуйте его и откройте терминал в папке `docker`. Все команды ниже выполняйте из этой папки.
 
@@ -17,6 +19,9 @@
 sudo bash scripts/install-engine-ubuntu.sh
 ```
 
+На RISC-V скрипт устанавливает `docker.io`, `docker-buildx` и
+`docker-compose-v2` из репозиториев Ubuntu.
+
 ## 3. Соберите XR Gate
 
 ```bash
@@ -26,11 +31,14 @@ chmod +x xr-gate
 
 Чтобы выбрать релиз, измените `XR_VERSION` в `.env`. Параметры оборудования находятся в `hardware/xreal_ultra.env`. Для другого устройства скопируйте `hardware/generic.env.example`, заполните `XR_PROFILE`, `XR_USB_IDS` и пути устройств, затем укажите новый файл в `XR_HARDWARE_ENV` в `.env`. Если профиль использует камеру, включите `XR_REQUIRE_CAMERA=1`.
 
-Для сборки из локальных архивов укажите `XR_RELEASE_SOURCE=local` в `.env`.
-Положите в `docker/archives/` архив XR Gate для Ubuntu 24.04 и вашей архитектуры
-(`xr-gate-ubuntu-24.04-linux-x64.tar.gz` или `xr-gate-ubuntu-24.04-linux-arm64.tar.gz`)
-и `hand-tracking-models-mercury.tar.gz`. В `XR_VERSION` укажите тег этого релиза.
-Если в той же папке есть `body-tracking-models-frame.tar.gz`, сборка установит и его.
+Укажите `XR_UBUNTU_VERSION=26.04` в `.env`, чтобы собрать образ на Ubuntu
+26.04 и взять соответствующий архив XR Gate. По умолчанию выбрана `24.04`.
+
+Для сборки из локальных архивов укажите `XR_RELEASE_SOURCE=local` и положите
+в `docker/archives/` соответствующий `xr-gate-ubuntu-<версия>-linux-<архитектура>.tar.gz`
+и `hand-tracking-models-mercury.tar.gz`. Суффикс архитектуры — `x64`,
+`arm64` или `riscv64`. В `XR_VERSION` укажите тег этого релиза. Если в этой
+папке есть `body-tracking-models-frame.tar.gz`, сборка установит и его.
 
 Затем соберите образ:
 

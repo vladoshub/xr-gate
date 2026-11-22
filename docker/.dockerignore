@@ -7,5 +7,6 @@
 !archives/
 archives/**
 !archives/xr-gate-ubuntu-24.04-linux-*.tar.gz
+!archives/xr-gate-ubuntu-26.04-linux-*.tar.gz
 !archives/hand-tracking-models-mercury.tar.gz
 !archives/body-tracking-models-frame.tar.gz

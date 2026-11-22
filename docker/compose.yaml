@@ -6,6 +6,7 @@ services:
       context: .
       args:
         XR_VERSION: ${XR_VERSION:?Set XR_VERSION in .env}
+        XR_UBUNTU_VERSION: ${XR_UBUNTU_VERSION:-24.04}
         XR_RELEASE_SOURCE: ${XR_RELEASE_SOURCE:-github}
     container_name: xr-gate
     init: true

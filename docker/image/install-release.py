@@ -12,16 +12,23 @@ import tempfile
 from urllib.parse import quote
 
 REPOSITORY = "vladoshub/xr-gate"
+UBUNTU_VERSIONS = ("24.04", "26.04")
 FRAME_ARCHIVE = "body-tracking-models-frame.tar.gz"
 
 
-def release_assets():
+def release_assets(ubuntu_version="24.04"):
+    if ubuntu_version not in UBUNTU_VERSIONS:
+        raise ValueError(f"XR_UBUNTU_VERSION must be 24.04 or 26.04, got {ubuntu_version}")
     machine = platform.machine().lower()
-    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
+    arch = {
+        "x86_64": "x64", "amd64": "x64",
+        "aarch64": "arm64", "arm64": "arm64",
+        "riscv64": "riscv64",
+    }.get(machine)
     if arch is None:
         raise RuntimeError(f"Unsupported XR Gate image architecture: {machine}")
     return {
-        "runtime": f"xr-gate-ubuntu-24.04-linux-{arch}.tar.gz",
+        "runtime": f"xr-gate-ubuntu-{ubuntu_version}-linux-{arch}.tar.gz",
         "models": "hand-tracking-models-mercury.tar.gz",
     }
 
@@ -64,10 +71,10 @@ def download_release(version, names, archive_dir):
             raise RuntimeError(f"SHA256 mismatch: {name}: {digest}")
 
 
-def install(version, destination=Path("/opt"), *, archives_dir=None):
+def install(version, destination=Path("/opt"), *, ubuntu_version="24.04", archives_dir=None):
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
         raise ValueError("XR_VERSION must be a valid image tag, for example v1.2.3")
-    selected_assets = release_assets()
+    selected_assets = release_assets(ubuntu_version)
     with tempfile.TemporaryDirectory() as temporary:
         archive_dir = Path(temporary) if archives_dir is None else Path(archives_dir)
         if archives_dir is None:
@@ -91,9 +98,12 @@ def install(version, destination=Path("/opt"), *, archives_dir=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Release and image tag (XR_VERSION)")
+    parser.add_argument("--ubuntu-version", choices=UBUNTU_VERSIONS, default="24.04",
+                        help="Ubuntu version of the base image (XR_UBUNTU_VERSION)")
     parser.add_argument("--source", choices=("github", "local"), default="github")
     parser.add_argument("--archives-dir", type=Path, help="Directory of local release archives")
     args = parser.parse_args()
     if args.source == "local" and args.archives_dir is None:
         parser.error("--archives-dir is required with --source=local")
-    install(args.version, archives_dir=args.archives_dir if args.source == "local" else None)
+    install(args.version, ubuntu_version=args.ubuntu_version,
+            archives_dir=args.archives_dir if args.source == "local" else None)

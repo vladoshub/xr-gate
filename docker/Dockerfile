@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:24.04
+ARG XR_UBUNTU_VERSION=24.04
+FROM ubuntu:${XR_UBUNTU_VERSION}
 
 ARG XR_VERSION
+ARG XR_UBUNTU_VERSION
 LABEL org.opencontainers.image.title="XR Gate TCP runtime" \
       org.opencontainers.image.source="https://github.com/vladoshub/xr-gate" \
       org.opencontainers.image.version="${XR_VERSION}"
@@ -14,6 +16,7 @@ COPY image/install-release.py /usr/local/lib/xr-gate/install-release.py
 ARG XR_RELEASE_SOURCE=github
 RUN --mount=type=bind,target=/run/xr-gate-build \
     python3 /usr/local/lib/xr-gate/install-release.py --version "$XR_VERSION" \
+      --ubuntu-version "$XR_UBUNTU_VERSION" \
       --source "$XR_RELEASE_SOURCE" --archives-dir /run/xr-gate-build/archives
 
 # Use the dependency list from the SAME release. No build tools or source build.
