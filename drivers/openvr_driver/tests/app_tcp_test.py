@@ -136,12 +136,17 @@ class TcpTest(unittest.TestCase):
             time.sleep(0.1 if index == 1 else 0.7)
         session = Session(handler, 650)
         rows = session.run()
-        self.assertTrue(any(r['sequence'] == 100 for r in rows))
-        self.assertTrue(any(r['sequence'] == 1 and r['fresh'] for r in rows))
-        empty = [r for r in rows if 150 < r['ms'] < 220]
-        self.assertTrue(empty)
-        self.assertTrue(all(not r['pose'] and not r['hands'] and not r['controllers']
-                            and not r['body'] and r['left_buttons'] == '0' for r in empty))
+        last_old_frame = max((i for i, row in enumerate(rows) if row['sequence'] == 100), default=-1)
+        first_new_frame = next((i for i, row in enumerate(rows) if row['sequence'] == 1 and row['fresh']), -1)
+        self.assertGreaterEqual(last_old_frame, 0, 'No frame from the first connection')
+        self.assertGreater(first_new_frame, last_old_frame, 'No fresh frame with reset sequence after reconnect')
+        # The server and probe can be scheduled at different times. Check the gap
+        # between observed frames so clock jitter cannot shift the assertion.
+        streams = ('pose', 'hands', 'hands2', 'controllers', 'controllers2', 'body')
+        self.assertTrue(any(
+            not any(row[stream] for stream in streams) and row['left_buttons'] == row['right_buttons'] == '0'
+            for row in rows[last_old_frame + 1:first_new_frame]
+        ), 'All stream caches must clear before the first frame after reconnect')
         self.assertEqual(session.accepts, 2)
 
     def test_wrong_protocol_and_oversized_line_are_rejected_then_recovered(self):
