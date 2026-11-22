@@ -40,8 +40,8 @@ moves to the new location if the destination is free.
 GitHub builds publish `body-tracking-models-frame.tar.gz` separately. Place it
 beside `unpack_xr_gate.sh` and the other release archives, or supply it with
 `--frame-models`. The unpack helper also accepts the GitHub artifact ZIP.
-For a local `riscv64` build, extract the model tarball into
-`out/riscv64/xr-gate/bin` to install the pre-exported model.
+For a local `riscv64` or `rva23s64` build, extract the pre-exported model
+tarball into `out/riscv64/xr-gate/bin` or `out/rva23s64/xr-gate/bin` respectively.
 
 ## Run
 

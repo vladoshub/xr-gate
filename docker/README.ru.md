@@ -26,13 +26,19 @@ chmod +x xr-gate
 
 Чтобы выбрать релиз, измените `XR_VERSION` в `.env`. Параметры оборудования находятся в `hardware/xreal_ultra.env`. Для другого устройства скопируйте `hardware/generic.env.example`, заполните `XR_PROFILE`, `XR_USB_IDS` и пути устройств, затем укажите новый файл в `XR_HARDWARE_ENV` в `.env`. Если профиль использует камеру, включите `XR_REQUIRE_CAMERA=1`.
 
+Для сборки из локальных архивов укажите `XR_RELEASE_SOURCE=local` в `.env`.
+Положите в `docker/archives/` архив XR Gate для Ubuntu 24.04 и вашей архитектуры
+(`xr-gate-ubuntu-24.04-linux-x64.tar.gz` или `xr-gate-ubuntu-24.04-linux-arm64.tar.gz`)
+и `hand-tracking-models-mercury.tar.gz`. В `XR_VERSION` укажите тег этого релиза.
+Если в той же папке есть `body-tracking-models-frame.tar.gz`, сборка установит и его.
+
 Затем соберите образ:
 
 ```bash
 sudo ./xr-gate build
 ```
 
-Дождитесь завершения сборки. Для первой сборки нужен интернет.
+Для загрузки базового образа и пакетов Ubuntu может понадобиться интернет.
 
 ## 4. Запустите XR Gate
 

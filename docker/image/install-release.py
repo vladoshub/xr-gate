@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download the selected release, verify GitHub SHA-256 digests, and unpack it."""
+"""Install XR Gate from verified GitHub release assets or local archives."""
 import argparse
 import hashlib
 import json
@@ -12,6 +12,7 @@ import tempfile
 from urllib.parse import quote
 
 REPOSITORY = "vladoshub/xr-gate"
+FRAME_ARCHIVE = "body-tracking-models-frame.tar.gz"
 
 
 def release_assets():
@@ -32,50 +33,56 @@ def download(url, destination):
 
 
 def extract_checked(archive, destination):
-    # The release contains relative library symlinks. Reject escaping paths/links.
-    root = Path(destination).resolve()
-    with tarfile.open(archive, "r:gz") as package:
-        for member in package.getmembers():
-            target = (root / member.name).resolve()
-            if target != root and root not in target.parents:
-                raise RuntimeError(f"Unsafe archive path: {member.name}")
-            if member.isdev() or member.isfifo():
-                raise RuntimeError(f"Unsupported archive member: {member.name}")
-            if member.issym() or member.islnk():
-                base = target.parent if member.issym() else root
-                link = (base / member.linkname).resolve()
-                if link != root and root not in link.parents:
-                    raise RuntimeError(f"Unsafe archive link: {member.name}")
-    subprocess.run(["tar", "--no-same-owner", "-xzf", str(archive), "-C", str(root)], check=True)
+    # The data filter checks links against the tree as it is extracted.
+    try:
+        with tarfile.open(archive, "r:gz") as package:
+            package.extractall(destination, filter="data")
+    except tarfile.FilterError as error:
+        raise RuntimeError(f"Unsafe archive path or member: {error}") from error
 
 
-def install(version, destination=Path("/opt")):
+def download_release(version, names, archive_dir):
+    tag = quote(version, safe="")
+    metadata = archive_dir / "release.json"
+    download(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}", metadata)
+    release = json.loads(metadata.read_text())
+    if release.get("tag_name") != version or release.get("draft"):
+        raise RuntimeError(f"Published release not found: {version}")
+    assets = {asset["name"]: asset for asset in release.get("assets", [])}
+    digests = {}
+    for name in names:
+        digest = assets.get(name, {}).get("digest") or ""
+        if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
+            raise RuntimeError(f"Release {version} is missing {name} or its SHA-256 digest")
+        digests[name] = digest.removeprefix("sha256:").lower()
+    for name, expected_digest in digests.items():
+        archive = archive_dir / name
+        download(f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}", archive)
+        with archive.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        if digest != expected_digest:
+            raise RuntimeError(f"SHA256 mismatch: {name}: {digest}")
+
+
+def install(version, destination=Path("/opt"), *, archives_dir=None):
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
-        raise ValueError("XR_VERSION must be a release tag, for example v1.2.3")
+        raise ValueError("XR_VERSION must be a valid image tag, for example v1.2.3")
     selected_assets = release_assets()
-    destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
-        metadata = Path(temporary) / "release.json"
-        download(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{quote(version, safe='')}", metadata)
-        release = json.loads(metadata.read_text())
-        if release.get("tag_name") != version or release.get("draft"):
-            raise RuntimeError(f"Published release not found: {version}")
-        assets = {asset["name"]: asset for asset in release.get("assets", [])}
-        digests = {}
+        archive_dir = Path(temporary) if archives_dir is None else Path(archives_dir)
+        if archives_dir is None:
+            download_release(version, selected_assets.values(), archive_dir)
+        elif (archive_dir / FRAME_ARCHIVE).is_file():
+            selected_assets["frame_models"] = FRAME_ARCHIVE
+
         for name in selected_assets.values():
-            digest = assets.get(name, {}).get("digest") or ""
-            if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
-                raise RuntimeError(f"Release {version} is missing {name} or its SHA-256 digest")
-            digests[name] = digest.removeprefix("sha256:").lower()
+            if not (archive_dir / name).is_file():
+                raise RuntimeError(f"Missing release archive: {archive_dir / name}")
+
+        destination.mkdir(parents=True, exist_ok=True)
         for component, name in selected_assets.items():
-            archive = Path(temporary) / name
-            download(f"https://github.com/{REPOSITORY}/releases/download/{quote(version, safe='')}/{name}", archive)
-            with archive.open("rb") as source:
-                digest = hashlib.file_digest(source, "sha256").hexdigest()
-            if digest != digests[name]:
-                raise RuntimeError(f"SHA256 mismatch: {name}: {digest}")
             output = destination if component == "runtime" else destination / "xr-gate/bin"
-            extract_checked(archive, output)
+            extract_checked(archive_dir / name, output)
     for name in ("grayscale_detection_160x160.onnx", "grayscale_keypoint_jan18.onnx"):
         if not (destination / "xr-gate/bin/hand-tracking-models/mercury" / name).is_file():
             raise RuntimeError(f"Mercury model missing: {name}")
@@ -83,5 +90,10 @@ def install(version, destination=Path("/opt")):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", required=True, help="GitHub release tag (XR_VERSION)")
-    install(parser.parse_args().version)
+    parser.add_argument("--version", required=True, help="Release and image tag (XR_VERSION)")
+    parser.add_argument("--source", choices=("github", "local"), default="github")
+    parser.add_argument("--archives-dir", type=Path, help="Directory of local release archives")
+    args = parser.parse_args()
+    if args.source == "local" and args.archives_dir is None:
+        parser.error("--archives-dir is required with --source=local")
+    install(args.version, archives_dir=args.archives_dir if args.source == "local" else None)

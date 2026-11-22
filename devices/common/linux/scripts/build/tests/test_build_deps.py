@@ -179,16 +179,19 @@ PY
     def test_riscv64_build_selects_monado_and_native_tracking_backends(self):
         self.stub_build()
         (self.root / "sitecustomize.py").write_text("import platform\nplatform.machine = lambda: 'riscv64'\n")
-        result = self.run_script(BUILD / "install_xr_gate_out.sh",
-                                 XR_BUILD_CPU="riscv64", PYTHONPATH=str(self.root))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        commands = [json.loads(line) for line in self.log.read_text().splitlines()]
-        profiles = [command["args"] for command in commands if Path(command["step"]).name == "build_profiles.sh"]
-        self.assertEqual(profiles, [["monado"]])
-        names = {Path(command["step"]).name for command in commands}
-        self.assertTrue({"install_basalt.sh", "install_mercury.sh", "install_frame_body_tracking.sh"} <= names)
-        self.assertFalse({"install_xrizer.sh", "install_steamvr_video_overlay.sh",
-                          "download_frame_models.sh"} & names)
+        for profile in ("riscv64", "rva23s64"):
+            with self.subTest(profile=profile):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script(BUILD / "install_xr_gate_out.sh",
+                                         XR_BUILD_CPU=profile, PYTHONPATH=str(self.root))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                commands = [json.loads(line) for line in self.log.read_text().splitlines()]
+                drivers = [command["args"] for command in commands if Path(command["step"]).name == "build_profiles.sh"]
+                self.assertEqual(drivers, [["monado"]])
+                names = {Path(command["step"]).name for command in commands}
+                self.assertTrue({"install_basalt.sh", "install_mercury.sh", "install_frame_body_tracking.sh"} <= names)
+                self.assertFalse({"install_xrizer.sh", "install_steamvr_video_overlay.sh",
+                                  "download_frame_models.sh"} & names)
 
     def test_missing_dependencies_stop_build_before_any_compilation(self):
         self.stub_build()

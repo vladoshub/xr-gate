@@ -80,8 +80,8 @@ export CMAKE_BUILD_TYPE=Release BUILD_TYPE=Release
 export VCPKG_MAX_CONCURRENCY="${BUILD_JOBS:-2}"
 case "$XR_BUILD_CPU" in
   aarch64) export VCPKG_TRIPLET="arm64-linux-aarch64-release" ;;
-  riscv64)
-    export VCPKG_TRIPLET="riscv64-linux-riscv64-release"
+  riscv64|rva23s64)
+    export VCPKG_TRIPLET="riscv64-linux-$XR_BUILD_CPU-release"
     export VCPKG_FORCE_SYSTEM_BINARIES=1
     ;;
   *) export VCPKG_TRIPLET="x64-linux-$XR_BUILD_CPU-release" ;;

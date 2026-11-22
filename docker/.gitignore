@@ -1,4 +1,5 @@
 .env
+/archives/
 .state/
 logs/
 exported-configs/

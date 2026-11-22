@@ -259,13 +259,20 @@ for replacement in ['ci:123:2',expected.replace(cpu_tag,'another-cpu'),expected.
         self.assertEqual(json.loads(manifest.read_text())["dependencies"], ["eigen3", "tbb"])
 
     def test_all_cpu_profiles_control_flags_opencv_triplets_and_metadata(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        cpu_target = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cpu_target)
         code = """
 import json, os
 from pathlib import Path
 names=['XR_BUILD_CPU','XR_CPU_TARGET','XR_CPU_TUNE','XR_OPENCV_CPU_BASELINE','VCPKG_TRIPLET','CFLAGS','CXXFLAGS','XR_CPU_CACHE_TAG']
 print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(Path(os.environ['XR_CPU_PROFILE_FILE']).read_text())}))
 """
-        profiles = [("aarch64", "armv8-a", "generic", "NEON"), ("riscv64", "rv64gc", "rocket", "DETECT")]
+        profiles = [
+            ("aarch64", "armv8-a", "generic", "NEON"),
+            ("riscv64", "rv64gc", "rocket", "DETECT"),
+            ("rva23s64", cpu_target.RVA23_MARCH, "rocket", "DETECT"),
+        ]
         if HOST_ARCH == "x86_64":
             profiles += [("GeNeRiC", "x86-64", "generic", "SSE2"),
                          ("AVX2", "x86-64-v3", "generic", "AVX2"),
@@ -274,10 +281,10 @@ print(json.dumps({'env':{k:os.environ[k] for k in names},'metadata':json.loads(P
         for mode, march, tune, opencv in profiles:
             with self.subTest(profile=mode):
                 test_env = dict(self.env, XR_BUILD_CPU=mode)
-                architecture = {"aarch64": "aarch64", "riscv64": "riscv64"}.get(mode, "x86_64")
+                architecture = {"aarch64": "aarch64", "riscv64": "riscv64", "rva23s64": "riscv64"}.get(mode, "x86_64")
                 if architecture != HOST_ARCH:
                     fake_host = self.root / architecture
-                    fake_host.mkdir()
+                    fake_host.mkdir(exist_ok=True)
                     (fake_host / "sitecustomize.py").write_text(
                         f"import platform\nplatform.machine = lambda: {architecture!r}\n")
                     test_env["PYTHONPATH"] = str(fake_host)
@@ -331,7 +338,7 @@ subprocess.run([str(binary)], check=True)
         for profile, suffix in [("GeNeRiC", "out/generic/xr-gate"),
                                 ("avx2", "out/xr-gate"), ("AvX512", "out/avx512/xr-gate"),
                                 ("native", "out/native/xr-gate"), ("AARCH64", "out/aarch64/xr-gate"),
-                                ("RISCV64", "out/riscv64/xr-gate")]:
+                                ("RISCV64", "out/riscv64/xr-gate"), ("RVA23S64", "out/rva23s64/xr-gate")]:
             env = dict(self.env, XR_ROOT_PROJECT=str(self.root), XR_OUT_PACKAGE_NAME="xr-gate", XR_BUILD_CPU=profile)
             for variable in ("XR_OUT_ROOT", "XR_OUT_BIN_ROOT"):
                 env.pop(variable, None)
@@ -414,6 +421,18 @@ subprocess.run([str(binary)], check=True)
             module.check_package(self.root, "isa : rv64imafdc_zicsr_zifencei\nhart isa : rv64gc\n")
             with self.assertRaisesRegex(ValueError, "missing CPU features: d"):
                 module.check_package(self.root, "isa : rv64imafdc\nhart isa : rv64imafc\n")
+
+    def test_rva23s64_runtime_checks_vector_and_bitmanip_on_every_hart(self):
+        spec = importlib.util.spec_from_file_location("cpu_target", BUILD.parent / "runtime/cpu_target.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (self.root / "BUILD_CPU_TARGET").write_text(module.RVA23_MARCH + "\n")
+
+        with patch.object(module.platform, "machine", return_value="riscv64"):
+            isa = "isa : rv64gcbv_zicond_zvbb_zvfhmin\n"
+            module.check_package(self.root, isa + "hart isa : rv64imafdcv_zba_zbb_zbs_zicond_zvbb_zvfhmin\n")
+            with self.assertRaisesRegex(ValueError, "missing CPU features: v, zicond"):
+                module.check_package(self.root, isa + "hart isa : rv64imafdcb_zvbb_zvfhmin\n")
 
     def test_onnxruntime_package_selection_for_each_architecture(self):
         # Mock only uname, which is the runtime selector's source of architecture.

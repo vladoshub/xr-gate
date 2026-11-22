@@ -351,7 +351,7 @@ echo "[cmake version]"
 "$CMAKE_BIN" --version
 
 vcpkg_dir="$BASALT_DIR/thirdparty/vcpkg"
-if [[ "$XR_BUILD_CPU" == riscv64 && ! -x "$vcpkg_dir/vcpkg" ]]; then
+if [[ "$VCPKG_TRIPLET" == riscv64-linux-* && ! -x "$vcpkg_dir/vcpkg" ]]; then
   xr_require_network "Basalt vcpkg executable is missing"
   echo
   echo "[bootstrap RISC-V vcpkg]"

@@ -58,6 +58,42 @@ class ReleaseTest(unittest.TestCase):
                 self.assertTrue(urls[1].endswith(f"/xr-gate-ubuntu-24.04-linux-{arch}.tar.gz"))
                 self.assertEqual((Path(folder) / "xr-gate/bin/release.txt").read_bytes(), b"fixture\n")
 
+    def test_install_from_local_archives_with_optional_frame(self):
+        for machine, include_frame in (("x86_64", True), ("aarch64", False)):
+            with self.subTest(machine=machine), \
+                 patch.object(installer.platform, "machine", return_value=machine), \
+                 tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                archives_dir = root / "archives"
+                archives_dir.mkdir()
+                for name, data in self.archives().items():
+                    (archives_dir / name).write_bytes(data)
+                frame_path = "body-tracking-models/frame/frame_backbone.onnx"
+                if include_frame:
+                    with tarfile.open(archives_dir / installer.FRAME_ARCHIVE, "w:gz") as package:
+                        model = tarfile.TarInfo(frame_path)
+                        model.size = len(b"frame model")
+                        package.addfile(model, io.BytesIO(b"frame model"))
+
+                with patch.object(installer, "download") as download:
+                    installer.install("v1.2.3", root / "out", archives_dir=archives_dir)
+                download.assert_not_called()
+                bin_dir = root / "out/xr-gate/bin"
+                self.assertEqual((bin_dir / "release.txt").read_bytes(), b"fixture\n")
+                self.assertEqual((bin_dir / frame_path).is_file(), include_frame)
+
+    def test_missing_local_archive_stops_before_extraction(self):
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(installer, "download") as download, \
+             patch.object(installer, "extract_checked") as extract:
+            root = Path(folder)
+            runtime = installer.release_assets()["runtime"]
+            (root / runtime).write_bytes(self.archives()[runtime])
+            with self.assertRaisesRegex(RuntimeError, "Missing release archive: .*hand-tracking-models-mercury"):
+                installer.install("v1.2.3", root / "out", archives_dir=root)
+            download.assert_not_called()
+            extract.assert_not_called()
+
     def test_unverified_or_corrupt_assets_are_rejected_before_extraction(self):
         for case in ("missing", "bad-digest", "corrupt", "wrong-tag"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as folder:

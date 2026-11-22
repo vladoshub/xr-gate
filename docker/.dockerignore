@@ -4,3 +4,8 @@
 !image/**
 !scripts/
 !scripts/tcp_probe.py
+!archives/
+archives/**
+!archives/xr-gate-ubuntu-24.04-linux-*.tar.gz
+!archives/hand-tracking-models-mercury.tar.gz
+!archives/body-tracking-models-frame.tar.gz

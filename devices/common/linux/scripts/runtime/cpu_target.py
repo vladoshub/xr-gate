@@ -13,6 +13,13 @@ V3_FLAGS = V1_FLAGS | {"avx", "avx2", "fma", "f16c", "bmi1", "bmi2", "lzcnt", "m
             "cx16", "lahf_lm", "popcnt", "sse3", "ssse3", "sse4_1", "sse4_2"}
 V4_FLAGS = V3_FLAGS | {"avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"}
 AARCH64_FLAGS = {"fp", "asimd"}
+RV64GC_FLAGS = set("imafdc")
+# GCC 15 in Ubuntu 26.04 needs the RVA23U64 extensions spelled out.
+RVA23_MARCH = (
+    "rv64gcbv_zic64b_zicbom_zicbop_zicboz_ziccamoa_ziccif_zicclsm_ziccrse_zicntr_"
+    "zicond_zihintntl_zihintpause_zihpm_zimop_za64rs_zawrs_zfa_zfhmin_zcb_zcmop_"
+    "zkt_zvbb_zvfhmin_zvkt_supm"
+)
 PROFILES = {
     "generic": ("x86_64", "x86-64", "generic", "SSE2"),
     "avx2": ("x86_64", "x86-64-v3", "generic", "AVX2"),
@@ -20,13 +27,17 @@ PROFILES = {
     "native": ("x86_64", "native", "native", "NATIVE"),
     "aarch64": ("aarch64", "armv8-a", "generic", "NEON"),
     "riscv64": ("riscv64", "rv64gc", "rocket", "DETECT"),
+    "rva23s64": ("riscv64", RVA23_MARCH, "rocket", "DETECT"),
 }
+TARGET_ARCHITECTURES = {march: architecture for architecture, march, _, _ in PROFILES.values()}
 PORTABLE_FEATURES = {
     "x86-64": V1_FLAGS,
     "x86-64-v3": V3_FLAGS,
     "x86-64-v4": V4_FLAGS,
     "armv8-a": AARCH64_FLAGS,
-    "rv64gc": set("imafdc"),
+    "rv64gc": RV64GC_FLAGS,
+    # Check the vector and bit-manipulation extensions reported by Linux.
+    RVA23_MARCH: RV64GC_FLAGS | {"v", "zba", "zbb", "zbs", "zicond", "zvbb", "zvfhmin"},
 }
 SCHEMA = "xr_gate_cpu_profile_v1"
 
@@ -51,10 +62,16 @@ def host_features(cpuinfo=None, architecture="x86_64"):
     text = Path("/proc/cpuinfo").read_text() if cpuinfo is None else cpuinfo
     if architecture == "riscv64":
         # Linux reports a common ISA and may also list the ISA of each hart.
-        isas = re.findall(r"^(?:hart )?isa\s*:\s*rv64([a-z]+)", text, re.M)
+        isas = re.findall(r"^(?:hart )?isa[ \t]*:[ \t]*rv64([a-z]+)((?:_[a-z0-9]+)*)", text, re.M)
         if not isas:
             raise ValueError("Cannot determine riscv64 CPU features from /proc/cpuinfo")
-        return set.intersection(*(set(isa.replace("g", "imafd")) for isa in isas))
+        harts = []
+        for letters, extensions in isas:
+            flags = set(letters.replace("g", "imafd")).union(extensions.split("_")[1:])
+            if "b" in flags:
+                flags.update({"zba", "zbb", "zbs"})
+            harts.append(flags)
+        return set.intersection(*harts)
 
     label = "Features" if architecture == "aarch64" else "flags"
     cpus = re.findall(rf"^{label}\s*:\s*(.*)$", text, re.M)
@@ -79,7 +96,7 @@ def describe(mode, cpuinfo=None, check_host=False):
         cache_tag = "native-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
     else:
         features = PORTABLE_FEATURES[march]
-        cache_tag = march
+        cache_tag = mode if mode == "rva23s64" else march
     return dict(schema=SCHEMA, profile=mode, architecture=architecture, march=march, tune=tune,
                 opencv_baseline=baseline, cache_tag=cache_tag,
                 required_features=sorted(features))
@@ -91,7 +108,6 @@ def check_package(root, cpuinfo=None):
     if not marker.is_file():
         return
     march = marker.read_text().strip()
-    architecture = {"armv8-a": "aarch64", "rv64gc": "riscv64"}.get(march, "x86_64")
     if march in PORTABLE_FEATURES:
         required = PORTABLE_FEATURES[march]
     elif march == "native":
@@ -107,6 +123,7 @@ def check_package(root, cpuinfo=None):
         required = set(data["required_features"])
     else:
         raise ValueError("Unknown package CPU target: " + march)
+    architecture = TARGET_ARCHITECTURES[march]
     check_architecture(architecture, "This runtime")
     missing = required - host_features(cpuinfo, architecture)
     if missing:

@@ -11,7 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl python3 && rm -rf /var/lib/apt/lists/*
 
 COPY image/install-release.py /usr/local/lib/xr-gate/install-release.py
-RUN python3 /usr/local/lib/xr-gate/install-release.py --version "$XR_VERSION"
+ARG XR_RELEASE_SOURCE=github
+RUN --mount=type=bind,target=/run/xr-gate-build \
+    python3 /usr/local/lib/xr-gate/install-release.py --version "$XR_VERSION" \
+      --source "$XR_RELEASE_SOURCE" --archives-dir /run/xr-gate-build/archives
 
 # Use the dependency list from the SAME release. No build tools or source build.
 # Suppress service starts in the image; BlueZ runs on the Linux host.

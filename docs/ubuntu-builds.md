@@ -12,6 +12,7 @@ is not the runtime ABI target. Select the CPU profile with `XR_BUILD_CPU`:
 | `native` | `-march=native -mtune=native` | NATIVE | The x86-64 build machine's CPU |
 | `aarch64` | `-march=armv8-a -mtune=generic` | NEON | Portable Linux ARM64 runtime |
 | `riscv64` | `-march=rv64gc -mtune=rocket` | Detect from compiler target | Linux RISC-V 64-bit runtime for RV64GC |
+| `rva23s64` | RVA23U64 extensions, `-mtune=rocket` | Detect from compiler target | Ubuntu 26.04 RISC-V runtime for RVA23S64 systems |
 
 The same profile configures Basalt, OpenCV and the vcpkg dependencies. `generic`
 uses the original x86-64 baseline (including SSE2); it does not require SSE3,
@@ -42,14 +43,20 @@ XR_BUILD_CPU=aarch64 ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 Build the `aarch64` profile on a Linux ARM64 host. It applies to every device
 profile and can be used with `XR_BUILD_ONLY`.
 
-Build the `riscv64` profile on a Linux RISC-V host with an RV64GC/LP64D
-toolchain. It includes Monado and defaults to scalar MLAS in ONNX Runtime
-for Mercury and FRAME. The build skips the SteamVR and xrizer components.
-The Monado build also disables its SteamVR Lighthouse loader on RISC-V.
+Build `riscv64` for Ubuntu 24.04 with an RV64GC/LP64D toolchain. Build
+`rva23s64` for Ubuntu 26.04 on an RVA23S64 system or under suitable QEMU
+emulation. The compiler flags spell out the RVA23U64 extensions for GCC 15.
+Both builds include Monado and use scalar MLAS kernels in ONNX Runtime
+for Mercury and FRAME. They skip the SteamVR and xrizer components and
+disable Monado's SteamVR Lighthouse loader.
 
 ```bash
 XR_BUILD_CPU=riscv64 ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
 XR_BUILD_CPU=riscv64 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 \
+  ./devices/common/linux/scripts/build/install_xr_gate_out.sh
+
+XR_BUILD_CPU=rva23s64 ./devices/common/linux/scripts/build/install_build_deps_ubuntu.sh
+XR_BUILD_CPU=rva23s64 XR_DOWNLOAD_HAND_TRACKING_MODELS=1 \
   ./devices/common/linux/scripts/build/install_xr_gate_out.sh
 ```
 
@@ -60,12 +67,20 @@ or ARM64 model build. Extract it into the package's `bin` directory.
 tar -xzf body-tracking-models-frame.tar.gz -C out/riscv64/xr-gate/bin
 ```
 
-In GitHub Actions, check `build_ubuntu_amd64`, `build_ubuntu_arm64`, or
-`build_ubuntu_riscv64` independently. AMD64 and ARM64 each build Ubuntu 24.04
-and 26.04. AMD64 is selected by default and uses `cpu_profile`. Choose
-`generic` for AMD64 CPUs without AVX2. ARM64 uses `aarch64` on
-`ubuntu-24.04-arm`. RISC-V builds Ubuntu 24.04 for RV64GC in parallel
-component jobs using Docker and QEMU on an AMD64 runner.
+For `rva23s64`, extract the archive into `out/rva23s64/xr-gate/bin`.
+
+In GitHub Actions, select the builds independently.
+
+| Input | Ubuntu | CPU profile |
+| --- | --- | --- |
+| `build_ubuntu_amd64` | 24.04 and 26.04 | `cpu_profile` |
+| `build_ubuntu_arm64` | 24.04 and 26.04 | `aarch64` |
+| `build_ubuntu_riscv64` | 24.04 | `riscv64` (RV64GC) |
+| `build_ubuntu_rva23s64` | 26.04 | `rva23s64` (RVA23S64) |
+
+AMD64 is selected by default. Choose `generic` for AMD64 CPUs without AVX2.
+ARM64 uses `ubuntu-24.04-arm`. Both RISC-V builds run their component jobs
+in parallel using Docker and QEMU on AMD64 runners.
 With `publish_release` enabled, the selected builds go into one GitHub Release
 under `release_tag`. The Windows installer is selected independently with
 `release_windows_driver`.
@@ -81,7 +96,8 @@ For a local act run, select one architecture per invocation.
 Local output roots are separated automatically.
 `out/generic/xr-gate/` for generic, `out/xr-gate/` for AVX2,
 `out/avx512/xr-gate/` for AVX512, `out/native/xr-gate/` for native,
-`out/aarch64/xr-gate/` for ARM64, and `out/riscv64/xr-gate/` for RISC-V.
+`out/aarch64/xr-gate/` for ARM64, `out/riscv64/xr-gate/` for RV64GC, and
+`out/rva23s64/xr-gate/` for RVA23S64.
 An explicit `XR_OUT_ROOT` still works. The
 installer rejects reuse across CPU profiles and native CPU identities.
 CI explicitly selects its original `out/xr-gate/` layout in each isolated job.
@@ -172,16 +188,25 @@ Choose the container for your target.
 | --- | --- | --- |
 | `aarch64` | `linux/arm64` | `ubuntu:24.04` |
 | `riscv64` | `linux/riscv64` | `riscv64/ubuntu:24.04` |
+| `rva23s64` | `linux/riscv64` | `riscv64/ubuntu:26.04` |
+
+For `rva23s64`, register a RISC-V user-mode QEMU with support for
+`-cpu rva23s64`. CI uses QEMU 10.2.3. Set `QEMU_CPU=rva23s64` for the
+container so its userspace and build-time tools can use RVA23 instructions.
 
 ```bash
 profile=aarch64
 platform=linux/arm64
 image=ubuntu:24.04
+qemu_options=()
+# For rva23s64, use the RISC-V platform and image above and set:
+# qemu_options=(-e QEMU_CPU=rva23s64)
 
-sudo docker run --rm --platform "$platform" "$image" uname -m
+sudo docker run --rm --platform "$platform" "${qemu_options[@]}" "$image" uname -m
 
 sudo docker run --rm --platform "$platform" \
   --mount "type=bind,source=$PWD,target=/src" --workdir /src \
+  "${qemu_options[@]}" \
   -e XR_BUILD_CPU="$profile" -e XR_DOWNLOAD_HAND_TRACKING_MODELS=1 -e XR_OFFLINE=0 \
   -e XR_ONNXRUNTIME_VERSION="${XR_ONNXRUNTIME_VERSION:-1.31.0}" \
   -e XR_BUILD_UID="$(id -u)" -e XR_BUILD_GID="$(id -g)" \
