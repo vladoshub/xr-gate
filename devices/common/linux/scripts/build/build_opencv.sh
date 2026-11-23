@@ -2,7 +2,11 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "${XR_BUILD_SESSION_DIR:-}" || ! -d "$XR_BUILD_SESSION_DIR" ]] || [[ -z "${XR_BUILD_SESSION_OWNER:-}" ]] || ! kill -0 "${XR_BUILD_SESSION_OWNER:-0}" 2>/dev/null; then
-  exec bash "$SCRIPT_DIR/with_build_session.sh" bash "$0" "$@"
+  session_options=()
+  if [[ "${1:-}" == --cross-riscv64 ]]; then
+    session_options+=(--cross-riscv64)
+  fi
+  exec bash "$SCRIPT_DIR/with_build_session.sh" "${session_options[@]}" bash "$0" "$@"
 fi
 : "${XR_BUILD_DEPENDENCY_TOKEN:?missing build session identity}"
 # Annotated tag 4.10.0, pinned to its resolved commit, not a moving branch.
@@ -26,6 +30,9 @@ build="$XR_BUILD_SESSION_DIR/opencv/build"
 mkdir -p "$prefix"
 bash "$SCRIPT_DIR/prepare_opencv_source.sh" "$src" "$OPENCV_COMMIT"
 opencv_options=()
+if [[ "${1:-}" == --cross-riscv64 ]]; then
+  opencv_options+=("-DCMAKE_TOOLCHAIN_FILE=$SCRIPT_DIR/riscv64-gnu.toolchain.cmake")
+fi
 if [[ "$XR_BUILD_CPU" == rva23s64 ]]; then
   # OpenCV 4.10's RVV intrinsics are incompatible with GCC 15.
   opencv_options+=(-DCV_ENABLE_INTRINSICS=OFF)

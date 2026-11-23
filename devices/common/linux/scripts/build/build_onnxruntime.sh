@@ -6,9 +6,26 @@ ROOT_PROJECT="$(cd "${ROOT_PROJECT:-$SCRIPT_DIR/../../../../..}" && pwd)"
 source "$SCRIPT_DIR/dependency_policy.sh"
 source "$SCRIPT_DIR/../runtime/onnxruntime_path.sh"
 
-readonly arch="$(xr_onnxruntime_arch)"
+arch="$(xr_onnxruntime_arch)"
 version="$(xr_onnxruntime_version)"
 readonly version
+cross_riscv="${XR_ONNXRUNTIME_CROSS_RISCV64:-0}"
+if [[ "$cross_riscv" == 1 ]]; then
+  case "$version:${XR_BUILD_CPU:-}" in
+    1.31.0:riscv64|1.31.0:rva23s64) ;;
+    *)
+      echo "[onnxruntime][ERROR] Cross-build requires ONNX Runtime 1.31.0 and XR_BUILD_CPU=riscv64 or rva23s64" >&2
+      exit 2
+      ;;
+  esac
+  arch=riscv64
+  toolchain="$SCRIPT_DIR/riscv64-gnu.toolchain.cmake"
+  profile="$(python3 "$SCRIPT_DIR/../runtime/cpu_target.py" describe "$XR_BUILD_CPU")"
+  IFS=$'\t' read -r _ march tune _ XR_CPU_CACHE_TAG <<< "$profile"
+  export CFLAGS="${CFLAGS:-} -march=$march -mtune=$tune -g0"
+  export CXXFLAGS="${CXXFLAGS:-} -march=$march -mtune=$tune -g0"
+fi
+readonly arch
 package="$(xr_onnxruntime_package_name "$arch" "$version")"
 readonly source_url=https://github.com/ROCm/onnxruntime.git
 if [[ "$version" == 1.31.0 ]]; then
@@ -28,6 +45,10 @@ build_key="$( {
   cat /etc/os-release
   printf '%s\0' "$(uname -m)" "${XR_CPU_CACHE_TAG:-}" "${CC:-}" "${CXX:-}" \
     "${CFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}"
+  if [[ "$cross_riscv" == 1 ]]; then
+    sha256sum < "$toolchain"
+    riscv64-linux-gnu-g++ --version
+  fi
 } | sha256sum)"
 mkdir -p "$cache_dir"
 cache_dir="$(cd "$cache_dir" && pwd)"
@@ -43,6 +64,12 @@ complete_sdk() {
      -s "$sdk/GIT_COMMIT_ID" && "$(<"$sdk/GIT_COMMIT_ID")" == "$source_commit" ]]
 }
 
+sdk_identity() (
+  . /etc/os-release
+  printf '%s|%s:%s|%s|%s\n' "${XR_BUILD_DEPENDENCY_TOKEN:?missing build session identity}" \
+    "$ID" "$VERSION_ID" "$source_commit" "${XR_CPU_CACHE_TAG:?missing CPU cache tag}"
+)
+
 checkout_pinned_source() {
   local directory="$1" url="$2" commit="$3" ref
   ref="$(xr_ensure_git_source "$directory" "$url" "$commit" 1 "$XR_UPDATE_DEPS" 1)"
@@ -57,7 +84,19 @@ checkout_pinned_source() {
   fi
 }
 
-if ! complete_sdk "$sdk_dir"; then
+if [[ -n "${XR_ONNXRUNTIME_SDK_DIR:-}" ]]; then
+  sdk_dir="$XR_ONNXRUNTIME_SDK_DIR/$package"
+  identity="$XR_ONNXRUNTIME_SDK_DIR/XR_BUILD_ID"
+  expected="$(sdk_identity)"
+  if [[ "$cross_riscv" == 1 || "$arch:$version" != riscv64:1.31.0 ||
+        ! -s "$identity" || "$(<"$identity")" != "$expected" ]] ||
+     ! complete_sdk "$sdk_dir" ||
+     ! LC_ALL=C readelf -h "$sdk_dir/lib/libonnxruntime.so" | grep -Eq 'Machine:[[:space:]]+RISC-V$'; then
+    echo "[onnxruntime][ERROR] SDK does not match this build, attempt, distro or CPU target: $XR_ONNXRUNTIME_SDK_DIR" >&2
+    exit 2
+  fi
+  echo "[onnxruntime] reusing cross-built SDK: $sdk_dir" >&2
+elif ! complete_sdk "$sdk_dir"; then
   xr_require_network "ONNX Runtime $version source build is missing from the SDK cache"
   # Reuse the checkout left by builds that used the Microsoft remote.
   if [[ "$version" == 1.31.0 && -e "$source_dir/.git" &&
@@ -84,6 +123,9 @@ if ! complete_sdk "$sdk_dir"; then
     build_args+=(--skip_submodule_sync)
     if [[ "$arch" == riscv64 ]]; then
       cmake_defines+=(onnxruntime_USE_RVV=OFF)
+    fi
+    if [[ "$cross_riscv" == 1 ]]; then
+      cmake_defines+=(CMAKE_TOOLCHAIN_FILE="$toolchain" onnxruntime_CROSS_COMPILING=ON)
     fi
   else
     # Keep the Eigen revision pinned by the legacy release's cmake/deps.txt.
@@ -131,4 +173,7 @@ fi
 
 mkdir -p "$install_dir"
 rsync -a --delete "$sdk_dir/" "$install_dir/"
+if [[ "$cross_riscv" == 1 && -n "${XR_BUILD_DEPENDENCY_TOKEN:-}" ]]; then
+  sdk_identity > "${install_dir%/*}/XR_BUILD_ID"
+fi
 printf '%s\n' "$install_dir"

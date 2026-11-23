@@ -586,18 +586,113 @@ jobs:
           retention-days: 3
 
 
-  build-riscv64:
-    name: build ${{ matrix.component.name }} / Ubuntu ${{ matrix.target.ubuntu }} / riscv64
+  build-opencv-riscv64:
+    name: OpenCV SDK / Ubuntu ${{ matrix.target.ubuntu }} / riscv64 cross-build
     runs-on: ubuntu-${{ matrix.target.ubuntu }}
     needs: plan-linux
     if: ${{ needs.plan-linux.outputs.riscv_targets != '[]' }}
+    timeout-minutes: 60
+    env:
+      XR_BUILD_CPU: ${{ matrix.target.cpu }}
+      XR_OFFLINE: "0"
+      XR_OPENCV_PREFIX: ${{ github.workspace }}/.build-deps/opencv-sdk
+      BUILD_JOBS: "3"
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan-linux.outputs.riscv_targets) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install the RISC-V cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-riscv64-linux-gnu libc6-dev-riscv64-cross cmake ninja-build python3 pkg-config ccache
+
+      - name: Cross-compile the static OpenCV SDK
+        run: |
+          set -euo pipefail
+          export PATH="/usr/bin:$PATH"
+          bash devices/common/linux/scripts/build/build_opencv.sh --cross-riscv64
+          for archive in "$XR_OPENCV_PREFIX"/lib/libopencv_*.a; do
+            LC_ALL=C readelf -h "$archive" |
+              awk '/Machine:/ { found=1; if ($NF != "RISC-V") wrong_arch=1 } END { exit (!found || wrong_arch) }'
+          done
+          tar -C .build-deps -czf opencv-sdk.tar.gz opencv-sdk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.target.ubuntu }}-${{ env.XR_BUILD_CPU }}
+          path: opencv-sdk.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  build-onnxruntime-riscv64:
+    name: ONNX Runtime SDK / Ubuntu ${{ matrix.target.ubuntu }} / riscv64 cross-build
+    runs-on: ubuntu-${{ matrix.target.ubuntu }}
+    needs: plan-linux
+    if: ${{ needs.plan-linux.outputs.riscv_targets != '[]' && inputs.onnxruntime_version != '1.18.1' }}
     timeout-minutes: 350
     env:
+      XR_BUILD_CPU: ${{ matrix.target.cpu }}
+      XR_ONNXRUNTIME_VERSION: "1.31.0"
+      XR_ONNXRUNTIME_CROSS_RISCV64: "1"
+      XR_BUILD_DEPENDENCY_TOKEN: ci:${{ github.run_id }}:${{ github.run_attempt }}
+      XR_BIN_ROOT: ${{ github.workspace }}/.build-deps/cross-ort
+      XR_OFFLINE: "0"
+      BUILD_JOBS: "3"
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan-linux.outputs.riscv_targets) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install the RISC-V cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-riscv64-linux-gnu libc6-dev-riscv64-cross cmake ninja-build patch python3-packaging rsync
+      - name: Cross-compile and package ONNX Runtime
+        run: |
+          set -euo pipefail
+          export PATH="/usr/bin:$PATH"
+          if [[ -n "${XR_LOCAL_BUILD_ID:-}" ]]; then
+            export XR_BUILD_DEPENDENCY_TOKEN="act:$XR_LOCAL_BUILD_ID"
+          fi
+          sdk="$(bash devices/common/linux/scripts/build/build_onnxruntime.sh)"
+          LC_ALL=C readelf -h "$sdk/lib/libonnxruntime.so" | grep -E 'Machine:[[:space:]]+RISC-V$'
+          if [[ "$XR_BUILD_CPU" == rva23s64 ]]; then
+            LC_ALL=C readelf -A "$sdk/lib/libonnxruntime.so" | grep -E 'Tag_RISCV_arch:.*_v1p0(_|")'
+          fi
+          tar -C "${sdk%/*}" -czf onnxruntime-sdk.tar.gz XR_BUILD_ID "${sdk##*/}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.target.ubuntu }}-${{ env.XR_BUILD_CPU }}
+          path: onnxruntime-sdk.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  build-riscv64:
+    name: build ${{ matrix.component.name }} / Ubuntu ${{ matrix.target.ubuntu }} / riscv64
+    runs-on: ubuntu-${{ matrix.target.ubuntu }}
+    needs: [plan-linux, build-opencv-riscv64]
+    if: ${{ needs.plan-linux.outputs.riscv_targets != '[]' }}
+    timeout-minutes: 350
+    env: &riscv_component_env
       XR_BUILD_CPU: ${{ matrix.target.cpu }}
       XR_RISCV_UBUNTU: ${{ matrix.target.ubuntu }}
       QEMU_CPU: ${{ matrix.target.qemu_cpu }}
       XR_BUILD_XRIZER: "0"
       XR_OFFLINE: "0"
+      XR_OPENCV_PREFIX: /work/.build-deps/opencv-sdk
+      XR_ONNXRUNTIME_SDK_DIR: ${{ matrix.component.name == 'mercury' && inputs.onnxruntime_version != '1.18.1' && '/work/.build-deps/onnxruntime-sdk' || '' }}
       BUILD_JOBS: "3"
       CMAKE_BUILD_PARALLEL_LEVEL: "3"
       XR_BUILD_ONLY: ${{ matrix.component.build_only }}
@@ -610,12 +705,32 @@ jobs:
             build_only: "capture_service_cpp xreal_display_helper imu_3dof xr_runtime_adapter override_controller xr_video xr_spatial bridges monado_driver"
           - name: basalt
             build_only: "basalt_vio"
-          - name: mercury
-            build_only: "mercury_hand_tracking frame_body_tracking"
-    steps:
+    steps: &riscv_component_steps
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: opencv-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.target.ubuntu }}-${{ env.XR_BUILD_CPU }}
+          path: .build-deps
+      - name: Unpack RISC-V OpenCV SDK
+        run: |
+          tar -xzf .build-deps/opencv-sdk.tar.gz -C .build-deps
+          test -s .build-deps/opencv-sdk/XR_BUILD_ID
+
+      - name: Download RISC-V ONNX Runtime SDK
+        if: ${{ env.XR_ONNXRUNTIME_SDK_DIR != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: onnxruntime-sdk-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-${{ matrix.target.ubuntu }}-${{ env.XR_BUILD_CPU }}
+          path: .build-deps
+      - name: Unpack RISC-V ONNX Runtime SDK
+        if: ${{ env.XR_ONNXRUNTIME_SDK_DIR != '' }}
+        run: |
+          mkdir -p .build-deps/onnxruntime-sdk
+          tar -xzf .build-deps/onnxruntime-sdk.tar.gz -C .build-deps/onnxruntime-sdk
+          test -s .build-deps/onnxruntime-sdk/XR_BUILD_ID
 
       - name: Enable RISC-V user-mode emulation
         if: ${{ matrix.target.cpu == 'riscv64' }}
@@ -641,9 +756,11 @@ jobs:
           docker run --rm -i --platform linux/riscv64 \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/work" --workdir /work \
             -e DEBIAN_FRONTEND -e QEMU_CPU \
+            -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e XR_LOCAL_BUILD_ID \
             -e XR_BUILD_CPU -e XR_BUILD_ONLY -e XR_BUILD_VENDOR_COMPONENTS -e XR_BUILD_XRIZER \
-            -e XR_RISCV_UBUNTU \
+            -e XR_RISCV_UBUNTU -e XR_OPENCV_PREFIX \
             -e XR_KEEP_OPENCV_BUILD -e XR_OFFLINE -e XR_ONNXRUNTIME_VERSION \
+            -e XR_ONNXRUNTIME_SDK_DIR \
             -e XR_DOWNLOAD_HAND_TRACKING_MODELS -e XR_DOWNLOAD_BODY_TRACKING_MODELS \
             -e BUILD_JOBS -e CMAKE_BUILD_PARALLEL_LEVEL \
             -e "XR_BUILD_UID=$(id -u)" -e "XR_BUILD_GID=$(id -g)" \
@@ -686,10 +803,30 @@ jobs:
           retention-days: ${{ inputs.upload_partial_artifacts && 3 || 1 }}
           compression-level: 0
 
+  build-riscv64-mercury:
+    name: build ${{ matrix.component.name }} / Ubuntu ${{ matrix.target.ubuntu }} / riscv64
+    runs-on: ubuntu-${{ matrix.target.ubuntu }}
+    needs: [plan-linux, build-opencv-riscv64, build-onnxruntime-riscv64]
+    if: >-
+      ${{ !cancelled() &&
+        needs.plan-linux.outputs.riscv_targets != '[]' &&
+        needs.build-opencv-riscv64.result == 'success' &&
+        (needs.build-onnxruntime-riscv64.result == 'success' || inputs.onnxruntime_version == '1.18.1') }}
+    timeout-minutes: 350
+    env: *riscv_component_env
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan-linux.outputs.riscv_targets) }}
+        component:
+          - name: mercury
+            build_only: "mercury_hand_tracking frame_body_tracking"
+    steps: *riscv_component_steps
+
   merge-riscv64:
     name: merge runtime / Ubuntu ${{ matrix.target.ubuntu }} / riscv64
     runs-on: ubuntu-24.04
-    needs: [plan-linux, build-riscv64]
+    needs: [plan-linux, build-riscv64, build-riscv64-mercury]
     if: ${{ needs.plan-linux.outputs.riscv_targets != '[]' }}
     timeout-minutes: 20
     strategy:

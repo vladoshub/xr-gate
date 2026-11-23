@@ -171,6 +171,23 @@ such as OpenCV. Use a separate CMake build directory for each target.
 See the [CMake toolchain guide](https://cmake.org/cmake/help/latest/manual/cmake-toolchains.7.html)
 and [ONNX Runtime cross-build guide](https://onnxruntime.ai/docs/build/inferencing.html#risc-v).
 
+The RISC-V CI builds the OpenCV and ONNX Runtime 1.31.0 SDKs in parallel on
+AMD64 runners using Ubuntu's RISC-V cross compiler and target libraries.
+The component jobs consume the SDK artifacts for the same Ubuntu version, CPU
+profile, run and attempt. The optional ONNX Runtime 1.18.1 build runs inside
+the target container.
+
+To build just the 1.31.0 SDK locally, use AMD64 Ubuntu matching the target
+version. Choose `riscv64` on Ubuntu 24.04 or `rva23s64` on Ubuntu 26.04.
+
+```bash
+sudo apt install git ca-certificates cmake ninja-build g++-riscv64-linux-gnu \
+  libc6-dev-riscv64-cross patch python3 python3-packaging rsync
+XR_BUILD_CPU=rva23s64 XR_ONNXRUNTIME_VERSION=1.31.0 XR_ONNXRUNTIME_CROSS_RISCV64=1 \
+  XR_BIN_ROOT="$PWD/build/cross-onnxruntime-sdk" BUILD_JOBS=4 \
+  bash devices/common/linux/scripts/build/build_onnxruntime.sh
+```
+
 ### Build the complete package using QEMU
 
 The full package entrypoint expects a Linux environment for the target
@@ -309,7 +326,9 @@ The split GitHub Actions workflow (also used by `act`) retains fresh, isolated
 caches per job/session and sets `XR_KEEP_OPENCV_BUILD=0`. Its automatic mode
 remains online because each job starts from a clean dependency environment.
 
-GitHub Actions builds OpenCV once **per Ubuntu ABI, workflow run and attempt**.
+GitHub Actions builds OpenCV once **per Ubuntu version, CPU profile, workflow
+run and attempt**. The RISC-V `core`, `basalt` and `mercury` jobs share the SDK
+from the corresponding RV64GC or RVA23S64 build.
 The SDK is an intermediate artifact, not an `actions/cache` entry. Downstream
 jobs accept it only if its run/attempt, Ubuntu version, source commit and CPU
 profile/native CPU fingerprint match. A new workflow run or attempt cannot

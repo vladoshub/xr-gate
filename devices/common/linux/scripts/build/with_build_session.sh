@@ -2,7 +2,16 @@
 # Build trees belong to one invocation. Local dependency/compiler caches survive
 # cleanup so the same build can run offline after its first successful run.
 set -euo pipefail
-[[ $# -gt 0 ]] || { echo "usage: $0 command [args...]" >&2; exit 2; }
+host_check=(--check-host)
+if [[ "${1:-}" == --cross-riscv64 ]]; then
+  if [[ "$(uname -m)" != x86_64 || ( "${XR_BUILD_CPU:-}" != riscv64 && "${XR_BUILD_CPU:-}" != rva23s64 ) ]]; then
+    echo "[build-session][ERROR] --cross-riscv64 requires an x86-64 host and a RISC-V CPU profile" >&2
+    exit 2
+  fi
+  host_check=()
+  shift
+fi
+[[ $# -gt 0 ]] || { echo "usage: $0 [--cross-riscv64] command [args...]" >&2; exit 2; }
 root="${ROOT_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)}"
 export ROOT_PROJECT="$root"
 export XR_KEEP_OPENCV_BUILD="${XR_KEEP_OPENCV_BUILD:-1}"
@@ -36,7 +45,7 @@ source "$support_dir/../runtime/onnxruntime_path.sh"
 XR_ONNXRUNTIME_VERSION="$(xr_onnxruntime_version)"
 export XR_ONNXRUNTIME_VERSION
 profile_values="$(python3 "$support_dir/../runtime/cpu_target.py" \
-  describe "${XR_BUILD_CPU:-avx2}" --check-host --output "$XR_CPU_PROFILE_FILE")"
+  describe "${XR_BUILD_CPU:-avx2}" "${host_check[@]}" --output "$XR_CPU_PROFILE_FILE")"
 IFS=$'\t' read -r XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG <<< "$profile_values"
 export XR_BUILD_CPU XR_CPU_TARGET XR_CPU_TUNE XR_OPENCV_CPU_BASELINE XR_CPU_CACHE_TAG
 export CFLAGS="${CFLAGS:-} -march=$XR_CPU_TARGET -mtune=$XR_CPU_TUNE -g0"
